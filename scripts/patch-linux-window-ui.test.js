@@ -19,6 +19,7 @@ const {
   applyLinuxAppUpdaterBridgePatch,
   applyLinuxAppUpdaterMenuPatch,
   applyLinuxFileManagerPatch,
+  applyLinuxGitOriginsSourceFallbackPatch,
   applyLinuxQuitGuardPatch,
   applyLinuxHotkeyWindowPrewarmPatch,
   applyLinuxLaunchActionArgsPatch,
@@ -317,7 +318,24 @@ test("scopes dynamic tray startup matching to the tray initializer", () => {
   const patched = applyPatchTwice(applyLinuxTrayPatch, source, null);
 
   assert.match(patched, /U&&startOther\(\);/);
-  assert.doesNotMatch(patched, /\(U\|\|process\.platform===`linux`&&codexLinuxIsTrayEnabled\(\)\)&&startOther\(\);/);
+  assert.doesNotMatch(
+    patched,
+    /\(U\|\|process\.platform===`linux`&&\(typeof codexLinuxIsTrayEnabled!==`function`\|\|codexLinuxIsTrayEnabled\(\)\)\)&&startOther\(\);/,
+  );
+  assert.match(
+    patched,
+    /\(E\|\|process\.platform===`linux`&&\(typeof codexLinuxIsTrayEnabled!==`function`\|\|codexLinuxIsTrayEnabled\(\)\)\)&&ce\$\(\);/,
+  );
+});
+
+test("migrates Linux tray startup patch to tolerate missing settings helper", () => {
+  const source = [
+    "async function eN(e){let t=await Ww(e.buildFlavor,e.repoRoot),r=new n.Tray(t.defaultIcon);return r}",
+    "let ce$=async()=>{O=!0;try{await eN({buildFlavor:a,repoRoot:j.repoRoot})}catch(e){O=!1}};(E||process.platform===`linux`&&codexLinuxIsTrayEnabled())&&ce$();",
+  ].join("");
+
+  const patched = applyPatchTwice(applyLinuxTrayPatch, source, null);
+
   assert.match(
     patched,
     /\(E\|\|process\.platform===`linux`&&\(typeof codexLinuxIsTrayEnabled!==`function`\|\|codexLinuxIsTrayEnabled\(\)\)\)&&ce\$\(\);/,
@@ -726,10 +744,10 @@ test("patches the current Computer Use gate without touching the Windows-interna
   assert.equal((patched.match(/installWhenMissing:!0,name:Ze/g) || []).length, 2);
 });
 
-test("patches Computer Use gates that use isAvailable descriptors", () => {
+test("patches the current isAvailable Computer Use gate shape", () => {
   const source = [
     "var lt=`browser-use`,ut=`chrome`,dt=`chrome-internal`,ft=`computer-use`,pt=`latex-tectonic`;",
-    "var Kr=[{forceReload:!0,installWhenMissing:!0,name:lt,isAvailable:({features:e})=>e.inAppBrowserUseAllowed,migrate:rr},{name:ft,isAvailable:({features:e,platform:t})=>t===`darwin`&&e.computerUse,migrate:vr},{installWhenMissing:!0,name:ft,isAvailable:({buildFlavor:e,features:n,platform:r})=>t.T.isInternal(e)&&r===`win32`&&n.computerUse},{name:pt,isAvailable:()=>!0}];",
+    "var Kr=[{forceReload:!0,installWhenMissing:!0,name:lt,isAvailable:({features:e})=>e.inAppBrowserUseAllowed,migrate:rr},{forceReload:!0,name:dt,isAvailable:({buildFlavor:e,features:t})=>Qn(e)&&t.externalBrowserUseAllowed},{forceReload:!0,name:ut,isAvailable:({buildFlavor:e,features:t})=>t.externalBrowserUseAllowed&&$n(e)},{name:ft,isAvailable:({features:e,platform:t})=>t===`darwin`&&e.computerUse,migrate:vr},{installWhenMissing:!0,name:ft,isAvailable:({buildFlavor:e,features:n,platform:r})=>t.T.isInternal(e)&&r===`win32`&&n.computerUse},{name:pt,isAvailable:()=>!0}];",
   ].join("");
 
   const patched = applyPatchTwice(applyLinuxComputerUsePluginGatePatch, source);
@@ -982,6 +1000,19 @@ test("patchMainBundleSource keeps non-icon patches active without an icon asset"
     patched,
     /nativeImage\.createFromPath\(process\.resourcesPath\+`\/\.\.\/content\/webview\/assets\//,
   );
+});
+
+test("adds a fallback source for renderer git-origins requests without weakening other git operations", () => {
+  const source =
+    "handleVSCodeRequest(n,r,i,a,o){try{let s=r,c=this.handlers[s];if(typeof c!=`function`)throw Error(`${r} not implemented in the current Electron process. Restart Codex to load the latest Electron handlers.`);let l=()=>c({...a,origin:n,windowHostId:i});if(o==null){if(e.qt(r))throw Error(`Missing git operation source for ${r}`);return l()}return t.Gt({source:o,requestKind:r},l)}catch(e){throw e}}";
+
+  const patched = applyPatchTwice(applyLinuxGitOriginsSourceFallbackPatch, source);
+
+  assert.match(
+    patched,
+    /if\(r===`git-origins`\)return t\.Gt\(\{source:`linux_git_origins_missing_source_fallback`,requestKind:r\},l\)/,
+  );
+  assert.match(patched, /throw Error\(`Missing git operation source for \$\{r\}`\)/);
 });
 
 test("missing icon asset skips only icon patches", () => {

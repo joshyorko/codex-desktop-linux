@@ -312,6 +312,7 @@ PY
 
 sync_browser_use_bundled_plugin_cache() {
     local source_plugin="$SCRIPT_DIR/resources/plugins/openai-bundled/plugins/browser-use"
+    local source_marketplace="$SCRIPT_DIR/resources/plugins/openai-bundled/.agents/plugins/marketplace.json"
     local plugin_json="$source_plugin/.codex-plugin/plugin.json"
     local source_client="$source_plugin/scripts/browser-client.mjs"
     local codex_home="${CODEX_HOME:-$HOME/.codex}"
@@ -321,9 +322,21 @@ sync_browser_use_bundled_plugin_cache() {
     local cache_client
     local cache_parent
     local tmp_plugin
+    local marketplace_root
+    local marketplace_plugins_dir
 
     [ -f "$plugin_json" ] || return 0
     [ -f "$source_client" ] || return 0
+
+    marketplace_root="$codex_home/.tmp/bundled-marketplaces/openai-bundled"
+    marketplace_plugins_dir="$marketplace_root/.agents/plugins"
+    if [ -f "$source_marketplace" ]; then
+        mkdir -p "$marketplace_plugins_dir"
+        rm -f "$marketplace_plugins_dir/marketplace.json"
+        cp "$source_marketplace" "$marketplace_plugins_dir/marketplace.json" && \
+            chmod u+w "$marketplace_plugins_dir/marketplace.json" || \
+            echo "Browser Use bundled marketplace sync failed; continuing with existing marketplace cache."
+    fi
 
     version="$(browser_use_plugin_version "$plugin_json" 2>/dev/null || true)"
     [ -n "$version" ] || return 0
