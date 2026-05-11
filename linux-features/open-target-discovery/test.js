@@ -282,6 +282,7 @@ test("open-target discovery filters broad non-IDE desktop entries", () => {
       ["electron37", "Electron 37", "", "Development;GTK;"],
       ["cmake-gui", "CMake", "Cross-platform buildsystem", "Development;Building;"],
       ["codex-desktop", "Codex Desktop", "Run Codex Desktop on Linux", "Development;"],
+      ["codex-monitor", "Codex Monitor", "Orchestrate Codex agents across local workspaces", "Development;"],
       ["stably-orca", "Orca", "Agentic Coding IDE", "Development;IDE;TextEditor;"],
     ];
 
@@ -306,7 +307,10 @@ test("open-target discovery filters broad non-IDE desktop entries", () => {
       "Xg.flatMap((target)=>{let platform=target.platforms.linux;return platform?[platform.label]:[]})",
     );
 
-    assert.deepEqual(targets.filter((label) => entries.map((entry) => entry[1]).includes(label)), ["Orca"]);
+    assert.deepEqual(targets.filter((label) => entries.map((entry) => entry[1]).includes(label)), [
+      "Codex Monitor",
+      "Orca",
+    ]);
   });
 });
 
