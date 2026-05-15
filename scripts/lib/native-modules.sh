@@ -162,10 +162,10 @@ build_native_modules() {
 
     info "Compiling for Electron v$ELECTRON_VERSION (this takes ~1 min)..."
     info "Using Electron headers: $ELECTRON_HEADERS_URL"
-    [ -x "$build_dir/node_modules/.bin/electron-rebuild" ] || error "electron-rebuild binary not found in native build toolchain"
+    [ -f "$build_dir/node_modules/@electron/rebuild/lib/cli.js" ] || error "electron-rebuild CLI not found in native build toolchain"
     npm_config_disturl="$ELECTRON_HEADERS_URL" \
     NPM_CONFIG_DISTURL="$ELECTRON_HEADERS_URL" \
-    "$build_dir/node_modules/.bin/electron-rebuild" -v "$ELECTRON_VERSION" --force --dist-url "$ELECTRON_HEADERS_URL" 2>&1 >&2
+    node "$build_dir/node_modules/@electron/rebuild/lib/cli.js" -v "$ELECTRON_VERSION" --force --dist-url "$ELECTRON_HEADERS_URL" 2>&1 >&2
 
     info "Native modules built successfully"
 

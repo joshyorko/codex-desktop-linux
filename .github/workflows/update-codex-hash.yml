@@ -8,9 +8,14 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: update-nix-upstream-hashes
+  cancel-in-progress: false
+
 jobs:
   update-hash:
     runs-on: ubuntu-latest
+    timeout-minutes: 90
     env:
       NIX_CONFIG: experimental-features = nix-command flakes
     steps:

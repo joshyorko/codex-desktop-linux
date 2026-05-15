@@ -709,16 +709,16 @@ args=" $* "
 
 case "$args" in
     *" @electron/rebuild@4.0.4 "*)
-        mkdir -p node_modules/.bin
-        cat > node_modules/.bin/electron-rebuild <<'REBUILD'
-#!/usr/bin/env bash
-set -euo pipefail
-printf 'electron-rebuild %s\n' "$*" >> "$NATIVE_TOOLCHAIN_LOG"
-mkdir -p node_modules/better-sqlite3/build/Release node_modules/node-pty/build/Release
-: > node_modules/better-sqlite3/build/Release/better_sqlite3.node
-: > node_modules/node-pty/build/Release/pty.node
+        mkdir -p node_modules/@electron/rebuild/lib
+        cat > node_modules/@electron/rebuild/lib/cli.js <<'REBUILD'
+#!/usr/bin/env node
+const fs = require("fs");
+fs.appendFileSync(process.env.NATIVE_TOOLCHAIN_LOG, `electron-rebuild ${process.argv.slice(2).join(" ")}\n`);
+fs.mkdirSync("node_modules/better-sqlite3/build/Release", { recursive: true });
+fs.mkdirSync("node_modules/node-pty/build/Release", { recursive: true });
+fs.closeSync(fs.openSync("node_modules/better-sqlite3/build/Release/better_sqlite3.node", "w"));
+fs.closeSync(fs.openSync("node_modules/node-pty/build/Release/pty.node", "w"));
 REBUILD
-        chmod +x node_modules/.bin/electron-rebuild
         ;;
 esac
 
@@ -804,7 +804,7 @@ test_launcher_template_sanity() {
     assert_contains "$REPO_DIR/scripts/lib/native-modules.sh" "patch_better_sqlite3_for_v8_external_pointer_api"
     assert_contains "$REPO_DIR/scripts/lib/native-modules.sh" "@electron/rebuild@4.0.4"
     assert_contains "$REPO_DIR/scripts/lib/native-modules.sh" "node-abi@^4.31.0"
-    assert_contains "$REPO_DIR/scripts/lib/native-modules.sh" 'node_modules/.bin/electron-rebuild'
+    assert_contains "$REPO_DIR/scripts/lib/native-modules.sh" 'node_modules/@electron/rebuild/lib/cli.js'
     assert_not_contains "$REPO_DIR/scripts/lib/native-modules.sh" "npx --yes @electron/rebuild"
     assert_contains "$REPO_DIR/scripts/lib/native-modules.sh" "prune_native_module_build_artifacts"
     assert_contains "$REPO_DIR/scripts/lib/native-modules.sh" 'find "$build_dir" -type f ! -name'

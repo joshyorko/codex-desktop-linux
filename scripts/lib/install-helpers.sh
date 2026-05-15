@@ -172,9 +172,9 @@ $(dependency_help)"
     fi
 
     local seven_zip_banner
-    seven_zip_banner="$("$SEVEN_ZIP_CMD" 2>&1 | grep -m 1 "7-Zip" || true)"
-    if [[ "$seven_zip_banner" == *"16.02"* ]]; then
-        error "System 7-zip is too old for modern APFS DMGs.
+    seven_zip_banner="$("$SEVEN_ZIP_CMD" 2>&1 | head -n 3 || true)"
+    if [[ "$seven_zip_banner" == *"16.02"* || "$seven_zip_banner" == *"p7zip Version"* ]]; then
+        error "System 7-zip is too old for modern APFS DMGs or lacks APFS support.
 Install a newer 7zz first by running:
   bash scripts/install-deps.sh
 

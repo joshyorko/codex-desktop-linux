@@ -7,6 +7,7 @@ UPSTREAM_DMG_URL="${UPSTREAM_DMG_URL:-https://persistent.oaistatic.com/codex-app
 UPSTREAM_DMG_PATH="${UPSTREAM_DMG_PATH:-/tmp/Codex.dmg}"
 BUILD_LOG="${BUILD_LOG:-/tmp/codex-nix-build.log}"
 VERIFY_LOG="${VERIFY_LOG:-/tmp/codex-nix-build-verify.log}"
+FAKE_SRI_HASH="sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
 
 validate_sri_hash() {
     local hash="$1"
@@ -100,13 +101,28 @@ run_nix_build() {
     local log_path="$1"
     rm -f "$log_path"
     set +e
-    nix build .#codex-desktop --no-link --print-build-logs 2>&1 | tee "$log_path"
-    local status="${PIPESTATUS[0]}"
+    nix build .#codex-desktop --no-link --print-build-logs >"$log_path" 2>&1
+    local status="$?"
     set -e
+    cat "$log_path"
     return "$status"
 }
 
+restore_flake_hashes() {
+    local dmg_hash="$1"
+    local payload_hash="$2"
+
+    if [ -n "$dmg_hash" ]; then
+        replace_flake_hash "codexDmg = pkgs.fetchurl {" "hash = " "$dmg_hash"
+    fi
+    if [ -n "$payload_hash" ]; then
+        replace_flake_hash "codexDesktopPayload = pkgs.stdenv.mkDerivation {" "outputHash = " "$payload_hash"
+    fi
+}
+
 main() {
+    local current_dmg_hash=""
+    local current_payload_hash=""
     mkdir -p "$(dirname "$UPSTREAM_DMG_PATH")"
     curl -fL --retry 3 -o "$UPSTREAM_DMG_PATH" "$UPSTREAM_DMG_URL"
 
@@ -125,24 +141,30 @@ main() {
     # for hashing instead of fetching the same 300MB artifact again.
     nix-store --add-fixed sha256 "$UPSTREAM_DMG_PATH" >/dev/null
 
+    current_payload_hash="$(read_flake_hash "codexDesktopPayload = pkgs.stdenv.mkDerivation {" "outputHash = ")"
+    echo "Current payload outputHash: $current_payload_hash"
+    echo "Forcing payload outputHash refresh..."
+    replace_flake_hash "codexDesktopPayload = pkgs.stdenv.mkDerivation {" "outputHash = " "$FAKE_SRI_HASH"
+
     if run_nix_build "$BUILD_LOG"; then
-        echo "Nix build succeeded with the current payload outputHash."
-        exit 0
+        echo "Nix build unexpectedly succeeded with the fake payload outputHash." >&2
+        restore_flake_hashes "$current_dmg_hash" "$current_payload_hash"
+        exit 1
     fi
 
     new_payload_hash="$(extract_got_sri_hash "$BUILD_LOG" || true)"
     if [ -z "$new_payload_hash" ]; then
         echo "Nix build failed without a fixed-output hash mismatch; leaving log at $BUILD_LOG" >&2
+        restore_flake_hashes "$current_dmg_hash" "$current_payload_hash"
         exit 1
     fi
 
     if ! validate_sri_hash "$new_payload_hash"; then
         echo "Refusing to proceed: extracted payload hash '$new_payload_hash' is not a valid SRI sha256." >&2
+        restore_flake_hashes "$current_dmg_hash" "$current_payload_hash"
         exit 1
     fi
 
-    current_payload_hash="$(read_flake_hash "codexDesktopPayload = pkgs.stdenv.mkDerivation {" "outputHash = ")"
-    echo "Current payload outputHash: $current_payload_hash"
     echo "Actual payload outputHash:  $new_payload_hash"
     replace_flake_hash "codexDesktopPayload = pkgs.stdenv.mkDerivation {" "outputHash = " "$new_payload_hash"
 

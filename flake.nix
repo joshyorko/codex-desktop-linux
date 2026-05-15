@@ -202,7 +202,7 @@ PY
 
           outputHashAlgo = "sha256";
           outputHashMode = "recursive";
-          outputHash = "sha256-c1sqCLidGcnZZNJHvoArQtC1IKVJa/JyXb/yV/HwiHM=";
+          outputHash = "sha256-8IX6OpYitjbazWLUBi6h8iRDxOMir5Kdezry8OThM2Q=";
           unsafeDiscardReferences.out = true;
 
           dontConfigure = true;
@@ -241,8 +241,6 @@ PY
               --replace-fail "npx asar" "asar"
             substituteInPlace "$source_dir/scripts/lib/dmg.sh" \
               --replace-fail "npx --yes asar" "asar"
-            substituteInPlace "$source_dir/scripts/lib/native-modules.sh" \
-              --replace-fail "npx --yes @electron/rebuild" "electron-rebuild"
 
             export CODEX_INSTALL_DIR="$out/opt/codex-desktop"
             ${pkgs.bash}/bin/bash "$source_dir/install.sh" "$source_dir/Codex.dmg"
