@@ -18,6 +18,8 @@ const REMOTE_CONTROL_VISIBILITY_REPLACEMENT =
 const REMOTE_CONTROL_VISIBILITY_OLD_REPLACEMENT =
   "function a({remoteControlConnectionsState:e,slingshotEnabled:t}){let n=typeof navigator!=`undefined`&&navigator.userAgent.includes(`Linux`);return t&&(n||(e?.available??!0))&&e?.accessRequired!==!0}";
 const REMOTE_CONTROL_SETTINGS_UX_MARKER = "codexLinuxRemoteControlSettingsTabs";
+const REMOTE_CONNECTIONS_REFRESH_MARKER = "codexLinuxRemoteConnectionsRefreshNow";
+const REMOTE_MOBILE_CHROME_BRIDGE_MARKER = "codexLinuxRemoteMobileBrowserBackends";
 const REMOTE_CONTROL_SELECTED_TAB_NEEDLE =
   "function rr({selectedConnectionsTab:e,showControlThisMacTab:t,showRemoteControlConnectionsSection:n,showTabbedSshPage:r}){return n?e===`control-this-mac`&&!t||e===`ssh`&&!r?`access-other-devices`:e:`ssh`}";
 const REMOTE_CONTROL_SELECTED_TAB_REPLACEMENT =
@@ -172,6 +174,91 @@ function applyLinuxRemoteControlSettingsUxPatch(source) {
   return patched.replace(REMOTE_CONTROL_SELECTED_TAB_NEEDLE, REMOTE_CONTROL_SELECTED_TAB_REPLACEMENT);
 }
 
+function applyLinuxRemoteConnectionsRefreshPatch(source) {
+  if (source.includes(REMOTE_CONNECTIONS_REFRESH_MARKER)) {
+    return source;
+  }
+
+  let patched = source;
+  if (patched.includes("Qn=15e3")) {
+    patched = patched.replace("Qn=15e3", "Qn=5e3");
+  } else if (patched.includes("15e3") && patched.includes("refresh-remote-connections")) {
+    console.warn("WARN: Could not find remote-connections refresh interval constant - skipping interval patch");
+  }
+
+  const effectPattern =
+    /\(0,([A-Za-z_$][\w$]*)\.useEffect\)\(\(\)=>\{let ([A-Za-z_$][\w$]*)=null,([A-Za-z_$][\w$]*)=!1,([A-Za-z_$][\w$]*)=async\(\)=>\{if\(![A-Za-z_$][\w$]*\)\{[A-Za-z_$][\w$]*=!0,[A-Za-z_$][\w$]*=new AbortController;try\{await ([A-Za-z_$][\w$]*)\([A-Za-z_$][\w$]*\.signal\)\}finally\{[A-Za-z_$][\w$]*=null,[A-Za-z_$][\w$]*=!1\}\}\},([A-Za-z_$][\w$]*)=window\.setInterval\(\(\)=>\{[A-Za-z_$][\w$]*\(\)\},([A-Za-z_$][\w$]*)\);return\(\)=>\{[A-Za-z_$][\w$]*\?\.abort\(\),window\.clearInterval\([A-Za-z_$][\w$]*\)\}\},\[\]\);/;
+  const match = patched.match(effectPattern);
+  if (match == null) {
+    if (patched.includes("refresh-remote-connections") && patched.includes("setInterval")) {
+      console.warn("WARN: Could not find remote-connections auto-refresh effect - skipping resume refresh patch");
+    }
+    return patched;
+  }
+
+  const [
+    needle,
+    reactVar,
+    abortVar,
+    pendingVar,
+    refreshVar,
+    refreshEventVar,
+    intervalVar,
+    intervalConstantVar,
+  ] = match;
+  const replacement =
+    `(0,${reactVar}.useEffect)(()=>{let ${abortVar}=null,${pendingVar}=!1,${refreshVar}=async()=>{if(!${pendingVar}){${pendingVar}=!0,${abortVar}=new AbortController;try{await ${refreshEventVar}(${abortVar}.signal)}finally{${abortVar}=null,${pendingVar}=!1}}},` +
+    `${REMOTE_CONNECTIONS_REFRESH_MARKER}=()=>{document.visibilityState!==\`hidden\`&&${refreshVar}()},` +
+    `${intervalVar}=window.setInterval(()=>{${refreshVar}()},${intervalConstantVar});` +
+    `document.addEventListener(\`visibilitychange\`,${REMOTE_CONNECTIONS_REFRESH_MARKER}),` +
+    `window.addEventListener(\`focus\`,${REMOTE_CONNECTIONS_REFRESH_MARKER}),` +
+    `window.addEventListener(\`online\`,${REMOTE_CONNECTIONS_REFRESH_MARKER}),` +
+    `window.addEventListener(\`resume\`,${REMOTE_CONNECTIONS_REFRESH_MARKER});` +
+    `return()=>{${abortVar}?.abort(),window.clearInterval(${intervalVar}),` +
+    `document.removeEventListener(\`visibilitychange\`,${REMOTE_CONNECTIONS_REFRESH_MARKER}),` +
+    `window.removeEventListener(\`focus\`,${REMOTE_CONNECTIONS_REFRESH_MARKER}),` +
+    `window.removeEventListener(\`online\`,${REMOTE_CONNECTIONS_REFRESH_MARKER}),` +
+    `window.removeEventListener(\`resume\`,${REMOTE_CONNECTIONS_REFRESH_MARKER})}},[]);`;
+
+  return patched.replace(needle, replacement);
+}
+
+function applyLinuxRemoteMobileChromeBridgePatch(source) {
+  if (source.includes(REMOTE_MOBILE_CHROME_BRIDGE_MARKER)) {
+    return source;
+  }
+
+  const backendNeedle =
+    "var tE=\"x-codex-browser-use-available-backends\",X6=[\"chrome\",\"iab\",\"cdp\"];function rE(t){return X6.some(e=>e===t)}";
+  const backendReplacement =
+    "var tE=\"x-codex-browser-use-available-backends\",X6=[\"chrome\",\"iab\",\"cdp\"];function rE(t){return X6.some(e=>e===t)}function codexLinuxRemoteMobileBrowserBackends(e){if(e==null)return null;if(!Array.isArray(e))return[];let t=e.filter(rE);return typeof process!=`undefined`&&process.platform===`linux`&&!t.includes(`chrome`)?[`chrome`,...t]:t}";
+  const currentBackendNeedle =
+    "function yC(){let t=globalThis.nodeRepl?.requestMeta?.[tE];return t==null?null:Array.isArray(t)?t.filter(rE):[]}";
+  const currentBackendReplacement =
+    "function yC(){let t=globalThis.nodeRepl?.requestMeta?.[tE];return codexLinuxRemoteMobileBrowserBackends(t)}";
+
+  if (!source.includes(backendNeedle) || !source.includes(currentBackendNeedle)) {
+    console.warn("WARN: Could not find Chrome browser-client backend allowlist needles - skipping remote-mobile Chrome bridge patch");
+    return source;
+  }
+
+  let patched = source
+    .replace(backendNeedle, backendReplacement)
+    .replace(currentBackendNeedle, currentBackendReplacement);
+
+  const nativePipeNeedle =
+    "function Cm(){let t=import.meta.__codexNativePipeUnavailableMessage;return typeof t==\"string\"&&t.length>0?t:\"privileged native pipe bridge is not available; browser-client is not trusted\"}";
+  const nativePipeReplacement =
+    "function codexLinuxRemoteMobileBrowserBridgeDiagnostic(e){return typeof process!=`undefined`&&process.platform===`linux`?`${e}; Chrome bridge was not exposed to this remote/mobile session. Check that the Chrome plugin, native host manifest, and x-codex-browser-use-available-backends request metadata include chrome.`:e}function Cm(){let t=import.meta.__codexNativePipeUnavailableMessage,e=typeof t==\"string\"&&t.length>0?t:\"privileged native pipe bridge is not available; browser-client is not trusted\";return codexLinuxRemoteMobileBrowserBridgeDiagnostic(e)}";
+  if (patched.includes(nativePipeNeedle)) {
+    patched = patched.replace(nativePipeNeedle, nativePipeReplacement);
+  } else {
+    console.warn("WARN: Could not find Chrome browser-client native pipe diagnostic needle - leaving default bridge diagnostic unchanged");
+  }
+
+  return patched;
+}
+
 module.exports = [
   {
     id: "linux-remote-control-device-key",
@@ -207,9 +294,21 @@ module.exports = [
     skipDescription: "Linux remote-control settings UX patch",
     apply: applyLinuxRemoteControlSettingsUxPatch,
   },
+  {
+    id: "linux-remote-connections-refresh",
+    phase: "webview-asset",
+    pattern: /^remote-connections-settings-.*\.js$/,
+    order: 20_140,
+    ciPolicy: "optional",
+    missingDescription: "remote connections settings bundle",
+    skipDescription: "Linux remote-connections refresh patch",
+    apply: applyLinuxRemoteConnectionsRefreshPatch,
+  },
 ];
 
 module.exports.applyLinuxRemoteControlDeviceKeyPatch = applyLinuxRemoteControlDeviceKeyPatch;
+module.exports.applyLinuxRemoteMobileChromeBridgePatch = applyLinuxRemoteMobileChromeBridgePatch;
 module.exports.applyLinuxRemoteControlPreserveConfigPatch = applyLinuxRemoteControlPreserveConfigPatch;
+module.exports.applyLinuxRemoteConnectionsRefreshPatch = applyLinuxRemoteConnectionsRefreshPatch;
 module.exports.applyLinuxRemoteControlVisibilityPatch = applyLinuxRemoteControlVisibilityPatch;
 module.exports.applyLinuxRemoteControlSettingsUxPatch = applyLinuxRemoteControlSettingsUxPatch;

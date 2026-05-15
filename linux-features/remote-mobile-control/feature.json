@@ -4,6 +4,7 @@
   "description": "Opt-in Linux patches for Codex mobile remote-control host enrollment.",
   "defaultEnabled": false,
   "entrypoints": {
-    "patchDescriptors": "./patch.js"
+    "patchDescriptors": "./patch.js",
+    "stageHook": "./stage.sh"
   }
 }
