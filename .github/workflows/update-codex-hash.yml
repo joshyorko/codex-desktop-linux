@@ -21,7 +21,9 @@ jobs:
       CACHIX_CACHE_NAME: codex-desktop-linux
       CACHIX_AUTH_TOKEN: ${{ secrets.CACHIX_AUTH_TOKEN }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
+        with:
+          ref: main
 
       - uses: cachix/install-nix-action@v31
 

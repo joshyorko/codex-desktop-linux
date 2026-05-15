@@ -544,6 +544,26 @@ test_upstream_build_app_workflow_tracks_dmg_metadata() {
     assert_contains "$workflow" 'make build-app DMG=/tmp/codex-upstream-ci/Codex.dmg'
     assert_contains "$workflow" 'DMG Last-Modified'
     assert_contains "$workflow" 'DMG SHA-256'
+    assert_contains "$workflow" "cron: '13 .*/2"
+    assert_contains "$workflow" 'HOMEBREW_TOOLS_REPOSITORY: joshyorko/homebrew-tools'
+    assert_contains "$workflow" 'HOMEBREW_TOOLS_DISPATCH_TOKEN'
+    assert_contains "$workflow" 'codex-desktop-linux-ready'
+    assert_contains "$workflow" '"package_id": "codex-desktop-linux"'
+    assert_contains "$workflow" '"conversion_sha"'
+    assert_contains "$workflow" '"dmg_sha256"'
+    assert_contains "$workflow" '"source_run_url"'
+    assert_contains "$workflow" 'api.github.com/repos/${HOMEBREW_TOOLS_REPOSITORY}/dispatches'
+}
+
+test_update_nix_hash_workflow_maintains_clean_main() {
+    info "Checking Nix hash refresh workflow targets clean main"
+    local workflow="$REPO_DIR/.github/workflows/update-codex-hash.yml"
+
+    assert_file_exists "$workflow"
+    assert_contains "$workflow" 'name: Update Nix upstream hashes'
+    assert_contains "$workflow" 'ref: main'
+    assert_contains "$workflow" 'git push origin main'
+    assert_contains "$workflow" 'actions/checkout@v6'
 }
 
 test_main_to_self_hosted_workflow_opens_update_pr() {
@@ -2655,6 +2675,7 @@ main() {
     test_missing_input_failure
     test_make_build_app_uses_installer_download_flow_by_default
     test_upstream_build_app_workflow_tracks_dmg_metadata
+    test_update_nix_hash_workflow_maintains_clean_main
     test_main_to_self_hosted_workflow_opens_update_pr
     test_installer_detects_electron_version_from_plist
     test_installer_keeps_electron_fallback_for_bad_metadata
