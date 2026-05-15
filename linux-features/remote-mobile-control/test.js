@@ -18,7 +18,9 @@ const {
 } = require("../../scripts/patch-linux-window-ui.js");
 const {
   applyLinuxRemoteControlDeviceKeyPatch,
+  applyLinuxRemoteMobileChromeBridgePatch,
   applyLinuxRemoteControlPreserveConfigPatch,
+  applyLinuxRemoteConnectionsRefreshPatch,
   applyLinuxRemoteControlSettingsUxPatch,
   applyLinuxRemoteControlVisibilityPatch,
 } = require("./patch.js");
@@ -45,6 +47,24 @@ function syntheticSettingsBundle() {
     "const a=`Control this Mac from your phone or other device`,b=`Add device to control this Mac remotely`,c=`Devices that can control this Mac`,d=`Keep Mac awake`,e=`Allow this Mac to be discovered and controlled`,f=`Control other devices from this Mac`,g=`Authorize this Mac to control other devices signed in to your ChatGPT account`,h=`Devices you can control from this Mac`;",
     "function nr(e,t){return e.displayName.localeCompare(t.displayName)}",
     "function rr({selectedConnectionsTab:e,showControlThisMacTab:t,showRemoteControlConnectionsSection:n,showTabbedSshPage:r}){return n?e===`control-this-mac`&&!t||e===`ssh`&&!r?`access-other-devices`:e:`ssh`}",
+  ].join("");
+}
+
+function syntheticSettingsRefreshBundle() {
+  return [
+    "var Qn=15e3,Z=React;",
+    "function tr(){let $=useEffectEvent(async e=>{await P(`refresh-remote-connections`,{signal:e})});",
+    "(0,Z.useEffect)(()=>{let e=null,t=!1,n=async()=>{if(!t){t=!0,e=new AbortController;try{await $(e.signal)}finally{e=null,t=!1}}},r=window.setInterval(()=>{n()},Qn);return()=>{e?.abort(),window.clearInterval(r)}},[]);",
+    "return null}",
+  ].join("");
+}
+
+function syntheticChromeBrowserClientBundle() {
+  return [
+    "var tE=\"x-codex-browser-use-available-backends\",X6=[\"chrome\",\"iab\",\"cdp\"];",
+    "function rE(t){return X6.some(e=>e===t)}",
+    "function Cm(){let t=import.meta.__codexNativePipeUnavailableMessage;return typeof t==\"string\"&&t.length>0?t:\"privileged native pipe bridge is not available; browser-client is not trusted\"}",
+    "function yC(){let t=globalThis.nodeRepl?.requestMeta?.[tE];return t==null?null:Array.isArray(t)?t.filter(rE):[]}",
   ].join("");
 }
 
@@ -81,6 +101,17 @@ function withFeatureRootEnv(root, fn) {
   }
 }
 
+function captureWarnings(fn) {
+  const warnings = [];
+  const originalWarn = console.warn;
+  console.warn = (message) => warnings.push(String(message));
+  try {
+    return { result: fn(), warnings };
+  } finally {
+    console.warn = originalWarn;
+  }
+}
+
 test("remote mobile control feature stays disabled until listed in features.json", () => {
   withTempFeatureRoot([], (root) => {
     assert.deepEqual(loadLinuxFeaturePatchDescriptors({ featuresRoot: root }), []);
@@ -95,10 +126,12 @@ test("remote mobile control feature exposes opt-in main-bundle and webview patch
       "feature:remote-mobile-control:linux-remote-control-preserve-config",
       "feature:remote-mobile-control:linux-remote-control-visibility",
       "feature:remote-mobile-control:linux-remote-control-settings-ux",
+      "feature:remote-mobile-control:linux-remote-connections-refresh",
     ]);
     assert.deepEqual(descriptors.map((descriptor) => descriptor.phase), [
       "main-bundle",
       "main-bundle",
+      "webview-asset",
       "webview-asset",
       "webview-asset",
     ]);
@@ -179,6 +212,68 @@ test("Linux remote-control selected-tab fallback avoids outbound control on Linu
   );
 });
 
+test("Linux remote-connections refresh patch shortens polling and refreshes on resume signals", () => {
+  const source = syntheticSettingsRefreshBundle();
+  const patched = applyLinuxRemoteConnectionsRefreshPatch(source);
+
+  assert.notEqual(patched, source);
+  assert.match(patched, /Qn=5e3/);
+  assert.doesNotMatch(patched, /Qn=15e3/);
+  assert.match(patched, /codexLinuxRemoteConnectionsRefreshNow/);
+  assert.match(patched, /document\.addEventListener\(`visibilitychange`,codexLinuxRemoteConnectionsRefreshNow\)/);
+  assert.match(patched, /window\.addEventListener\(`focus`,codexLinuxRemoteConnectionsRefreshNow\)/);
+  assert.match(patched, /window\.addEventListener\(`online`,codexLinuxRemoteConnectionsRefreshNow\)/);
+  assert.match(patched, /window\.addEventListener\(`resume`,codexLinuxRemoteConnectionsRefreshNow\)/);
+  assert.match(patched, /document\.removeEventListener\(`visibilitychange`,codexLinuxRemoteConnectionsRefreshNow\)/);
+  assert.match(patched, /window\.removeEventListener\(`resume`,codexLinuxRemoteConnectionsRefreshNow\)/);
+  assert.equal(applyLinuxRemoteConnectionsRefreshPatch(patched), patched);
+});
+
+test("Linux remote-connections refresh patch warns when upstream refresh needles drift", () => {
+  const source = "const marker=`refresh-remote-connections`;window.setInterval(()=>marker,15e3);";
+  const { result, warnings } = captureWarnings(() => applyLinuxRemoteConnectionsRefreshPatch(source));
+
+  assert.equal(result, source);
+  assert.ok(warnings.some((warning) => warning.includes("refresh interval constant")));
+  assert.ok(warnings.some((warning) => warning.includes("auto-refresh effect")));
+});
+
+test("Linux remote mobile Chrome bridge patch preserves Chrome when request metadata narrows browser backends", () => {
+  const source = syntheticChromeBrowserClientBundle();
+  const patched = applyLinuxRemoteMobileChromeBridgePatch(source);
+
+  assert.notEqual(patched, source);
+  assert.match(patched, /codexLinuxRemoteMobileBrowserBackends/);
+  assert.match(patched, /codexLinuxRemoteMobileBrowserBridgeDiagnostic/);
+  assert.match(patched, /Chrome bridge was not exposed to this remote\/mobile session/);
+  assert.equal(applyLinuxRemoteMobileChromeBridgePatch(patched), patched);
+
+  const context = {
+    globalThis: {
+      nodeRepl: {
+        requestMeta: {
+          "x-codex-browser-use-available-backends": ["iab"],
+        },
+      },
+    },
+    module: { exports: {} },
+    process: { platform: "linux" },
+  };
+  context.globalThis.globalThis = context.globalThis;
+  const nativePipeIndex = patched.indexOf("function codexLinuxRemoteMobileBrowserBridgeDiagnostic");
+  const browserBackendsOnly = patched.slice(0, nativePipeIndex) + patched.slice(patched.indexOf("function yC"));
+  vm.runInNewContext(`${browserBackendsOnly};module.exports=yC;`, context);
+  assert.deepEqual([...context.module.exports()], ["chrome", "iab"]);
+});
+
+test("Linux remote mobile Chrome bridge patch warns when browser-client needles drift", () => {
+  const source = "var tE=\"x-codex-browser-use-available-backends\";function yC(){return null}";
+  const { result, warnings } = captureWarnings(() => applyLinuxRemoteMobileChromeBridgePatch(source));
+
+  assert.equal(result, source);
+  assert.ok(warnings.some((warning) => warning.includes("backend allowlist needles")));
+});
+
 test("patched Linux device-key provider can create, sign with, and delete a key", async () => {
   const configHome = fs.mkdtempSync(path.join(os.tmpdir(), "codex-remote-mobile-key-store-"));
   try {
@@ -249,7 +344,7 @@ test("remote mobile control feature participates in ASAR patching and reports", 
         );
         fs.writeFileSync(
           path.join(assetsDir, "remote-connections-settings-test.js"),
-          syntheticSettingsBundle(),
+          syntheticSettingsBundle() + syntheticSettingsRefreshBundle(),
         );
 
         const report = createPatchReport();
@@ -268,6 +363,8 @@ test("remote mobile control feature participates in ASAR patching and reports", 
         assert.match(patchedFile, /n\.kind===`local`&&process\.platform!==`linux`/);
         assert.match(patchedVisibilityFile, /navigator\.userAgent\.includes\(`Linux`\)/);
         assert.match(patchedSettingsFile, /codexLinuxRemoteControlSettingsTabs/);
+        assert.match(patchedSettingsFile, /codexLinuxRemoteConnectionsRefreshNow/);
+        assert.match(patchedSettingsFile, /Qn=5e3/);
         assert.match(patchedSettingsFile, /Control this computer/);
         assert.ok(
           report.patches.some((patch) =>
@@ -290,6 +387,12 @@ test("remote mobile control feature participates in ASAR patching and reports", 
         assert.ok(
           report.patches.some((patch) =>
             patch.name === "feature:remote-mobile-control:linux-remote-control-settings-ux" &&
+            patch.status === "applied",
+          ),
+        );
+        assert.ok(
+          report.patches.some((patch) =>
+            patch.name === "feature:remote-mobile-control:linux-remote-connections-refresh" &&
             patch.status === "applied",
           ),
         );

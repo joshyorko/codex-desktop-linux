@@ -28,6 +28,11 @@ What it changes:
   Linux JavaScript ECDSA P-256 key provider.
 - Lets the remote-control Connections UI render on Linux when upstream marks
   the feature unavailable or withholds the remote-control visibility rollout.
+- Refreshes the remote Connections settings state every 5 seconds and
+  immediately after focus, visibility, online, or resume signals.
+- Keeps Chrome Browser Use available to remote/mobile controlled sessions when
+  the local Chrome plugin and native host are healthy, and adds a diagnostic
+  when the native browser bridge is not exposed to the session.
 - Persists the private key material at
   `~/.config/codex-desktop/remote-control-device-keys-v1.json` with `0600`
   file permissions.
