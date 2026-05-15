@@ -629,7 +629,7 @@ stage_browser_use_plugin_from_upstream() {
     local target_client="$target_plugin/scripts/browser-client.mjs"
 
     if [ ! -d "$source_plugin" ]; then
-        warn "Browser Use bundled plugin resources not found in upstream app; skipping Browser Use"
+        info "Browser Use bundled plugin resources not present in upstream app; skipping Browser Use"
         return 1
     fi
 

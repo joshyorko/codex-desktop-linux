@@ -159,10 +159,16 @@ function applyBrowserAnnotationScreenshotPatch(currentSource) {
   } else if (patchedSource.includes(liveElementScreenshotNeedle)) {
     patchedSource = patchedSource.replace(liveElementScreenshotNeedle, storedAnchorScreenshotPatch);
   } else {
+    const currentSelectedElementNeedle =
+      "if(ve&&M?.anchor.kind===`element`){let e=hl(M,y.current)??null,t=e==null?null:El(e);ke=t?.rect??Rl(M.anchor),je=t?.borderRadius,Ae=Xl(M.anchor,ke,_.width,_.height)}";
+    const currentSelectedElementPatch =
+      "if(ve&&M?.anchor.kind===`element`){ke=Rl(M.anchor),je=void 0,Ae=Xl(M.anchor,ke,_.width,_.height)}";
     const currentElementScreenshotRegex =
       /if\(([A-Za-z_$][\w$]*)&&([A-Za-z_$][\w$]*)\?\.anchor\.kind===`element`\)\{let e=[^;{}]+?\?\?null,t=e==null\?null:[A-Za-z_$][\w$]*\(e\);([A-Za-z_$][\w$]*)=t\?\.rect\?\?([A-Za-z_$][\w$]*)\(\2\.anchor\),([A-Za-z_$][\w$]*)=t\?\.borderRadius\}/;
-    const currentElementScreenshotMatch = patchedSource.match(currentElementScreenshotRegex);
-    if (currentElementScreenshotMatch != null) {
+    if (patchedSource.includes(currentSelectedElementNeedle)) {
+      patchedSource = patchedSource.replace(currentSelectedElementNeedle, currentSelectedElementPatch);
+    } else if (currentElementScreenshotRegex.test(patchedSource)) {
+      const currentElementScreenshotMatch = patchedSource.match(currentElementScreenshotRegex);
       const [, screenshotModeVar, selectedCommentVar, rectVar, anchorRectFn, radiusVar] = currentElementScreenshotMatch;
       patchedSource = patchedSource.replace(
         currentElementScreenshotRegex,
@@ -186,10 +192,16 @@ function applyBrowserAnnotationScreenshotPatch(currentSource) {
   } else {
     const currentMarkersNeedle = "be=(!ge&&ye!=null?A.filter(e=>e.id!==ye.id):A).flatMap";
     const currentMarkersPatch = "be=(ge?he:!ge&&ye!=null?A.filter(e=>e.id!==ye.id):A).flatMap";
+    const currentSelectedMarkersNeedle = "Se=(!ve&&xe!=null?k.filter(e=>e.id!==xe.id):k).flatMap";
+    const currentSelectedMarkersPatch = "Se=(ve?_e:!ve&&xe!=null?k.filter(e=>e.id!==xe.id):k).flatMap";
     if (patchedSource.includes(currentMarkersPatch)) {
+      // Already patched.
+    } else if (patchedSource.includes(currentSelectedMarkersPatch)) {
       // Already patched.
     } else if (patchedSource.includes(currentMarkersNeedle)) {
       patchedSource = patchedSource.replace(currentMarkersNeedle, currentMarkersPatch);
+    } else if (patchedSource.includes(currentSelectedMarkersNeedle)) {
+      patchedSource = patchedSource.replace(currentSelectedMarkersNeedle, currentSelectedMarkersPatch);
     } else {
       console.warn("WARN: Could not find browser annotation screenshot markers — skipping screenshot marker patch");
     }
