@@ -236,6 +236,16 @@ bash scripts/install-deps.sh
 
 It auto-detects `apt`, `dnf5`, `dnf`, `pacman`, or `zypper`, installs system packages, and bootstraps Rust through `rustup` when needed.
 
+On immutable desktops such as Bluefin, prefer the checked-in devcontainer for ordinary development instead of installing Rust or build tools on the host:
+
+```bash
+# from VS Code / Dev Containers
+Dev Containers: Reopen in Container
+
+# once inside the devcontainer
+cargo test -p codex-computer-use-linux
+```
+
 #### Apt-specific (Debian / Ubuntu / Pop!_OS / Mint)
 
 On apt-based systems, `install-deps.sh` can still bootstrap NodeSource Node.js for users who want a system Node.js toolchain:
