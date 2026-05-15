@@ -546,6 +546,28 @@ test_upstream_build_app_workflow_tracks_dmg_metadata() {
     assert_contains "$workflow" 'DMG SHA-256'
 }
 
+test_main_to_self_hosted_workflow_opens_update_pr() {
+    info "Checking main to self-hosted integration PR workflow"
+    local workflow="$REPO_DIR/.github/workflows/open-main-to-self-hosted-pr.yml"
+
+    assert_file_exists "$workflow"
+    assert_contains "$workflow" 'name: Open main to self-hosted PR'
+    assert_contains "$workflow" 'branches:'
+    assert_contains "$workflow" '- main'
+    assert_contains "$workflow" 'contents: write'
+    assert_contains "$workflow" 'pull-requests: write'
+    assert_contains "$workflow" 'MAIN_BRANCH: main'
+    assert_contains "$workflow" 'SELF_HOSTED_BRANCH: self-hosted'
+    assert_contains "$workflow" 'SYNC_BRANCH: codex/main-to-self-hosted'
+    assert_contains "$workflow" 'git merge-base --is-ancestor "$main_sha" "$self_hosted_sha"'
+    assert_contains "$workflow" 'git merge --no-ff "origin/${MAIN_BRANCH}"'
+    assert_contains "$workflow" 'git push --force-with-lease origin "${SYNC_BRANCH}"'
+    assert_contains "$workflow" 'gh pr create'
+    assert_contains "$workflow" '--base "${SELF_HOSTED_BRANCH}"'
+    assert_contains "$workflow" '--head "${SYNC_BRANCH}"'
+    assert_contains "$workflow" 'gh pr edit "$existing_pr"'
+}
+
 test_installer_detects_electron_version_from_plist() {
     info "Checking Electron version detection from app metadata"
     local workspace="$TMP_DIR/electron-version"
@@ -2633,6 +2655,7 @@ main() {
     test_missing_input_failure
     test_make_build_app_uses_installer_download_flow_by_default
     test_upstream_build_app_workflow_tracks_dmg_metadata
+    test_main_to_self_hosted_workflow_opens_update_pr
     test_installer_detects_electron_version_from_plist
     test_installer_keeps_electron_fallback_for_bad_metadata
     test_managed_node_runtime_source_install
