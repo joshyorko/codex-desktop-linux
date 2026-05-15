@@ -17,6 +17,24 @@ const REMOTE_CONTROL_VISIBILITY_REPLACEMENT =
   "function a({remoteControlConnectionsState:e,slingshotEnabled:t}){let n=typeof navigator!=`undefined`&&navigator.userAgent.includes(`Linux`);return(n||t)&&(n||(e?.available??!0))&&e?.accessRequired!==!0}";
 const REMOTE_CONTROL_VISIBILITY_OLD_REPLACEMENT =
   "function a({remoteControlConnectionsState:e,slingshotEnabled:t}){let n=typeof navigator!=`undefined`&&navigator.userAgent.includes(`Linux`);return t&&(n||(e?.available??!0))&&e?.accessRequired!==!0}";
+const REMOTE_CONTROL_SETTINGS_UX_MARKER = "codexLinuxRemoteControlSettingsTabs";
+const REMOTE_CONTROL_SELECTED_TAB_NEEDLE =
+  "function rr({selectedConnectionsTab:e,showControlThisMacTab:t,showRemoteControlConnectionsSection:n,showTabbedSshPage:r}){return n?e===`control-this-mac`&&!t||e===`ssh`&&!r?`access-other-devices`:e:`ssh`}";
+const REMOTE_CONTROL_SELECTED_TAB_REPLACEMENT =
+  "function rr({selectedConnectionsTab:e,showControlThisMacTab:t,showRemoteControlConnectionsSection:n,showTabbedSshPage:r}){let i=typeof navigator!=`undefined`&&navigator.userAgent.includes(`Linux`);if(i){if(!n)return`ssh`;if(e===`access-other-devices`)return t?`control-this-mac`:`ssh`;if(e===`control-this-mac`&&!t)return`ssh`;if(e===`ssh`&&!r)return t?`control-this-mac`:`ssh`;return e}return n?e===`control-this-mac`&&!t||e===`ssh`&&!r?`access-other-devices`:e:`ssh`}";
+const REMOTE_CONTROL_LINUX_LABEL_REPLACEMENTS = [
+  ["Control this Mac from your phone or other device", "Control this computer from your phone or other device"],
+  ["Add device to control this Mac remotely", "Add a device to control this computer remotely"],
+  ["Devices that can control this Mac", "Devices that can control this computer"],
+  ["Allow this Mac to be discovered and controlled", "Allow this computer to be discovered and controlled"],
+  ["Control other devices from this Mac", "Control other devices from this computer"],
+  ["Authorize this Mac to control other devices signed in to your ChatGPT account", "Authorize this computer to control other devices signed in to your ChatGPT account"],
+  ["Devices you can control from this Mac", "Devices you can control from this computer"],
+  ["Control this Mac", "Control this computer"],
+  ["Keep Mac awake", "Keep computer awake"],
+  ["this Mac", "this computer"],
+  ["local Mac", "local computer"],
+];
 
 function linuxDeviceKeyProviderSource({ cryptoVar, fsVar, pathVar }) {
   return [
@@ -112,6 +130,48 @@ function applyLinuxRemoteControlVisibilityPatch(source) {
   return source.replace(REMOTE_CONTROL_VISIBILITY_NEEDLE, REMOTE_CONTROL_VISIBILITY_REPLACEMENT);
 }
 
+function wrapRemoteControlTabs(source, firstKey) {
+  const key = firstKey.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const pattern = new RegExp(
+    `tabs:(\\[\\{key:\`${key}\`[\\s\\S]*?\\}\\]),selectedKey:([A-Za-z_$][\\w$]*),variant:\`underline\`,onSelect:([A-Za-z_$][\\w$]*)\\}`,
+    "g",
+  );
+  return source.replace(
+    pattern,
+    "tabs:codexLinuxRemoteControlSettingsTabs($1),selectedKey:$2,variant:`underline`,onSelect:$3}",
+  );
+}
+
+function applyLinuxRemoteControlSettingsUxPatch(source) {
+  let patched = source;
+  for (const [from, to] of REMOTE_CONTROL_LINUX_LABEL_REPLACEMENTS) {
+    patched = patched.replaceAll(from, to);
+  }
+
+  if (!patched.includes(REMOTE_CONTROL_SETTINGS_UX_MARKER)) {
+    const helperNeedle = "function nr(e,t){return e.displayName.localeCompare(t.displayName)}";
+    if (!patched.includes(helperNeedle)) {
+      console.warn("WARN: Could not find remote-control settings helper needle - skipping Linux remote-control settings UX patch");
+      return patched;
+    }
+    const helper =
+      "function codexLinuxRemoteControlSettingsTabs(e){return typeof navigator!=`undefined`&&navigator.userAgent.includes(`Linux`)?e.filter(e=>e.key!==`access-other-devices`):e}";
+    patched = patched.replace(helperNeedle, `${helper}${helperNeedle}`);
+  }
+
+  patched = wrapRemoteControlTabs(patched, "control-this-mac");
+  patched = wrapRemoteControlTabs(patched, "access-other-devices");
+
+  if (patched.includes(REMOTE_CONTROL_SELECTED_TAB_REPLACEMENT)) {
+    return patched;
+  }
+  if (!patched.includes(REMOTE_CONTROL_SELECTED_TAB_NEEDLE)) {
+    console.warn("WARN: Could not find remote-control selected-tab needle - skipping Linux remote-control selected-tab patch");
+    return patched;
+  }
+  return patched.replace(REMOTE_CONTROL_SELECTED_TAB_NEEDLE, REMOTE_CONTROL_SELECTED_TAB_REPLACEMENT);
+}
+
 module.exports = [
   {
     id: "linux-remote-control-device-key",
@@ -137,8 +197,19 @@ module.exports = [
     skipDescription: "Linux remote-control visibility patch",
     apply: applyLinuxRemoteControlVisibilityPatch,
   },
+  {
+    id: "linux-remote-control-settings-ux",
+    phase: "webview-asset",
+    pattern: /^remote-connections-settings-.*\.js$/,
+    order: 20_130,
+    ciPolicy: "optional",
+    missingDescription: "remote connections settings bundle",
+    skipDescription: "Linux remote-control settings UX patch",
+    apply: applyLinuxRemoteControlSettingsUxPatch,
+  },
 ];
 
 module.exports.applyLinuxRemoteControlDeviceKeyPatch = applyLinuxRemoteControlDeviceKeyPatch;
 module.exports.applyLinuxRemoteControlPreserveConfigPatch = applyLinuxRemoteControlPreserveConfigPatch;
 module.exports.applyLinuxRemoteControlVisibilityPatch = applyLinuxRemoteControlVisibilityPatch;
+module.exports.applyLinuxRemoteControlSettingsUxPatch = applyLinuxRemoteControlSettingsUxPatch;

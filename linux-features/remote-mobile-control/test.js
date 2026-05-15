@@ -19,6 +19,7 @@ const {
 const {
   applyLinuxRemoteControlDeviceKeyPatch,
   applyLinuxRemoteControlPreserveConfigPatch,
+  applyLinuxRemoteControlSettingsUxPatch,
   applyLinuxRemoteControlVisibilityPatch,
 } = require("./patch.js");
 
@@ -34,6 +35,24 @@ function syntheticMainBundle() {
 
 function syntheticVisibilityBundle() {
   return "function a({remoteControlConnectionsState:e,slingshotEnabled:t}){return t&&(e?.available??!0)&&e?.accessRequired!==!0}export{a as t};";
+}
+
+function syntheticSettingsBundle() {
+  return [
+    "const o=`linux`,Q={jsx(){},jsxs(){}};",
+    "tabs:[{key:`control-this-mac`,name:o===`windows`?(0,Q.jsx)(z,{id:`settings.remoteConnections.tabs.controlThisMac.windows`,defaultMessage:`Control this PC`,description:`Tab label for settings that let other devices control this Windows device`}):(0,Q.jsx)(z,{id:`settings.remoteConnections.tabs.controlThisMac`,defaultMessage:`Control this Mac`,description:`Tab label for settings that let other devices control this computer`})},{key:`access-other-devices`,name:(0,Q.jsx)(z,{id:`settings.remoteConnections.tabs.accessOtherDevices`,defaultMessage:`Control other devices`,description:`Tab label for settings that let this computer control other devices`})},{key:`ssh`,name:(0,Q.jsx)(z,{id:`settings.remoteConnections.tabs.ssh`,defaultMessage:`SSH`,description:`Tab label for SSH remote connections`})}],selectedKey:je,variant:`underline`,onSelect:se}",
+    "tabs:[{key:`access-other-devices`,name:(0,Q.jsx)(z,{id:`settings.remoteConnections.tabs.accessOtherDevices`,defaultMessage:`Control other devices`,description:`Tab label for settings that let this computer control other devices`})},{key:`ssh`,name:(0,Q.jsx)(z,{id:`settings.remoteConnections.tabs.ssh`,defaultMessage:`SSH`,description:`Tab label for SSH remote connections`})}],selectedKey:je,variant:`underline`,onSelect:se}",
+    "const a=`Control this Mac from your phone or other device`,b=`Add device to control this Mac remotely`,c=`Devices that can control this Mac`,d=`Keep Mac awake`,e=`Allow this Mac to be discovered and controlled`,f=`Control other devices from this Mac`,g=`Authorize this Mac to control other devices signed in to your ChatGPT account`,h=`Devices you can control from this Mac`;",
+    "function nr(e,t){return e.displayName.localeCompare(t.displayName)}",
+    "function rr({selectedConnectionsTab:e,showControlThisMacTab:t,showRemoteControlConnectionsSection:n,showTabbedSshPage:r}){return n?e===`control-this-mac`&&!t||e===`ssh`&&!r?`access-other-devices`:e:`ssh`}",
+  ].join("");
+}
+
+function syntheticSelectedTabBundle() {
+  return [
+    "function nr(e,t){return e.displayName.localeCompare(t.displayName)}",
+    "function rr({selectedConnectionsTab:e,showControlThisMacTab:t,showRemoteControlConnectionsSection:n,showTabbedSshPage:r}){return n?e===`control-this-mac`&&!t||e===`ssh`&&!r?`access-other-devices`:e:`ssh`}",
+  ].join("");
 }
 
 function withTempFeatureRoot(enabled, fn) {
@@ -75,10 +94,12 @@ test("remote mobile control feature exposes opt-in main-bundle and webview patch
       "feature:remote-mobile-control:linux-remote-control-device-key",
       "feature:remote-mobile-control:linux-remote-control-preserve-config",
       "feature:remote-mobile-control:linux-remote-control-visibility",
+      "feature:remote-mobile-control:linux-remote-control-settings-ux",
     ]);
     assert.deepEqual(descriptors.map((descriptor) => descriptor.phase), [
       "main-bundle",
       "main-bundle",
+      "webview-asset",
       "webview-asset",
     ]);
   });
@@ -108,6 +129,54 @@ test("Linux remote-control visibility patch allows Linux when upstream marks ava
   assert.match(patched, /navigator\.userAgent\.includes\(`Linux`\)/);
   assert.match(patched, /\(n\|\|t\)&&\(n\|\|\(e\?\.available\?\?!0\)\)&&e\?\.accessRequired!==!0/);
   assert.equal(applyLinuxRemoteControlVisibilityPatch(patched), patched);
+});
+
+test("Linux remote-control settings UX patch hides unsupported outbound tab and removes Mac copy", () => {
+  const source = syntheticSettingsBundle();
+  const patched = applyLinuxRemoteControlSettingsUxPatch(source);
+
+  assert.notEqual(patched, source);
+  assert.match(patched, /codexLinuxRemoteControlSettingsTabs/);
+  assert.match(patched, /e\.filter\(e=>e\.key!==`access-other-devices`\)/);
+  assert.match(patched, /if\(e===`access-other-devices`\)return t\?`control-this-mac`:`ssh`/);
+  assert.match(patched, /Control this computer/);
+  assert.match(patched, /Control this computer from your phone or other device/);
+  assert.match(patched, /Add a device to control this computer remotely/);
+  assert.match(patched, /Devices that can control this computer/);
+  assert.match(patched, /Keep computer awake/);
+  assert.match(patched, /Allow this computer to be discovered and controlled/);
+  assert.doesNotMatch(patched, /Control this Mac/);
+  assert.doesNotMatch(patched, /this Mac/);
+  assert.equal(applyLinuxRemoteControlSettingsUxPatch(patched), patched);
+});
+
+test("Linux remote-control selected-tab fallback avoids outbound control on Linux", () => {
+  const patched = applyLinuxRemoteControlSettingsUxPatch(syntheticSelectedTabBundle());
+  const context = {
+    navigator: { userAgent: "Linux x86_64" },
+    module: { exports: {} },
+  };
+  vm.runInNewContext(`${patched};module.exports=rr;`, context);
+  const resolveTab = context.module.exports;
+
+  assert.equal(
+    resolveTab({
+      selectedConnectionsTab: "access-other-devices",
+      showControlThisMacTab: true,
+      showRemoteControlConnectionsSection: true,
+      showTabbedSshPage: true,
+    }),
+    "control-this-mac",
+  );
+  assert.equal(
+    resolveTab({
+      selectedConnectionsTab: "access-other-devices",
+      showControlThisMacTab: false,
+      showRemoteControlConnectionsSection: true,
+      showTabbedSshPage: true,
+    }),
+    "ssh",
+  );
 });
 
 test("patched Linux device-key provider can create, sign with, and delete a key", async () => {
@@ -178,6 +247,10 @@ test("remote mobile control feature participates in ASAR patching and reports", 
           path.join(assetsDir, "remote-control-connections-visibility-test.js"),
           syntheticVisibilityBundle(),
         );
+        fs.writeFileSync(
+          path.join(assetsDir, "remote-connections-settings-test.js"),
+          syntheticSettingsBundle(),
+        );
 
         const report = createPatchReport();
         patchExtractedApp(tempApp, { report });
@@ -187,9 +260,15 @@ test("remote mobile control feature participates in ASAR patching and reports", 
           path.join(assetsDir, "remote-control-connections-visibility-test.js"),
           "utf8",
         );
+        const patchedSettingsFile = fs.readFileSync(
+          path.join(assetsDir, "remote-connections-settings-test.js"),
+          "utf8",
+        );
         assert.match(patchedFile, /codexLinuxRemoteControlDeviceKeyClient/);
         assert.match(patchedFile, /n\.kind===`local`&&process\.platform!==`linux`/);
         assert.match(patchedVisibilityFile, /navigator\.userAgent\.includes\(`Linux`\)/);
+        assert.match(patchedSettingsFile, /codexLinuxRemoteControlSettingsTabs/);
+        assert.match(patchedSettingsFile, /Control this computer/);
         assert.ok(
           report.patches.some((patch) =>
             patch.name === "feature:remote-mobile-control:linux-remote-control-device-key" &&
@@ -205,6 +284,12 @@ test("remote mobile control feature participates in ASAR patching and reports", 
         assert.ok(
           report.patches.some((patch) =>
             patch.name === "feature:remote-mobile-control:linux-remote-control-visibility" &&
+            patch.status === "applied",
+          ),
+        );
+        assert.ok(
+          report.patches.some((patch) =>
+            patch.name === "feature:remote-mobile-control:linux-remote-control-settings-ux" &&
             patch.status === "applied",
           ),
         );
