@@ -15,6 +15,13 @@ building:
 }
 ```
 
+For the Nix flake build, use the declarative app variant instead because the
+git-ignored `features.json` file is not part of the flake source:
+
+```bash
+nix run .#remote-mobile-control
+```
+
 What it changes:
 
 - Replaces the macOS-only `remote-control-device-key.node` requirement with a

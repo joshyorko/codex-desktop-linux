@@ -78,6 +78,12 @@ nix run github:ilysenko/codex-desktop-linux
 
 The flake handles dependencies and patches Electron for NixOS. A GitHub Actions bot refreshes the upstream `Codex.dmg` and recursive Nix payload hashes in `main`; if you hit a hash mismatch right after an upstream release, wait for the next bot run and retry.
 
+Because flakes do not include the git-ignored `linux-features/features.json` opt-in file, Nix exposes feature-specific app variants for optional integrations. To build and run Codex Desktop with the experimental mobile remote-control feature enabled:
+
+```bash
+nix run github:ilysenko/codex-desktop-linux#remote-mobile-control
+```
+
 `nix develop github:ilysenko/codex-desktop-linux` enters a dev shell with the required tooling.
 
 ## Linux Computer Use

@@ -179,8 +179,17 @@ PY
           fi
         '';
 
-        codexDesktopPayload = pkgs.stdenv.mkDerivation {
-          pname = "codex-desktop-payload";
+        linuxFeaturesConfig = linuxFeatureIds:
+          pkgs.writeText "codex-linux-features.json" (builtins.toJSON {
+            enabled = linuxFeatureIds;
+          });
+
+        packageSuffix = linuxFeatureIds:
+          if linuxFeatureIds == [ ] then "" else "-${pkgs.lib.concatStringsSep "-" linuxFeatureIds}";
+
+        makeCodexDesktopPayload = { linuxFeatureIds ? [ ], outputHash }:
+        pkgs.stdenv.mkDerivation {
+          pname = "codex-desktop-payload${packageSuffix linuxFeatureIds}";
           version = "26.506.21252";
           src = sourceRoot;
           __structuredAttrs = true;
@@ -202,7 +211,7 @@ PY
 
           outputHashAlgo = "sha256";
           outputHashMode = "recursive";
-          outputHash = "sha256-IQ5YRXeZhf4ObXUvsr7WURygcGRuxMyix13Q4jP4F58=";
+          inherit outputHash;
           unsafeDiscardReferences.out = true;
 
           dontConfigure = true;
@@ -224,6 +233,7 @@ PY
             export CXXFLAGS="''${CXXFLAGS:-} -ffile-prefix-map=$TMPDIR=/build -fdebug-prefix-map=$TMPDIR=/build -fmacro-prefix-map=$TMPDIR=/build"
             export RUSTFLAGS="''${RUSTFLAGS:-} --remap-path-prefix=$TMPDIR=/build -C link-arg=-Wl,--build-id=none"
             export CODEX_MANAGED_NODE_SOURCE="${pkgs.nodejs}"
+            export CODEX_LINUX_FEATURES_CONFIG="${linuxFeaturesConfig linuxFeatureIds}"
             mkdir -p "$HOME" "$npm_config_cache" "$CARGO_HOME"
 
             source_dir="$TMPDIR/codex-source"
@@ -255,8 +265,15 @@ PY
           '';
         };
 
-        codexDesktop = pkgs.stdenv.mkDerivation {
-          pname = "codex-desktop";
+        makeCodexDesktop = { linuxFeatureIds ? [ ], payloadHash }:
+        let
+          codexDesktopPayload = makeCodexDesktopPayload {
+            inherit linuxFeatureIds;
+            outputHash = payloadHash;
+          };
+        in
+        pkgs.stdenv.mkDerivation {
+          pname = "codex-desktop${packageSuffix linuxFeatureIds}";
           version = "26.506.21252";
           src = codexDesktopPayload;
 
@@ -325,6 +342,15 @@ PY
           };
         };
 
+        codexDesktop = makeCodexDesktop {
+          payloadHash = "sha256-IQ5YRXeZhf4ObXUvsr7WURygcGRuxMyix13Q4jP4F58=";
+        };
+
+        codexDesktopRemoteMobileControl = makeCodexDesktop {
+          linuxFeatureIds = [ "remote-mobile-control" ];
+          payloadHash = "sha256-T7Vd20fWm7Yz5vNxC05H40rE8Oq3NFLErgxr/s/0mEk=";
+        };
+
         installer = pkgs.writeShellApplication {
           name = "codex-desktop-installer";
           runtimeInputs = [
@@ -370,12 +396,18 @@ PY
         packages = {
           default = codexDesktop;
           codex-desktop = codexDesktop;
+          codex-desktop-remote-mobile-control = codexDesktopRemoteMobileControl;
           installer = installer;
         };
 
         apps.default = {
           type = "app";
           program = "${codexDesktop}/bin/codex-desktop";
+        };
+
+        apps.remote-mobile-control = {
+          type = "app";
+          program = "${codexDesktopRemoteMobileControl}/bin/codex-desktop";
         };
 
         apps.installer = {
