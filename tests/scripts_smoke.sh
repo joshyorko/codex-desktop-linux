@@ -640,6 +640,157 @@ SCRIPT
     assert_contains "$workspace/output.log" "v22.22.2"
 }
 
+test_better_sqlite3_electron_42_source_patch() {
+    info "Checking better-sqlite3 Electron 42 source patch"
+    local workspace="$TMP_DIR/better-sqlite3-electron-42"
+    local module_dir="$workspace/node_modules/better-sqlite3"
+    local output_log="$workspace/output.log"
+
+    mkdir -p "$module_dir/src/util"
+    cat > "$module_dir/src/better_sqlite3.cpp" <<'CPP'
+void init(v8::Isolate* isolate, Addon* addon) {
+	v8::Local<v8::External> data = v8::External::New(isolate, addon);
+}
+CPP
+    cat > "$module_dir/src/util/macros.cpp" <<'CPP'
+#define EasyIsolate v8::Isolate* isolate = v8::Isolate::GetCurrent()
+#define OnlyIsolate info.GetIsolate()
+#define OnlyContext isolate->GetCurrentContext()
+#define OnlyAddon static_cast<Addon*>(info.Data().As<v8::External>()->Value())
+CPP
+    cat > "$module_dir/src/util/helpers.cpp" <<'CPP'
+void SetPrototypeGetter() {
+	recv->InstanceTemplate()->SetNativeDataProperty(
+		InternalizedFromLatin1(isolate, name),
+		func,
+		0,
+		data
+	);
+}
+CPP
+
+    (
+        ELECTRON_VERSION="42.0.1"
+        info() { echo "[INFO] $*" >&2; }
+        warn() { echo "[WARN] $*" >&2; }
+        error() { echo "[ERROR] $*" >&2; exit 1; }
+        # shellcheck disable=SC1091
+        source "$REPO_DIR/scripts/lib/native-modules.sh"
+        patch_better_sqlite3_for_v8_external_pointer_api "$module_dir"
+        patch_better_sqlite3_for_v8_external_pointer_api "$module_dir"
+    ) > "$output_log" 2>&1
+
+    assert_contains "$module_dir/src/better_sqlite3.cpp" "BETTER_SQLITE3_EXTERNAL_NEW(isolate, addon)"
+    assert_contains "$module_dir/src/util/macros.cpp" "BETTER_SQLITE3_EXTERNAL_POINTER_TAG"
+    assert_contains "$module_dir/src/util/macros.cpp" "BETTER_SQLITE3_EXTERNAL_VALUE(info.Data().As<v8::External>())"
+    assert_contains "$module_dir/src/util/helpers.cpp" "nullptr"
+    assert_contains "$output_log" "Patched better-sqlite3 source for V8 external pointer API"
+    assert_contains "$output_log" "already applied"
+}
+
+test_native_module_rebuild_uses_local_electron_rebuild_toolchain() {
+    info "Checking native module rebuild uses local Electron rebuild toolchain"
+    local workspace="$TMP_DIR/native-module-rebuild-toolchain"
+    local app_dir="$workspace/app-extracted"
+    local fake_bin="$workspace/bin"
+    local toolchain_log="$workspace/toolchain.log"
+    local output_log="$workspace/output.log"
+
+    mkdir -p "$app_dir/node_modules/better-sqlite3" "$app_dir/node_modules/node-pty" "$fake_bin"
+    printf '%s\n' '{"version":"12.9.0"}' > "$app_dir/node_modules/better-sqlite3/package.json"
+    printf '%s\n' '{"version":"1.1.0"}' > "$app_dir/node_modules/node-pty/package.json"
+
+    cat > "$fake_bin/npm" <<'SCRIPT'
+#!/usr/bin/env bash
+set -euo pipefail
+
+printf 'npm %s\n' "$*" >> "$NATIVE_TOOLCHAIN_LOG"
+args=" $* "
+
+case "$args" in
+    *" @electron/rebuild@4.0.4 "*)
+        mkdir -p node_modules/.bin
+        cat > node_modules/.bin/electron-rebuild <<'REBUILD'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'electron-rebuild %s\n' "$*" >> "$NATIVE_TOOLCHAIN_LOG"
+mkdir -p node_modules/better-sqlite3/build/Release node_modules/node-pty/build/Release
+: > node_modules/better-sqlite3/build/Release/better_sqlite3.node
+: > node_modules/node-pty/build/Release/pty.node
+REBUILD
+        chmod +x node_modules/.bin/electron-rebuild
+        ;;
+esac
+
+case "$args" in
+    *" better-sqlite3@12.9.0 "*)
+        mkdir -p node_modules/better-sqlite3/src/util
+        printf '%s\n' '{"version":"12.9.0"}' > node_modules/better-sqlite3/package.json
+        cat > node_modules/better-sqlite3/src/better_sqlite3.cpp <<'CPP'
+void init(v8::Isolate* isolate, Addon* addon) {
+	v8::Local<v8::External> data = v8::External::New(isolate, addon);
+}
+CPP
+        cat > node_modules/better-sqlite3/src/util/macros.cpp <<'CPP'
+#define EasyIsolate v8::Isolate* isolate = v8::Isolate::GetCurrent()
+#define OnlyIsolate info.GetIsolate()
+#define OnlyContext isolate->GetCurrentContext()
+#define OnlyAddon static_cast<Addon*>(info.Data().As<v8::External>()->Value())
+CPP
+        cat > node_modules/better-sqlite3/src/util/helpers.cpp <<'CPP'
+void SetPrototypeGetter() {
+	recv->InstanceTemplate()->SetNativeDataProperty(
+		InternalizedFromLatin1(isolate, name),
+		func,
+		0,
+		data
+	);
+}
+CPP
+        ;;
+esac
+
+case "$args" in
+    *" node-pty@1.1.0 "*)
+        mkdir -p node_modules/node-pty
+        printf '%s\n' '{"version":"1.1.0"}' > node_modules/node-pty/package.json
+        ;;
+esac
+SCRIPT
+    chmod +x "$fake_bin/npm"
+
+    cat > "$fake_bin/npx" <<'SCRIPT'
+#!/usr/bin/env bash
+echo "npx should not be used for electron-rebuild" >&2
+exit 99
+SCRIPT
+    chmod +x "$fake_bin/npx"
+
+    (
+        PATH="$fake_bin:$PATH"
+        export PATH
+        NATIVE_TOOLCHAIN_LOG="$toolchain_log"
+        export NATIVE_TOOLCHAIN_LOG
+        WORK_DIR="$workspace/work"
+        ELECTRON_VERSION="42.0.1"
+        ELECTRON_HEADERS_URL="https://example.invalid/electron"
+        mkdir -p "$WORK_DIR"
+        info() { echo "[INFO] $*" >&2; }
+        warn() { echo "[WARN] $*" >&2; }
+        error() { echo "[ERROR] $*" >&2; exit 1; }
+        # shellcheck disable=SC1091
+        source "$REPO_DIR/scripts/lib/native-modules.sh"
+        build_native_modules "$app_dir"
+    ) > "$output_log" 2>&1
+
+    assert_contains "$toolchain_log" "@electron/rebuild@4.0.4"
+    assert_contains "$toolchain_log" "node-abi@^4.31.0"
+    assert_contains "$toolchain_log" "electron-rebuild -v 42.0.1 --force --dist-url https://example.invalid/electron"
+    assert_contains "$output_log" "Native modules built successfully"
+    assert_file_exists "$app_dir/node_modules/better-sqlite3/build/Release/better_sqlite3.node"
+    assert_file_exists "$app_dir/node_modules/node-pty/build/Release/pty.node"
+}
+
 test_launcher_template_sanity() {
     info "Checking launcher template markers"
     assert_contains "$REPO_DIR/install.sh" 'DEFAULT_CODEX_WEBVIEW_PORT=5175'
@@ -650,6 +801,11 @@ test_launcher_template_sanity() {
     assert_contains "$REPO_DIR/scripts/lib/rebuild-report.sh" "write_rebuild_report_json"
     assert_contains "$REPO_DIR/install.sh" "MIN_BETTER_SQLITE3_VERSION_FOR_ELECTRON_41=\"12.9.0\""
     assert_contains "$REPO_DIR/scripts/lib/native-modules.sh" "better_sqlite3_build_version"
+    assert_contains "$REPO_DIR/scripts/lib/native-modules.sh" "patch_better_sqlite3_for_v8_external_pointer_api"
+    assert_contains "$REPO_DIR/scripts/lib/native-modules.sh" "@electron/rebuild@4.0.4"
+    assert_contains "$REPO_DIR/scripts/lib/native-modules.sh" "node-abi@^4.31.0"
+    assert_contains "$REPO_DIR/scripts/lib/native-modules.sh" 'node_modules/.bin/electron-rebuild'
+    assert_not_contains "$REPO_DIR/scripts/lib/native-modules.sh" "npx --yes @electron/rebuild"
     assert_contains "$REPO_DIR/scripts/lib/native-modules.sh" "prune_native_module_build_artifacts"
     assert_contains "$REPO_DIR/scripts/lib/native-modules.sh" 'find "$build_dir" -type f ! -name'
     assert_contains "$REPO_DIR/scripts/lib/native-modules.sh" 'find "$module_dir" -type f -name'
@@ -1198,6 +1354,54 @@ test_chrome_plugin_staging() {
     assert_contains "$output_log" "Chrome plugin staged from upstream DMG"
 }
 
+test_chrome_marketplace_fallback_synthesis() {
+    info "Checking Chrome marketplace fallback synthesis when upstream omits chrome"
+    local workspace="$TMP_DIR/chrome-marketplace-fallback"
+    local app_dir="$workspace/Codex.app"
+    local install_dir="$workspace/install"
+    local output_log="$workspace/output.log"
+    local marketplace="$install_dir/resources/plugins/openai-bundled/.agents/plugins/marketplace.json"
+
+    mkdir -p "$workspace" "$install_dir/resources"
+    make_fake_chrome_upstream_app "$app_dir"
+
+    # Upstream marketplace.json lists no chrome entry — exercises the
+    # synthesized-fallback path in write_bundled_plugins_marketplace.
+    cat > "$app_dir/Contents/Resources/plugins/openai-bundled/.agents/plugins/marketplace.json" <<'JSON'
+{"plugins":[{"name":"browser-use","source":{"source":"local","path":"./plugins/browser-use"},"policy":{"installation":"AVAILABLE"}}]}
+JSON
+
+    # Distinctive name + category prove the synthesized entry actually
+    # reads the staged plugin.json rather than reusing hardcoded values.
+    cat > "$app_dir/Contents/Resources/plugins/openai-bundled/plugins/chrome/.codex-plugin/plugin.json" <<'JSON'
+{"name":"chrome-fallback-test","version":"9.9.9","interface":{"category":"FallbackCategory"}}
+JSON
+
+    (
+        SCRIPT_DIR="$REPO_DIR"
+        INSTALL_DIR="$install_dir"
+        WORK_DIR="$workspace/work"
+        ARCH="x86_64"
+        ICON_SOURCE="$workspace/missing-icon.png"
+        CODEX_APP_ID="codex-desktop"
+        mkdir -p "$WORK_DIR"
+        warn() { echo "[WARN] $*" >&2; }
+        info() { echo "[INFO] $*" >&2; }
+        # shellcheck disable=SC1091
+        source "$REPO_DIR/scripts/lib/bundled-plugins.sh"
+        stage_linux_computer_use_plugin() { return 1; }
+        install_bundled_plugin_resources "$app_dir"
+    ) >"$output_log" 2>&1
+
+    assert_file_exists "$marketplace"
+    assert_contains "$marketplace" '"name": "chrome-fallback-test"'
+    assert_contains "$marketplace" '"category": "FallbackCategory"'
+    assert_contains "$marketplace" '"path": "./plugins/chrome"'
+    assert_contains "$marketplace" '"installation": "AVAILABLE"'
+    assert_contains "$marketplace" '"authentication": "ON_INSTALL"'
+    assert_not_contains "$marketplace" "Bundled marketplace does not contain chrome plugin"
+}
+
 test_chrome_native_host_manifest_writer() {
     info "Checking Chrome native host manifest writer"
     local workspace="$TMP_DIR/chrome-native-host-manifest"
@@ -1303,16 +1507,30 @@ test_linux_translucent_sidebar_default_patch_smoke() {
         'let D={removeMenu(){},setMenuBarVisibility(){},setIcon(){},once(){}};let n=require(`electron`),t=require(`node:path`),a=require(`node:fs`);...process.platform===`win32`?{autoHideMenuBar:!0}:{},process.platform===`win32`&&D.removeMenu(),foo)}),D.once(`ready-to-show`,()=>{var sa=Mi({id:`fileManager`,label:`Finder`,icon:`apps/finder.png`,kind:`fileManager`,darwin:{detect:()=>`open`,args:e=>ai(e)},win32:{label:`File Explorer`,icon:`apps/file-explorer.png`,detect:ca,args:e=>ai(e),open:async({path:e})=>la(e)}});function ca(){let e=1;return e}async function la(e){let t=ua(e);if(t&&(0,a.statSync)(t).isFile()){n.shell.showItemInFolder(t);return}let r=t??e,i=await n.shell.openPath(r);if(i)throw Error(i)}function ua(e){return e}var Ua=Mi({id:`systemDefault`,label:`System Default App`,icon:`apps/file-explorer.png`,kind:`systemDefault`,hidden:!0,darwin:{icon:`apps/finder.png`,detect:()=>`system-default`,iconPath:()=>null,args:e=>[e],open:async({path:e})=>Wa(e)},win32:{detect:()=>`system-default`,iconPath:()=>null,args:e=>[e],open:async({path:e})=>Wa(e)},linux:{detect:()=>`system-default`,iconPath:()=>null,args:e=>[e],open:async({path:e})=>Wa(e)}});async function Wa(e){return e}' \
         'function settings(){let d=ot(r,e),f=at(e),p={codeThemeId:tt(a,e).id,theme:d},x=`settings.general.appearance.chromeTheme.translucentSidebar`;return {p,x}}' \
         'function runtime(){let o=`light`,a=`electron`,l=null,f=null,C=fl(l,`light`),w=fl(f,`dark`);let T=o===`light`?C:w,E;if(T.opaqueWindows&&!XZ()){document.body.classList.add(`electron-opaque`);return E}return E}'
+    cat > "$extracted/webview/assets/app-main-test.js" <<'JS'
+let{data:c}=Qc(y.APPEARANCE_LIGHT_CHROME_THEME,s),l;let{data:u}=Qc(y.APPEARANCE_DARK_CHROME_THEME,l),d;let x=b,S;let C=o===`light`?x:S,w;if(C.opaqueWindows&&!ba()){e.classList.add(`electron-opaque`)}
+JS
+    cat > "$extracted/webview/assets/diff-view-mode-test.js" <<'JS'
+function oe(e,t){let n=o[t];return{accent:p(e?.accent)??n.accent,contrast:se(e?.contrast,n.contrast),fonts:le(e?.fonts),ink:p(e?.ink)??n.ink,opaqueWindows:e?.opaqueWindows??n.opaqueWindows,semanticColors:ue(e?.semanticColors,n.semanticColors),surface:p(e?.surface)??n.surface}}
+JS
 
     node "$REPO_DIR/scripts/patch-linux-window-ui.js" "$extracted" >"$output_log" 2>&1
     assert_contains "$extracted/webview/assets/general-settings-test.js" 'navigator.userAgent.includes(`Linux`)&&r?.opaqueWindows==null&&(d={...d,opaqueWindows:!0})'
     assert_contains "$extracted/webview/assets/index-test.js" 'document.documentElement.dataset.codexOs===`linux`&&((o===`light`?l:f)?.opaqueWindows==null&&(T={...T,opaqueWindows:!0}))'
+    assert_contains "$extracted/webview/assets/app-main-test.js" 'document.documentElement.dataset.codexOs===`linux`&&((o===`light`?c:u)?.opaqueWindows==null&&(C={...C,opaqueWindows:!0}))'
+    assert_contains "$extracted/webview/assets/diff-view-mode-test.js" 'opaqueWindows:e?.opaqueWindows??(typeof navigator<`u`&&((navigator.userAgentData?.platform??navigator.platform??navigator.userAgent).toLowerCase().includes(`linux`))?!0:n.opaqueWindows)'
     assert_occurrence_count "$extracted/webview/assets/general-settings-test.js" 'navigator.userAgent.includes(`Linux`)' '1'
     assert_occurrence_count "$extracted/webview/assets/index-test.js" 'dataset.codexOs===`linux`' '1'
+    assert_occurrence_count "$extracted/webview/assets/app-main-test.js" 'dataset.codexOs===`linux`' '1'
+    assert_occurrence_count "$extracted/webview/assets/diff-view-mode-test.js" 'toLowerCase().includes(`linux`)' '1'
+    assert_not_contains "$output_log" 'Could not find Linux opaque window default insertion point'
 
     node "$REPO_DIR/scripts/patch-linux-window-ui.js" "$extracted" >"$output_log" 2>&1
     assert_occurrence_count "$extracted/webview/assets/general-settings-test.js" 'navigator.userAgent.includes(`Linux`)' '1'
     assert_occurrence_count "$extracted/webview/assets/index-test.js" 'dataset.codexOs===`linux`' '1'
+    assert_occurrence_count "$extracted/webview/assets/app-main-test.js" 'dataset.codexOs===`linux`' '1'
+    assert_occurrence_count "$extracted/webview/assets/diff-view-mode-test.js" 'toLowerCase().includes(`linux`)' '1'
+    assert_not_contains "$output_log" 'Could not find Linux opaque window default insertion point'
 }
 
 test_linux_tray_patch_smoke() {
@@ -1340,7 +1558,7 @@ function Nw(e,n){return `icon`}
 async function Hw(e){return process.platform!==`win32`&&process.platform!==`darwin`?null:(zw=!0,Lw??Rw??(Rw=(async()=>{let r=await Ww(e.buildFlavor,e.repoRoot),i=new n.Tray(r.defaultIcon);return i})()))}
 async function Ww(e,t){if(process.platform===`darwin`){return null}let r=process.platform===`win32`?`.ico`:`.png`,a=Nw(e,process.platform),o=[...n.app.isPackaged?[(0,i.join)(process.resourcesPath,`${a}${r}`)]:[],(0,i.join)(t,`electron`,`src`,`icons`,`${a}${r}`)];for(let e of o){let t=n.nativeImage.createFromPath(e);if(!t.isEmpty())return{defaultIcon:t,chronicleRunningIcon:null}}return{defaultIcon:await n.app.getFileIcon(process.execPath,{size:process.platform===`win32`?`small`:`normal`}),chronicleRunningIcon:null}}
 var pb=class{trayMenuThreads={runningThreads:[],unreadThreads:[],pinnedThreads:[],recentThreads:[],usageLimits:[]};constructor(){this.tray={on(){},setContextMenu(){},popUpContextMenu(){}};this.onTrayButtonClick=()=>{};this.tray.on(`click`,()=>{this.onTrayButtonClick()}),this.tray.on(`right-click`,()=>{this.openNativeTrayMenu()})}async handleMessage(e){switch(e.type){case`tray-menu-threads-changed`:this.trayMenuThreads=e.trayMenuThreads;return}}openNativeTrayMenu(){this.updateChronicleTrayIcon();let e=n.Menu.buildFromTemplate(this.getNativeTrayMenuItems());e.once(`menu-will-show`,()=>{this.isNativeTrayMenuOpen=!0}),e.once(`menu-will-close`,()=>{this.isNativeTrayMenuOpen=!1,this.handleNativeTrayMenuClosed()}),this.tray.popUpContextMenu(e)}updateChronicleTrayIcon(){}getNativeTrayMenuItems(){return[]}}
-v&&k.on(`close`,e=>{this.persistPrimaryWindowBounds(k,f);let t=this.getPrimaryWindows(f).some(e=>e!==k);if(process.platform===`win32`&&f===`local`&&!this.isAppQuitting&&this.options.canHideLastLocalWindowToTray?.()===!0&&!t){e.preventDefault(),k.hide();return}if(process.platform===`darwin`&&!this.isAppQuitting&&!t){e.preventDefault(),k.hide()}});
+v&&k.on(`close`,e=>{this.persistPrimaryWindowBounds(k,f);let t=this.getPrimaryWindows(f).some(e=>e!==k);if(process.platform===`win32`&&!this.isAppQuitting&&this.options.canHideLastLocalWindowToTray?.()===!0&&!t){e.preventDefault(),k.hide();return}if(process.platform===`darwin`&&!this.isAppQuitting&&!t){e.preventDefault(),k.hide()}});
 let E=process.platform===`win32`;
 let oe=async()=>{};
 let se=async e=>{};
@@ -1352,7 +1570,7 @@ JS
     node "$REPO_DIR/scripts/patch-linux-window-ui.js" "$extracted" >"$output_log" 2>&1
     assert_contains "$extracted/.vite/build/main-test.js" 'process.platform!==`win32`&&process.platform!==`darwin`&&process.platform!==`linux`?null:'
     assert_contains "$extracted/.vite/build/main-test.js" 'nativeImage.createFromPath(process.resourcesPath+`/../content/webview/assets/app-test.png`)'
-    assert_contains "$extracted/.vite/build/main-test.js" '(process.platform===`win32`||process.platform===`linux`)&&f===`local`'
+    assert_contains "$extracted/.vite/build/main-test.js" '(process.platform===`win32`||process.platform===`linux`)&&!this.isAppQuitting'
     assert_contains "$extracted/.vite/build/main-test.js" '!this.isAppQuitting&&!(typeof codexLinuxIsQuitInProgress===`function`&&codexLinuxIsQuitInProgress())'
     assert_contains "$extracted/.vite/build/main-test.js" 'setLinuxTrayContextMenu(){let e=n.Menu.buildFromTemplate(this.getNativeTrayMenuItems())'
     assert_contains "$extracted/.vite/build/main-test.js" 'process.platform===`linux`&&this.setLinuxTrayContextMenu(),this.tray.on(`click`'
@@ -1457,7 +1675,7 @@ NODE
     node "$REPO_DIR/scripts/patch-linux-window-ui.js" "$extracted" >"$output_log" 2>&1
     assert_occurrence_count "$extracted/.vite/build/main-test.js" 'process.platform!==`linux`' '1'
     assert_occurrence_count "$extracted/.vite/build/main-test.js" 'nativeImage.createFromPath(process.resourcesPath' '1'
-    assert_occurrence_count "$extracted/.vite/build/main-test.js" 'process.platform===`linux`)&&f===`local`' '1'
+    assert_occurrence_count "$extracted/.vite/build/main-test.js" 'process.platform===`linux`)&&!this.isAppQuitting' '1'
     assert_occurrence_count "$extracted/.vite/build/main-test.js" 'setLinuxTrayContextMenu(){' '1'
     assert_occurrence_count "$extracted/.vite/build/main-test.js" 'process.platform===`linux`&&this.setLinuxTrayContextMenu(),this.tray.on(`click`' '1'
     assert_occurrence_count "$extracted/.vite/build/main-test.js" 'process.platform===`linux`?this.openNativeTrayMenu():this.onTrayButtonClick()' '1'
@@ -1765,18 +1983,18 @@ test_browser_annotation_screenshot_patch_smoke() {
     mkdir -p "$workspace"
     make_fake_extracted_asar "$extracted" 'let D={removeMenu(){},setMenuBarVisibility(){},setIcon(){},once(){}};let n=require(`electron`),t=require(`node:path`),a=require(`node:fs`);...process.platform===`win32`?{autoHideMenuBar:!0}:{},process.platform===`win32`&&D.removeMenu(),foo)}),D.once(`ready-to-show`,()=>{})'
     cat > "$extracted/.vite/build/comment-preload.js" <<'JS'
-if(M&&j?.anchor.kind===`element`){let e=qu(j,y.current)??null,t=e==null?null:rd(e);he=t?.rect??md(j.anchor),_e=t?.borderRadius}
-de=u?.target.mode===`create`?ce.find(e=>Sd(e.anchor,u.anchor.value))??null:null,fe=!M&&de!=null?ce.filter(e=>e.id!==de.id):ce,
+if(ve&&M?.anchor.kind===`element`){let e=hl(M,y.current)??null,t=e==null?null:El(e);ke=t?.rect??Rl(M.anchor),je=t?.borderRadius,Ae=Xl(M.anchor,ke,_.width,_.height)}
+Se=(!ve&&xe!=null?k.filter(e=>e.id!==xe.id):k).flatMap
 JS
 
     node "$REPO_DIR/scripts/patch-linux-window-ui.js" "$extracted" >"$output_log" 2>&1
-    assert_contains "$extracted/.vite/build/comment-preload.js" 'if(M&&j?.anchor.kind===`element`){he=md(j.anchor),_e=void 0}'
-    assert_contains "$extracted/.vite/build/comment-preload.js" 'fe=M?ue:!M&&de!=null?ce.filter(e=>e.id!==de.id):ce,'
-    assert_not_contains "$extracted/.vite/build/comment-preload.js" 'qu(j,y.current)'
+    assert_contains "$extracted/.vite/build/comment-preload.js" 'if(ve&&M?.anchor.kind===`element`){ke=Rl(M.anchor),je=void 0,Ae=Xl(M.anchor,ke,_.width,_.height)}'
+    assert_contains "$extracted/.vite/build/comment-preload.js" 'Se=(ve?_e:!ve&&xe!=null?k.filter(e=>e.id!==xe.id):k).flatMap'
+    assert_not_contains "$extracted/.vite/build/comment-preload.js" 'hl(M,y.current)'
 
     node "$REPO_DIR/scripts/patch-linux-window-ui.js" "$extracted" >"$output_log" 2>&1
-    assert_occurrence_count "$extracted/.vite/build/comment-preload.js" 'he=md(j.anchor)' '1'
-    assert_occurrence_count "$extracted/.vite/build/comment-preload.js" 'fe=M?ue' '1'
+    assert_occurrence_count "$extracted/.vite/build/comment-preload.js" 'ke=Rl(M.anchor)' '1'
+    assert_occurrence_count "$extracted/.vite/build/comment-preload.js" 'Se=(ve?_e' '1'
 }
 
 test_linux_single_instance_patch_smoke() {
@@ -1790,16 +2008,15 @@ test_linux_single_instance_patch_smoke() {
     bundle_body="$(cat <<'JS'
 let S=globalThis.__codexSmoke;
 let n={app:{whenReady(){return Promise.resolve()},quit(){S.quitCount++},requestSingleInstanceLock(){S.lockCount++;return true},on(e,t){S.appHandlers[e]=t},off(e,t){S.offHandlers[e]=t}}};
-let t={Er(){return {info(){}}},jn:class{add(e){S.disposables.push(e)}}};
+let t={Er(){return {info(){}}},jn:class{add(e){S.disposables.push(e)}},y(){return{setSecondInstanceArgsHandler:e=>{S.initialHandler=e}}},g(e){return e},t(e){return Array.isArray(e)&&e.includes(`--open-project`)}};
 let i={default:{dirname(e){S.dirnameCalls.push(e);return `/tmp`}}},o={mkdirSync(...e){S.mkdirSyncCalls.push(e)},rmSync(...e){S.rmSyncCalls.push(e)}},u={default:{createServer(e){S.createServerCalls++;S.socketConnectionHandler=e;return S.socketServer}}};
-async function uT(){let k=new t.jn;t.Er().info(`Launching app`,{safe:{agentRunId:process.env.CODEX_ELECTRON_AGENT_RUN_ID?.trim()||null}});let A=Date.now();await n.app.whenReady();let w=(...e)=>{S.traceCalls.push(e)},M={globalState:S.globalState,repoRoot:`/tmp/codex-smoke`},z=`local`,R={deepLinks:{queueProcessArgs(e){S.queueArgs.push(e);return Array.isArray(e)&&e.some(e=>{let t=String(e);return t.startsWith(`codex://`)||t.startsWith(`codex-browser-sidebar://`)})},flushPendingDeepLinks(){S.flushPendingDeepLinksCalls++;return Promise.resolve()}},navigateToRoute(e,t){S.navigateCalls.push({windowId:e.id,path:t})}},P={windowManager:{sendMessageToWindow(e,t){S.messages.push({windowId:e.id,message:t})}},hotkeyWindowLifecycleManager:{hide(){S.hideCalls++},show(){S.showCalls++;return S.hotkeyWindowShowResult},ensureHotkeyWindowController(){S.ensureHotkeyWindowControllerCalls++;return S.hotkeyWindowController}},getPrimaryWindow(){return S.primaryWindow},createFreshLocalWindow(e){S.createFreshLocalWindowCalls.push(e);return S.createdWindow},ensureHostWindow(e){S.ensureHostWindowCalls.push(e);return S.primaryWindow??S.createdWindow}},g={reportNonFatal(e,t){S.errors.push({error:String(e),meta:t})}},l=e=>{S.initialHandler=e},re=e=>{S.focusCalls.push(e.id);e.isMinimized()&&e.restore(),e.show(),e.focus()},ie=async()=>{S.ieCalls++;try{P.hotkeyWindowLifecycleManager.hide();let e=P.getPrimaryWindow(`local`)??await P.createFreshLocalWindow(`/`);if(e==null)return;re(e)}catch(e){g.reportNonFatal(e instanceof Error?e:`Failed to open window on second instance`,{kind:`second-instance-open-window-failed`})}};l(e=>{R.deepLinks.queueProcessArgs(e)||ie()});let ae=async(e,t)=>{P.hotkeyWindowLifecycleManager.hide();let n=P.getPrimaryWindow(z),r=n??await P.createFreshLocalWindow(e);r!=null&&(n!=null&&t.navigateExistingWindow&&R.navigateToRoute(r,e),re(r))},oe=async()=>{S.trayStartupCalls++};let E=process.platform===`win32`;E&&oe();let me=await P.ensureHostWindow(z);me&&re(me),w(`local window ensured`,A,{hostId:z,localWindowVisible:me?.isVisible()??!1}),A=Date.now(),await R.deepLinks.flushPendingDeepLinks()}
+async function uT(){let{setSecondInstanceArgsHandler:l}=t.y(),k=new t.jn;k.add(()=>{}),t.Er().info(`Launching app`,{safe:{agentRunId:process.env.CODEX_ELECTRON_AGENT_RUN_ID?.trim()||null}});let A=Date.now();await n.app.whenReady();let w=(...e)=>{S.traceCalls.push(e)},M={globalState:S.globalState,repoRoot:`/tmp/codex-smoke`},z=`local`,R={deepLinks:{queueProcessArgs(e){S.queueArgs.push(e);return Array.isArray(e)&&e.some(e=>{let t=String(e);return t.startsWith(`codex://`)||t.startsWith(`codex-browser-sidebar://`)})},flushPendingDeepLinks(){S.flushPendingDeepLinksCalls++;return Promise.resolve()}},navigateToRoute(e,t){S.navigateCalls.push({windowId:e.id,path:t})}},P={windowManager:{sendMessageToWindow(e,t){S.messages.push({windowId:e.id,message:t})}},hotkeyWindowLifecycleManager:{hide(){S.hideCalls++},show(){S.showCalls++;return S.hotkeyWindowShowResult},ensureHotkeyWindowController(){S.ensureHotkeyWindowControllerCalls++;return S.hotkeyWindowController}},getPrimaryWindow(){return S.primaryWindow},createFreshLocalWindow(e){S.createFreshLocalWindowCalls.push(e);return S.createdWindow},ensureHostWindow(e){S.ensureHostWindowCalls.push(e);return S.primaryWindow??S.createdWindow}},g={reportNonFatal(e,t){S.errors.push({error:String(e),meta:t})}},re=e=>{S.focusCalls.push(e.id);e.isMinimized()&&e.restore(),e.show(),e.focus()},ie=async()=>{S.ieCalls++;try{P.hotkeyWindowLifecycleManager.hide();let e=P.getPrimaryWindow()??await P.createFreshLocalWindow(`/`);if(e==null)return;re(e)}catch(e){g.reportNonFatal(e instanceof Error?e:`Failed to open window on second instance`,{kind:`second-instance-open-window-failed`})}};l(e=>{let n=t.t(t.g(e));if(R.deepLinks.queueProcessArgs(e)){n&&ie();return}if(n){ie();return}ie()});let ae=async(e,t)=>{P.hotkeyWindowLifecycleManager.hide();let n=P.getPrimaryWindow(),r=n??await P.createFreshLocalWindow(e);r!=null&&(n!=null&&t.navigateExistingWindow&&R.navigateToRoute(r,e),re(r))},oe=async()=>{S.trayStartupCalls++};let E=process.platform===`win32`;E&&oe();let me=await P.ensureHostWindow(z);me&&re(me),w(`local window ensured`,A,{hostId:z,localWindowVisible:me?.isVisible()??!1}),A=Date.now(),await R.deepLinks.flushPendingDeepLinks()}
 JS
 )"
     make_fake_extracted_asar "$extracted" "$bundle_body"
 
     node "$REPO_DIR/scripts/patch-linux-window-ui.js" "$extracted" >"$output_log" 2>&1
     assert_contains "$extracted/.vite/build/main-test.js" 'process.platform===`linux`&&!n.app.requestSingleInstanceLock()'
-    assert_contains "$extracted/.vite/build/main-test.js" 'codexLinuxSecondInstanceHandler'
     assert_contains "$extracted/.vite/build/main-test.js" 'codexLinuxHandleLaunchActionArgs'
     assert_contains "$extracted/.vite/build/main-test.js" 'e.includes(`--new-chat`)'
     assert_contains "$extracted/.vite/build/main-test.js" 'e.includes(`--quick-chat`)'
@@ -2021,9 +2238,7 @@ async function boot(settings = {}, env = { CODEX_DESKTOP_LAUNCH_ACTION_SOCKET: "
 
 (async () => {
   await boot();
-  assert(typeof state.appHandlers["before-quit"] === "function", "before-quit handler was not registered");
-  assert(typeof state.appHandlers["second-instance"] === "function", "second-instance handler was not registered");
-  assert(typeof state.initialHandler === "function", "initial argv handler was not registered");
+  assert(typeof state.initialHandler === "function", "setSecondInstanceArgsHandler callback was not registered");
   assert(state.createServerCalls === 1, "warm-start launch action socket server was not created");
   assert(state.socketListenCalls.length === 1 && state.socketListenCalls[0] === "/tmp/codex-smoke.sock", "warm-start launch action socket did not listen on the configured path");
   assert(typeof state.socketConnectionHandler === "function", "warm-start launch action socket connection handler was not registered");
@@ -2035,7 +2250,7 @@ async function boot(settings = {}, env = { CODEX_DESKTOP_LAUNCH_ACTION_SOCKET: "
   assert(state.trayStartupCalls === 1, "startup should initialize the Linux tray when the tray gate is enabled");
 
   async function runSecondInstance(args) {
-    state.appHandlers["second-instance"]({}, args);
+    state.initialHandler(args);
     await flushAsyncHandlers();
   }
 
@@ -2187,26 +2402,10 @@ async function boot(settings = {}, env = { CODEX_DESKTOP_LAUNCH_ACTION_SOCKET: "
 
   resetCalls();
   state.primaryWindow = state.primary;
-  state.appHandlers["before-quit"]();
-  await runSecondInstance(["codex-desktop", "--quick-chat"]);
-  assert(state.messages.length === 0, "quit-in-progress second-instance args should not reopen quick chat");
-  assert(state.focusCalls.length === 0, "quit-in-progress second-instance args should not focus a window");
-  assert(state.ieCalls === 0, "quit-in-progress second-instance args should not hit the focus fallback");
-
-  resetCalls();
-  state.primaryWindow = state.primary;
-  let socketAfterQuit = await runSocketArgs(["codex-desktop", "--prompt-chat"]);
-  assert(socketAfterQuit.outputs[0] === "ok\n", "quit-in-progress warm-start socket should still acknowledge handled args");
-  assert(state.openHomeCalls === 0, "quit-in-progress warm-start socket should not open the prompt");
-  assert(state.focusCalls.length === 0, "quit-in-progress warm-start socket should not focus the main window");
-  assert(state.ieCalls === 0, "quit-in-progress warm-start socket should not fall back to focus");
-
-  resetCalls();
-  state.primaryWindow = state.primary;
   await runInitialArgs(["codex-desktop", "--new-chat"]);
-  assert(state.createFreshLocalWindowCalls.length === 0, "quit-in-progress initial args should not open a new window");
-  assert(state.navigateCalls.length === 0, "quit-in-progress initial args should not navigate an existing window");
-  assert(state.focusCalls.length === 0, "quit-in-progress initial args should not focus the main window");
+  assert(state.createFreshLocalWindowCalls.length === 0, "initial --new-chat should reuse a warm primary window");
+  assert(state.navigateCalls.length === 1 && state.navigateCalls[0].path === "/", "initial --new-chat should navigate an existing window to /");
+  assert(state.focusCalls.length === 1 && state.focusCalls[0] === "primary", "initial --new-chat should focus the main window");
 
   await boot({ promptChatEnabled: false });
   resetCalls();
@@ -2247,9 +2446,6 @@ NODE
 
     node "$REPO_DIR/scripts/patch-linux-window-ui.js" "$extracted" >"$output_log" 2>&1
     assert_occurrence_count "$extracted/.vite/build/main-test.js" '!n.app.requestSingleInstanceLock()' '1'
-    assert_occurrence_count "$extracted/.vite/build/main-test.js" 'codexLinuxBeforeQuitHandler=()=>{typeof codexLinuxMarkQuitInProgress===`function`&&codexLinuxMarkQuitInProgress()}' '1'
-    assert_occurrence_count "$extracted/.vite/build/main-test.js" 'n.app.on(`before-quit`,codexLinuxBeforeQuitHandler)' '1'
-    assert_occurrence_count "$extracted/.vite/build/main-test.js" 'codexLinuxSecondInstanceHandler' '3'
     assert_occurrence_count "$extracted/.vite/build/main-test.js" 'codexLinuxQuitInProgress=!1' '1'
     assert_occurrence_count "$extracted/.vite/build/main-test.js" 'codexLinuxIsQuitInProgress=()=>codexLinuxQuitInProgress===!0' '1'
     assert_occurrence_count "$extracted/.vite/build/main-test.js" 'codexLinuxHandleLaunchActionArgs=' '1'
@@ -2265,79 +2461,6 @@ NODE
     assert_occurrence_count "$extracted/.vite/build/main-test.js" 'codexLinuxStartLaunchActionSocket=' '1'
     assert_occurrence_count "$extracted/.vite/build/main-test.js" 'codexLinuxOpenQuickChat=' '1'
     assert_occurrence_count "$extracted/.vite/build/main-test.js" 'codexLinuxPrewarmHotkeyWindow()' '1'
-
-    node - "$REPO_DIR" "$extracted" "$workspace" <<'NODE'
-const childProcess = require("child_process");
-const fs = require("fs");
-const path = require("path");
-
-const repoDir = process.argv[2];
-const baseExtracted = process.argv[3];
-const workspace = process.argv[4];
-const patcher = path.join(repoDir, "scripts", "patch-linux-window-ui.js");
-const launchPatchSource = fs.readFileSync(path.join(repoDir, "scripts", "patches", "launch-actions.js"), "utf8");
-const mainBundlePath = path.join(".vite", "build", "main-test.js");
-const baseMainPath = path.join(baseExtracted, mainBundlePath);
-const currentSource = fs.readFileSync(baseMainPath, "utf8");
-
-function assert(condition, message) {
-  if (!condition) {
-    throw new Error(message);
-  }
-}
-
-function extractConst(name) {
-  const match = launchPatchSource.match(new RegExp(`const ${name} =\\n    "((?:\\\\.|[^"])*)";`));
-  assert(match, `Could not extract ${name}`);
-  return JSON.parse(`"${match[1]}"`);
-}
-
-function extractCurrentLaunchActionPatch(source) {
-  const match = source.match(/let (?:codexLinux[A-Za-z_$][\w$]*=.*?,)*ae=async\(e,t\)=>\{P\.hotkeyWindowLifecycleManager\.hide\(\);.*?;let oe=async\(\)=>\{/);
-  assert(match, "Could not extract current launch-action patch from smoke bundle");
-  return match[0];
-}
-
-const currentPatch = extractCurrentLaunchActionPatch(currentSource);
-const startupPrewarmNeedle = "codexLinuxPrewarmHotkeyWindow(),A=Date.now(),await R.deepLinks.flushPendingDeepLinks()";
-const startupPrewarmPattern = /codexLinuxPrewarmHotkeyWindow\(\).*?await R\.deepLinks\.flushPendingDeepLinks\(\)/;
-const variants = [
-  ["old-flags-first", extractConst("oldLaunchActionPatch")],
-  ["deep-link-first-all-args", extractConst("deepLinkFirstLaunchActionPatch")],
-  ["warm-start-without-hotkey", extractConst("deepLinkAwareExistingWindowLaunchActionPatch")],
-  ["open-home-without-socket", extractConst("openHomeHotkeyWindowLaunchActionPatch")],
-  ["socket-without-controller-prewarm", extractConst("socketHotkeyWindowLaunchActionPatch")],
-  ["show-based-hotkey-window", extractConst("showBasedHotkeyWindowLaunchActionPatch")],
-  ["fresh-window", extractConst("freshWindowLaunchActionPatch")],
-];
-
-for (const [name, variant] of variants) {
-  const variantDir = path.join(workspace, `upgrade-${name}`);
-  fs.cpSync(baseExtracted, variantDir, { recursive: true });
-  const variantMainPath = path.join(variantDir, mainBundlePath);
-  const variantSource = currentSource
-    .replace(currentPatch, variant)
-    .replace(`process.platform===\`linux\`&&${startupPrewarmNeedle}`, "A=Date.now(),await R.deepLinks.flushPendingDeepLinks()")
-    .replace(startupPrewarmNeedle, "A=Date.now(),await R.deepLinks.flushPendingDeepLinks()");
-  fs.writeFileSync(variantMainPath, variantSource, "utf8");
-  childProcess.execFileSync(process.execPath, [patcher, variantDir], {
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  const upgraded = fs.readFileSync(variantMainPath, "utf8");
-  assert(upgraded.includes("codexLinuxGetHotkeyWindowController="), `${name} variant did not include the hotkey controller accessor`);
-  assert(upgraded.includes("ensureHotkeyWindowController"), `${name} variant did not use the real hotkey window controller`);
-  assert(upgraded.includes("codexLinuxPrewarmHotkeyWindow="), `${name} variant did not include the hotkey prompt prewarm helper`);
-  assert(startupPrewarmPattern.test(upgraded), `${name} variant did not include startup hotkey prompt prewarming`);
-  assert(upgraded.includes("codexLinuxStartLaunchActionSocket="), `${name} variant did not include the fast warm-start socket handler`);
-  assert(upgraded.includes("o.mkdirSync(i.default.dirname(e)"), `${name} variant used the wrong fs namespace for the socket directory`);
-  assert(!upgraded.includes("o.default.mkdirSync"), `${name} variant kept the broken fs.default socket setup`);
-  assert(!upgraded.includes("let e=P.hotkeyWindowLifecycleManager;typeof e.openHome"), `${name} variant kept the fake lifecycle-manager openHome path`);
-  assert(!upgraded.includes("P.hotkeyWindowLifecycleManager.prewarm?.()"), `${name} variant kept the fake lifecycle-manager prewarm path`);
-  assert(!upgraded.includes("P.hotkeyWindowLifecycleManager.show()||await P.ensureHostWindow(z)"), `${name} variant kept the show-based hotkey handler`);
-  assert(!upgraded.includes("codexLinuxOpenNewChat="), `${name} variant kept the fresh-window handler`);
-  assert(!upgraded.includes("Array.isArray(e)&&R.deepLinks.queueProcessArgs(e)?!0"), `${name} variant kept broad deeplink routing`);
-}
-NODE
 }
 
 test_linux_computer_use_gate_patch_smoke() {
@@ -2460,10 +2583,13 @@ main() {
     test_installer_detects_electron_version_from_plist
     test_installer_keeps_electron_fallback_for_bad_metadata
     test_managed_node_runtime_source_install
+    test_better_sqlite3_electron_42_source_patch
+    test_native_module_rebuild_uses_local_electron_rebuild_toolchain
     test_browser_use_node_repl_fallback_runtime
     test_browser_use_node_repl_glibc_pidfd_patch_static
     test_browser_use_node_repl_ldd_output_compatibility
     test_chrome_plugin_staging
+    test_chrome_marketplace_fallback_synthesis
     test_chrome_native_host_manifest_writer
     test_launcher_template_sanity
     test_side_by_side_launcher_identity

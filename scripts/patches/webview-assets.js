@@ -7,6 +7,20 @@ const path = require("node:path");
 // They stay fail-soft because upstream chunk names and minified symbols drift.
 function applyLinuxOpaqueWindowsDefaultPatch(currentSource) {
   let patchedSource = currentSource;
+  let warnedMissingNeedle = false;
+  const linuxDefaultPatched = () =>
+    patchedSource.includes("opaqueWindows:e?.opaqueWindows??(typeof navigator<`u`&&") ||
+    patchedSource.includes("navigator.userAgent.includes(`Linux`)&&") ||
+    patchedSource.includes("document.documentElement.dataset.codexOs===`linux`&&");
+  const warnMissingNeedle = () => {
+    if (warnedMissingNeedle || linuxDefaultPatched()) {
+      return;
+    }
+    warnedMissingNeedle = true;
+    console.warn(
+      "WARN: Could not find Linux opaque window default insertion point — skipping settings default patch",
+    );
+  };
 
   const mergeNeedle = "opaqueWindows:e?.opaqueWindows??n.opaqueWindows,semanticColors:";
   const mergePatch =
@@ -17,9 +31,7 @@ function applyLinuxOpaqueWindowsDefaultPatch(currentSource) {
   } else if (patchedSource.includes(mergeNeedle)) {
     patchedSource = patchedSource.replace(mergeNeedle, mergePatch);
   } else if (patchedSource.includes("opaqueWindows") && patchedSource.includes("semanticColors")) {
-    console.warn(
-      "WARN: Could not find Linux opaque window default insertion point — skipping settings default patch",
-    );
+    warnMissingNeedle();
   }
 
   const settingsNeedle =
@@ -41,6 +53,20 @@ function applyLinuxOpaqueWindowsDefaultPatch(currentSource) {
     patchedSource = patchedSource.replace(currentSettingsNeedle, currentSettingsPatch);
   }
 
+  const currentSettingsRegex =
+    /setThemePatch:([A-Za-z_$][\w$]*),theme:([A-Za-z_$][\w$]*)\}=([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*)\),([A-Za-z_$][\w$]*)=/;
+  if (patchedSource.includes("navigator.userAgent.includes(`Linux`)&&x?.opaqueWindows==null")) {
+    // Already patched by the current-settings branch above.
+  } else if (/navigator\.userAgent\.includes\(`Linux`\)&&[A-Za-z_$][\w$]*\?\.opaqueWindows==null/.test(patchedSource)) {
+    // Already patched with drifted minified names.
+  } else if (currentSettingsRegex.test(patchedSource)) {
+    patchedSource = patchedSource.replace(
+      currentSettingsRegex,
+      (match, setThemePatchVar, themeVar, hookVar, variantVar, nextVar) =>
+        `setThemePatch:${setThemePatchVar},theme:${themeVar}}=${hookVar}(${variantVar});navigator.userAgent.includes(\`Linux\`)&&${themeVar}?.opaqueWindows==null&&(${themeVar}={...${themeVar},opaqueWindows:!0});let ${nextVar}=`,
+    );
+  }
+
   const runtimeNeedle =
     "let T=o===`light`?C:w,E;if(T.opaqueWindows&&!XZ()){";
   const runtimePatch =
@@ -58,6 +84,40 @@ function applyLinuxOpaqueWindowsDefaultPatch(currentSource) {
     // Already patched.
   } else if (patchedSource.includes(currentRuntimeNeedle)) {
     patchedSource = patchedSource.replace(currentRuntimeNeedle, currentRuntimePatch);
+  }
+
+  if (!patchedSource.includes("document.documentElement.dataset.codexOs===`linux`&&")) {
+    const currentRuntimeRegex =
+      /let\{data:([A-Za-z_$][\w$]*)\}=Qc\([A-Za-z_$][\w$]*\.APPEARANCE_LIGHT_CHROME_THEME,[A-Za-z_$][\w$]*\).*?let\{data:([A-Za-z_$][\w$]*)\}=Qc\([A-Za-z_$][\w$]*\.APPEARANCE_DARK_CHROME_THEME,[A-Za-z_$][\w$]*\).*?let ([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)===`light`\?([A-Za-z_$][\w$]*):([A-Za-z_$][\w$]*),/;
+    const currentRuntimeMatch = patchedSource.match(currentRuntimeRegex);
+    if (currentRuntimeMatch != null) {
+      const [
+        ,
+        lightThemeRawVar,
+        darkThemeRawVar,
+        selectedThemeVar,
+        resolvedVariantVar,
+        lightThemeVar,
+        darkThemeVar,
+      ] = currentRuntimeMatch;
+      const selectorNeedle =
+        `let ${selectedThemeVar}=${resolvedVariantVar}===\`light\`?${lightThemeVar}:${darkThemeVar},`;
+      const selectorPatch =
+        `let ${selectedThemeVar}=${resolvedVariantVar}===\`light\`?${lightThemeVar}:${darkThemeVar};document.documentElement.dataset.codexOs===\`linux\`&&((${resolvedVariantVar}===\`light\`?${lightThemeRawVar}:${darkThemeRawVar})?.opaqueWindows==null&&(${selectedThemeVar}={...${selectedThemeVar},opaqueWindows:!0}));let `;
+      if (patchedSource.includes(selectorNeedle)) {
+        patchedSource = patchedSource.replace(selectorNeedle, selectorPatch);
+      }
+    }
+  }
+
+  if (
+    patchedSource === currentSource &&
+    !linuxDefaultPatched() &&
+    (currentSource.includes("opaqueWindows") ||
+      currentSource.includes("electron-opaque") ||
+      currentSource.includes("translucentSidebar"))
+  ) {
+    warnMissingNeedle();
   }
 
   return patchedSource;
@@ -99,10 +159,16 @@ function applyBrowserAnnotationScreenshotPatch(currentSource) {
   } else if (patchedSource.includes(liveElementScreenshotNeedle)) {
     patchedSource = patchedSource.replace(liveElementScreenshotNeedle, storedAnchorScreenshotPatch);
   } else {
+    const currentSelectedElementNeedle =
+      "if(ve&&M?.anchor.kind===`element`){let e=hl(M,y.current)??null,t=e==null?null:El(e);ke=t?.rect??Rl(M.anchor),je=t?.borderRadius,Ae=Xl(M.anchor,ke,_.width,_.height)}";
+    const currentSelectedElementPatch =
+      "if(ve&&M?.anchor.kind===`element`){ke=Rl(M.anchor),je=void 0,Ae=Xl(M.anchor,ke,_.width,_.height)}";
     const currentElementScreenshotRegex =
       /if\(([A-Za-z_$][\w$]*)&&([A-Za-z_$][\w$]*)\?\.anchor\.kind===`element`\)\{let e=[^;{}]+?\?\?null,t=e==null\?null:[A-Za-z_$][\w$]*\(e\);([A-Za-z_$][\w$]*)=t\?\.rect\?\?([A-Za-z_$][\w$]*)\(\2\.anchor\),([A-Za-z_$][\w$]*)=t\?\.borderRadius\}/;
-    const currentElementScreenshotMatch = patchedSource.match(currentElementScreenshotRegex);
-    if (currentElementScreenshotMatch != null) {
+    if (patchedSource.includes(currentSelectedElementNeedle)) {
+      patchedSource = patchedSource.replace(currentSelectedElementNeedle, currentSelectedElementPatch);
+    } else if (currentElementScreenshotRegex.test(patchedSource)) {
+      const currentElementScreenshotMatch = patchedSource.match(currentElementScreenshotRegex);
       const [, screenshotModeVar, selectedCommentVar, rectVar, anchorRectFn, radiusVar] = currentElementScreenshotMatch;
       patchedSource = patchedSource.replace(
         currentElementScreenshotRegex,
@@ -126,10 +192,16 @@ function applyBrowserAnnotationScreenshotPatch(currentSource) {
   } else {
     const currentMarkersNeedle = "be=(!ge&&ye!=null?A.filter(e=>e.id!==ye.id):A).flatMap";
     const currentMarkersPatch = "be=(ge?he:!ge&&ye!=null?A.filter(e=>e.id!==ye.id):A).flatMap";
+    const currentSelectedMarkersNeedle = "Se=(!ve&&xe!=null?k.filter(e=>e.id!==xe.id):k).flatMap";
+    const currentSelectedMarkersPatch = "Se=(ve?_e:!ve&&xe!=null?k.filter(e=>e.id!==xe.id):k).flatMap";
     if (patchedSource.includes(currentMarkersPatch)) {
+      // Already patched.
+    } else if (patchedSource.includes(currentSelectedMarkersPatch)) {
       // Already patched.
     } else if (patchedSource.includes(currentMarkersNeedle)) {
       patchedSource = patchedSource.replace(currentMarkersNeedle, currentMarkersPatch);
+    } else if (patchedSource.includes(currentSelectedMarkersNeedle)) {
+      patchedSource = patchedSource.replace(currentSelectedMarkersNeedle, currentSelectedMarkersPatch);
     } else {
       console.warn("WARN: Could not find browser annotation screenshot markers — skipping screenshot marker patch");
     }

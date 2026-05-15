@@ -22,7 +22,7 @@
 
         codexDmg = pkgs.fetchurl {
           url = "https://persistent.oaistatic.com/codex-app-prod/Codex.dmg";
-          hash = "sha256-4FroU+UDXJSbB5FfjGhiGyXrQ/R+UYXuaYPoR7oXbyc=";
+          hash = "sha256-WTeptN8D9hF2ffvlJKppfLTOJr5Z0hjokHCnGX6drk0=";
         };
 
         electronLibs = with pkgs; [
@@ -194,7 +194,7 @@ PY
             pkgs.gnused
             pkgs.makeWrapper
             pkgs.nodejs
-            pkgs.p7zip
+            pkgs._7zz
             pkgs.patchelf
             pkgs.python3
             pkgs.unzip
@@ -333,7 +333,7 @@ PY
             pkgs.bash
             pkgs.nodejs
             pkgs.python3
-            pkgs.p7zip
+            pkgs._7zz
             pkgs.curl
             pkgs.unzip
             pkgs.gnumake
@@ -389,7 +389,7 @@ PY
           packages = [
             pkgs.nodejs
             pkgs.python3
-            pkgs.p7zip
+            pkgs._7zz
             pkgs.curl
             pkgs.unzip
             pkgs.gnumake
