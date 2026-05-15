@@ -1473,6 +1473,12 @@ JSON
         # shellcheck disable=SC1091
         source "$REPO_DIR/scripts/lib/bundled-plugins.sh"
         stage_linux_computer_use_plugin() { return 1; }
+        build_chrome_extension_host() {
+            local fake_host="$workspace/codex-chrome-extension-host"
+            printf '#!/bin/sh\n' > "$fake_host"
+            chmod +x "$fake_host"
+            printf '%s\n' "$fake_host"
+        }
         install_bundled_plugin_resources "$app_dir"
     ) >"$output_log" 2>&1
 
