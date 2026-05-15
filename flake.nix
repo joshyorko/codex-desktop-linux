@@ -202,7 +202,7 @@ PY
 
           outputHashAlgo = "sha256";
           outputHashMode = "recursive";
-          outputHash = "sha256-eMbtWC/KDyfZdzVJsfvpk6RxR37QUz26HzHT6yqbXH8=";
+          outputHash = "sha256-c1sqCLidGcnZZNJHvoArQtC1IKVJa/JyXb/yV/HwiHM=";
           unsafeDiscardReferences.out = true;
 
           dontConfigure = true;
