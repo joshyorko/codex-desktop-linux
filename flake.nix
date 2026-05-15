@@ -179,8 +179,17 @@ PY
           fi
         '';
 
-        codexDesktopPayload = pkgs.stdenv.mkDerivation {
-          pname = "codex-desktop-payload";
+        linuxFeaturesConfig = linuxFeatureIds:
+          pkgs.writeText "codex-linux-features.json" (builtins.toJSON {
+            enabled = linuxFeatureIds;
+          });
+
+        packageSuffix = linuxFeatureIds:
+          if linuxFeatureIds == [ ] then "" else "-${pkgs.lib.concatStringsSep "-" linuxFeatureIds}";
+
+        makeCodexDesktopPayload = { linuxFeatureIds ? [ ], outputHash }:
+        pkgs.stdenv.mkDerivation {
+          pname = "codex-desktop-payload${packageSuffix linuxFeatureIds}";
           version = "26.506.21252";
           src = sourceRoot;
           __structuredAttrs = true;
@@ -202,7 +211,7 @@ PY
 
           outputHashAlgo = "sha256";
           outputHashMode = "recursive";
-          outputHash = "sha256-SlGeq+nvuWRRPvKcy2OByUv7yLRmN4yK4Wg8WubJXMM=";
+          inherit outputHash;
           unsafeDiscardReferences.out = true;
 
           dontConfigure = true;
@@ -219,10 +228,12 @@ PY
             export CARGO_HOME="$TMPDIR/cargo-home"
             export CARGO_BUILD_JOBS=1
             export SOURCE_DATE_EPOCH=1
+            export CODEX_LINUX_ENABLE_COMPUTER_USE_UI=1
             export CFLAGS="''${CFLAGS:-} -ffile-prefix-map=$TMPDIR=/build -fdebug-prefix-map=$TMPDIR=/build -fmacro-prefix-map=$TMPDIR=/build"
             export CXXFLAGS="''${CXXFLAGS:-} -ffile-prefix-map=$TMPDIR=/build -fdebug-prefix-map=$TMPDIR=/build -fmacro-prefix-map=$TMPDIR=/build"
             export RUSTFLAGS="''${RUSTFLAGS:-} --remap-path-prefix=$TMPDIR=/build -C link-arg=-Wl,--build-id=none"
             export CODEX_MANAGED_NODE_SOURCE="${pkgs.nodejs}"
+            export CODEX_LINUX_FEATURES_CONFIG="${linuxFeaturesConfig linuxFeatureIds}"
             mkdir -p "$HOME" "$npm_config_cache" "$CARGO_HOME"
 
             source_dir="$TMPDIR/codex-source"
@@ -244,18 +255,6 @@ PY
             export CODEX_INSTALL_DIR="$out/opt/codex-desktop"
             ${pkgs.bash}/bin/bash "$source_dir/install.sh" "$source_dir/Codex.dmg"
 
-            rm -rf "$CODEX_INSTALL_DIR/resources/plugins/openai-bundled/plugins/computer-use"
-            marketplace="$CODEX_INSTALL_DIR/resources/plugins/openai-bundled/.agents/plugins/marketplace.json"
-            if [ -f "$marketplace" ]; then
-              node - "$marketplace" <<'NODE'
-              const fs = require("fs");
-              const marketplacePath = process.argv[2];
-              const marketplace = JSON.parse(fs.readFileSync(marketplacePath, "utf8"));
-              marketplace.plugins = (marketplace.plugins || []).filter((plugin) => plugin.name !== "computer-use");
-              fs.writeFileSync(marketplacePath, JSON.stringify(marketplace, null, 2) + "\n");
-NODE
-            fi
-
             asar extract "$CODEX_INSTALL_DIR/resources/app.asar" "$CODEX_INSTALL_DIR/resources/app-extracted"
             rm -f "$CODEX_INSTALL_DIR/resources/app.asar"
             rm -rf "$CODEX_INSTALL_DIR/resources/app.asar.unpacked"
@@ -266,8 +265,15 @@ NODE
           '';
         };
 
-        codexDesktop = pkgs.stdenv.mkDerivation {
-          pname = "codex-desktop";
+        makeCodexDesktop = { linuxFeatureIds ? [ ], payloadHash }:
+        let
+          codexDesktopPayload = makeCodexDesktopPayload {
+            inherit linuxFeatureIds;
+            outputHash = payloadHash;
+          };
+        in
+        pkgs.stdenv.mkDerivation {
+          pname = "codex-desktop${packageSuffix linuxFeatureIds}";
           version = "26.506.21252";
           src = codexDesktopPayload;
 
@@ -336,6 +342,15 @@ NODE
           };
         };
 
+        codexDesktop = makeCodexDesktop {
+          payloadHash = "sha256-IQ5YRXeZhf4ObXUvsr7WURygcGRuxMyix13Q4jP4F58=";
+        };
+
+        codexDesktopRemoteMobileControl = makeCodexDesktop {
+          linuxFeatureIds = [ "remote-mobile-control" ];
+          payloadHash = "sha256-T7Vd20fWm7Yz5vNxC05H40rE8Oq3NFLErgxr/s/0mEk=";
+        };
+
         installer = pkgs.writeShellApplication {
           name = "codex-desktop-installer";
           runtimeInputs = [
@@ -381,12 +396,18 @@ NODE
         packages = {
           default = codexDesktop;
           codex-desktop = codexDesktop;
+          codex-desktop-remote-mobile-control = codexDesktopRemoteMobileControl;
           installer = installer;
         };
 
         apps.default = {
           type = "app";
           program = "${codexDesktop}/bin/codex-desktop";
+        };
+
+        apps.remote-mobile-control = {
+          type = "app";
+          program = "${codexDesktopRemoteMobileControl}/bin/codex-desktop";
         };
 
         apps.installer = {

@@ -33,6 +33,7 @@ Anything systemd-based should work for the optional auto-updater service (`syste
 | Linux browser annotations | ✅ always | Stored-anchor screenshots, isolated marker rendering |
 | Chrome plugin native host | ✅ always | Auto-installs the upstream Chrome plugin plus Linux native-messaging support for Chrome, Brave, and Chromium |
 | Linux Computer Use | ⚠️ opt-in | MCP backend registers by default; the in-app UI is opt-in. Supports screenshots, accessibility, window targeting, and input synthesis |
+| Mobile remote control host | 🧪 opt-in experiment | SSH remote projects work normally. Phone/Android host access is upstream macOS-only by default; `linux-features/remote-mobile-control` adds experimental Linux device-key, visibility, and host-enablement patches |
 | Server-gated features (e.g. `gpt-5.5`) | 🟡 server-side | OpenAI rolls per-account, not project-controlled. Building a fresh package does not unlock these. |
 
 ## Before you install
@@ -76,6 +77,12 @@ nix run github:ilysenko/codex-desktop-linux
 ```
 
 The flake handles dependencies and patches Electron for NixOS. A GitHub Actions bot refreshes the upstream `Codex.dmg` and recursive Nix payload hashes in `main`; if you hit a hash mismatch right after an upstream release, wait for the next bot run and retry.
+
+Because flakes do not include the git-ignored `linux-features/features.json` opt-in file, Nix exposes feature-specific app variants for optional integrations. To build and run Codex Desktop with the experimental mobile remote-control feature enabled:
+
+```bash
+nix run github:ilysenko/codex-desktop-linux#remote-mobile-control
+```
 
 `nix develop github:ilysenko/codex-desktop-linux` enters a dev shell with the required tooling.
 
