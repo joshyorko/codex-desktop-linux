@@ -58,6 +58,9 @@ const {
 const {
   validateReport,
 } = require("./ci/validate-patch-report.js");
+const {
+  applyPersistentRateLimitFooterPatch,
+} = require("./patches/webview-assets.js");
 
 const mainBundlePrefix =
   "let n=require(`electron`),i=require(`node:path`),o=require(`node:fs`);";
@@ -270,6 +273,7 @@ test("default core patch descriptors are grouped and unique", () => {
     "linux-computer-use-install-flow",
     "linux-app-updater-bridge",
     "browser-annotation-screenshot",
+    "composer-persistent-rate-limit-footer",
     "keybinds-settings",
     "package-desktop-name",
   ];
@@ -2048,6 +2052,137 @@ test("patch report marks warned asset patches as skipped", () => {
   } finally {
     fs.rmSync(tempRoot, { recursive: true, force: true });
   }
+});
+
+test("persistent rate limit footer uses existing account signal without dropdown copy", () => {
+  const source = [
+    'import{A as Do,E as Oo,I as ko,L as Ao,M as jo,N as Mo,P as No,S as Po,W as Fo,_ as Io,a as Lo,c as Ro,d as zo,f as Bo,g as Vo,h as Ho,j as Uo,l as Wo,m as Go,o as Ko,p as qo,r as Jo,s as Yo,t as Xo,u as Zo,v as Qo,x as $o,y as es}from"./rate-limit-rows-HF3Xhn3F.js";',
+    "function TF(e){let t=(0,Z.c)(148),",
+    "t[131]!==Ut||t[132]!==Wt||t[133]!==Gt?(Kt=(0,Q.jsxs)(`div`,{className:`flex min-w-0 flex-1 flex-nowrap items-center gap-1`,children:[Ut,Wt,Gt]}),t[131]=Ut,t[132]=Wt,t[133]=Gt,t[134]=Kt):Kt=t[134]",
+    "(0,Q.jsx)(nz,{conversationId:f,hostId:C,cwdOverride:w}),(0,Q.jsx)(vz,{conversationId:f,hasGoal:y,isGoalActionAvailable:b,onClearGoal:x,showDivider:!0})",
+  ].join("");
+
+  const patched = applyPatchTwice(applyPersistentRateLimitFooterPatch, source);
+
+  assert.match(patched, /function codexLinuxRateLimitFooter/);
+  assert.match(patched, /catch\(e\)\{return null\}/);
+  assert.match(patched, /\{data:a=null\}=li\(Fn\)/);
+  assert.match(patched, /c=Xo\(Jo\(o,\{activeLimitName:s,selectedModel:i\}\)\)\.slice\(0,2\)/);
+  assert.doesNotMatch(patched, /codexLinuxUseRateLimitStatus/);
+  assert.doesNotMatch(patched, /codex-linux-rate-limit-footer/);
+  assert.equal((patched.match(/Rate limits remaining/g) || []).length, 1);
+});
+
+test("persistent rate limit footer skips current footer group when conversation id is missing", () => {
+  const source = [
+    "var Z=Ai();var Q=Hr();",
+    "function H_(e){let t=(0,Z.c)(6),{minutes:n,variant:r}=e,i=$i(),a;t[0]!==i||t[1]!==n||t[2]!==r?(a=Uo({intl:i,minutes:n,variant:r}),t[0]=i,t[1]=n,t[2]=r,t[3]=a):a=t[3];let o;return t[4]===a?o=t[5]:(o=(0,Q.jsx)(Q.Fragment,{children:a}),t[4]=a,t[5]=o),o}",
+    "function U_(e){let t=(0,Z.c)(75),{rateLimits:n,activeLimitName:r,planType:i,suppressUpsell:a,selectedModel:o}=e;return null}",
+    "function IG({activeCollaborationMode:t}){let le=t?.settings.model??null,{data:ue}=Oc(),{data:de}=ci(jn),fe=Qo(de),pe=Bo(de,le),me=de?.rate_limit_reached_type?.type,he=me!=null&&me!==`rate_limit_reached`,ge=ue?.structure===`workspace`&&Io(de)&&!es(de)&&!he,_e=fe&&!ge,ve=pe&&!ge,ye=Ro(de),be=Zo(de),xe=Ko(ye,{activeLimitName:be,selectedModel:le}),Se=Lo(ye,{activeLimitName:be,selectedModel:le});",
+    "let Ut=xt,Wt=null,Gt=yt,Kt;t[131]!==Ut||t[132]!==Wt||t[133]!==Gt?(Kt=(0,Q.jsxs)(`div`,{className:`flex min-w-0 flex-1 flex-nowrap items-center gap-1`,children:[Ut,Wt,Gt]}),t[131]=Ut,t[132]=Wt,t[133]=Gt,t[134]=Kt):Kt=t[134];return Kt}",
+  ].join("");
+
+  const patched = applyPatchTwice(applyPersistentRateLimitFooterPatch, source);
+
+  assert.match(patched, /function codexLinuxRateLimitFooter\(\{conversationId:e\}\)/);
+  assert.match(patched, /catch\(e\)\{return null\}/);
+  assert.match(patched, /\{activeMode:n\}=Bi\(e\),r=n\?\.settings\.model\?\?null,\{data:i\}=ci\(jn\)/);
+  assert.doesNotMatch(patched, /codexLinuxRateLimitFooter,\{conversationId:z\}/);
+  assert.match(patched, /children:\[Ut,Wt,Gt\]/);
+  assert.match(patched, /\(0,Q\.jsx\)\(H_,\{minutes:e\.bucket\.windowDurationMins,variant:`summary`\}\)/);
+  assert.doesNotMatch(patched, /w===`home`\?\(0,Q\.jsx\)\(codexLinuxRateLimitFooter/);
+  assert.doesNotMatch(patched, /rateLimitEntries:ye/);
+});
+
+test("persistent rate limit footer adapts to current composer conversation id symbols", () => {
+  const source = [
+    "var Z=Ai();var Q=Hr();",
+    "function H_(e){let t=(0,Z.c)(6),{minutes:n,variant:r}=e,i=$i(),a;t[0]!==i||t[1]!==n||t[2]!==r?(a=Uo({intl:i,minutes:n,variant:r}),t[0]=i,t[1]=n,t[2]=r,t[3]=a):a=t[3];let o;return t[4]===a?o=t[5]:(o=(0,Q.jsx)(Q.Fragment,{children:a}),t[4]=a,t[5]=o),o}",
+    "function U_(e){let t=(0,Z.c)(75),{rateLimits:n,activeLimitName:r,planType:i,suppressUpsell:a,selectedModel:o}=e;return null}",
+    "function EF(e){let t=(0,Z.c)(148),{conversationId:a,activeCollaborationMode:o}=e,r=o?.settings.model??null,{data:de}=ci(jn),ye=Ro(de),be=Zo(de),xe=Ko(ye,{activeLimitName:be,selectedModel:r}),Se=Lo(ye,{activeLimitName:be,selectedModel:r}),R=M?.type===`local`?M.localConversationId:null,z=R??a,B=oi(fn,z);",
+    "let Ut=xt,Wt=null,Gt=yt,Kt;t[131]!==Ut||t[132]!==Wt||t[133]!==Gt?(Kt=(0,Q.jsxs)(`div`,{className:`flex min-w-0 flex-1 flex-nowrap items-center gap-1`,children:[Ut,Wt,Gt]}),t[131]=Ut,t[132]=Wt,t[133]=Gt,t[134]=Kt):Kt=t[134];return Kt}",
+  ].join("");
+
+  const patched = applyPatchTwice(applyPersistentRateLimitFooterPatch, source);
+
+  assert.match(patched, /function codexLinuxRateLimitFooter\(\{conversationId:e\}\)/);
+  assert.match(patched, /catch\(e\)\{return null\}/);
+  assert.match(patched, /codexLinuxRateLimitFooter,\{conversationId:z\}/);
+  assert.match(patched, /Kt=\(0,Q\.jsxs\)\(`div`,\{className:`flex min-w-0 flex-1 flex-nowrap items-center gap-1`,children:\[Ut,\(0,Q\.jsx\)\(codexLinuxRateLimitFooter,\{conversationId:z\}\),Wt,Gt\]\}\)/);
+  assert.doesNotMatch(patched, /t\[131\]!==Ut\|\|t\[132\]!==Wt\|\|t\[133\]!==Gt\?\(Kt=.*codexLinuxRateLimitFooter/);
+  assert.doesNotMatch(patched, /children:\[Ut,Wt,Gt\]/);
+});
+
+test("persistent rate limit footer migrates broken current composer calls", () => {
+  const source = [
+    "var Z=Ai();var Q=Hr();",
+    "function H_(e){let t=(0,Z.c)(6),{minutes:n,variant:r}=e,i=$i(),a;t[0]!==i||t[1]!==n||t[2]!==r?(a=Uo({intl:i,minutes:n,variant:r}),t[0]=i,t[1]=n,t[2]=r,t[3]=a):a=t[3];let o;return t[4]===a?o=t[5]:(o=(0,Q.jsx)(Q.Fragment,{children:a}),t[4]=a,t[5]=o),o}",
+    "function U_(e){let t=(0,Z.c)(75),{rateLimits:n,activeLimitName:r,planType:i,suppressUpsell:a,selectedModel:o}=e;return null}",
+    "function IG({activeCollaborationMode:t}){let z=ci(Zt),le=t?.settings.model??null,{data:ue}=Oc(),{data:de}=ci(jn),fe=Qo(de),pe=Bo(de,le),me=de?.rate_limit_reached_type?.type,he=me!=null&&me!==`rate_limit_reached`,ge=ue?.structure===`workspace`&&Io(de)&&!es(de)&&!he,_e=fe&&!ge,ve=pe&&!ge,ye=Ro(de),be=Zo(de),xe=Ko(ye,{activeLimitName:be,selectedModel:le}),Se=Lo(ye,{activeLimitName:be,selectedModel:le});",
+    "let Ut=xt,Wt=null,Gt=yt,Kt;Kt=(0,Q.jsxs)(`div`,{className:`flex min-w-0 flex-1 flex-nowrap items-center gap-1`,children:[Ut,w===`home`?(0,Q.jsx)(codexLinuxRateLimitFooter,{conversationId:z}):null,Wt,Gt]});return Kt}",
+  ].join("");
+
+  const patched = applyPatchTwice(applyPersistentRateLimitFooterPatch, source);
+
+  assert.match(patched, /function codexLinuxRateLimitFooter/);
+  assert.match(patched, /catch\(e\)\{return null\}/);
+  assert.match(patched, /codexLinuxRateLimitFooter,\{conversationId:z\}/);
+  assert.doesNotMatch(patched, /w===`home`\?\(0,Q\.jsx\)\(codexLinuxRateLimitFooter/);
+  assert.doesNotMatch(patched, /codexLinuxRateLimitFooter,\{rateLimitEntries:/);
+});
+
+test("persistent rate limit footer upgrades existing current helper to guarded helper", () => {
+  const oldHelper =
+    "function codexLinuxRateLimitFooter({conversationId:e}){let t=(0,Z.c)(22),{activeMode:n}=Bi(e),r=n?.settings.model??null,{data:i}=ci(jn);return null}";
+  const source = [
+    "var Z=Ai();var Q=Hr();",
+    "function H_(e){let t=(0,Z.c)(6),{minutes:n,variant:r}=e,i=$i(),a;t[0]!==i||t[1]!==n||t[2]!==r?(a=Uo({intl:i,minutes:n,variant:r}),t[0]=i,t[1]=n,t[2]=r,t[3]=a):a=t[3];let o;return t[4]===a?o=t[5]:(o=(0,Q.jsx)(Q.Fragment,{children:a}),t[4]=a,t[5]=o),o}",
+    oldHelper,
+    "function U_(e){let t=(0,Z.c)(75),{rateLimits:n,activeLimitName:r,planType:i,suppressUpsell:a,selectedModel:o}=e;return null}",
+    "function IG({activeCollaborationMode:t}){let z=ci(Zt),le=t?.settings.model??null,{data:ue}=Oc(),{data:de}=ci(jn),fe=Qo(de),pe=Bo(de,le),me=de?.rate_limit_reached_type?.type,he=me!=null&&me!==`rate_limit_reached`,ge=ue?.structure===`workspace`&&Io(de)&&!es(de)&&!he,_e=fe&&!ge,ve=pe&&!ge,ye=Ro(de),be=Zo(de),xe=Ko(ye,{activeLimitName:be,selectedModel:le}),Se=Lo(ye,{activeLimitName:be,selectedModel:le});",
+    "let Ut=xt,Wt=null,Gt=yt,Kt;Kt=(0,Q.jsxs)(`div`,{className:`flex min-w-0 flex-1 flex-nowrap items-center gap-1`,children:[Ut,(0,Q.jsx)(codexLinuxRateLimitFooter,{conversationId:z}),Wt,Gt]});return Kt}",
+  ].join("");
+
+  const patched = applyPatchTwice(applyPersistentRateLimitFooterPatch, source);
+
+  assert.equal((patched.match(/function codexLinuxRateLimitFooter/g) || []).length, 1);
+  assert.match(patched, /catch\(e\)\{return null\}/);
+  assert.match(patched, /\{activeMode:n\}=Bi\(e\),r=n\?\.settings\.model\?\?null,\{data:i\}=ci\(jn\)/);
+  assert.doesNotMatch(patched, /function codexLinuxRateLimitFooter\(\{conversationId:e\}\)\{let t=/);
+});
+
+test("persistent rate limit footer repairs incorrectly adapted current composer calls", () => {
+  const brokenHelper =
+    "function codexLinuxRateLimitFooter({rateLimitEntries:e,activeLimitName:t,selectedModel:n}){let r=(0,Z.c)(20),i=Jo(e,{activeLimitName:t,selectedModel:n}),a=Xo(i).slice(0,2);if(a.length===0)return null;return a}";
+  const source = [
+    "var Z=Ai();var Q=Hr();",
+    "function H_(e){let t=(0,Z.c)(6),{minutes:n,variant:r}=e,i=$i(),a;t[0]!==i||t[1]!==n||t[2]!==r?(a=Uo({intl:i,minutes:n,variant:r}),t[0]=i,t[1]=n,t[2]=r,t[3]=a):a=t[3];let o;return t[4]===a?o=t[5]:(o=(0,Q.jsx)(Q.Fragment,{children:a}),t[4]=a,t[5]=o),o}",
+    brokenHelper,
+    "function U_(e){let t=(0,Z.c)(75),{rateLimits:n,activeLimitName:r,planType:i,suppressUpsell:a,selectedModel:o}=e;return null}",
+    "function IG({activeCollaborationMode:t}){let z=ci(Zt),le=t?.settings.model??null,{data:ue}=Oc(),{data:de}=ci(jn),fe=Qo(de),pe=Bo(de,le),me=de?.rate_limit_reached_type?.type,he=me!=null&&me!==`rate_limit_reached`,ge=ue?.structure===`workspace`&&Io(de)&&!es(de)&&!he,_e=fe&&!ge,ve=pe&&!ge,ye=Ro(de),be=Zo(de),xe=Ko(ye,{activeLimitName:be,selectedModel:le}),Se=Lo(ye,{activeLimitName:be,selectedModel:le});",
+    "let Ut=xt,Wt=null,Gt=yt,Kt;Kt=(0,Q.jsxs)(`div`,{className:`flex min-w-0 flex-1 flex-nowrap items-center gap-1`,children:[Ut,w===`home`?(0,Q.jsx)(codexLinuxRateLimitFooter,{rateLimitEntries:ye,activeLimitName:be,selectedModel:le}):null,Wt,Gt]});return Kt}",
+  ].join("");
+
+  const patched = applyPatchTwice(applyPersistentRateLimitFooterPatch, source);
+
+  assert.match(patched, /function codexLinuxRateLimitFooter\(\{conversationId:e\}\)/);
+  assert.match(patched, /codexLinuxRateLimitFooter,\{conversationId:z\}/);
+  assert.doesNotMatch(patched, /w===`home`\?\(0,Q\.jsx\)\(codexLinuxRateLimitFooter/);
+  assert.doesNotMatch(patched, /rateLimitEntries:e/);
+  assert.doesNotMatch(patched, /rateLimitEntries:ye/);
+});
+
+test("persistent rate limit footer skips composer patch when helper cannot be inserted", () => {
+  const source = [
+    "function Cz(e){let t=(0,Z.c)(148),",
+    "t[131]!==Ut||t[132]!==Wt||t[133]!==Gt?(Kt=(0,Q.jsxs)(`div`,{className:`flex min-w-0 flex-1 flex-nowrap items-center gap-1`,children:[Ut,Wt,Gt]}),t[131]=Ut,t[132]=Wt,t[133]=Gt,t[134]=Kt):Kt=t[134]",
+    "(0,Q.jsx)(nz,{conversationId:f,hostId:C,cwdOverride:w}),(0,Q.jsx)(vz,{conversationId:f,hasGoal:y,isGoalActionAvailable:b,onClearGoal:x,showDivider:!0})",
+  ].join("");
+
+  const patched = applyPatchTwice(applyPersistentRateLimitFooterPatch, source);
+
+  assert.equal(patched, source);
+  assert.doesNotMatch(patched, /codexLinuxRateLimitFooter/);
 });
 
 test("patcher CLI writes --report-json output", () => {
