@@ -337,6 +337,10 @@ function computerUseFeatureBundleFixture() {
   return "function me(e,{env:t=process.env,platform:n=process.platform}={}){return n!==`win32`||t.CODEX_ELECTRON_ENABLE_WINDOWS_COMPUTER_USE!==`1`?e:{...e,computerUse:!0,computerUseNodeRepl:!0}}";
 }
 
+function currentComputerUseFeatureBundleFixture() {
+  return "function ye(e,{buildFlavor:n=t.D.resolve(),env:r=d.default.env,platform:i=d.default.platform}={}){let a=i===`win32`&&r.CODEX_ELECTRON_ENABLE_WINDOWS_COMPUTER_USE===`1`?{...e,computerUse:!0,computerUseNodeRepl:!0}:e,o=n===t.D.Dev?be(r):null;return o==null?a:{...a,...o}}";
+}
+
 function computerUseRendererAvailabilityBundleFixture() {
   return [
     "function hae(e){return e===`macOS`||e===`windows`}",
@@ -1497,6 +1501,19 @@ test("enables Computer Use desktop features on Linux", () => {
   assert.match(patched, /CODEX_ELECTRON_ENABLE_WINDOWS_COMPUTER_USE/);
 });
 
+test("enables current Computer Use desktop features on Linux", () => {
+  const patched = applyPatchTwice(
+    applyLinuxComputerUseFeaturePatch,
+    currentComputerUseFeatureBundleFixture(),
+  );
+
+  assert.match(
+    patched,
+    /let a=i===`linux`\?\{\.\.\.e,computerUse:!0,computerUseNodeRepl:!0\}:i===`win32`&&r\.CODEX_ELECTRON_ENABLE_WINDOWS_COMPUTER_USE===`1`\?\{\.\.\.e,computerUse:!0,computerUseNodeRepl:!0\}:e,o=n===t\.D\.Dev\?be\(r\):null;return o==null\?a:\{\.\.\.a,\.\.\.o\}/,
+  );
+  assert.match(patched, /CODEX_ELECTRON_ENABLE_WINDOWS_COMPUTER_USE/);
+});
+
 test("shows Computer Use plugin UI on Linux without the upstream rollout flag", () => {
   const patched = applyPatchTwice(
     applyLinuxComputerUseRendererAvailabilityPatch,
@@ -1622,9 +1639,13 @@ function withIsolatedHome(body) {
   const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "codex-cu-ui-test-"));
   const previousHome = process.env.HOME;
   const previousXdg = process.env.XDG_CONFIG_HOME;
+  const previousAppId = process.env.CODEX_APP_ID;
+  const previousLinuxAppId = process.env.CODEX_LINUX_APP_ID;
   const previousFlag = process.env[COMPUTER_USE_UI_ENV_VAR];
   process.env.HOME = tempHome;
   delete process.env.XDG_CONFIG_HOME;
+  delete process.env.CODEX_APP_ID;
+  delete process.env.CODEX_LINUX_APP_ID;
   delete process.env[COMPUTER_USE_UI_ENV_VAR];
   try {
     return body(tempHome);
@@ -1639,6 +1660,16 @@ function withIsolatedHome(body) {
     } else {
       process.env.XDG_CONFIG_HOME = previousXdg;
     }
+    if (previousAppId == null) {
+      delete process.env.CODEX_APP_ID;
+    } else {
+      process.env.CODEX_APP_ID = previousAppId;
+    }
+    if (previousLinuxAppId == null) {
+      delete process.env.CODEX_LINUX_APP_ID;
+    } else {
+      process.env.CODEX_LINUX_APP_ID = previousLinuxAppId;
+    }
     if (previousFlag == null) {
       delete process.env[COMPUTER_USE_UI_ENV_VAR];
     } else {
@@ -1648,8 +1679,8 @@ function withIsolatedHome(body) {
   }
 }
 
-function writeSettingsFile(home, content) {
-  const dir = path.join(home, ".config", "codex-desktop");
+function writeSettingsFile(home, content, appId = "codex-desktop") {
+  const dir = path.join(home, ".config", appId);
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, "settings.json"), content, "utf8");
 }
@@ -1672,6 +1703,14 @@ test("isComputerUseUiEnabled honours the env var", () => {
 test("isComputerUseUiEnabled honours the persisted settings flag", () => {
   withIsolatedHome((home) => {
     writeSettingsFile(home, JSON.stringify({ [COMPUTER_USE_UI_SETTINGS_KEY]: true }));
+    assert.equal(isComputerUseUiEnabled(), true);
+  });
+});
+
+test("isComputerUseUiEnabled honours side-by-side CODEX_APP_ID settings", () => {
+  withIsolatedHome((home) => {
+    process.env.CODEX_APP_ID = "codex-cua-lab";
+    writeSettingsFile(home, JSON.stringify({ [COMPUTER_USE_UI_SETTINGS_KEY]: true }), "codex-cua-lab");
     assert.equal(isComputerUseUiEnabled(), true);
   });
 });

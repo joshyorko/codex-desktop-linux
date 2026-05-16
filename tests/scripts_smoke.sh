@@ -5,6 +5,8 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 TMP_DIR="$(mktemp -d)"
 
+export CODEX_LINUX_FEATURES_CONFIG="$REPO_DIR/linux-features/features.example.json"
+
 cleanup() {
     rm -rf "$TMP_DIR"
 }
@@ -432,8 +434,9 @@ test_pacman_builder_without_updater_transition_hook() {
     local app_dir="$workspace/app"
     local dist_dir="$workspace/dist"
     local capture_dir="$workspace/capture"
+    local ampersand_tmpdir="$workspace/ampersand&tmp"
 
-    mkdir -p "$workspace" "$dist_dir" "$capture_dir"
+    mkdir -p "$workspace" "$dist_dir" "$capture_dir" "$ampersand_tmpdir"
     make_stub_bin_dir "$bin_dir"
     make_fake_app "$app_dir"
 
@@ -442,8 +445,12 @@ test_pacman_builder_without_updater_transition_hook() {
 set -euo pipefail
 cp PKGBUILD "$CAPTURE_DIR/PKGBUILD"
 cp codex-desktop.install "$CAPTURE_DIR/codex-desktop.install"
+pkgname="$(sed -n 's/^pkgname=//p' PKGBUILD)"
+pkgver="$(sed -n 's/^pkgver=//p' PKGBUILD)"
+pkgrel="$(sed -n 's/^pkgrel=//p' PKGBUILD)"
+arch="$(sed -n "s/^arch=('\([^']*\)').*/\1/p" PKGBUILD)"
 mkdir -p "$PKGDEST"
-touch "$PKGDEST/codex-desktop-2026.03.24.120000-1-x86_64.pkg.tar.zst"
+touch "$PKGDEST/${pkgname}-${pkgver}-${pkgrel}-${arch}.pkg.tar.zst"
 SCRIPT
     cat > "$bin_dir/cargo" <<'SCRIPT'
 #!/usr/bin/env bash
@@ -452,17 +459,28 @@ exit 99
 SCRIPT
     chmod +x "$bin_dir/makepkg" "$bin_dir/cargo"
 
-    PATH="$bin_dir:$PATH" \
-    CAPTURE_DIR="$capture_dir" \
-    APP_DIR_OVERRIDE="$app_dir" \
-    DIST_DIR_OVERRIDE="$dist_dir" \
-    PACKAGE_WITH_UPDATER=0 \
-    PACKAGE_VERSION="2026.03.24.120000+manual" \
-    bash "$REPO_DIR/scripts/build-pacman.sh"
+    local package_path
+    package_path="$(
+        TMPDIR="$ampersand_tmpdir" \
+        PATH="$bin_dir:$PATH" \
+        CAPTURE_DIR="$capture_dir" \
+        APP_DIR_OVERRIDE="$app_dir" \
+        DIST_DIR_OVERRIDE="$dist_dir" \
+        PACKAGE_WITH_UPDATER=0 \
+        PACKAGE_VERSION="2026.03.24.120000+manual" \
+        bash "$REPO_DIR/scripts/build-pacman.sh"
+    )"
 
-    assert_file_exists "$dist_dir/codex-desktop-2026.03.24.120000-1-x86_64.pkg.tar.zst"
+    assert_file_exists "$dist_dir/codex-desktop-2026.03.24.120000+manual-1-x86_64.pkg.tar.zst"
+    [ "$package_path" = "$dist_dir/codex-desktop-2026.03.24.120000+manual-1-x86_64.pkg.tar.zst" ] || fail "Expected build-pacman.sh to print built package path, got: $package_path"
+    assert_file_exists "$dist_dir/codex-desktop-latest.pkg.tar.zst"
+    [ "$(readlink "$dist_dir/codex-desktop-latest.pkg.tar.zst")" = "codex-desktop-2026.03.24.120000+manual-1-x86_64.pkg.tar.zst" ] || fail "Expected latest pacman symlink to point at built package"
     assert_file_exists "$capture_dir/PKGBUILD"
     assert_file_exists "$capture_dir/codex-desktop.install"
+    assert_contains "$capture_dir/PKGBUILD" "pkgver=2026.03.24.120000+manual"
+    assert_contains "$capture_dir/PKGBUILD" "pkgrel=1"
+    assert_contains "$capture_dir/PKGBUILD" "ampersand&tmp"
+    assert_not_contains "$capture_dir/PKGBUILD" "__STAGING_DIR__"
     assert_contains "$capture_dir/PKGBUILD" "install=codex-desktop.install"
     assert_not_contains "$capture_dir/PKGBUILD" "'polkit'"
     assert_contains "$capture_dir/codex-desktop.install" "codex_no_updater_cleanup_update_manager_service"
@@ -470,6 +488,88 @@ SCRIPT
     assert_contains "$capture_dir/codex-desktop.install" "pre_remove"
     assert_contains "$capture_dir/codex-desktop.install" "codex-no-updater-transition-cleanup.sh"
     assert_not_contains "$capture_dir/codex-desktop.install" "update-builder"
+}
+
+test_appimage_builder_smoke() {
+    info "Running AppImage packaging smoke test"
+    local workspace="$TMP_DIR/appimage"
+    local bin_dir="$workspace/bin"
+    local app_dir="$workspace/app"
+    local dist_dir="$workspace/dist"
+    local appdir="$workspace/codex-desktop.AppDir"
+    local capture_dir="$workspace/capture"
+    local arch
+
+    case "$(uname -m)" in
+        x86_64) arch="x86_64" ;;
+        aarch64|arm64) arch="aarch64" ;;
+        armv7l|armhf) arch="armhf" ;;
+        *) fail "Unsupported AppImage smoke-test architecture: $(uname -m)" ;;
+    esac
+
+    mkdir -p "$workspace" "$dist_dir" "$capture_dir"
+    make_stub_bin_dir "$bin_dir"
+    make_fake_app "$app_dir"
+
+    cat > "$bin_dir/appimagetool" <<'SCRIPT'
+#!/usr/bin/env bash
+set -euo pipefail
+
+saw_no_appstream=0
+previous=""
+last=""
+for arg in "$@"; do
+    [ "$arg" = "--no-appstream" ] && saw_no_appstream=1
+    previous="$last"
+    last="$arg"
+done
+
+[ "$saw_no_appstream" -eq 1 ] || exit 2
+[ -n "$previous" ] || exit 3
+[ -d "$previous" ] || exit 4
+[ -n "${ARCH:-}" ] || exit 5
+[ -n "${VERSION:-}" ] || exit 6
+
+mkdir -p "$(dirname "$last")" "$CAPTURE_DIR"
+cp -a "$previous" "$CAPTURE_DIR/AppDir"
+printf '%s\n' "$ARCH" > "$CAPTURE_DIR/arch"
+printf '%s\n' "$VERSION" > "$CAPTURE_DIR/version"
+touch "$last"
+SCRIPT
+    chmod +x "$bin_dir/appimagetool"
+
+    PATH="$bin_dir:$PATH" \
+    CAPTURE_DIR="$capture_dir" \
+    APP_DIR_OVERRIDE="$app_dir" \
+    DIST_DIR_OVERRIDE="$dist_dir" \
+    APPIMAGE_APPDIR_OVERRIDE="$appdir" \
+    PACKAGE_VERSION="2026.03.24.120000+appimage" \
+    bash "$REPO_DIR/scripts/build-appimage.sh"
+
+    assert_file_exists "$dist_dir/codex-desktop-2026.03.24.120000+appimage-$arch.AppImage"
+    assert_file_exists "$capture_dir/AppDir/AppRun"
+    [ -x "$capture_dir/AppDir/AppRun" ] || fail "Expected AppRun to be executable"
+    assert_file_exists "$capture_dir/AppDir/codex-desktop.desktop"
+    assert_file_exists "$capture_dir/AppDir/codex-desktop.png"
+    assert_file_exists "$capture_dir/AppDir/.DirIcon"
+    assert_file_exists "$capture_dir/AppDir/usr/share/applications/codex-desktop.desktop"
+    assert_file_exists "$capture_dir/AppDir/usr/share/icons/hicolor/256x256/apps/codex-desktop.png"
+    assert_file_exists "$capture_dir/AppDir/opt/codex-desktop/start.sh"
+    assert_file_exists "$capture_dir/AppDir/opt/codex-desktop/.codex-linux/codex-desktop.png"
+    assert_file_exists "$capture_dir/AppDir/opt/codex-desktop/.codex-linux/codex-packaged-runtime.sh"
+    assert_file_exists "$capture_dir/AppDir/opt/codex-desktop/resources/node-runtime/bin/node"
+    assert_file_not_exists "$capture_dir/AppDir/usr/bin/codex-update-manager"
+    assert_file_not_exists "$capture_dir/AppDir/usr/lib/systemd/user/codex-update-manager.service"
+    assert_file_not_exists "$capture_dir/AppDir/usr/share/polkit-1/actions/com.github.ilysenko.codex-desktop-linux.update.policy"
+    assert_file_not_exists "$capture_dir/AppDir/opt/codex-desktop/update-builder"
+    assert_contains "$capture_dir/AppDir/codex-desktop.desktop" "Exec=AppRun %u"
+    assert_contains "$capture_dir/AppDir/codex-desktop.desktop" "Icon=codex-desktop"
+    assert_contains "$capture_dir/AppDir/codex-desktop.desktop" "X-AppImage-Version=2026.03.24.120000+appimage"
+    assert_not_contains "$capture_dir/AppDir/codex-desktop.desktop" "codex-update-manager"
+    assert_contains "$capture_dir/AppDir/opt/codex-desktop/.codex-linux/codex-packaged-runtime.sh" 'CHROME_DESKTOP="codex-desktop.desktop"'
+    assert_not_contains "$capture_dir/AppDir/opt/codex-desktop/.codex-linux/codex-packaged-runtime.sh" "/usr/share/applications"
+    [ "$(cat "$capture_dir/arch")" = "$arch" ] || fail "Expected appimagetool ARCH=$arch"
+    [ "$(cat "$capture_dir/version")" = "2026.03.24.120000+appimage" ] || fail "Expected appimagetool VERSION override"
 }
 
 test_missing_input_failure() {
@@ -502,10 +602,39 @@ SCRIPT
     assert_contains "$rpm_log" "Missing packaged launcher runtime helper"
 }
 
+test_make_install_reports_missing_native_packages() {
+    info "Checking make install missing-package diagnostics"
+    local workspace="$TMP_DIR/make-install-missing"
+    local output_log
+    local format
+    local expected
+
+    mkdir -p "$workspace/dist"
+
+    for format in pacman rpm deb; do
+        output_log="$workspace/$format.log"
+        case "$format" in
+            pacman) expected="No pacman package found. Run 'make pacman' first." ;;
+            rpm) expected="No RPM package found. Run 'make rpm' first." ;;
+            deb) expected="No Debian package found. Run 'make deb' first." ;;
+        esac
+
+        if make -f "$REPO_DIR/Makefile" -C "$workspace" install \
+            NATIVE_PKG_FORMAT_CMD="printf $format" >"$output_log" 2>&1
+        then
+            fail "make install should fail when no $format package exists"
+        fi
+
+        assert_contains "$output_log" "$expected"
+    done
+}
+
 test_make_build_app_uses_installer_download_flow_by_default() {
     info "Checking make build-app default DMG behavior"
     local workspace="$TMP_DIR/make-build-app"
     local install_log="$workspace/install-args.log"
+    local first_line
+    local second_line
 
     mkdir -p "$workspace"
 
@@ -526,6 +655,58 @@ SCRIPT
     second_line="$(sed -n '2p' "$install_log")"
     [ "$first_line" = "1" ] || fail "Expected make build-app to call install.sh with a single default argument slot, got: $(cat "$install_log")"
     [ -z "$second_line" ] || fail "Expected make build-app default DMG argument to be empty so install.sh falls back to reuse/download, got: $(cat "$install_log")"
+}
+
+test_make_build_app_fresh_uses_installer_fresh_flow() {
+    info "Checking make build-app-fresh DMG behavior"
+    local workspace="$TMP_DIR/make-build-app-fresh"
+    local install_log="$workspace/install-args.log"
+    local first_line
+    local second_line
+    local third_line
+
+    mkdir -p "$workspace"
+
+    cat > "$workspace/install.sh" <<'SCRIPT'
+#!/usr/bin/env bash
+set -eu
+printf '%s\n' "$#" > "$TEST_INSTALL_LOG"
+for arg in "$@"; do
+    printf '%s\n' "$arg" >> "$TEST_INSTALL_LOG"
+done
+SCRIPT
+    chmod +x "$workspace/install.sh"
+
+    TEST_INSTALL_LOG="$install_log" make -f "$REPO_DIR/Makefile" -C "$workspace" build-app-fresh >/dev/null
+
+    assert_file_exists "$install_log"
+    first_line="$(sed -n '1p' "$install_log")"
+    second_line="$(sed -n '2p' "$install_log")"
+    third_line="$(sed -n '3p' "$install_log")"
+    [ "$first_line" = "2" ] || fail "Expected make build-app-fresh to pass --fresh plus the default argument slot, got: $(cat "$install_log")"
+    [ "$second_line" = "--fresh" ] || fail "Expected make build-app-fresh to pass --fresh first, got: $(cat "$install_log")"
+    [ -z "$third_line" ] || fail "Expected make build-app-fresh default DMG argument to be empty, got: $(cat "$install_log")"
+}
+
+test_native_shortcut_targets_compose_existing_flows() {
+    info "Checking native install/update shortcut targets"
+    local install_log="$TMP_DIR/make-install-native.log"
+    local bootstrap_log="$TMP_DIR/make-bootstrap-native.log"
+    local update_log="$TMP_DIR/make-update-native.log"
+
+    make -n -C "$REPO_DIR" install-native >"$install_log"
+    assert_contains "$install_log" './install.sh --fresh'
+    assert_contains "$install_log" 'Building native package'
+    assert_contains "$install_log" 'Installing latest native package'
+
+    make -n -C "$REPO_DIR" bootstrap-native >"$bootstrap_log"
+    assert_contains "$bootstrap_log" 'bash scripts/install-deps.sh'
+    assert_contains "$bootstrap_log" 'PATH="$HOME/.cargo/bin:$PATH"'
+    assert_contains "$bootstrap_log" 'install-native'
+
+    make -n -C "$REPO_DIR" update-native >"$update_log"
+    assert_contains "$update_log" 'git pull --ff-only'
+    assert_contains "$update_log" 'install-native'
 }
 
 test_upstream_build_app_workflow_tracks_dmg_metadata() {
@@ -1044,7 +1225,7 @@ PY
     # bounded-execution defenses preserved (0.2 s watchdog + 2 s curl cap).
     assert_contains "$REPO_DIR/launcher/start.sh.template" '/dev/tcp/127.0.0.1/"$CODEX_LINUX_WEBVIEW_PORT"'
     assert_contains "$REPO_DIR/launcher/start.sh.template" "kill -9 \"\$probe_pid\""
-    assert_contains "$REPO_DIR/launcher/start.sh.template" 'curl --disable --silent --show-error --fail --max-time 2'
+    assert_contains "$REPO_DIR/launcher/start.sh.template" 'curl --disable --noproxy 127.0.0.1,localhost --silent --show-error --fail --max-time 2'
     assert_contains "$REPO_DIR/launcher/start.sh.template" "for attempt in \$(seq 1 250)"
     assert_contains "$REPO_DIR/launcher/start.sh.template" "sleep 0.02"
     assert_contains "$REPO_DIR/launcher/start.sh.template" "Webview origin verified."
@@ -2670,6 +2851,525 @@ test_webview_probe_equivalence() {
         || fail "webview probe equivalence harness reported a verdict mismatch or unbounded watchdog"
 }
 
+test_user_local_prepare_build_repo_overlays_committed_local_changes() {
+    info "Checking user-local managed checkout preserves committed local overlay changes"
+    local workspace="$TMP_DIR/user-local-overlay"
+    local origin_repo="$workspace/origin.git"
+    local source_repo="$workspace/source"
+    local upstream_repo="$workspace/upstream"
+    local managed_repo="$workspace/xdg-data/codex-desktop-linux/managed-repo"
+    local install_env="$workspace/install.env"
+
+    mkdir -p "$workspace"
+    git init --bare --initial-branch=main "$origin_repo" >/dev/null
+    git clone "$origin_repo" "$source_repo" >/dev/null 2>&1
+    git -C "$source_repo" config user.name "Smoke Test"
+    git -C "$source_repo" config user.email "smoke@example.com"
+
+    cat > "$source_repo/tracked.txt" <<'EOF'
+base
+EOF
+    cat > "$source_repo/upstream.txt" <<'EOF'
+upstream-base
+EOF
+    git -C "$source_repo" add tracked.txt upstream.txt
+    git -C "$source_repo" commit -m "base" >/dev/null
+    git -C "$source_repo" push -u origin main >/dev/null
+    git -C "$source_repo" remote set-head origin -a >/dev/null 2>&1 || true
+
+    cat > "$source_repo/tracked.txt" <<'EOF'
+local-overlay
+EOF
+    git -C "$source_repo" commit -am "local overlay" >/dev/null
+
+    git clone "$origin_repo" "$upstream_repo" >/dev/null 2>&1
+    git -C "$upstream_repo" config user.name "Smoke Test"
+    git -C "$upstream_repo" config user.email "smoke@example.com"
+    cat > "$upstream_repo/upstream.txt" <<'EOF'
+upstream-advanced
+EOF
+    cat > "$upstream_repo/remote-only.txt" <<'EOF'
+remote-only
+EOF
+    git -C "$upstream_repo" add upstream.txt remote-only.txt
+    git -C "$upstream_repo" commit -m "upstream advance" >/dev/null
+    git -C "$upstream_repo" push origin main >/dev/null
+
+    (
+        export HOME="$workspace/home"
+        export XDG_DATA_HOME="$workspace/xdg-data"
+        export XDG_STATE_HOME="$workspace/xdg-state"
+        mkdir -p "$HOME" "$XDG_DATA_HOME" "$XDG_STATE_HOME"
+
+        # shellcheck disable=SC1091
+        source "$REPO_DIR/contrib/user-local-install/files/.local/lib/codex-desktop-linux/common.sh"
+
+        INSTALL_CONFIG_FILE="$install_env"
+        cat > "$INSTALL_CONFIG_FILE" <<EOF
+SOURCE_REPO_DIR=$(printf '%q' "$source_repo")
+MANAGED_REPO_DIR=$(printf '%q' "$managed_repo")
+REPO_ORIGIN_URL=$(printf '%q' "$origin_repo")
+REPO_DEFAULT_BRANCH=$(printf '%q' "main")
+OPT_ROOT=$(printf '%q' "$workspace/opt")
+EOF
+
+        prepare_build_repo
+
+        [ "$(git -C "$MANAGED_REPO_DIR" rev-parse HEAD)" = "$(git -C "$upstream_repo" rev-parse HEAD)" ] \
+            || fail "Expected managed checkout to reset to latest upstream commit"
+        [ "$(cat "$MANAGED_REPO_DIR/tracked.txt")" = "local-overlay" ] \
+            || fail "Expected committed local overlay change to be copied into managed checkout"
+        [ "$(cat "$MANAGED_REPO_DIR/upstream.txt")" = "upstream-advanced" ] \
+            || fail "Expected upstream-only change to remain intact in managed checkout"
+        [ "$(cat "$MANAGED_REPO_DIR/remote-only.txt")" = "remote-only" ] \
+            || fail "Expected upstream-only added file to remain in managed checkout"
+        [ -n "$(source_repo_overlay_signature)" ] \
+            || fail "Expected committed local overlay to produce a non-empty overlay signature"
+    )
+}
+
+test_user_local_prepare_build_repo_detects_default_branch_without_recorded_branch() {
+    info "Checking user-local managed checkout detects remote default branch when metadata leaves it empty"
+    local workspace="$TMP_DIR/user-local-branch-detect"
+    local origin_repo="$workspace/origin.git"
+    local source_repo="$workspace/source"
+    local unmanaged_source="$workspace/source-without-git"
+    local managed_repo="$workspace/xdg-data/codex-desktop-linux/managed-repo"
+    local install_env="$workspace/install.env"
+
+    mkdir -p "$workspace" "$unmanaged_source"
+    git init --bare --initial-branch=master "$origin_repo" >/dev/null
+    git clone "$origin_repo" "$source_repo" >/dev/null 2>&1
+    git -C "$source_repo" config user.name "Smoke Test"
+    git -C "$source_repo" config user.email "smoke@example.com"
+    cat > "$source_repo/branch.txt" <<'EOF'
+master-branch
+EOF
+    git -C "$source_repo" add branch.txt
+    git -C "$source_repo" commit -m "base" >/dev/null
+    git -C "$source_repo" push -u origin master >/dev/null
+    git -C "$source_repo" remote set-head origin -a >/dev/null 2>&1 || true
+
+    (
+        export HOME="$workspace/home"
+        export XDG_DATA_HOME="$workspace/xdg-data"
+        export XDG_STATE_HOME="$workspace/xdg-state"
+        mkdir -p "$HOME" "$XDG_DATA_HOME" "$XDG_STATE_HOME"
+
+        # shellcheck disable=SC1091
+        source "$REPO_DIR/contrib/user-local-install/files/.local/lib/codex-desktop-linux/common.sh"
+
+        INSTALL_CONFIG_FILE="$install_env"
+        cat > "$INSTALL_CONFIG_FILE" <<EOF
+SOURCE_REPO_DIR=$(printf '%q' "$unmanaged_source")
+MANAGED_REPO_DIR=$(printf '%q' "$managed_repo")
+REPO_ORIGIN_URL=$(printf '%q' "$origin_repo")
+REPO_DEFAULT_BRANCH=$(printf '%q' "")
+OPT_ROOT=$(printf '%q' "$workspace/opt")
+EOF
+
+        prepare_build_repo
+
+        [ "$(repo_default_branch)" = "master" ] \
+            || fail "Expected default branch detection to resolve to the remote master branch"
+        [ "$(git -C "$MANAGED_REPO_DIR" rev-parse --abbrev-ref HEAD)" = "master" ] \
+            || fail "Expected managed checkout to land on the detected master branch"
+        [ "$(cat "$MANAGED_REPO_DIR/branch.txt")" = "master-branch" ] \
+            || fail "Expected managed checkout contents from the detected master branch"
+    )
+}
+
+test_user_local_prepare_build_repo_ignores_stale_recorded_default_branch() {
+    info "Checking user-local managed checkout ignores a stale recorded default branch"
+    local workspace="$TMP_DIR/user-local-stale-branch"
+    local origin_repo="$workspace/origin.git"
+    local source_repo="$workspace/source"
+    local unmanaged_source="$workspace/source-without-git"
+    local managed_repo="$workspace/xdg-data/codex-desktop-linux/managed-repo"
+    local install_env="$workspace/install.env"
+
+    mkdir -p "$workspace" "$unmanaged_source"
+    git init --bare --initial-branch=main "$origin_repo" >/dev/null
+    git clone "$origin_repo" "$source_repo" >/dev/null 2>&1
+    git -C "$source_repo" config user.name "Smoke Test"
+    git -C "$source_repo" config user.email "smoke@example.com"
+    cat > "$source_repo/branch.txt" <<'EOF'
+main-branch
+EOF
+    git -C "$source_repo" add branch.txt
+    git -C "$source_repo" commit -m "base" >/dev/null
+    git -C "$source_repo" push -u origin main >/dev/null
+    git -C "$source_repo" remote set-head origin -a >/dev/null 2>&1 || true
+
+    (
+        export HOME="$workspace/home"
+        export XDG_DATA_HOME="$workspace/xdg-data"
+        export XDG_STATE_HOME="$workspace/xdg-state"
+        mkdir -p "$HOME" "$XDG_DATA_HOME" "$XDG_STATE_HOME"
+
+        # shellcheck disable=SC1091
+        source "$REPO_DIR/contrib/user-local-install/files/.local/lib/codex-desktop-linux/common.sh"
+
+        INSTALL_CONFIG_FILE="$install_env"
+        cat > "$INSTALL_CONFIG_FILE" <<EOF
+SOURCE_REPO_DIR=$(printf '%q' "$unmanaged_source")
+MANAGED_REPO_DIR=$(printf '%q' "$managed_repo")
+REPO_ORIGIN_URL=$(printf '%q' "$origin_repo")
+REPO_DEFAULT_BRANCH=$(printf '%q' "master")
+OPT_ROOT=$(printf '%q' "$workspace/opt")
+EOF
+
+        prepare_build_repo
+
+        [ "$(repo_default_branch)" = "main" ] \
+            || fail "Expected stale recorded branch to fall back to the remote default branch"
+        [ "$(git -C "$MANAGED_REPO_DIR" rev-parse --abbrev-ref HEAD)" = "main" ] \
+            || fail "Expected managed checkout to land on the recovered main branch"
+        [ "$(cat "$MANAGED_REPO_DIR/branch.txt")" = "main-branch" ] \
+            || fail "Expected managed checkout contents from the recovered main branch"
+    )
+}
+
+test_user_local_prepare_build_repo_ignores_stale_source_origin_head() {
+    info "Checking user-local managed checkout ignores a stale source origin/HEAD ref"
+    local workspace="$TMP_DIR/user-local-stale-origin-head"
+    local origin_repo="$workspace/origin.git"
+    local source_repo="$workspace/source"
+    local managed_repo="$workspace/xdg-data/codex-desktop-linux/managed-repo"
+    local install_env="$workspace/install.env"
+
+    mkdir -p "$workspace"
+    git init --bare --initial-branch=main "$origin_repo" >/dev/null
+    git clone "$origin_repo" "$source_repo" >/dev/null 2>&1
+    git -C "$source_repo" config user.name "Smoke Test"
+    git -C "$source_repo" config user.email "smoke@example.com"
+    cat > "$source_repo/branch.txt" <<'EOF'
+main-branch
+EOF
+    git -C "$source_repo" add branch.txt
+    git -C "$source_repo" commit -m "base" >/dev/null
+    git -C "$source_repo" push -u origin main >/dev/null
+    git -C "$source_repo" remote set-head origin -a >/dev/null 2>&1 || true
+    git -C "$source_repo" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/master
+
+    (
+        export HOME="$workspace/home"
+        export XDG_DATA_HOME="$workspace/xdg-data"
+        export XDG_STATE_HOME="$workspace/xdg-state"
+        mkdir -p "$HOME" "$XDG_DATA_HOME" "$XDG_STATE_HOME"
+
+        # shellcheck disable=SC1091
+        source "$REPO_DIR/contrib/user-local-install/files/.local/lib/codex-desktop-linux/common.sh"
+
+        INSTALL_CONFIG_FILE="$install_env"
+        cat > "$INSTALL_CONFIG_FILE" <<EOF
+SOURCE_REPO_DIR=$(printf '%q' "$source_repo")
+MANAGED_REPO_DIR=$(printf '%q' "$managed_repo")
+REPO_ORIGIN_URL=$(printf '%q' "$origin_repo")
+REPO_DEFAULT_BRANCH=$(printf '%q' "")
+OPT_ROOT=$(printf '%q' "$workspace/opt")
+EOF
+
+        prepare_build_repo
+
+        [ "$(repo_default_branch)" = "main" ] \
+            || fail "Expected stale source origin/HEAD to fall back to the real remote default branch"
+        [ "$(git -C "$MANAGED_REPO_DIR" rev-parse --abbrev-ref HEAD)" = "main" ] \
+            || fail "Expected managed checkout to land on the recovered main branch"
+        [ "$(cat "$MANAGED_REPO_DIR/branch.txt")" = "main-branch" ] \
+            || fail "Expected managed checkout contents from the recovered main branch"
+    )
+}
+
+test_user_local_install_from_update_defers_record_only_metadata() {
+    info "Checking user-local helper refresh does not record metadata before update success"
+    local workspace="$TMP_DIR/user-local-from-update-record-only"
+    local fake_bin="$workspace/bin"
+    local home="$workspace/home"
+    local marker="$workspace/record-only-attempted"
+
+    mkdir -p "$fake_bin"
+    cat > "$fake_bin/7z" <<'SCRIPT'
+#!/usr/bin/env bash
+set -euo pipefail
+: "${RECORD_ONLY_MARKER:?}"
+mkdir -p "$(dirname "$RECORD_ONLY_MARKER")"
+printf '%s\n' "attempted" > "$RECORD_ONLY_MARKER"
+exit 1
+SCRIPT
+    printf '#!/usr/bin/env bash\nexit 0\n' > "$fake_bin/systemctl"
+    printf '#!/usr/bin/env bash\nexit 0\n' > "$fake_bin/update-desktop-database"
+    chmod +x "$fake_bin/7z" "$fake_bin/systemctl" "$fake_bin/update-desktop-database"
+
+    PATH="$fake_bin:$PATH" \
+        HOME="$home" \
+        XDG_DATA_HOME="$workspace/data" \
+        XDG_STATE_HOME="$workspace/state" \
+        RECORD_ONLY_MARKER="$marker" \
+        CODEX_USER_LOCAL_SOURCE_REPO_DIR="$REPO_DIR" \
+        bash "$REPO_DIR/contrib/user-local-install/install-user-local.sh" --from-update >/dev/null
+    assert_file_not_exists "$marker"
+
+    PATH="$fake_bin:$PATH" \
+        HOME="$home" \
+        XDG_DATA_HOME="$workspace/data" \
+        XDG_STATE_HOME="$workspace/state" \
+        RECORD_ONLY_MARKER="$marker" \
+        CODEX_USER_LOCAL_SOURCE_REPO_DIR="$REPO_DIR" \
+        bash "$REPO_DIR/contrib/user-local-install/install-user-local.sh" >/dev/null
+    assert_file_exists "$marker"
+}
+
+test_user_local_prepare_build_repo_updates_existing_single_branch_fetch_refspec() {
+    info "Checking user-local managed checkout can switch branches after a single-branch clone"
+    local workspace="$TMP_DIR/user-local-single-branch-refspec"
+    local origin_repo="$workspace/origin.git"
+    local upstream_repo="$workspace/upstream"
+    local unmanaged_source="$workspace/source-without-git"
+    local managed_repo="$workspace/xdg-data/codex-desktop-linux/managed-repo"
+    local install_env="$workspace/install.env"
+
+    mkdir -p "$workspace" "$unmanaged_source"
+    git init --bare --initial-branch=main "$origin_repo" >/dev/null
+    git clone "$origin_repo" "$upstream_repo" >/dev/null 2>&1
+    git -C "$upstream_repo" config user.name "Smoke Test"
+    git -C "$upstream_repo" config user.email "smoke@example.com"
+    cat > "$upstream_repo/branch.txt" <<'EOF'
+main-branch
+EOF
+    git -C "$upstream_repo" add branch.txt
+    git -C "$upstream_repo" commit -m "base" >/dev/null
+    git -C "$upstream_repo" push -u origin main >/dev/null
+
+    (
+        export HOME="$workspace/home"
+        export XDG_DATA_HOME="$workspace/xdg-data"
+        export XDG_STATE_HOME="$workspace/xdg-state"
+        mkdir -p "$HOME" "$XDG_DATA_HOME" "$XDG_STATE_HOME"
+
+        # shellcheck disable=SC1091
+        source "$REPO_DIR/contrib/user-local-install/files/.local/lib/codex-desktop-linux/common.sh"
+
+        INSTALL_CONFIG_FILE="$install_env"
+        cat > "$INSTALL_CONFIG_FILE" <<EOF
+SOURCE_REPO_DIR=$(printf '%q' "$unmanaged_source")
+MANAGED_REPO_DIR=$(printf '%q' "$managed_repo")
+REPO_ORIGIN_URL=$(printf '%q' "$origin_repo")
+REPO_DEFAULT_BRANCH=$(printf '%q' "main")
+OPT_ROOT=$(printf '%q' "$workspace/opt")
+EOF
+
+        prepare_build_repo
+
+        [ "$(git -C "$MANAGED_REPO_DIR" rev-parse --abbrev-ref HEAD)" = "main" ] \
+            || fail "Expected managed checkout to start on main"
+        [ "$(git -C "$MANAGED_REPO_DIR" config --get-all remote.origin.fetch)" = "+refs/heads/*:refs/remotes/origin/*" ] \
+            || fail "Expected managed checkout fetch refspec to include all branches"
+    )
+
+    git -C "$upstream_repo" checkout -q -b master
+    cat > "$upstream_repo/branch.txt" <<'EOF'
+master-branch
+EOF
+    git -C "$upstream_repo" commit -am "master branch" >/dev/null
+    git -C "$upstream_repo" push -u origin master >/dev/null
+    git --git-dir="$origin_repo" symbolic-ref HEAD refs/heads/master
+
+    (
+        export HOME="$workspace/home"
+        export XDG_DATA_HOME="$workspace/xdg-data"
+        export XDG_STATE_HOME="$workspace/xdg-state"
+        mkdir -p "$HOME" "$XDG_DATA_HOME" "$XDG_STATE_HOME"
+
+        # shellcheck disable=SC1091
+        source "$REPO_DIR/contrib/user-local-install/files/.local/lib/codex-desktop-linux/common.sh"
+
+        INSTALL_CONFIG_FILE="$install_env"
+        cat > "$INSTALL_CONFIG_FILE" <<EOF
+SOURCE_REPO_DIR=$(printf '%q' "$unmanaged_source")
+MANAGED_REPO_DIR=$(printf '%q' "$managed_repo")
+REPO_ORIGIN_URL=$(printf '%q' "$origin_repo")
+REPO_DEFAULT_BRANCH=$(printf '%q' "master")
+OPT_ROOT=$(printf '%q' "$workspace/opt")
+EOF
+
+        prepare_build_repo
+
+        [ "$(git -C "$MANAGED_REPO_DIR" rev-parse --abbrev-ref HEAD)" = "master" ] \
+            || fail "Expected managed checkout to switch to master"
+        [ "$(cat "$MANAGED_REPO_DIR/branch.txt")" = "master-branch" ] \
+            || fail "Expected managed checkout contents from the newly selected branch"
+    )
+}
+
+test_user_local_prepare_build_repo_handles_deleted_overlay_paths() {
+    info "Checking user-local managed checkout tolerates overlay paths deleted in the worktree"
+    local workspace="$TMP_DIR/user-local-deleted-overlay"
+    local origin_repo="$workspace/origin.git"
+    local source_repo="$workspace/source"
+    local managed_repo="$workspace/xdg-data/codex-desktop-linux/managed-repo"
+    local install_env="$workspace/install.env"
+
+    mkdir -p "$workspace"
+    git init --bare --initial-branch=main "$origin_repo" >/dev/null
+    git clone "$origin_repo" "$source_repo" >/dev/null 2>&1
+    git -C "$source_repo" config user.name "Smoke Test"
+    git -C "$source_repo" config user.email "smoke@example.com"
+
+    cat > "$source_repo/overlay.txt" <<'EOF'
+base
+EOF
+    git -C "$source_repo" add overlay.txt
+    git -C "$source_repo" commit -m "base" >/dev/null
+    git -C "$source_repo" push -u origin main >/dev/null
+    git -C "$source_repo" remote set-head origin -a >/dev/null 2>&1 || true
+
+    cat > "$source_repo/overlay.txt" <<'EOF'
+committed-overlay
+EOF
+    git -C "$source_repo" commit -am "overlay commit" >/dev/null
+    rm -f "$source_repo/overlay.txt"
+
+    (
+        export HOME="$workspace/home"
+        export XDG_DATA_HOME="$workspace/xdg-data"
+        export XDG_STATE_HOME="$workspace/xdg-state"
+        mkdir -p "$HOME" "$XDG_DATA_HOME" "$XDG_STATE_HOME"
+
+        # shellcheck disable=SC1091
+        source "$REPO_DIR/contrib/user-local-install/files/.local/lib/codex-desktop-linux/common.sh"
+
+        INSTALL_CONFIG_FILE="$install_env"
+        cat > "$INSTALL_CONFIG_FILE" <<EOF
+SOURCE_REPO_DIR=$(printf '%q' "$source_repo")
+MANAGED_REPO_DIR=$(printf '%q' "$managed_repo")
+REPO_ORIGIN_URL=$(printf '%q' "$origin_repo")
+REPO_DEFAULT_BRANCH=$(printf '%q' "main")
+OPT_ROOT=$(printf '%q' "$workspace/opt")
+EOF
+
+        prepare_build_repo
+
+        [ ! -e "$MANAGED_REPO_DIR/overlay.txt" ] \
+            || fail "Expected deleted overlay path to be removed from managed checkout"
+    )
+}
+
+test_user_local_prepare_build_repo_removes_rename_source_paths() {
+    info "Checking user-local managed checkout removes rename source paths"
+    local workspace="$TMP_DIR/user-local-rename-overlay"
+    local origin_repo="$workspace/origin.git"
+    local source_repo="$workspace/source"
+    local managed_repo="$workspace/xdg-data/codex-desktop-linux/managed-repo"
+    local install_env="$workspace/install.env"
+
+    mkdir -p "$workspace"
+    git init --bare --initial-branch=main "$origin_repo" >/dev/null
+    git clone "$origin_repo" "$source_repo" >/dev/null 2>&1
+    git -C "$source_repo" config user.name "Smoke Test"
+    git -C "$source_repo" config user.email "smoke@example.com"
+
+    cat > "$source_repo/old-name.txt" <<'EOF'
+base
+EOF
+    git -C "$source_repo" add old-name.txt
+    git -C "$source_repo" commit -m "base" >/dev/null
+    git -C "$source_repo" push -u origin main >/dev/null
+    git -C "$source_repo" remote set-head origin -a >/dev/null 2>&1 || true
+
+    git -C "$source_repo" mv old-name.txt new-name.txt
+    git -C "$source_repo" commit -m "rename overlay file" >/dev/null
+
+    (
+        export HOME="$workspace/home"
+        export XDG_DATA_HOME="$workspace/xdg-data"
+        export XDG_STATE_HOME="$workspace/xdg-state"
+        mkdir -p "$HOME" "$XDG_DATA_HOME" "$XDG_STATE_HOME"
+
+        # shellcheck disable=SC1091
+        source "$REPO_DIR/contrib/user-local-install/files/.local/lib/codex-desktop-linux/common.sh"
+
+        INSTALL_CONFIG_FILE="$install_env"
+        cat > "$INSTALL_CONFIG_FILE" <<EOF
+SOURCE_REPO_DIR=$(printf '%q' "$source_repo")
+MANAGED_REPO_DIR=$(printf '%q' "$managed_repo")
+REPO_ORIGIN_URL=$(printf '%q' "$origin_repo")
+REPO_DEFAULT_BRANCH=$(printf '%q' "main")
+OPT_ROOT=$(printf '%q' "$workspace/opt")
+EOF
+
+        prepare_build_repo
+
+        [ ! -e "$MANAGED_REPO_DIR/old-name.txt" ] \
+            || fail "Expected rename source path to be removed from managed checkout"
+        [ "$(cat "$MANAGED_REPO_DIR/new-name.txt")" = "base" ] \
+            || fail "Expected rename destination path to be present in managed checkout"
+    )
+}
+
+test_user_local_prepare_build_repo_skips_unmerged_overlay_paths() {
+    info "Checking user-local managed checkout skips unmerged overlay paths"
+    local workspace="$TMP_DIR/user-local-unmerged-overlay"
+    local origin_repo="$workspace/origin.git"
+    local source_repo="$workspace/source"
+    local managed_repo="$workspace/xdg-data/codex-desktop-linux/managed-repo"
+    local install_env="$workspace/install.env"
+
+    mkdir -p "$workspace"
+    git init --bare --initial-branch=main "$origin_repo" >/dev/null
+    git clone "$origin_repo" "$source_repo" >/dev/null 2>&1
+    git -C "$source_repo" config user.name "Smoke Test"
+    git -C "$source_repo" config user.email "smoke@example.com"
+
+    cat > "$source_repo/conflict.txt" <<'EOF'
+base
+EOF
+    git -C "$source_repo" add conflict.txt
+    git -C "$source_repo" commit -m "base" >/dev/null
+    git -C "$source_repo" push -u origin main >/dev/null
+    git -C "$source_repo" remote set-head origin -a >/dev/null 2>&1 || true
+
+    git -C "$source_repo" checkout -q -b feature
+    cat > "$source_repo/conflict.txt" <<'EOF'
+feature-change
+EOF
+    git -C "$source_repo" commit -am "feature change" >/dev/null
+    git -C "$source_repo" checkout -q main
+    cat > "$source_repo/conflict.txt" <<'EOF'
+main-change
+EOF
+    git -C "$source_repo" commit -am "main change" >/dev/null
+    if git -C "$source_repo" merge feature >/dev/null 2>&1; then
+        fail "Expected merge to conflict in unmerged overlay smoke test"
+    fi
+    assert_contains "$source_repo/conflict.txt" "<<<<<<<"
+
+    (
+        export HOME="$workspace/home"
+        export XDG_DATA_HOME="$workspace/xdg-data"
+        export XDG_STATE_HOME="$workspace/xdg-state"
+        mkdir -p "$HOME" "$XDG_DATA_HOME" "$XDG_STATE_HOME"
+
+        # shellcheck disable=SC1091
+        source "$REPO_DIR/contrib/user-local-install/files/.local/lib/codex-desktop-linux/common.sh"
+
+        INSTALL_CONFIG_FILE="$install_env"
+        cat > "$INSTALL_CONFIG_FILE" <<EOF
+SOURCE_REPO_DIR=$(printf '%q' "$source_repo")
+MANAGED_REPO_DIR=$(printf '%q' "$managed_repo")
+REPO_ORIGIN_URL=$(printf '%q' "$origin_repo")
+REPO_DEFAULT_BRANCH=$(printf '%q' "main")
+OPT_ROOT=$(printf '%q' "$workspace/opt")
+EOF
+
+        prepare_build_repo
+
+        [ "$(cat "$MANAGED_REPO_DIR/conflict.txt")" = "base" ] \
+            || fail "Expected managed checkout to keep clean upstream content for unmerged overlay paths"
+        assert_not_contains "$MANAGED_REPO_DIR/conflict.txt" "<<<<<<<"
+    )
+}
+
 main() {
     test_common_helper_sourcing
     test_deb_builder_smoke
@@ -2678,8 +3378,12 @@ main() {
     test_no_updater_cleanup_helper_removes_inactive_user_enablement
     test_rpm_builder_smoke
     test_pacman_builder_without_updater_transition_hook
+    test_appimage_builder_smoke
     test_missing_input_failure
+    test_make_install_reports_missing_native_packages
     test_make_build_app_uses_installer_download_flow_by_default
+    test_make_build_app_fresh_uses_installer_fresh_flow
+    test_native_shortcut_targets_compose_existing_flows
     test_upstream_build_app_workflow_tracks_dmg_metadata
     test_update_nix_hash_workflow_maintains_clean_main
     test_main_to_self_hosted_workflow_opens_update_pr
@@ -2709,6 +3413,15 @@ main() {
     test_linux_computer_use_gate_patch_smoke
     test_linux_computer_use_ui_opt_in_smoke
     test_linux_file_manager_patch_fails_soft
+    test_user_local_prepare_build_repo_overlays_committed_local_changes
+    test_user_local_prepare_build_repo_detects_default_branch_without_recorded_branch
+    test_user_local_prepare_build_repo_ignores_stale_recorded_default_branch
+    test_user_local_prepare_build_repo_ignores_stale_source_origin_head
+    test_user_local_install_from_update_defers_record_only_metadata
+    test_user_local_prepare_build_repo_updates_existing_single_branch_fetch_refspec
+    test_user_local_prepare_build_repo_handles_deleted_overlay_paths
+    test_user_local_prepare_build_repo_removes_rename_source_paths
+    test_user_local_prepare_build_repo_skips_unmerged_overlay_paths
     info "All script smoke tests passed"
 }
 

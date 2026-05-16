@@ -1101,9 +1101,12 @@ verify_webview_origin() {
     # SSL error, etc.) instead of a generic "HTTP fetch failed", matching
     # what the original python3 urllib version exposed via its raised
     # exception text.
+    # --noproxy keeps loopback validation pointed at the embedded webview
+    # server even when the user's shell exports http_proxy/ALL_PROXY without a
+    # localhost NO_PROXY exemption.
     local body err detail
     err=$(mktemp 2>/dev/null) || err="${TMPDIR:-/tmp}/codex-curl-err.$$"
-    if ! body="$(curl --disable --silent --show-error --fail --max-time 2 "$url" 2>"$err")"; then
+    if ! body="$(curl --disable --noproxy 127.0.0.1,localhost --silent --show-error --fail --max-time 2 "$url" 2>"$err")"; then
         detail=$(< "$err" 2>/dev/null)
         rm -f "$err"
         echo "Webview origin validation failed for $url; ${detail:-curl exited non-zero with no diagnostic}" >&2

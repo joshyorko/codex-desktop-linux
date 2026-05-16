@@ -39,6 +39,23 @@ What it changes:
 - Preserves `remote_control = true` / `features.remote_control = true` in the
   local Codex config instead of letting upstream strip it before app-server
   startup.
+- Updates remote-control settings and Codex mobile setup copy so the Linux flow
+  is not described as Mac-only.
+
+KDE Plasma smoke check:
+
+Mobile control depends on the Linux Computer Use backend once the host is
+enrolled. On Plasma/Wayland, verify that the KWin backend is ready after
+building or installing the package:
+
+```bash
+./codex-app/resources/plugins/openai-bundled/plugins/computer-use/bin/codex-computer-use-linux doctor
+./codex-app/resources/plugins/openai-bundled/plugins/computer-use/bin/codex-computer-use-linux windows
+```
+
+The doctor report should show the KWin window backend, XDG Desktop Portal, and
+input checks as ready. The windows report should return `"backend": "kwin"` with
+a non-empty `windows` list.
 
 Known risks:
 
