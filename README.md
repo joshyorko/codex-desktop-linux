@@ -216,6 +216,7 @@ By default, the native package installs a companion `systemd --user` service nam
 
 - It checks upstream `Codex.dmg` on daemon startup, every 6 hours, and in the background on app launch when stale.
 - When a new DMG is available, it rebuilds a local native package with `/opt/codex-desktop/update-builder`.
+- Rebuilds reuse the package's staged optional Linux feature config, so enabled `linux-features/` choices survive auto-updates.
 - If Codex Desktop is open, the final install waits until Electron exits.
 - The updater runs unprivileged and uses `pkexec` only for the final package install.
 - Codex CLI checks are best-effort and launcher-scoped. Set `CODEX_SYNC_CLI_PREFLIGHT=1` when debugging launch-time CLI preflight.

@@ -168,6 +168,50 @@ SCRIPT
     assert_file_exists "$pkg_root/opt/codex-desktop/resources/node-runtime/bin/node"
 }
 
+test_update_builder_preserves_enabled_linux_features_config() {
+    info "Checking update-builder preserves sanitized enabled Linux feature config"
+    local workspace="$TMP_DIR/update-builder-linux-features"
+    local root="$workspace/root"
+    local app_dir="$workspace/app"
+    local feature_config="$workspace/features.json"
+    local staged_config="$root/opt/codex-desktop/update-builder/linux-features/features.json"
+
+    mkdir -p "$workspace"
+    make_fake_app "$app_dir"
+    cat > "$feature_config" <<'JSON'
+{
+  "enabled": [
+    "example-feature"
+  ],
+  "localComment": "should not be packaged"
+}
+JSON
+
+    (
+        export APP_DIR="$app_dir"
+        export PACKAGE_NAME="codex-desktop"
+        export UPDATER_SERVICE_SOURCE="$REPO_DIR/packaging/linux/codex-update-manager.service"
+        export CODEX_LINUX_FEATURES_CONFIG="$feature_config"
+
+        # shellcheck disable=SC1091
+        source "$REPO_DIR/scripts/lib/package-common.sh"
+        stage_update_builder_bundle "$root"
+    )
+
+    assert_file_exists "$staged_config"
+    assert_contains "$staged_config" "example-feature"
+    assert_not_contains "$staged_config" "localComment"
+
+    node - "$staged_config" <<'NODE' || fail "Expected staged Linux features config to be sanitized"
+const fs = require("node:fs");
+const configPath = process.argv[2];
+const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+if (JSON.stringify(config) !== JSON.stringify({ enabled: ["example-feature"] })) {
+  process.exit(1);
+}
+NODE
+}
+
 test_deb_builder_respects_package_identity() {
     info "Running side-by-side Debian packaging smoke test"
     local workspace="$TMP_DIR/deb-identity"
@@ -3373,6 +3417,7 @@ EOF
 main() {
     test_common_helper_sourcing
     test_deb_builder_smoke
+    test_update_builder_preserves_enabled_linux_features_config
     test_deb_builder_respects_package_identity
     test_deb_builder_without_updater
     test_no_updater_cleanup_helper_removes_inactive_user_enablement
