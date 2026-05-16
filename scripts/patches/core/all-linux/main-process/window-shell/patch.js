@@ -6,6 +6,7 @@ const {
   applyLinuxSetIconPatch,
   applyLinuxOpaqueBackgroundPatch,
   applyLinuxFileManagerPatch,
+  applyLinuxCodeEditorOpenTargetPatch,
   applyLinuxTrayPatch,
   applyLinuxSingleInstancePatch,
   applyLinuxGitOriginsSourceFallbackPatch,
@@ -54,6 +55,13 @@ module.exports = [
     order: 100,
     ciPolicy: "required-upstream",
     apply: applyLinuxFileManagerPatch,
+  },
+  {
+    id: "linux-code-editor-open-targets",
+    phase: "main-bundle",
+    order: 105,
+    ciPolicy: "required-upstream",
+    apply: applyLinuxCodeEditorOpenTargetPatch,
   },
   {
     id: "linux-tray",

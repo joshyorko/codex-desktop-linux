@@ -20,6 +20,7 @@ const {
   applyLinuxBrowserUseIabVisibleOnCreatePatch,
   applyLinuxChromeExtensionStatusPatch,
   applyLinuxChromePluginAutoInstallPatch,
+  applyLinuxCodeEditorOpenTargetPatch,
   applyLinuxAppUpdaterBridgePatch,
   applyLinuxAppUpdaterMenuPatch,
   applyLinuxExplicitIpcQuitPatch,
@@ -62,6 +63,8 @@ const mainBundlePrefix =
   "let n=require(`electron`),i=require(`node:path`),o=require(`node:fs`);";
 const fileManagerBundle =
   "var lu=jl({id:`fileManager`,label:`Finder`,icon:`apps/finder.png`,kind:`fileManager`,darwin:{detect:()=>`open`,args:e=>il(e)},win32:{label:`File Explorer`,icon:`apps/file-explorer.png`,detect:uu,args:e=>il(e),open:async({path:e})=>du(e)}});function uu(){}";
+const codeEditorOpenTargetsBundle =
+  "let lm={default:{sync(){return null}}};function Ew({id:e,label:t,icon:n,darwinDetect:r,win32Detect:i,linuxDetect:a}){return{id:e,platforms:{darwin:r?{label:t,icon:n,kind:`editor`,detect:r,args:gw,supportsSsh:!0}:void 0,win32:i?{label:t,icon:n,kind:`editor`,detect:i,args:gw,supportsSsh:!0}:void 0,linux:a?{label:t,icon:n,kind:`editor`,detect:a,args:gw,supportsSsh:!0}:void 0}}}function gw(e,t){return t?[`${e}:${t.line}:${t.column}`]:[e]}var XT=Ew({id:`vscode`,label:`VS Code`,icon:`apps/vscode.png`,darwinDetect:()=>`open`,win32Detect:ZT,linuxDetect:()=>lm(`code`)});function ZT(){return `Code.exe`}var QT=Ew({id:`vscodeInsiders`,label:`VS Code Insiders`,icon:`apps/vscode-insiders.png`,darwinDetect:()=>`open`,win32Detect:$T,linuxDetect:()=>lm(`code-insiders`)});function $T(){return `Code - Insiders.exe`}";
 const alreadyOpaqueBackgroundBundle =
   "process.platform===`linux`?{backgroundColor:e?t:n,backgroundMaterial:null}:{backgroundColor:r,backgroundMaterial:null}";
 const opaqueBackgroundBundleWithDriftingGw =
@@ -244,6 +247,7 @@ test("default core patch descriptors are grouped and unique", () => {
     "linux-opaque-background",
     "linux-avatar-overlay-mouse-passthrough",
     "linux-file-manager",
+    "linux-code-editor-open-targets",
     "linux-tray",
     "linux-single-instance",
     "linux-computer-use-ui-feature",
@@ -458,6 +462,40 @@ test("adds Linux file manager support without relying on exact minified variable
   assert.match(patched, /linux:\{label:`File Manager`/);
   assert.match(patched, /detect:\(\)=>`linux-file-manager`/);
   assert.match(patched, /n\.shell\.openPath\(__codexOpenTarget\)/);
+});
+
+test("patches Linux VS Code open targets to use executable lookup helper", () => {
+  const source = `${mainBundlePrefix}${codeEditorOpenTargetsBundle}`;
+  const patched = applyPatchTwice(applyLinuxCodeEditorOpenTargetPatch, source);
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-code-open-target-"));
+  const binDir = path.join(tempDir, "bin");
+  const code = path.join(binDir, "code");
+  const codeInsiders = path.join(binDir, "code-insiders");
+
+  try {
+    fs.mkdirSync(binDir, { recursive: true });
+    fs.writeFileSync(code, "#!/bin/sh\nexit 0\n");
+    fs.writeFileSync(codeInsiders, "#!/bin/sh\nexit 0\n");
+    fs.chmodSync(code, 0o755);
+    fs.chmodSync(codeInsiders, 0o755);
+
+    assert.match(patched, /function codexLinuxOpenTargetExecutable\(e\)/);
+    assert.match(patched, /linuxDetect:\(\)=>codexLinuxOpenTargetExecutable\(`code`\)/);
+    assert.match(patched, /linuxDetect:\(\)=>codexLinuxOpenTargetExecutable\(`code-insiders`\)/);
+    assert.doesNotMatch(patched, /linuxDetect:\(\)=>lm\(`code/);
+
+    const requireStub = (name) => (name === "electron" ? {} : require(name));
+    const [detectedCode, detectedCodeInsiders] = new Function(
+      "require",
+      "process",
+      `${patched};return [XT.platforms.linux.detect(),QT.platforms.linux.detect()];`,
+    )(requireStub, { platform: "linux", env: { HOME: tempDir, PATH: binDir } });
+
+    assert.equal(detectedCode, code);
+    assert.equal(detectedCodeInsiders, codeInsiders);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
 });
 
 test("adds the Linux quit guard when electron/path/fs requires are split across statements", () => {
