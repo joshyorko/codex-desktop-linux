@@ -9,11 +9,15 @@ OPT_ROOT="${HOME}/.local/opt/codex-desktop-linux"
 OPT_BIN_DIR="${OPT_ROOT}/bin"
 OPT_LIB_DIR="${OPT_ROOT}/lib/codex-desktop-linux"
 XDG_DATA_HOME="${XDG_DATA_HOME:-${HOME}/.local/share}"
+XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-${HOME}/.config}"
 DATA_DIR="${XDG_DATA_HOME}/codex-desktop-linux"
+CONFIG_DIR="${XDG_CONFIG_HOME}/codex-desktop-linux"
+USER_LOCAL_ENV_FILE="${CONFIG_DIR}/user-local.env"
 MANAGED_REPO_DIR="${DATA_DIR}/managed-repo"
 STATE_DIR="${XDG_STATE_HOME:-${HOME}/.local/state}/codex-desktop-linux"
 FROM_UPDATE=0
 ENABLE_TIMER=0
+USER_LOCAL_OZONE_PLATFORM_SETTING=""
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -22,6 +26,12 @@ while [ $# -gt 0 ]; do
             ;;
         --enable-timer)
             ENABLE_TIMER=1
+            ;;
+        --force-x11|--x11-fallback)
+            USER_LOCAL_OZONE_PLATFORM_SETTING="x11"
+            ;;
+        --no-force-x11|--no-x11-fallback)
+            USER_LOCAL_OZONE_PLATFORM_SETTING="auto"
             ;;
         *)
             echo "Unknown option: $1" >&2
@@ -36,6 +46,15 @@ copy_file() {
     local dst="$2"
     mkdir -p "$(dirname "$dst")"
     cp "$src" "$dst"
+}
+
+write_user_local_preferences() {
+    [ -n "$USER_LOCAL_OZONE_PLATFORM_SETTING" ] || return 0
+
+    mkdir -p "$CONFIG_DIR"
+    cat > "$USER_LOCAL_ENV_FILE" <<EOF
+CODEX_USER_LOCAL_OZONE_PLATFORM=$(printf '%q' "$USER_LOCAL_OZONE_PLATFORM_SETTING")
+EOF
 }
 
 repo_origin_url() {
@@ -117,6 +136,7 @@ EOF
 }
 
 install_manager_files
+write_user_local_preferences
 
 if command -v systemctl >/dev/null 2>&1; then
     systemctl --user daemon-reload >/dev/null 2>&1 || true

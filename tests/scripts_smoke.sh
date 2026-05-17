@@ -813,6 +813,244 @@ test_main_to_self_hosted_workflow_opens_update_pr() {
     assert_contains "$workflow" 'gh pr edit "$existing_pr"'
 }
 
+test_devcontainer_homebrew_cask_is_local_tap_installable() {
+    info "Checking devcontainer Homebrew cask"
+    local cask="$REPO_DIR/contrib/homebrew/codex-desktop-devcontainer.rb"
+
+    assert_file_exists "$cask"
+    assert_contains "$cask" 'cask "codex-desktop-devcontainer"'
+    assert_contains "$cask" 'url "https://github.com/joshyorko/homebrew-tools/releases/download/codex-desktop-linux-'
+    assert_contains "$cask" 'binary "bin/codex-desktop", target: "codex-desktop"'
+    assert_contains "$cask" 'Exec=#{HOMEBREW_PREFIX}/bin/codex-desktop %U'
+    assert_contains "$cask" 'depends_on formula: "desktop-file-utils"'
+    assert_contains "$cask" 'codex-desktop web --inspect'
+    assert_contains "$cask" 'codex-desktop doctor'
+    assert_contains "$cask" 'codex-desktop serve --workspace /workspace'
+    assert_contains "$cask" "reuses the"
+    assert_contains "$cask" 'Real devcontainer web-mode browser smoke'
+    assert_contains "$cask" 'container-local'
+    assert_not_contains "$cask" 'depends_on cask:'
+}
+
+test_devcontainer_homebrew_validation_script_targets_ror_image() {
+    info "Checking devcontainer Homebrew validation script"
+    local script="$REPO_DIR/scripts/devcontainer-homebrew-smoke.sh"
+
+    assert_file_exists "$script"
+    assert_contains "$script" 'ghcr.io/joshyorko/ror:latest'
+    assert_contains "$script" 'contrib/homebrew/codex-desktop-devcontainer.rb'
+    assert_contains "$script" 'brew tap codex-devcontainer/local'
+    assert_contains "$script" 'brew install --cask'
+    assert_contains "$script" 'codex-desktop --help'
+    assert_contains "$script" 'codex-desktop web --inspect'
+    assert_contains "$script" 'codex-desktop serve'
+    assert_contains "$script" '--once-health-check'
+    assert_contains "$script" 'non-loopback bind requires --require-token'
+    assert_contains "$script" 'auth'
+    assert_contains "$script" 'token_present'
+    assert_contains "$script" 'blocked_host_env'
+    assert_contains "$script" 'DISPLAY'
+    assert_contains "$script" 'WAYLAND_DISPLAY'
+    assert_contains "$script" 'DBUS_SESSION_BUS_ADDRESS'
+    assert_contains "$script" 'YDOTOOL_SOCKET'
+    assert_contains "$script" 'codex-desktop doctor'
+    assert_contains "$script" 'CODEX_DESKTOP_RUN_COMPUTER_USE_DOCTOR=0'
+    assert_not_contains "$script" 'joshyorko/homebrew-tools'
+}
+
+test_devcontainer_desktop_host_is_loopback_and_container_scoped() {
+    info "Checking devcontainer desktop host harness"
+    local script="$REPO_DIR/scripts/devcontainer-codex-desktop-host.sh"
+    local smoke="$REPO_DIR/scripts/devcontainer-codex-desktop-browser-smoke.sh"
+
+    assert_file_exists "$script"
+    assert_file_exists "$smoke"
+    assert_contains "$script" 'Xvfb "$DISPLAY"'
+    assert_contains "$script" 'start_background x11vnc x11vnc'
+    assert_contains "$script" '-display "$DISPLAY"'
+    assert_contains "$script" 'ensure_apk_package xkeyboard-config'
+    assert_contains "$script" 'websockify'
+    assert_contains "$script" '--web "$novnc_dir"'
+    assert_contains "$script" '-localhost'
+    assert_contains "$script" '-noipv6'
+    assert_contains "$script" 'APP_URL="http://127.0.0.1:$WEB_PORT'
+    assert_contains "$script" 'path=websockify'
+    assert_contains "$script" 'CODEX_DESKTOP_DEVCONTAINER_MODE=1'
+    assert_contains "$script" 'CODEX_CLI_PACKAGE="${CODEX_DESKTOP_DEVCONTAINER_CODEX_CLI_PACKAGE:-@openai/codex@alpha}"'
+    assert_contains "$script" 'CODEX_HOME="${CODEX_HOME:-$PROFILE_CODEX_HOME}"'
+    assert_contains "$script" 'XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$PROFILE_XDG_CONFIG_HOME}"'
+    assert_contains "$script" 'CODEX_ELECTRON_USER_DATA_DIR="$PROFILE_DIR/electron-user-data"'
+    assert_contains "$script" 'CODEX_BROWSER_USE_PREFER_LOCAL_BROWSER=1'
+    assert_contains "$script" 'CODEX_BROWSER_USE_BROWSER_COMMAND="${CODEX_BROWSER_USE_BROWSER_COMMAND:-chromium}"'
+    assert_contains "$script" 'CODEX_COMPUTER_USE_BROWSER_ONLY=1'
+    assert_contains "$script" 'npm install -g --prefix "$NPM_PREFIX" "$CODEX_CLI_PACKAGE"'
+    assert_contains "$script" 'stop_host'
+    assert_contains "$script" 'stop_pid_file "$PID_DIR/novnc.pid"'
+    assert_contains "$script" 'codex-desktop --x11 --no-sandbox'
+    assert_contains "$script" 'status_host()'
+    assert_not_contains "$script" 'codex-desktop desktop --no-sandbox'
+    assert_contains "$smoke" 'ghcr.io/joshyorko/ror:latest'
+    assert_contains "$smoke" 'chromium'
+    assert_contains "$smoke" 'codex-desktop serve'
+    assert_contains "$smoke" 'CONTAINER_WORKSPACE="/tmp/codex-desktop-workspace"'
+    assert_contains "$smoke" '--workspace'
+    assert_contains "$smoke" '--profile "$profile_dir"'
+    assert_contains "$smoke" 'CODEX_BROWSER_USE_BROWSER_COMMAND=chromium'
+    assert_contains "$smoke" 'CODEX_BROWSER_CDP_PORT=9334'
+    assert_contains "$smoke" 'missing_or_invalid_token'
+    assert_contains "$smoke" 'forbidden_origin'
+    assert_contains "$smoke" 'x-codex-web-token'
+    assert_contains "$smoke" '/__codex/browser/status'
+    assert_contains "$smoke" 'cdp_endpoint'
+    assert_contains "$smoke" 'http://127.0.0.1:9333'
+    assert_contains "$smoke" 'http://127.0.0.1:9334'
+    assert_contains "$smoke" 'http://127.0.0.1:9334/json/version'
+    assert_contains "$smoke" 'physical_host_control'
+    assert_contains "$smoke" 'devcontainer-smoke-marker'
+    assert_contains "$smoke" 'codex-web-forbidden-ui-transport'
+    assert_contains "$smoke" 'Page.captureScreenshot'
+    assert_contains "$smoke" 'Codex web UI did not become ready'
+    assert_not_contains "$smoke" 'imagemagick-7'
+    assert_not_contains "$smoke" 'import -window root'
+    assert_not_contains "$smoke" 'noVNC did not connect'
+}
+
+test_web_mode_security_token_env_and_cdp_static_contract() {
+    info "Checking web mode security/token/env/CDP contract"
+    local server="$REPO_DIR/launcher/web-mode-server.mjs"
+    local bootstrap="$REPO_DIR/launcher/web-mode-bootstrap.js"
+    local stripped_env
+
+    assert_file_exists "$server"
+    assert_file_exists "$bootstrap"
+    assert_contains "$server" 'crypto.randomBytes(24).toString("base64url")'
+    assert_contains "$server" 'token_present: Boolean(state.token)'
+    assert_contains "$server" 'sameOriginAllowed'
+    assert_contains "$server" 'forbidden_origin'
+    assert_contains "$server" 'missing_or_invalid_token'
+    assert_contains "$server" 'x-codex-web-token'
+    assert_contains "$server" 'codex_web_token'
+    assert_contains "$server" 'non-loopback bind requires --require-token'
+    assert_contains "$server" 'delete env\[key\]'
+    assert_contains "$server" 'CODEX_COMPUTER_USE_BROWSER_ONLY: "1"'
+    assert_contains "$server" 'CODEX_COMPUTER_CONTROL_MODE: "browser-only"'
+    assert_contains "$server" 'physical_host_control: false'
+    assert_contains "$server" 'app-server", "--listen", "stdio://"'
+    assert_contains "$server" '--remote-debugging-address=127.0.0.1'
+    assert_contains "$server" '--remote-debugging-port='
+    assert_contains "$server" 'CODEX_BROWSER_CDP_PORT || "9333"'
+    assert_contains "$server" 'waitForCdpEndpoint'
+    assert_contains "$server" '/json/version'
+    assert_contains "$server" '/__codex/browser/status'
+    assert_contains "$server" 'container-local Chromium/CDP sidecar ready'
+
+    for stripped_env in \
+        DISPLAY \
+        WAYLAND_DISPLAY \
+        XAUTHORITY \
+        DBUS_SESSION_BUS_ADDRESS \
+        XDG_SESSION_ID \
+        DESKTOP_SESSION \
+        XDG_CURRENT_DESKTOP \
+        GNOME_DESKTOP_SESSION_ID \
+        KDE_FULL_SESSION \
+        SWAYSOCK \
+        HYPRLAND_INSTANCE_SIGNATURE \
+        I3SOCK \
+        YDOTOOL_SOCKET; do
+        assert_contains "$server" "\"$stripped_env\""
+    done
+
+    assert_contains "$bootstrap" 'window.__CODEX_WEB_TOKEN__ || ""'
+    assert_contains "$bootstrap" '"x-codex-web-token": bridgeToken'
+    assert_contains "$bootstrap" 'codex_web_token=${encodeURIComponent(bridgeToken)}'
+    assert_contains "$bootstrap" 'window.postMessage(message, window.location.origin)'
+    assert_contains "$bootstrap" 'Electron worker bridge is unavailable in devcontainer web mode'
+}
+
+test_web_mode_codex_home_policy() {
+    info "Checking web mode Codex identity/profile policy"
+    local server="$REPO_DIR/launcher/web-mode-server.mjs"
+    local workspace="$TMP_DIR/web-mode-codex-home/workspace"
+    local profile="$TMP_DIR/web-mode-codex-home/profile"
+    local shared_home="$TMP_DIR/web-mode-codex-home/shared-codex"
+    local custom_home="$TMP_DIR/web-mode-codex-home/custom-codex"
+    local home_dir="$TMP_DIR/web-mode-codex-home/home"
+    local default_home="$home_dir/.codex"
+
+    mkdir -p "$workspace" "$profile" "$shared_home" "$custom_home" "$home_dir"
+
+    CODEX_HOME="$shared_home" node "$server" inspect \
+        --workspace "$workspace" \
+        --profile "$profile" > "$TMP_DIR/web-mode-shared-home.json"
+    assert_contains "$TMP_DIR/web-mode-shared-home.json" "\"codex_home\": \"$shared_home\""
+    assert_contains "$TMP_DIR/web-mode-shared-home.json" "\"profile\": \"$profile\""
+    assert_contains "$TMP_DIR/web-mode-shared-home.json" "\"isolated\": false"
+    assert_not_contains "$TMP_DIR/web-mode-shared-home.json" "$profile/identity/codex-home"
+
+    HOME="$home_dir" env -u CODEX_HOME node "$server" inspect \
+        --workspace "$workspace" \
+        --profile "$profile" > "$TMP_DIR/web-mode-default-home.json"
+    assert_contains "$TMP_DIR/web-mode-default-home.json" "\"codex_home\": \"$default_home\""
+
+    env -u CODEX_HOME node "$server" inspect \
+        --workspace "$workspace" \
+        --profile "$profile" \
+        --codex-home "$custom_home" > "$TMP_DIR/web-mode-custom-home.json"
+    assert_contains "$TMP_DIR/web-mode-custom-home.json" "\"codex_home\": \"$custom_home\""
+
+    env -u CODEX_HOME node "$server" inspect \
+        --workspace "$workspace" \
+        --profile "$profile" \
+        --isolated > "$TMP_DIR/web-mode-isolated-home.json"
+    assert_contains "$TMP_DIR/web-mode-isolated-home.json" "\"codex_home\": \"$profile/identity/codex-home\""
+    assert_contains "$TMP_DIR/web-mode-isolated-home.json" "\"isolated\": true"
+}
+
+test_web_mode_inventory_script_reports_host_markers() {
+    info "Checking web mode bridge inventory script"
+    local script="$REPO_DIR/scripts/web-mode-inventory.mjs"
+    local webview_dir="$TMP_DIR/web-mode-inventory/webview"
+    local out="$TMP_DIR/web-mode-inventory/bridge-inventory.json"
+
+    mkdir -p "$webview_dir/assets"
+    cat > "$webview_dir/index.html" <<'HTML'
+<!doctype html>
+<html>
+<head><title>Codex</title></head>
+<body>
+<script>window.acquireVsCodeApi && window.acquireVsCodeApi();</script>
+<script src="./assets/app.js"></script>
+</body>
+</html>
+HTML
+    cat > "$webview_dir/assets/app.js" <<'JS'
+const host = {
+  dispatchHostMessage: "dispatchHostMessage",
+  dispatchMessage: "dispatchMessage",
+  ipcRenderer: "ipcRenderer",
+  electron: "electron",
+  uri: "vscode://codex",
+  get: "get-global-state",
+  set: "set-global-state",
+  computer: "computer_use",
+  browser: "Browser Use",
+};
+console.log(host);
+JS
+
+    assert_file_exists "$script"
+    node "$script" --webview-dir "$webview_dir" --out "$out"
+    assert_file_exists "$out"
+    assert_contains "$out" '"schema_version": 1'
+    assert_contains "$out" '"scanned_files": 2'
+    assert_contains "$out" '"host_api_markers"'
+    assert_contains "$out" '"acquireVsCodeApi": 2'
+    assert_contains "$out" '"dispatchHostMessage": 2'
+    assert_contains "$out" '"vscode://codex": 1'
+    assert_contains "$out" '"Browser Use": 1'
+}
+
 test_installer_detects_electron_version_from_plist() {
     info "Checking Electron version detection from app metadata"
     local workspace="$TMP_DIR/electron-version"
@@ -924,9 +1162,9 @@ set -euo pipefail
 CODEX_LINUX_WEBVIEW_PORT=${CODEX_WEBVIEW_PORT:-5175}
 SCRIPT
     awk '
-        /^case "\$CODEX_LINUX_WEBVIEW_PORT" in/ { emit = 1 }
+        /^normalize_tcp_port\(\) \{/ { emit = 1 }
+        /^launcher_port_is_open\(\) \{/ { exit }
         emit { print }
-        /^WEBVIEW_ORIGIN=/ { exit }
     ' "$REPO_DIR/launcher/start.sh.template" >> "$launcher_probe_script"
     cat >> "$launcher_probe_script" <<'SCRIPT'
 printf '%s\n' "$CODEX_LINUX_WEBVIEW_PORT"
@@ -1227,10 +1465,45 @@ test_launcher_template_sanity() {
     assert_contains "$REPO_DIR/scripts/lib/native-modules.sh" "CODEX_ELECTRON_CACHE_DIR"
     assert_contains "$REPO_DIR/scripts/lib/native-modules.sh" "--continue-at -"
     assert_file_exists "$REPO_DIR/launcher/webview-server.py"
+    assert_file_exists "$REPO_DIR/launcher/web-mode-server.mjs"
+    assert_file_exists "$REPO_DIR/launcher/web-mode-bootstrap.js"
     assert_contains "$REPO_DIR/launcher/webview-server.py" "Cache-Control"
     assert_contains "$REPO_DIR/launcher/webview-server.py" "If-Modified-Since"
     assert_contains "$REPO_DIR/install.sh" "webview-server.py"
+    assert_contains "$REPO_DIR/install.sh" "web-mode-server.mjs"
+    assert_contains "$REPO_DIR/install.sh" "web-mode-bootstrap.js"
+    assert_contains "$REPO_DIR/scripts/lib/package-common.sh" "web-mode-server.mjs"
+    assert_contains "$REPO_DIR/scripts/lib/package-common.sh" "web-mode-bootstrap.js"
+    assert_contains "$REPO_DIR/updater/src/builder.rs" "launcher/web-mode-server.mjs"
+    assert_contains "$REPO_DIR/updater/src/builder.rs" "launcher/web-mode-bootstrap.js"
     assert_contains "$REPO_DIR/launcher/start.sh.template" 'python3 "$SCRIPT_DIR/.codex-linux/webview-server.py" "$CODEX_LINUX_WEBVIEW_PORT" --bind 127.0.0.1'
+    assert_contains "$REPO_DIR/launcher/start.sh.template" "codex_desktop_web_mode"
+    assert_contains "$REPO_DIR/launcher/start.sh.template" "codex_desktop_web_mode serve"
+    assert_contains "$REPO_DIR/launcher/start.sh.template" "serve --workspace DIR"
+    assert_contains "$REPO_DIR/launcher/start.sh.template" "--codex-home DIR|--isolated"
+    assert_contains "$REPO_DIR/launcher/start.sh.template" "CODEX_DESKTOP_WEB_MODE=1"
+    assert_contains "$REPO_DIR/launcher/start.sh.template" "CODEX_BROWSER_MODE"
+    assert_contains "$REPO_DIR/launcher/start.sh.template" "CODEX_COMPUTER_CONTROL_MODE"
+    assert_contains "$REPO_DIR/launcher/web-mode-server.mjs" 'codex app-server'
+    assert_contains "$REPO_DIR/launcher/web-mode-server.mjs" 'app-server'
+    assert_contains "$REPO_DIR/launcher/web-mode-server.mjs" 'stdio://'
+    assert_contains "$REPO_DIR/launcher/web-mode-server.mjs" '"initialize"'
+    assert_contains "$REPO_DIR/launcher/web-mode-server.mjs" '"initialized"'
+    assert_contains "$REPO_DIR/launcher/web-mode-server.mjs" '"account/read"'
+    assert_contains "$REPO_DIR/launcher/web-mode-server.mjs" '/__codex/app-server/rpc'
+    assert_contains "$REPO_DIR/launcher/web-mode-server.mjs" '/__codex/app-server/events'
+    assert_contains "$REPO_DIR/launcher/web-mode-server.mjs" 'CODEX_BROWSER_MODE'
+    assert_contains "$REPO_DIR/launcher/web-mode-server.mjs" 'container-chromium'
+    assert_contains "$REPO_DIR/launcher/web-mode-server.mjs" 'CODEX_BROWSER_CDP_ENDPOINT'
+    assert_contains "$REPO_DIR/launcher/web-mode-server.mjs" 'CODEX_BROWSER_USE_SOCKET_DIR'
+    assert_contains "$REPO_DIR/launcher/web-mode-server.mjs" 'CODEX_COMPUTER_USE_BROWSER_ONLY'
+    assert_contains "$REPO_DIR/launcher/web-mode-server.mjs" 'CODEX_COMPUTER_CONTROL_MODE'
+    assert_contains "$REPO_DIR/launcher/web-mode-server.mjs" 'CODEX_HOME: args.codexHome'
+    assert_contains "$REPO_DIR/launcher/web-mode-server.mjs" 'process.env.CODEX_HOME'
+    assert_contains "$REPO_DIR/launcher/web-mode-server.mjs" '--codex-home'
+    assert_contains "$REPO_DIR/launcher/web-mode-server.mjs" '--isolated'
+    assert_contains "$REPO_DIR/launcher/web-mode-bootstrap.js" 'health?.codex_home'
+    assert_contains "$REPO_DIR/launcher/web-mode-server.mjs" 'browser-only'
     assert_contains "$REPO_DIR/launcher/start.sh.template" "WEBVIEW_PID_FILE"
     assert_contains "$REPO_DIR/launcher/start.sh.template" "owned_webview_server_pid"
     assert_contains "$REPO_DIR/launcher/start.sh.template" "discover_webview_server_pid"
@@ -1246,6 +1519,12 @@ test_launcher_template_sanity() {
     assert_contains "$REPO_DIR/launcher/start.sh.template" "x-scheme-handler/"
     assert_contains "$REPO_DIR/launcher/start.sh.template" "codex-browser-sidebar"
     assert_contains "$REPO_DIR/launcher/start.sh.template" "codex-linux-warm-start-enabled"
+    assert_contains "$REPO_DIR/launcher/start.sh.template" "--new-instance"
+    assert_contains "$REPO_DIR/launcher/start.sh.template" "CODEX_MULTI_LAUNCH"
+    assert_contains "$REPO_DIR/launcher/start.sh.template" "CODEX_MULTI_LAUNCH_PORT_RANGE"
+    assert_contains "$REPO_DIR/launcher/start.sh.template" "choose_multi_launch_port"
+    assert_contains "$REPO_DIR/launcher/start.sh.template" "configure_multi_launch_instance"
+    assert_contains "$REPO_DIR/launcher/start.sh.template" 'launcher-$CODEX_LINUX_INSTANCE_ID.log'
     assert_contains "$REPO_DIR/launcher/start.sh.template" "ADOPTED_WEBVIEW_PID"
     assert_contains "$REPO_DIR/launcher/start.sh.template" "Reusing webview server pid="
     python3 - "$REPO_DIR/launcher/start.sh.template" <<'PY'
@@ -1257,9 +1536,29 @@ detect_body = source.split("detect_warm_start() {", 1)[1].split("send_warm_start
 launch_body = source.split("launch_electron() {", 1)[1].split("load_packaged_runtime_helper", 1)[0]
 runtime_body = source.split("trap cleanup_launcher EXIT", 1)[1].split("launch_electron", 1)[0]
 stop_body = source.split("stop_owned_webview_server() {", 1)[1].split("owned_webview_server_pid() {", 1)[0]
+stale_body = source.split("pid_is_stale_webview_server() {", 1)[1].split("stop_owned_webview_server() {", 1)[0]
+multi_body = source.split("configure_multi_launch_instance() {", 1)[1].split('WEBVIEW_ORIGIN="http://127.0.0.1:$CODEX_LINUX_WEBVIEW_PORT"', 1)[0]
 adopt_body = source.split("adopt_existing_webview_server() {", 1)[1].split("ensure_webview_server() {", 1)[0]
 ensure_body = source.split("ensure_webview_server() {", 1)[1].split("wait_for_webview_server", 1)[0]
 reconcile_body = source.split("reconcile_runtime_state() {", 1)[1].split("set_electron_defaults() {", 1)[0]
+if 'LAUNCHER_ARGS=()' not in source:
+    raise SystemExit("launcher must keep a sanitized argv for launcher-only flags")
+if 'configure_multi_launch_instance "$@"' not in source:
+    raise SystemExit("launcher must configure multi-launch before deriving WEBVIEW_ORIGIN")
+if '$((CODEX_LINUX_WEBVIEW_PORT + 4))' not in source:
+    raise SystemExit("multi-launch default range must cap the default at five ports")
+if 'CODEX_LINUX_INSTANCE_ID="port-$CODEX_LINUX_WEBVIEW_PORT"' not in multi_body:
+    raise SystemExit("multi-launch must derive a stable instance id from the allocated port")
+if 'APP_STATE_DIR="$base_state_dir/instances/$CODEX_LINUX_INSTANCE_ID"' not in multi_body:
+    raise SystemExit("multi-launch must isolate app pid/webview state per allocated port")
+if 'LAUNCH_ACTION_RUNTIME_DIR="$XDG_RUNTIME_DIR/$CODEX_LINUX_APP_ID/instances/$CODEX_LINUX_INSTANCE_ID"' not in multi_body:
+    raise SystemExit("multi-launch must isolate warm-start sockets per allocated port")
+if 'CODEX_ELECTRON_USER_DATA_DIR="$APP_STATE_DIR/electron-user-data"' not in multi_body:
+    raise SystemExit("multi-launch must force a per-instance Electron user-data dir")
+if 'send_warm_start_launch_action "${LAUNCHER_ARGS[@]}"' not in source:
+    raise SystemExit("warm-start handoff must not receive launcher-only multi-launch flags")
+if 'launch_electron "${LAUNCHER_ARGS[@]}"' not in source:
+    raise SystemExit("Electron launch must receive sanitized launcher args")
 if 'RUNNING_APP_PID="$(find_running_app_pid)"' not in detect_body:
     raise SystemExit("detect_warm_start must record a pid-file running app even when warm start is disabled")
 if '[ -S "$LAUNCH_ACTION_SOCKET" ] && RUNNING_APP_PID="$(discover_running_app_pid)"' not in detect_body:
@@ -1292,6 +1591,10 @@ if "running_app_is_active" not in stop_body or "Preserving webview server" not i
     raise SystemExit("stop_owned_webview_server must not stop the live app webview server")
 if "stale_webview_server_pid" not in source or "stop_stale_webview_server" not in source:
     raise SystemExit("launcher must detect stale deleted webview servers left behind by previous installs")
+if 'current_webview_dir="$(canonical_path "$WEBVIEW_DIR")"' not in stale_body:
+    raise SystemExit("stale webview detection must compare against the current bundle path")
+if '[ "$cwd" != "$current_webview_dir" ]' not in stale_body:
+    raise SystemExit("stale webview detection must catch servers moved into backup bundle directories")
 if 'ADOPTED_WEBVIEW_PID="$pid"' not in adopt_body:
     raise SystemExit("adopt_existing_webview_server must not mark a running app server as started by this launcher")
 if 'STARTED_WEBVIEW_PID="$pid"' not in adopt_body:
@@ -1302,6 +1605,8 @@ if "if adopt_existing_webview_server; then" not in ensure_body:
     raise SystemExit("ensure_webview_server must split adoption from origin verification")
 if "stop_stale_webview_server" not in ensure_body:
     raise SystemExit("ensure_webview_server must clear stale deleted webview servers before treating the port as foreign")
+if ensure_body.find("stop_stale_webview_server") > ensure_body.find("is already serving Codex content"):
+    raise SystemExit("ensure_webview_server must try stale-server cleanup before foreign reachable-port failure")
 if "Keeping the live app untouched" not in ensure_body:
     raise SystemExit("ensure_webview_server must not stop a live app server when validation fails")
 if 'if live_app_pid="$(find_running_app_pid)" || { [ -S "$LAUNCH_ACTION_SOCKET" ] && live_app_pid="$(discover_running_app_pid)"; }; then' not in reconcile_body:
@@ -1500,6 +1805,12 @@ PY
     assert_contains "$REPO_DIR/packaging/linux/codex-desktop.desktop" "codex-update-manager install-ready"
     assert_contains "$REPO_DIR/contrib/user-local-install/files/.local/share/applications/codex-desktop.desktop" "@HOME@/.local/bin/codex-desktop %U"
     assert_contains "$REPO_DIR/contrib/user-local-install/files/.local/share/applications/codex-desktop.desktop" "MimeType=x-scheme-handler/codex;x-scheme-handler/codex-browser-sidebar;"
+    assert_contains "$REPO_DIR/contrib/user-local-install/files/.local/bin/codex-desktop" "CODEX_USER_LOCAL_OZONE_PLATFORM"
+    assert_contains "$REPO_DIR/contrib/user-local-install/files/.local/bin/codex-desktop" 'exec "${APP_DIR}/start.sh" --x11 "$@"'
+    assert_contains "$REPO_DIR/contrib/user-local-install/files/.local/bin/codex-desktop" 'exec "${APP_DIR}/start.sh" --wayland "$@"'
+    assert_contains "$REPO_DIR/contrib/user-local-install/install-user-local.sh" "--force-x11"
+    assert_contains "$REPO_DIR/contrib/user-local-install/install-user-local.sh" "user-local.env"
+    assert_contains "$REPO_DIR/contrib/user-local-install/README.md" "--force-x11"
 }
 
 test_side_by_side_launcher_identity() {
@@ -3312,6 +3623,49 @@ SCRIPT
     assert_file_exists "$marker"
 }
 
+test_user_local_install_preserves_persisted_x11_preference_on_refresh() {
+    info "Checking user-local X11 fallback preference persists across helper refreshes"
+    local workspace="$TMP_DIR/user-local-x11-preference"
+    local stub_bin="$workspace/bin"
+    local home="$workspace/home"
+    local config_home="$workspace/config"
+    local preference_file="$config_home/codex-desktop-linux/user-local.env"
+
+    mkdir -p "$stub_bin"
+    printf '#!/usr/bin/env bash\nexit 0\n' > "$stub_bin/7z"
+    printf '#!/usr/bin/env bash\nexit 0\n' > "$stub_bin/systemctl"
+    printf '#!/usr/bin/env bash\nexit 0\n' > "$stub_bin/update-desktop-database"
+    chmod +x "$stub_bin/7z" "$stub_bin/systemctl" "$stub_bin/update-desktop-database"
+
+    PATH="$stub_bin:$PATH" \
+        HOME="$home" \
+        XDG_CONFIG_HOME="$config_home" \
+        XDG_DATA_HOME="$workspace/data" \
+        XDG_STATE_HOME="$workspace/state" \
+        CODEX_USER_LOCAL_SOURCE_REPO_DIR="$REPO_DIR" \
+        bash "$REPO_DIR/contrib/user-local-install/install-user-local.sh" --force-x11 >/dev/null
+    assert_file_exists "$preference_file"
+    assert_contains "$preference_file" "CODEX_USER_LOCAL_OZONE_PLATFORM=x11"
+
+    PATH="$stub_bin:$PATH" \
+        HOME="$home" \
+        XDG_CONFIG_HOME="$config_home" \
+        XDG_DATA_HOME="$workspace/data" \
+        XDG_STATE_HOME="$workspace/state" \
+        CODEX_USER_LOCAL_SOURCE_REPO_DIR="$REPO_DIR" \
+        bash "$REPO_DIR/contrib/user-local-install/install-user-local.sh" --from-update >/dev/null
+    assert_contains "$preference_file" "CODEX_USER_LOCAL_OZONE_PLATFORM=x11"
+
+    PATH="$stub_bin:$PATH" \
+        HOME="$home" \
+        XDG_CONFIG_HOME="$config_home" \
+        XDG_DATA_HOME="$workspace/data" \
+        XDG_STATE_HOME="$workspace/state" \
+        CODEX_USER_LOCAL_SOURCE_REPO_DIR="$REPO_DIR" \
+        bash "$REPO_DIR/contrib/user-local-install/install-user-local.sh" --no-force-x11 >/dev/null
+    assert_contains "$preference_file" "CODEX_USER_LOCAL_OZONE_PLATFORM=auto"
+}
+
 test_user_local_prepare_build_repo_updates_existing_single_branch_fetch_refspec() {
     info "Checking user-local managed checkout can switch branches after a single-branch clone"
     local workspace="$TMP_DIR/user-local-single-branch-refspec"
@@ -3580,6 +3934,12 @@ main() {
     test_upstream_build_app_workflow_tracks_dmg_metadata
     test_update_nix_hash_workflow_maintains_clean_main
     test_main_to_self_hosted_workflow_opens_update_pr
+    test_devcontainer_homebrew_cask_is_local_tap_installable
+    test_devcontainer_homebrew_validation_script_targets_ror_image
+    test_devcontainer_desktop_host_is_loopback_and_container_scoped
+    test_web_mode_security_token_env_and_cdp_static_contract
+    test_web_mode_codex_home_policy
+    test_web_mode_inventory_script_reports_host_markers
     test_installer_detects_electron_version_from_plist
     test_installer_keeps_electron_fallback_for_bad_metadata
     test_port_validation_rejects_oversized_numeric_values
@@ -3614,6 +3974,7 @@ main() {
     test_user_local_prepare_build_repo_ignores_stale_recorded_default_branch
     test_user_local_prepare_build_repo_ignores_stale_source_origin_head
     test_user_local_install_from_update_defers_record_only_metadata
+    test_user_local_install_preserves_persisted_x11_preference_on_refresh
     test_user_local_prepare_build_repo_updates_existing_single_branch_fetch_refspec
     test_user_local_prepare_build_repo_handles_deleted_overlay_paths
     test_user_local_prepare_build_repo_removes_rename_source_paths

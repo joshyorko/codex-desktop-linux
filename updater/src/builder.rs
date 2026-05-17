@@ -14,7 +14,7 @@ use std::{
 use tokio::process::Command;
 use tracing::info;
 
-const REQUIRED_BUNDLE_FILES: [(&str, &str); 15] = [
+const REQUIRED_BUNDLE_FILES: [(&str, &str); 17] = [
     ("Cargo.toml", "Cargo.toml"),
     ("Cargo.lock", "Cargo.lock"),
     ("computer-use-linux", "computer-use-linux"),
@@ -26,6 +26,14 @@ const REQUIRED_BUNDLE_FILES: [(&str, &str); 15] = [
     ("install.sh", "install.sh"),
     ("launcher/start.sh.template", "launcher/start.sh.template"),
     ("launcher/webview-server.py", "launcher/webview-server.py"),
+    (
+        "launcher/web-mode-server.mjs",
+        "launcher/web-mode-server.mjs",
+    ),
+    (
+        "launcher/web-mode-bootstrap.js",
+        "launcher/web-mode-bootstrap.js",
+    ),
     ("scripts/build-deb.sh", "scripts/build-deb.sh"),
     (
         "scripts/patch-linux-window-ui.js",
@@ -527,6 +535,14 @@ touch "${DIST_DIR_OVERRIDE}/codex-desktop-${VER}-1-x86_64.pkg.tar.zst"
             bundle_root.join("launcher/webview-server.py"),
             b"# fake webview server\n",
         )?;
+        fs::write(
+            bundle_root.join("launcher/web-mode-server.mjs"),
+            b"console.log('fake web mode server');\n",
+        )?;
+        fs::write(
+            bundle_root.join("launcher/web-mode-bootstrap.js"),
+            b"console.log('fake web mode bootstrap');\n",
+        )?;
         fs::write(bundle_root.join("assets/codex.png"), b"png")?;
         fs::write(
             bundle_root.join("packaging/linux/control"),
@@ -668,6 +684,14 @@ chmod +x "${CODEX_INSTALL_DIR}/start.sh"
             .exists());
         assert!(artifacts
             .workspace_dir
+            .join("builder/launcher/web-mode-server.mjs")
+            .exists());
+        assert!(artifacts
+            .workspace_dir
+            .join("builder/launcher/web-mode-bootstrap.js")
+            .exists());
+        assert!(artifacts
+            .workspace_dir
             .join("builder/scripts/lib/node-runtime.sh")
             .exists());
         assert!(artifacts
@@ -708,6 +732,14 @@ chmod +x "${CODEX_INSTALL_DIR}/start.sh"
             source_root.join("launcher/webview-server.py"),
             b"# fake webview server\n",
         )?;
+        fs::write(
+            source_root.join("launcher/web-mode-server.mjs"),
+            b"console.log('fake web mode server');\n",
+        )?;
+        fs::write(
+            source_root.join("launcher/web-mode-bootstrap.js"),
+            b"console.log('fake web mode bootstrap');\n",
+        )?;
         fs::write(source_root.join("scripts/build-deb.sh"), b"#!/bin/bash\n")?;
         fs::write(
             source_root.join("scripts/patch-linux-window-ui.js"),
@@ -742,6 +774,12 @@ chmod +x "${CODEX_INSTALL_DIR}/start.sh"
             .join("scripts/patch-linux-window-ui.js")
             .exists());
         assert!(destination_root.join("launcher/webview-server.py").exists());
+        assert!(destination_root
+            .join("launcher/web-mode-server.mjs")
+            .exists());
+        assert!(destination_root
+            .join("launcher/web-mode-bootstrap.js")
+            .exists());
         assert!(destination_root
             .join("scripts/patches/registry.js")
             .exists());
