@@ -76,6 +76,7 @@ exec "$CONTAINER_ENGINE" run --rm \
     grep -q "non-loopback bind requires --require-token" /tmp/codex-desktop-non-loopback.log
 
     CODEX_BROWSER_USE_BROWSER_COMMAND=/nonexistent/chromium \
+      CODEX_HOME=/tmp/codex-shared-home \
       codex-desktop serve \
       --workspace /workspace \
       --profile /tmp/codex-desktop-profile \
@@ -85,6 +86,8 @@ exec "$CONTAINER_ENGINE" run --rm \
     grep -q "serving http://127.0.0.1:" /tmp/codex-desktop-serve-health.log
     grep -q "\"mode\": \"devcontainer-web\"" /tmp/codex-desktop-serve-health.log
     grep -q "\"loopback_only_default\": true" /tmp/codex-desktop-serve-health.log
+    grep -q "\"codex_home\": \"/tmp/codex-shared-home\"" /tmp/codex-desktop-serve-health.log
+    ! grep -q "\"codex_home\": \"/tmp/codex-desktop-profile" /tmp/codex-desktop-serve-health.log
     grep -q "\"auth\"" /tmp/codex-desktop-serve-health.log
     grep -q "\"required\": true" /tmp/codex-desktop-serve-health.log
     grep -q "\"token_present\": true" /tmp/codex-desktop-serve-health.log
