@@ -143,6 +143,11 @@ build_native_modules() {
         warn "Using better-sqlite3@$bs3_build_ver for Electron v$ELECTRON_VERSION compatibility (DMG has $bs3_ver)"
     fi
 
+    if [ -n "${CODEX_NATIVE_MODULES_SOURCE:-}" ]; then
+        install_native_modules_from_source "$app_extracted" "$CODEX_NATIVE_MODULES_SOURCE" "$bs3_build_ver" "$npty_ver"
+        return 0
+    fi
+
     # Build in a CLEAN directory (asar doesn't have full source)
     local build_dir="$WORK_DIR/native-build"
     mkdir -p "$build_dir"
@@ -178,6 +183,37 @@ build_native_modules() {
     prune_native_module_build_artifacts "$app_extracted/node_modules/node-pty"
 }
 
+install_native_modules_from_source() {
+    local app_extracted="$1"
+    local source_dir="$2"
+    local expected_better_sqlite3_version="$3"
+    local expected_node_pty_version="$4"
+    local source_better_sqlite3="$source_dir/better-sqlite3"
+    local source_node_pty="$source_dir/node-pty"
+    local actual_better_sqlite3_version
+    local actual_node_pty_version
+
+    [ -d "$source_better_sqlite3" ] || error "Prebuilt better-sqlite3 source not found at $source_better_sqlite3"
+    [ -d "$source_node_pty" ] || error "Prebuilt node-pty source not found at $source_node_pty"
+
+    actual_better_sqlite3_version=$(node -p "require('$source_better_sqlite3/package.json').version" 2>/dev/null || echo "")
+    actual_node_pty_version=$(node -p "require('$source_node_pty/package.json').version" 2>/dev/null || echo "")
+
+    [ "$actual_better_sqlite3_version" = "$expected_better_sqlite3_version" ] || \
+        error "Prebuilt better-sqlite3 version mismatch: expected $expected_better_sqlite3_version, got ${actual_better_sqlite3_version:-unknown}"
+    [ "$actual_node_pty_version" = "$expected_node_pty_version" ] || \
+        error "Prebuilt node-pty version mismatch: expected $expected_node_pty_version, got ${actual_node_pty_version:-unknown}"
+
+    info "Using prebuilt native modules from $source_dir"
+    rm -rf "$app_extracted/node_modules/better-sqlite3"
+    rm -rf "$app_extracted/node_modules/node-pty"
+    cp -r "$source_better_sqlite3" "$app_extracted/node_modules/"
+    cp -r "$source_node_pty" "$app_extracted/node_modules/"
+    chmod -R u+w "$app_extracted/node_modules/better-sqlite3" "$app_extracted/node_modules/node-pty"
+    prune_native_module_build_artifacts "$app_extracted/node_modules/better-sqlite3"
+    prune_native_module_build_artifacts "$app_extracted/node_modules/node-pty"
+}
+
 # ---- Download Linux Electron ----
 download_electron() {
     info "Downloading Electron v${ELECTRON_VERSION} for Linux..."
@@ -191,6 +227,17 @@ download_electron() {
     esac
 
     local electron_zip="electron-v${ELECTRON_VERSION}-linux-${electron_arch}.zip"
+    if [ -n "${CODEX_ELECTRON_ZIP_SOURCE:-}" ]; then
+        [ -f "$CODEX_ELECTRON_ZIP_SOURCE" ] || error "CODEX_ELECTRON_ZIP_SOURCE does not exist: $CODEX_ELECTRON_ZIP_SOURCE"
+        info "Using Electron runtime archive: $CODEX_ELECTRON_ZIP_SOURCE"
+        cp "$CODEX_ELECTRON_ZIP_SOURCE" "$WORK_DIR/electron.zip"
+        mkdir -p "$INSTALL_DIR"
+        cd "$INSTALL_DIR"
+        unzip -qo "$WORK_DIR/electron.zip"
+        info "Electron ready"
+        return 0
+    fi
+
     local url
     if [ -n "$ELECTRON_MIRROR" ]; then
         url="${ELECTRON_MIRROR%/}/v${ELECTRON_VERSION}/${electron_zip}"

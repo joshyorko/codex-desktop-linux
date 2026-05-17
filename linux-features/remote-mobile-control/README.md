@@ -22,6 +22,13 @@ git-ignored `features.json` file is not part of the flake source:
 nix run .#remote-mobile-control
 ```
 
+Feature-specific Nix outputs are additive. To combine this feature with the
+Computer Use UI opt-in:
+
+```bash
+nix run .#computer-use-ui-remote-mobile-control
+```
+
 What it changes:
 
 - Replaces the macOS-only `remote-control-device-key.node` requirement with a

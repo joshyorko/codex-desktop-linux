@@ -890,6 +890,37 @@ function applyLinuxGitOriginsSourceFallbackPatch(currentSource) {
   return currentSource;
 }
 
+function applyLinuxRemoteControlConfigPreservationPatch(currentSource) {
+  const removedLog = "Removed remote_control from config before app-server start";
+  const failedLog = "Failed to remove remote_control before app-server start";
+  const stripperGuardRegex =
+    /async function [A-Za-z_$][\w$]*\(\{codexHome:[A-Za-z_$][\w$]*,hostConfig:([A-Za-z_$][\w$]*),logger:[A-Za-z_$][\w$]*=[^}]*\}\)\{if\(\1\.kind===`local`\)try\{/gu;
+  const patchedSource = currentSource.replace(stripperGuardRegex, (needle, hostConfigVar) =>
+    needle.replace(
+      `if(${hostConfigVar}.kind===\`local\`)try{`,
+      `if(${hostConfigVar}.kind===\`local\`&&process.platform!==\`linux\`)try{`,
+    ),
+  );
+  if (patchedSource !== currentSource) {
+    return patchedSource;
+  }
+
+  const alreadyPatchedRegex =
+    /async function [A-Za-z_$][\w$]*\(\{codexHome:[A-Za-z_$][\w$]*,hostConfig:([A-Za-z_$][\w$]*),logger:[A-Za-z_$][\w$]*=[^}]*\}\)\{if\(\1\.kind===`local`&&process\.platform!==`linux`\)try\{/u;
+  if (alreadyPatchedRegex.test(currentSource)) {
+    return currentSource;
+  }
+
+  if (!currentSource.includes(removedLog) && !currentSource.includes(failedLog)) {
+    return currentSource;
+  }
+
+  console.warn(
+    "WARN: Could not find remote-control config stripper guard — skipping Linux remote-control config preservation patch",
+  );
+  return currentSource;
+}
+
 module.exports = {
   applyBrowserUseNodeReplApprovalPatch,
   applyLinuxBrowserUseIabVisibleOnCreatePatch,
@@ -903,6 +934,7 @@ module.exports = {
   applyLinuxMenuPatch,
   applyLinuxOpaqueBackgroundPatch,
   applyLinuxQuitGuardPatch,
+  applyLinuxRemoteControlConfigPreservationPatch,
   applyLinuxSetIconPatch,
   applyLinuxSingleInstancePatch,
   applyLinuxTrayPatch,

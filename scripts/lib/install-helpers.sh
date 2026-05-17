@@ -124,9 +124,16 @@ validate_app_identity() {
             error "CODEX_WEBVIEW_PORT must be a TCP port number"
             ;;
     esac
-    if [ "$CODEX_WEBVIEW_PORT" -lt 1 ] || [ "$CODEX_WEBVIEW_PORT" -gt 65535 ]; then
+    local port_number
+    port_number="$CODEX_WEBVIEW_PORT"
+    while [ "${port_number#0}" != "$port_number" ]; do
+        port_number="${port_number#0}"
+    done
+    [ -n "$port_number" ] || port_number=0
+    if [ "${#port_number}" -gt 5 ] || [ "$port_number" -lt 1 ] || [ "$port_number" -gt 65535 ]; then
         error "CODEX_WEBVIEW_PORT must be between 1 and 65535"
     fi
+    CODEX_WEBVIEW_PORT="$port_number"
 }
 
 shell_quote() {

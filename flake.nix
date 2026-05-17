@@ -7,7 +7,7 @@
   };
 
   outputs = { self, nixpkgs, flake-utils }:
-    flake-utils.lib.eachDefaultSystem (system:
+    flake-utils.lib.eachSystem [ "x86_64-linux" "aarch64-linux" ] (system:
       let
         pkgs = import nixpkgs { inherit system; };
         sourceRoot = pkgs.lib.cleanSourceWith {
@@ -22,7 +22,156 @@
 
         codexDmg = pkgs.fetchurl {
           url = "https://persistent.oaistatic.com/codex-app-prod/Codex.dmg";
-          hash = "sha256-WTeptN8D9hF2ffvlJKppfLTOJr5Z0hjokHCnGX6drk0=";
+          hash = "sha256-bUQMcTN3GTXIYKVUa81gP4ubZbN+m4K9sAGdT9DIW2o=";
+        };
+
+        codexVersion = "26.513.31313";
+        electronVersion = "42.0.1";
+        electronPlatform =
+          {
+            x86_64-linux = {
+              arch = "x64";
+              hash = "sha256-4bi1uG0//2nis1AlhjY9OECF7gV4vQQfpZFf0LVXxPE=";
+            };
+            aarch64-linux = {
+              arch = "arm64";
+              hash = "sha256-oIpOaROATrBc6nmNi9CvrOTRuI6dB9uGt3nqSkSL4HA=";
+            };
+          }.${system} or (throw "codex-desktop-linux Nix package is not supported on ${system}");
+
+        electronZip = pkgs.fetchurl {
+          url = "https://github.com/electron/electron/releases/download/v${electronVersion}/electron-v${electronVersion}-linux-${electronPlatform.arch}.zip";
+          hash = electronPlatform.hash;
+        };
+
+        electronHeaders = pkgs.fetchurl {
+          url = "https://artifacts.electronjs.org/headers/dist/v${electronVersion}/node-v${electronVersion}-headers.tar.gz";
+          hash = "sha256-yQBrv98qtbQ8cdZpuqx2uyP1mkIAVhLlUFjI/vxh9gA=";
+        };
+
+        browserUseNodeReplRuntime = pkgs.fetchurl {
+          url = "https://persistent.oaistatic.com/codex-primary-runtime/26.426.12240/codex-primary-runtime-linux-x64-26.426.12240.tar.xz";
+          hash = "sha256-21Yk6276NrZuxvbdBIjO+5ZuSWNoYqq2IJpDNsHKkMQ=";
+        };
+
+        browserUseNodeRepl = if system == "x86_64-linux" then pkgs.stdenv.mkDerivation {
+          pname = "codex-browser-use-node-repl";
+          version = "26.426.12240";
+          src = browserUseNodeReplRuntime;
+
+          dontConfigure = true;
+          dontBuild = true;
+
+          installPhase = ''
+            runHook preInstall
+            mkdir -p "$out/bin"
+            tar -xJf "$src" -C "$TMPDIR" codex-primary-runtime/dependencies/bin/node_repl
+            install -m 0755 "$TMPDIR/codex-primary-runtime/dependencies/bin/node_repl" "$out/bin/node_repl"
+            runHook postInstall
+          '';
+        } else null;
+
+        codexComputerUseBinaries = pkgs.rustPlatform.buildRustPackage {
+          pname = "codex-computer-use-linux-binaries";
+          version = "0.1.2-linux-alpha1";
+          src = sourceRoot;
+
+          cargoLock = {
+            lockFile = ./Cargo.lock;
+            outputHashes = {
+              "cosmic-protocols-0.2.0" = "sha256-ymn+BUTTzyHquPn4hvuoA3y1owFj8LVrmsPu2cdkFQ8=";
+            };
+          };
+
+          buildAndTestSubdir = "computer-use-linux";
+          cargoBuildFlags = [
+            "-p"
+            "codex-computer-use-linux"
+            "--bins"
+          ];
+          doCheck = false;
+
+          installPhase = ''
+            runHook preInstall
+            release_dir="target/''${CARGO_BUILD_TARGET:-${pkgs.stdenv.hostPlatform.rust.rustcTarget}}/release"
+            if [ ! -d "$release_dir" ]; then
+              release_dir="target/release"
+            fi
+            install -Dm0755 "$release_dir/codex-computer-use-linux" "$out/bin/codex-computer-use-linux"
+            install -Dm0755 "$release_dir/codex-computer-use-cosmic" "$out/bin/codex-computer-use-cosmic"
+            install -Dm0755 "$release_dir/codex-chrome-extension-host" "$out/bin/codex-chrome-extension-host"
+            runHook postInstall
+          '';
+        };
+
+        nativeModulesNodeModules = pkgs.importNpmLock.buildNodeModules {
+          npmRoot = ./nix/native-modules;
+          inherit (pkgs) nodejs;
+          derivationArgs = {
+            npmRebuildFlags = [ "--ignore-scripts" ];
+          };
+        };
+
+        codexNativeModules = pkgs.stdenv.mkDerivation {
+          pname = "codex-desktop-electron-native-modules";
+          version = electronVersion;
+          dontUnpack = true;
+
+          nativeBuildInputs = [
+            pkgs.bash
+            pkgs.gcc
+            pkgs.gnumake
+            pkgs.nodejs
+            pkgs.python3
+          ];
+
+          buildPhase = ''
+            runHook preBuild
+
+            cp -R ${nativeModulesNodeModules}/node_modules .
+            cp ${nativeModulesNodeModules}/package.json .
+            cp ${nativeModulesNodeModules}/package-lock.json .
+            chmod -R u+w node_modules
+
+            mkdir -p "$TMPDIR/electron-headers"
+            tar -xzf ${electronHeaders} -C "$TMPDIR/electron-headers" --strip-components=1
+
+            export SCRIPT_DIR=${sourceRoot}
+            export WORK_DIR="$TMPDIR"
+            export ARCH="${pkgs.stdenv.hostPlatform.uname.processor}"
+            export ELECTRON_VERSION=${electronVersion}
+            export MIN_BETTER_SQLITE3_VERSION_FOR_ELECTRON_41="12.9.0"
+            export npm_config_nodedir="$TMPDIR/electron-headers"
+            export NPM_CONFIG_NODEDIR="$TMPDIR/electron-headers"
+
+            # Reuse the installer's Electron 42 source compatibility patch without
+            # sourcing install-helpers.sh, which owns the top-level installer traps.
+            info() { echo "[INFO] $*" >&2; }
+            warn() { echo "[WARN] $*" >&2; }
+            error() { echo "[ERROR] $*" >&2; exit 1; }
+            source ${sourceRoot}/scripts/lib/native-modules.sh
+            patch_better_sqlite3_for_v8_external_pointer_api "$PWD/node_modules/better-sqlite3"
+
+            node "$PWD/node_modules/@electron/rebuild/lib/cli.js" \
+              -v ${electronVersion} \
+              --force \
+              --module-dir "$PWD" \
+              --dist-url "file://$TMPDIR/electron-headers"
+
+            runHook postBuild
+          '';
+
+          installPhase = ''
+            runHook preInstall
+            mkdir -p "$out"
+            cp -R node_modules/better-sqlite3 "$out/better-sqlite3"
+            cp -R node_modules/node-pty "$out/node-pty"
+            find "$out/better-sqlite3/build" -type f ! -name "*.node" -delete 2>/dev/null || true
+            find "$out/node-pty/build" -type f ! -name "*.node" -delete 2>/dev/null || true
+            find "$out" -type d -empty -delete 2>/dev/null || true
+            find "$out" -type f -name "*.target.mk" -delete 2>/dev/null || true
+            runHook postInstall
+          '';
         };
 
         electronLibs = with pkgs; [
@@ -184,13 +333,19 @@ PY
             enabled = linuxFeatureIds;
           });
 
-        packageSuffix = linuxFeatureIds:
-          if linuxFeatureIds == [ ] then "" else "-${pkgs.lib.concatStringsSep "-" linuxFeatureIds}";
+        enabledFeatureIds = { enableComputerUseUi ? false, linuxFeatureIds ? [ ] }:
+          pkgs.lib.optionals enableComputerUseUi [ "computer-use-ui" ] ++ linuxFeatureIds;
 
-        makeCodexDesktopPayload = { linuxFeatureIds ? [ ], outputHash }:
+        packageSuffix = args:
+          let
+            featureIds = enabledFeatureIds args;
+          in
+          if featureIds == [ ] then "" else "-${pkgs.lib.concatStringsSep "-" featureIds}";
+
+        mkCodexDesktopPayload = { enableComputerUseUi ? false, linuxFeatureIds ? [ ] }:
         pkgs.stdenv.mkDerivation {
-          pname = "codex-desktop-payload${packageSuffix linuxFeatureIds}";
-          version = "26.506.21252";
+          pname = "codex-desktop${packageSuffix { inherit enableComputerUseUi linuxFeatureIds; }}-payload";
+          version = codexVersion;
           src = sourceRoot;
           __structuredAttrs = true;
 
@@ -203,16 +358,12 @@ PY
             pkgs.gnused
             pkgs.makeWrapper
             pkgs.nodejs
+            pkgs.asar
             pkgs._7zz
             pkgs.patchelf
             pkgs.python3
             pkgs.unzip
           ];
-
-          outputHashAlgo = "sha256";
-          outputHashMode = "recursive";
-          inherit outputHash;
-          unsafeDiscardReferences.out = true;
 
           dontConfigure = true;
           dontBuild = true;
@@ -228,12 +379,22 @@ PY
             export CARGO_HOME="$TMPDIR/cargo-home"
             export CARGO_BUILD_JOBS=1
             export SOURCE_DATE_EPOCH=1
+            ${pkgs.lib.optionalString enableComputerUseUi ''
             export CODEX_LINUX_ENABLE_COMPUTER_USE_UI=1
+            ''}
             export CFLAGS="''${CFLAGS:-} -ffile-prefix-map=$TMPDIR=/build -fdebug-prefix-map=$TMPDIR=/build -fmacro-prefix-map=$TMPDIR=/build"
             export CXXFLAGS="''${CXXFLAGS:-} -ffile-prefix-map=$TMPDIR=/build -fdebug-prefix-map=$TMPDIR=/build -fmacro-prefix-map=$TMPDIR=/build"
             export RUSTFLAGS="''${RUSTFLAGS:-} --remap-path-prefix=$TMPDIR=/build -C link-arg=-Wl,--build-id=none"
             export CODEX_MANAGED_NODE_SOURCE="${pkgs.nodejs}"
             export CODEX_LINUX_FEATURES_CONFIG="${linuxFeaturesConfig linuxFeatureIds}"
+            export CODEX_ELECTRON_ZIP_SOURCE="${electronZip}"
+            export CODEX_NATIVE_MODULES_SOURCE="${codexNativeModules}"
+            ${pkgs.lib.optionalString (browserUseNodeRepl != null) ''
+            export CODEX_LINUX_NODE_REPL_SOURCE="${browserUseNodeRepl}/bin/node_repl"
+            ''}
+            export CODEX_LINUX_COMPUTER_USE_BACKEND_SOURCE="${codexComputerUseBinaries}/bin/codex-computer-use-linux"
+            export CODEX_LINUX_COMPUTER_USE_COSMIC_SOURCE="${codexComputerUseBinaries}/bin/codex-computer-use-cosmic"
+            export CODEX_CHROME_EXTENSION_HOST_SOURCE="${codexComputerUseBinaries}/bin/codex-chrome-extension-host"
             mkdir -p "$HOME" "$npm_config_cache" "$CARGO_HOME"
 
             source_dir="$TMPDIR/codex-source"
@@ -242,10 +403,6 @@ PY
             chmod -R u+w "$source_dir"
             cp ${codexDmg} "$source_dir/Codex.dmg"
 
-            npm_tools="$TMPDIR/npm-tools"
-            npm install --prefix "$npm_tools" --ignore-scripts asar @electron/rebuild
-            patchShebangs "$npm_tools"
-            export PATH="$npm_tools/node_modules/.bin:$PATH"
             substituteInPlace "$source_dir/scripts/lib/asar-patch.sh" \
               --replace-fail "npx --yes asar" "asar" \
               --replace-fail "npx asar" "asar"
@@ -265,17 +422,17 @@ PY
           '';
         };
 
-        makeCodexDesktop = { linuxFeatureIds ? [ ], payloadHash }:
+        mkCodexDesktop = { enableComputerUseUi ? false, linuxFeatureIds ? [ ] }:
         let
-          codexDesktopPayload = makeCodexDesktopPayload {
-            inherit linuxFeatureIds;
-            outputHash = payloadHash;
+          featureArgs = { inherit enableComputerUseUi linuxFeatureIds; };
+          payload = mkCodexDesktopPayload {
+            inherit enableComputerUseUi linuxFeatureIds;
           };
         in
         pkgs.stdenv.mkDerivation {
-          pname = "codex-desktop${packageSuffix linuxFeatureIds}";
-          version = "26.506.21252";
-          src = codexDesktopPayload;
+          pname = "codex-desktop${packageSuffix featureArgs}";
+          version = codexVersion;
+          src = payload;
 
           nativeBuildInputs = [
             pkgs.asar
@@ -334,7 +491,14 @@ PY
           '';
 
           meta = {
-            description = "Codex Desktop for Linux";
+            description =
+              let
+                featureIds = enabledFeatureIds featureArgs;
+              in
+              if featureIds == [ ] then
+                "Codex Desktop for Linux"
+              else
+                "Codex Desktop for Linux with ${pkgs.lib.concatStringsSep ", " featureIds} enabled";
             homepage = "https://github.com/ilysenko/codex-desktop-linux";
             license = pkgs.lib.licenses.mit;
             platforms = pkgs.lib.platforms.linux;
@@ -342,13 +506,19 @@ PY
           };
         };
 
-        codexDesktop = makeCodexDesktop {
-          payloadHash = "sha256-IQ5YRXeZhf4ObXUvsr7WURygcGRuxMyix13Q4jP4F58=";
+        codexDesktop = mkCodexDesktop { };
+
+        codexDesktopComputerUseUi = mkCodexDesktop {
+          enableComputerUseUi = true;
         };
 
-        codexDesktopRemoteMobileControl = makeCodexDesktop {
+        codexDesktopRemoteMobileControl = mkCodexDesktop {
           linuxFeatureIds = [ "remote-mobile-control" ];
-          payloadHash = "sha256-T7Vd20fWm7Yz5vNxC05H40rE8Oq3NFLErgxr/s/0mEk=";
+        };
+
+        codexDesktopComputerUseUiRemoteMobileControl = mkCodexDesktop {
+          enableComputerUseUi = true;
+          linuxFeatureIds = [ "remote-mobile-control" ];
         };
 
         installer = pkgs.writeShellApplication {
@@ -396,7 +566,9 @@ PY
         packages = {
           default = codexDesktop;
           codex-desktop = codexDesktop;
+          codex-desktop-computer-use-ui = codexDesktopComputerUseUi;
           codex-desktop-remote-mobile-control = codexDesktopRemoteMobileControl;
+          codex-desktop-computer-use-ui-remote-mobile-control = codexDesktopComputerUseUiRemoteMobileControl;
           installer = installer;
         };
 
@@ -410,9 +582,19 @@ PY
           program = "${codexDesktopRemoteMobileControl}/bin/codex-desktop";
         };
 
+        apps.computer-use-ui-remote-mobile-control = {
+          type = "app";
+          program = "${codexDesktopComputerUseUiRemoteMobileControl}/bin/codex-desktop";
+        };
+
         apps.installer = {
           type = "app";
           program = "${installer}/bin/codex-desktop-installer";
+        };
+
+        apps.codex-desktop-computer-use-ui = {
+          type = "app";
+          program = "${codexDesktopComputerUseUi}/bin/codex-desktop";
         };
 
         devShells.default = pkgs.mkShell {

@@ -868,6 +868,75 @@ PLIST
     [ "$(tail -n 1 "$output_log")" = "41.3.0" ] || fail "Expected fallback Electron version 41.3.0, got: $(cat "$output_log")"
 }
 
+test_port_validation_rejects_oversized_numeric_values() {
+    info "Checking oversized numeric webview port validation"
+    local workspace="$TMP_DIR/port-validation"
+    local install_stdout="$workspace/install.stdout"
+    local install_stderr="$workspace/install.stderr"
+    local launcher_stdout="$workspace/launcher.stdout"
+    local launcher_stderr="$workspace/launcher.stderr"
+    local canonical_stdout="$workspace/canonical.stdout"
+    local canonical_stderr="$workspace/canonical.stderr"
+    local launcher_probe_script="$workspace/launcher-port-probe.sh"
+    local start_script="$workspace/start.sh"
+    local huge_port="999999999999999999999999"
+    local rc
+
+    mkdir -p "$workspace"
+
+    set +e
+    CODEX_INSTALLER_SOURCE_ONLY=1 CODEX_WEBVIEW_PORT="$huge_port" bash -c \
+        'source "$1"; validate_app_identity' \
+        _ "$REPO_DIR/install.sh" >"$install_stdout" 2>"$install_stderr"
+    rc=$?
+    set -e
+    [ "$rc" -ne 0 ] || fail "Expected installer validation to reject oversized CODEX_WEBVIEW_PORT"
+    assert_contains "$install_stderr" "CODEX_WEBVIEW_PORT must be between 1 and 65535"
+    assert_not_contains "$install_stderr" "integer expected"
+
+    CODEX_INSTALLER_SOURCE_ONLY=1 CODEX_WEBVIEW_PORT=00080 bash -c \
+        'source "$1"; validate_app_identity; printf "%s\n" "$CODEX_WEBVIEW_PORT"' \
+        _ "$REPO_DIR/install.sh" >"$canonical_stdout" 2>"$canonical_stderr"
+    [ "$(cat "$canonical_stdout")" = "80" ] || fail "Expected installer validation to canonicalize leading-zero CODEX_WEBVIEW_PORT"
+    [ ! -s "$canonical_stderr" ] || fail "Expected installer leading-zero canonicalization to be quiet, got: $(cat "$canonical_stderr")"
+
+    cat > "$start_script" <<'SCRIPT'
+#!/bin/bash
+set -euo pipefail
+CODEX_LINUX_APP_ID=codex-desktop
+CODEX_LINUX_APP_DISPLAY_NAME=Codex
+CODEX_LINUX_WEBVIEW_PORT=${CODEX_WEBVIEW_PORT:-5175}
+SCRIPT
+    cat "$REPO_DIR/launcher/start.sh.template" >> "$start_script"
+    chmod +x "$start_script"
+
+    set +e
+    CODEX_WEBVIEW_PORT="$huge_port" "$start_script" --help >"$launcher_stdout" 2>"$launcher_stderr"
+    rc=$?
+    set -e
+    [ "$rc" -ne 0 ] || fail "Expected launcher validation to reject oversized CODEX_WEBVIEW_PORT"
+    assert_contains "$launcher_stderr" "CODEX_WEBVIEW_PORT must be between 1 and 65535"
+    assert_not_contains "$launcher_stderr" "integer expected"
+
+    cat > "$launcher_probe_script" <<'SCRIPT'
+#!/bin/bash
+set -euo pipefail
+CODEX_LINUX_WEBVIEW_PORT=${CODEX_WEBVIEW_PORT:-5175}
+SCRIPT
+    awk '
+        /^case "\$CODEX_LINUX_WEBVIEW_PORT" in/ { emit = 1 }
+        emit { print }
+        /^WEBVIEW_ORIGIN=/ { exit }
+    ' "$REPO_DIR/launcher/start.sh.template" >> "$launcher_probe_script"
+    cat >> "$launcher_probe_script" <<'SCRIPT'
+printf '%s\n' "$CODEX_LINUX_WEBVIEW_PORT"
+SCRIPT
+    chmod +x "$launcher_probe_script"
+    CODEX_WEBVIEW_PORT=00080 "$launcher_probe_script" >"$launcher_stdout" 2>"$launcher_stderr"
+    [ "$(tail -n 1 "$launcher_stdout")" = "80" ] || fail "Expected launcher validation to canonicalize leading-zero CODEX_WEBVIEW_PORT"
+    [ ! -s "$launcher_stderr" ] || fail "Expected launcher leading-zero canonicalization to be quiet, got: $(cat "$launcher_stderr")"
+}
+
 test_managed_node_runtime_source_install() {
     info "Checking managed Node.js runtime source install"
     local workspace="$TMP_DIR/managed-node-runtime"
@@ -1056,6 +1125,85 @@ SCRIPT
     assert_contains "$output_log" "Native modules built successfully"
     assert_file_exists "$app_dir/node_modules/better-sqlite3/build/Release/better_sqlite3.node"
     assert_file_exists "$app_dir/node_modules/node-pty/build/Release/pty.node"
+}
+
+test_native_module_rebuild_accepts_prebuilt_source() {
+    info "Checking native module rebuild accepts prebuilt source"
+    local workspace="$TMP_DIR/native-module-prebuilt-source"
+    local app_dir="$workspace/app-extracted"
+    local source_dir="$workspace/prebuilt"
+    local output_log="$workspace/output.log"
+
+    mkdir -p \
+        "$app_dir/node_modules/better-sqlite3" \
+        "$app_dir/node_modules/node-pty" \
+        "$source_dir/better-sqlite3/build/Release" \
+        "$source_dir/node-pty/build/Release"
+    printf '%s\n' '{"version":"12.9.0"}' > "$app_dir/node_modules/better-sqlite3/package.json"
+    printf '%s\n' '{"version":"1.1.0"}' > "$app_dir/node_modules/node-pty/package.json"
+    printf '%s\n' stale > "$app_dir/node_modules/better-sqlite3/old.txt"
+
+    printf '%s\n' '{"version":"12.9.0"}' > "$source_dir/better-sqlite3/package.json"
+    printf '%s\n' '{"version":"1.1.0"}' > "$source_dir/node-pty/package.json"
+    : > "$source_dir/better-sqlite3/build/Release/better_sqlite3.node"
+    : > "$source_dir/better-sqlite3/build/Release/junk.o"
+    : > "$source_dir/node-pty/build/Release/pty.node"
+    : > "$source_dir/node-pty/build/Release/junk.o"
+
+    (
+        WORK_DIR="$workspace/work"
+        ELECTRON_VERSION="42.0.1"
+        CODEX_NATIVE_MODULES_SOURCE="$source_dir"
+        mkdir -p "$WORK_DIR"
+        info() { echo "[INFO] $*" >&2; }
+        warn() { echo "[WARN] $*" >&2; }
+        error() { echo "[ERROR] $*" >&2; exit 1; }
+        # shellcheck disable=SC1091
+        source "$REPO_DIR/scripts/lib/native-modules.sh"
+        build_native_modules "$app_dir"
+    ) > "$output_log" 2>&1
+
+    assert_contains "$output_log" "Using prebuilt native modules from $source_dir"
+    assert_file_exists "$app_dir/node_modules/better-sqlite3/build/Release/better_sqlite3.node"
+    assert_file_exists "$app_dir/node_modules/node-pty/build/Release/pty.node"
+    [ ! -f "$app_dir/node_modules/better-sqlite3/old.txt" ] || fail "Expected stale better-sqlite3 module to be replaced"
+    [ ! -f "$app_dir/node_modules/better-sqlite3/build/Release/junk.o" ] || fail "Expected better-sqlite3 build junk to be pruned"
+    [ ! -f "$app_dir/node_modules/node-pty/build/Release/junk.o" ] || fail "Expected node-pty build junk to be pruned"
+}
+
+test_bundled_plugin_builders_accept_prebuilt_binaries() {
+    info "Checking bundled plugin builders accept prebuilt binaries"
+    local workspace="$TMP_DIR/bundled-plugin-prebuilt-binaries"
+    local backend="$workspace/codex-computer-use-linux"
+    local cosmic="$workspace/codex-computer-use-cosmic"
+    local host="$workspace/codex-chrome-extension-host"
+    local output_log="$workspace/output.log"
+
+    mkdir -p "$workspace"
+    printf '#!/usr/bin/env bash\n' > "$backend"
+    printf '#!/usr/bin/env bash\n' > "$cosmic"
+    printf '#!/usr/bin/env bash\n' > "$host"
+    chmod +x "$backend" "$cosmic" "$host"
+
+    (
+        SCRIPT_DIR="$REPO_DIR"
+        CODEX_LINUX_COMPUTER_USE_BACKEND_SOURCE="$backend"
+        CODEX_LINUX_COMPUTER_USE_COSMIC_SOURCE="$cosmic"
+        CODEX_CHROME_EXTENSION_HOST_SOURCE="$host"
+        info() { echo "[INFO] $*" >&2; }
+        warn() { echo "[WARN] $*" >&2; }
+        error() { echo "[ERROR] $*" >&2; exit 1; }
+        # shellcheck disable=SC1091
+        source "$REPO_DIR/scripts/lib/bundled-plugins.sh"
+        build_linux_computer_use_backend
+        build_chrome_extension_host
+    ) > "$output_log" 2>&1
+
+    assert_contains "$output_log" "Using prebuilt Linux Computer Use backend"
+    assert_contains "$output_log" "Using prebuilt Chrome extension host"
+    assert_contains "$output_log" "$backend"
+    assert_contains "$output_log" "$cosmic"
+    assert_contains "$output_log" "$host"
 }
 
 test_launcher_template_sanity() {
@@ -3434,9 +3582,12 @@ main() {
     test_main_to_self_hosted_workflow_opens_update_pr
     test_installer_detects_electron_version_from_plist
     test_installer_keeps_electron_fallback_for_bad_metadata
+    test_port_validation_rejects_oversized_numeric_values
     test_managed_node_runtime_source_install
     test_better_sqlite3_electron_42_source_patch
     test_native_module_rebuild_uses_local_electron_rebuild_toolchain
+    test_native_module_rebuild_accepts_prebuilt_source
+    test_bundled_plugin_builders_accept_prebuilt_binaries
     test_browser_use_node_repl_fallback_runtime
     test_browser_use_node_repl_glibc_pidfd_patch_static
     test_browser_use_node_repl_ldd_output_compatibility

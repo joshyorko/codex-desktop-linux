@@ -10,6 +10,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 - The Chrome native-messaging host now evicts stale browser clients when a newer Codex browser client connects, preventing old Node REPL sessions from repeatedly reattaching CDP and driving extension service-worker CPU.
 - The bundled Chrome plugin is now auto-installed during app startup, matching Browser Use, so the plugin page no longer falls back to an install button after restart when the Linux native host is already staged.
 - Nix builds, installer apps, and dev shells now use modern `7zz`, and the installer dependency check accepts `7zz` without requiring a separate legacy `7z` binary.
+- Codex Desktop no longer removes user-enabled `remote_control = true` from the local Linux config before starting the app server.
+
+## [0.8.0] - 2026-05-16
+
+### Added
+
+- New opt-in Linux feature `remote-control-ui` that patches upstream webview bundles to expose the `remote_control` / Codex mobile UI surfaces on Linux without faking backend state, MFA, or connected-client data.
+- `linux-features` can now contribute opt-in `webview-asset` patch descriptors in addition to main-bundle patches, so feature-scoped Linux UI experiments can hook hashed webview assets without being promoted into the core patch registry.
 
 ## [0.7.1] - 2026-05-06
 

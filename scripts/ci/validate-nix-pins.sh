@@ -1,0 +1,167 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO_DIR="${REPO_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
+FLAKE_FILE="${FLAKE_FILE:-$REPO_DIR/flake.nix}"
+UPSTREAM_DMG_URL="${UPSTREAM_DMG_URL:-https://persistent.oaistatic.com/codex-app-prod/Codex.dmg}"
+UPSTREAM_DMG_PATH="${1:-${UPSTREAM_DMG_PATH:-/tmp/Codex.dmg}}"
+
+fail() {
+    echo "ERROR: $*" >&2
+    exit 1
+}
+
+find_seven_zip() {
+    local candidate
+    for candidate in 7zz 7z 7za; do
+        if command -v "$candidate" >/dev/null 2>&1; then
+            command -v "$candidate"
+            return 0
+        fi
+    done
+    return 1
+}
+
+read_nix_string() {
+    local name="$1"
+    python3 - "$FLAKE_FILE" "$name" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+text = Path(sys.argv[1]).read_text()
+name = re.escape(sys.argv[2])
+match = re.search(rf'\b{name}\s*=\s*"([^"]+)";', text)
+if not match:
+    raise SystemExit(f"Could not find Nix string {sys.argv[2]!r}")
+print(match.group(1))
+PY
+}
+
+read_nix_fetchurl_field() {
+    local binding="$1"
+    local field="$2"
+    python3 - "$FLAKE_FILE" "$binding" "$field" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+text = Path(sys.argv[1]).read_text()
+binding = re.escape(sys.argv[2])
+field = re.escape(sys.argv[3])
+block_match = re.search(rf'\b{binding}\s*=\s*pkgs\.fetchurl\s*\{{(?P<body>.*?)\n\s*\}};', text, re.S)
+if not block_match:
+    raise SystemExit(f"Could not find fetchurl block {sys.argv[2]!r}")
+field_match = re.search(rf'\b{field}\s*=\s*"([^"]+)";', block_match.group("body"))
+if not field_match:
+    raise SystemExit(f"Could not find field {sys.argv[3]!r} in {sys.argv[2]!r}")
+print(field_match.group(1))
+PY
+}
+
+json_file_field() {
+    local json_path="$1"
+    local expression="$2"
+
+    node -e "const value = require(process.argv[1]); process.stdout.write(String($expression ?? ''));" "$json_path"
+}
+
+assert_equal() {
+    local label="$1"
+    local expected="$2"
+    local actual="$3"
+
+    if [ "$expected" != "$actual" ]; then
+        fail "$label mismatch: expected '$expected', got '$actual'"
+    fi
+    echo "OK: $label = $actual"
+}
+
+if [ ! -s "$UPSTREAM_DMG_PATH" ]; then
+    mkdir -p "$(dirname "$UPSTREAM_DMG_PATH")"
+    curl -fL --retry 3 -o "$UPSTREAM_DMG_PATH" "$UPSTREAM_DMG_URL"
+fi
+
+SEVEN_ZIP_CMD="$(find_seven_zip)" || fail "7z/7zz/7za not found"
+WORK_DIR="$(mktemp -d)"
+cleanup() {
+    rm -rf "$WORK_DIR"
+}
+trap cleanup EXIT
+
+"$SEVEN_ZIP_CMD" x -y -snl "$UPSTREAM_DMG_PATH" -o"$WORK_DIR/dmg" >/dev/null 2>&1 || true
+APP_DIR="$(find "$WORK_DIR/dmg" -maxdepth 3 -name "*.app" -type d | head -1)"
+[ -n "$APP_DIR" ] || fail "Could not find .app bundle in $UPSTREAM_DMG_PATH"
+
+ASAR_PATH="$APP_DIR/Contents/Resources/app.asar"
+PLIST_PATH="$APP_DIR/Contents/Frameworks/Electron Framework.framework/Versions/A/Resources/Info.plist"
+[ -f "$ASAR_PATH" ] || fail "Could not find app.asar in DMG"
+[ -f "$PLIST_PATH" ] || fail "Could not find Electron Info.plist in DMG"
+ASAR_EXTRACT_DIR="$WORK_DIR/app-extracted"
+npx --yes asar extract "$ASAR_PATH" "$ASAR_EXTRACT_DIR"
+
+dmg_electron_version="$(python3 - "$PLIST_PATH" <<'PY'
+import plistlib
+import sys
+
+with open(sys.argv[1], "rb") as handle:
+    print(plistlib.load(handle).get("CFBundleVersion", ""))
+PY
+)"
+dmg_codex_version="$(json_file_field "$ASAR_EXTRACT_DIR/package.json" "value.version")"
+dmg_better_sqlite3_version="$(json_file_field "$ASAR_EXTRACT_DIR/node_modules/better-sqlite3/package.json" "value.version")"
+dmg_node_pty_version="$(json_file_field "$ASAR_EXTRACT_DIR/node_modules/node-pty/package.json" "value.version")"
+
+nix_codex_version="$(read_nix_string codexVersion)"
+nix_electron_version="$(read_nix_string electronVersion)"
+native_electron_version="$(node -p "require('$REPO_DIR/nix/native-modules/package.json').dependencies.electron")"
+native_better_sqlite3_version="$(node -p "require('$REPO_DIR/nix/native-modules/package.json').dependencies['better-sqlite3']")"
+native_node_pty_version="$(node -p "require('$REPO_DIR/nix/native-modules/package.json').dependencies['node-pty']")"
+
+assert_equal "Codex app version pin" "$dmg_codex_version" "$nix_codex_version"
+assert_equal "Electron version pin" "$dmg_electron_version" "$nix_electron_version"
+assert_equal "native-modules Electron pin" "$nix_electron_version" "$native_electron_version"
+assert_equal "native-modules better-sqlite3 pin" "$dmg_better_sqlite3_version" "$native_better_sqlite3_version"
+assert_equal "native-modules node-pty pin" "$dmg_node_pty_version" "$native_node_pty_version"
+
+flake_node_repl_url="$(read_nix_fetchurl_field browserUseNodeReplRuntime url)"
+flake_node_repl_sri="$(read_nix_fetchurl_field browserUseNodeReplRuntime hash)"
+installer_node_repl_url="$(python3 - "$REPO_DIR/scripts/lib/bundled-plugins.sh" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+text = Path(sys.argv[1]).read_text()
+match = re.search(r'CODEX_BROWSER_USE_NODE_REPL_RUNTIME_URL:-([^}"]+)', text)
+if not match:
+    raise SystemExit("Could not find Browser Use node_repl default URL")
+print(match.group(1))
+PY
+)"
+installer_node_repl_sha="$(python3 - "$REPO_DIR/scripts/lib/bundled-plugins.sh" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+text = Path(sys.argv[1]).read_text()
+match = re.search(r'CODEX_BROWSER_USE_NODE_REPL_RUNTIME_SHA256:-([0-9a-f]{64})', text)
+if not match:
+    raise SystemExit("Could not find Browser Use node_repl default SHA-256")
+print(match.group(1))
+PY
+)"
+flake_node_repl_sha="$(python3 - "$flake_node_repl_sri" <<'PY'
+import base64
+import sys
+
+sri = sys.argv[1]
+if not sri.startswith("sha256-"):
+    raise SystemExit("Browser Use node_repl flake hash is not an SRI sha256")
+print(base64.b64decode(sri.removeprefix("sha256-")).hex())
+PY
+)"
+
+assert_equal "Browser Use node_repl URL pin" "$installer_node_repl_url" "$flake_node_repl_url"
+assert_equal "Browser Use node_repl SHA-256 pin" "$installer_node_repl_sha" "$flake_node_repl_sha"
+
+echo "Nix pins match the upstream DMG and installer defaults."

@@ -473,7 +473,7 @@ dependencies = [
 
 [[package]]
 name = "codex-update-manager"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -483,6 +483,7 @@ dependencies = [
  "futures-util",
  "notify-rust",
  "reqwest",
+ "semver",
  "serde",
  "serde_json",
  "sha2",

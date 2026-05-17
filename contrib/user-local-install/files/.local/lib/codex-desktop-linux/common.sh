@@ -74,7 +74,7 @@ source_repo_head() {
 remote_repo_head() {
     local origin_url
     origin_url="$(repo_origin_url)" || return 1
-    git ls-remote "$origin_url" HEAD | awk 'NR==1 { print $1 }'
+    git -C "$(repo_remote_query_dir)" ls-remote "$origin_url" HEAD | awk 'NR==1 { print $1 }'
 }
 
 repo_origin_url() {
@@ -89,6 +89,18 @@ repo_origin_url() {
     return 1
 }
 
+repo_remote_query_dir() {
+    if [ -d "$SOURCE_REPO_DIR/.git" ]; then
+        printf '%s\n' "$SOURCE_REPO_DIR"
+        return 0
+    fi
+    if [ -d "$MANAGED_REPO_DIR/.git" ]; then
+        printf '%s\n' "$MANAGED_REPO_DIR"
+        return 0
+    fi
+    printf '%s\n' "/"
+}
+
 repo_branch_from_origin_head() {
     local repo_dir="$1"
     local branch=""
@@ -96,6 +108,24 @@ repo_branch_from_origin_head() {
     [ -d "$repo_dir/.git" ] || return 1
     branch="$(git -C "$repo_dir" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || true)"
     branch="${branch#origin/}"
+    [ -n "$branch" ] || return 1
+    printf '%s\n' "$branch"
+}
+
+repo_branch_from_remote_head() {
+    local origin_url=""
+    local branch=""
+
+    origin_url="$(repo_origin_url 2>/dev/null || true)"
+    [ -n "$origin_url" ] || return 1
+    branch="$(git -C "$(repo_remote_query_dir)" ls-remote --symref "$origin_url" HEAD 2>/dev/null | awk '
+        $1 == "ref:" {
+            branch = $2
+            sub("^refs/heads/", "", branch)
+            print branch
+            exit
+        }
+    ')"
     [ -n "$branch" ] || return 1
     printf '%s\n' "$branch"
 }
@@ -108,7 +138,7 @@ remote_branch_exists() {
     origin_url="$(repo_origin_url 2>/dev/null || true)"
     [ -n "$origin_url" ] || return 1
 
-    git ls-remote --exit-code --heads "$origin_url" "refs/heads/$branch" >/dev/null 2>&1
+    git -C "$(repo_remote_query_dir)" ls-remote --exit-code --heads "$origin_url" "refs/heads/$branch" >/dev/null 2>&1
 }
 
 repo_default_branch() {
@@ -124,6 +154,11 @@ repo_default_branch() {
     fi
 
     if branch="$(repo_branch_from_origin_head "$MANAGED_REPO_DIR" 2>/dev/null)" && remote_branch_exists "$branch"; then
+        printf '%s\n' "$branch"
+        return 0
+    fi
+
+    if branch="$(repo_branch_from_remote_head 2>/dev/null)" && remote_branch_exists "$branch"; then
         printf '%s\n' "$branch"
         return 0
     fi

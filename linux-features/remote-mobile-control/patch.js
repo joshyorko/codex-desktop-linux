@@ -11,12 +11,16 @@ const DEVICE_KEY_GUARD =
   "if(process.platform!==`darwin`)throw Error(`Remote control device keys are only available on macOS`);";
 const DEVICE_KEY_GUARD_REPLACEMENT =
   "if(process.platform===`linux`)return codexLinuxRemoteControlDeviceKeyClient();if(process.platform!==`darwin`)throw Error(`Remote control device keys are only available on macOS`);";
+const DEVICE_KEY_REQUIRE_NEEDLE =
+  /(?:var|let|const)\s+[A-Za-z_$][\w$]*=\(0,[A-Za-z_$][\w$]*\.createRequire\)\(__filename\),[A-Za-z_$][\w$]*=`remote-control-device-key\.node`/u;
 const REMOTE_CONTROL_VISIBILITY_NEEDLE =
   "function a({remoteControlConnectionsState:e,slingshotEnabled:t}){return t&&(e?.available??!0)&&e?.accessRequired!==!0}";
 const REMOTE_CONTROL_VISIBILITY_REPLACEMENT =
   "function a({remoteControlConnectionsState:e,slingshotEnabled:t}){let n=typeof navigator!=`undefined`&&navigator.userAgent.includes(`Linux`);return(n||t)&&(n||(e?.available??!0))&&e?.accessRequired!==!0}";
 const REMOTE_CONTROL_VISIBILITY_OLD_REPLACEMENT =
   "function a({remoteControlConnectionsState:e,slingshotEnabled:t}){let n=typeof navigator!=`undefined`&&navigator.userAgent.includes(`Linux`);return t&&(n||(e?.available??!0))&&e?.accessRequired!==!0}";
+const REMOTE_CONTROL_SETTINGS_VISIBILITY_NEEDLE =
+  /function ([A-Za-z_$][\w$]*)\(\{remoteControlConnectionsState:([A-Za-z_$][\w$]*),slingshotEnabled:([A-Za-z_$][\w$]*)\}\)\{return \3&&\(\2\?\.available\?\?!0\)\}/u;
 const REMOTE_CONTROL_SETTINGS_UX_MARKER = "codexLinuxRemoteControlSettingsTabs";
 const REMOTE_CONNECTIONS_REFRESH_MARKER = "codexLinuxRemoteConnectionsRefreshNow";
 const REMOTE_MOBILE_CHROME_BRIDGE_MARKER = "codexLinuxRemoteMobileBrowserBackends";
@@ -90,8 +94,8 @@ function applyLinuxRemoteControlDeviceKeyPatch(source) {
     return source;
   }
 
-  const insertionNeedle = "var bV=(0,b.createRequire)(__filename),xV=`remote-control-device-key.node`";
-  if (!source.includes(insertionNeedle) || !source.includes(DEVICE_KEY_GUARD)) {
+  const insertionNeedle = source.match(DEVICE_KEY_REQUIRE_NEEDLE)?.[0] ?? null;
+  if (insertionNeedle == null || !source.includes(DEVICE_KEY_GUARD)) {
     console.warn("WARN: Could not find remote-control device-key bundle needles - skipping Linux remote-control device-key patch");
     return source;
   }
@@ -103,31 +107,59 @@ function applyLinuxRemoteControlDeviceKeyPatch(source) {
 }
 
 function applyLinuxRemoteControlPreserveConfigPatch(source) {
-  const patchedNeedle =
-    "async function mV({codexHome:e,hostConfig:n,logger:r=t.Jr()}){if(n.kind===`local`&&process.platform!==`linux`)try{";
-  if (source.includes(patchedNeedle)) {
+  const stripperGuardRegex =
+    /async function [A-Za-z_$][\w$]*\(\{codexHome:[A-Za-z_$][\w$]*,hostConfig:([A-Za-z_$][\w$]*),logger:[A-Za-z_$][\w$]*=[^}]*\}\)\{if\(\1\.kind===`local`\)try\{/gu;
+  const patched = source.replace(stripperGuardRegex, (needle, hostConfigVar) =>
+    needle.replace(
+      `if(${hostConfigVar}.kind===\`local\`)try{`,
+      `if(${hostConfigVar}.kind===\`local\`&&process.platform!==\`linux\`)try{`,
+    ),
+  );
+  if (patched !== source) {
+    return patched;
+  }
+
+  const alreadyPatchedRegex =
+    /async function [A-Za-z_$][\w$]*\(\{codexHome:[A-Za-z_$][\w$]*,hostConfig:([A-Za-z_$][\w$]*),logger:[A-Za-z_$][\w$]*=[^}]*\}\)\{if\(\1\.kind===`local`&&process\.platform!==`linux`\)try\{/u;
+  if (
+    alreadyPatchedRegex.test(source) ||
+    !source.includes("Removed remote_control from config before app-server start") &&
+      !source.includes("Failed to remove remote_control before app-server start")
+  ) {
     return source;
   }
 
-  const needle = "async function mV({codexHome:e,hostConfig:n,logger:r=t.Jr()}){if(n.kind===`local`)try{";
-  if (!source.includes(needle)) {
-    console.warn("WARN: Could not find remote-control config stripping needle - skipping Linux remote-control config patch");
-    return source;
-  }
-
-  return source.replace(needle, patchedNeedle);
+  console.warn("WARN: Could not find remote-control config stripping needle - skipping Linux remote-control config patch");
+  return source;
 }
 
 function applyLinuxRemoteControlVisibilityPatch(source) {
-  if (source.includes(REMOTE_CONTROL_VISIBILITY_REPLACEMENT)) {
+  if (
+    source.includes(REMOTE_CONTROL_VISIBILITY_REPLACEMENT) ||
+    source.includes("remoteControlConnectionsState") &&
+      source.includes("navigator.userAgent.includes(`Linux`)")
+  ) {
     return source;
   }
   if (source.includes(REMOTE_CONTROL_VISIBILITY_OLD_REPLACEMENT)) {
     return source.replace(REMOTE_CONTROL_VISIBILITY_OLD_REPLACEMENT, REMOTE_CONTROL_VISIBILITY_REPLACEMENT);
   }
   if (!source.includes(REMOTE_CONTROL_VISIBILITY_NEEDLE)) {
-    console.warn("WARN: Could not find remote-control visibility gate - skipping Linux remote-control visibility patch");
-    return source;
+    if (!source.includes("remoteControlConnectionsState")) {
+      return source;
+    }
+
+    const settingsVisibilityMatch = source.match(REMOTE_CONTROL_SETTINGS_VISIBILITY_NEEDLE);
+    if (settingsVisibilityMatch == null) {
+      console.warn("WARN: Could not find remote-control visibility gate - skipping Linux remote-control visibility patch");
+      return source;
+    }
+
+    const [, functionName, stateVar, slingshotVar] = settingsVisibilityMatch;
+    return source.replace(
+      REMOTE_CONTROL_SETTINGS_VISIBILITY_NEEDLE,
+      `function ${functionName}({remoteControlConnectionsState:${stateVar},slingshotEnabled:${slingshotVar}}){let n=typeof navigator!=\`undefined\`&&navigator.userAgent.includes(\`Linux\`);return(n||${slingshotVar})&&(n||(${stateVar}?.available??!0))}`,
+    );
   }
   return source.replace(REMOTE_CONTROL_VISIBILITY_NEEDLE, REMOTE_CONTROL_VISIBILITY_REPLACEMENT);
 }
