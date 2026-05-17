@@ -224,7 +224,7 @@ case "${LAUNCHER_ARGS[0]:-}" in
         if [ "${LAUNCHER_ARGS[1]:-}" = "--inspect" ]; then
             codex_desktop_web_mode inspect "${LAUNCHER_ARGS[@]:2}"
         fi
-        echo "codex-desktop web is now served by: codex-desktop serve --workspace <path> --profile <path>" >&2
+        echo "codex-desktop web is now served by: codex-desktop serve --workspace <path>" >&2
         exit 64
         ;;
     doctor)
@@ -239,7 +239,7 @@ Usage: ./start.sh [COMMAND] [OPTIONS]
 Launches the $CODEX_LINUX_APP_DISPLAY_NAME app.
 
 Commands:
-  serve --workspace DIR --profile DIR
+  serve --workspace DIR [--profile DIR] [--codex-home DIR|--isolated]
                               Run devcontainer real web mode on a loopback listener
   web --inspect               Print web-mode inspection JSON
   doctor [--mode devcontainer]
