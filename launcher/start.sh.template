@@ -245,7 +245,7 @@ Usage: ./start.sh [COMMAND] [OPTIONS]
 Launches the $CODEX_LINUX_APP_DISPLAY_NAME app.
 
 Commands:
-  serve --workspace DIR --profile DIR
+  serve --workspace DIR [--profile DIR] [--codex-home DIR|--isolated]
                               Run devcontainer real web mode on a loopback listener
   web --inspect               Print web-mode inspection JSON
   doctor [--mode devcontainer]

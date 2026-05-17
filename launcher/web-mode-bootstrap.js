@@ -108,6 +108,7 @@
   function refreshWorkspaceObjects() {
     const workspace = health?.workspace || "/workspace";
     const profile = health?.profile || `${workspace}/.codex-desktop`;
+    const codexHome = health?.codex_home || "~/.codex";
     webState.sharedObjects.host_config = {
       id: localHostId,
       display_name: "Local",
@@ -116,7 +117,7 @@
     webState.globalState["active-workspace-roots"] ??= { roots: [workspace] };
     webState.globalState["electron-saved-workspace-roots"] ??= { roots: [workspace] };
     webState.globalState["workspace-root-options"] ??= { roots: [workspace] };
-    webState.globalState["codex-home"] ??= `${profile}/profile/codex-home`;
+    webState.globalState["codex-home"] ??= codexHome;
     webState.globalState["home-directory"] ??= workspace;
   }
 
