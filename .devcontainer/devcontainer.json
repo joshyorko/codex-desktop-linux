@@ -1,0 +1,21 @@
+{
+  "name": "Codex Desktop Linux",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": ".."
+  },
+  "runArgs": [
+    "--userns=keep-id"
+  ],
+  "remoteUser": "vscode",
+  "workspaceFolder": "/workspaces/codex-desktop-linux",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "rust-lang.rust-analyzer",
+        "tamasfe.even-better-toml"
+      ]
+    }
+  },
+  "postCreateCommand": "cargo --version && rustc --version"
+}

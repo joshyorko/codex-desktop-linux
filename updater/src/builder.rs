@@ -14,7 +14,7 @@ use std::{
 use tokio::process::Command;
 use tracing::info;
 
-const REQUIRED_BUNDLE_FILES: [(&str, &str); 15] = [
+const REQUIRED_BUNDLE_FILES: [(&str, &str); 17] = [
     ("Cargo.toml", "Cargo.toml"),
     ("Cargo.lock", "Cargo.lock"),
     ("computer-use-linux", "computer-use-linux"),
@@ -26,6 +26,8 @@ const REQUIRED_BUNDLE_FILES: [(&str, &str); 15] = [
     ("install.sh", "install.sh"),
     ("launcher/start.sh.template", "launcher/start.sh.template"),
     ("launcher/webview-server.py", "launcher/webview-server.py"),
+    ("launcher/web-mode-server.mjs", "launcher/web-mode-server.mjs"),
+    ("launcher/web-mode-bootstrap.js", "launcher/web-mode-bootstrap.js"),
     ("scripts/build-deb.sh", "scripts/build-deb.sh"),
     (
         "scripts/patch-linux-window-ui.js",

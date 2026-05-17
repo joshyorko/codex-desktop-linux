@@ -21,24 +21,25 @@ const REMOTE_CONTROL_VISIBILITY_OLD_REPLACEMENT =
   "function a({remoteControlConnectionsState:e,slingshotEnabled:t}){let n=typeof navigator!=`undefined`&&navigator.userAgent.includes(`Linux`);return t&&(n||(e?.available??!0))&&e?.accessRequired!==!0}";
 const REMOTE_CONTROL_SETTINGS_VISIBILITY_NEEDLE =
   /function ([A-Za-z_$][\w$]*)\(\{remoteControlConnectionsState:([A-Za-z_$][\w$]*),slingshotEnabled:([A-Za-z_$][\w$]*)\}\)\{return \3&&\(\2\?\.available\?\?!0\)\}/u;
-const REMOTE_CONTROL_LINUX_COPY_REPLACEMENTS = [
-  ["defaultMessage:`Mac`", "defaultMessage:`Linux`"],
-  ["Keep this Mac awake", "Keep this Linux desktop awake"],
-  ["Devices that can control this Mac", "Devices that can control this Linux desktop"],
-  ["Control this Mac from your phone or other device", "Control this Linux desktop from your phone or other device"],
-  ["Add device to control this Mac remotely", "Add device to control this Linux desktop remotely"],
-  ["Control other devices from this Mac", "Control other devices from this Linux desktop"],
-  ["Authorize this Mac to control other devices signed in to your ChatGPT account", "Authorize this Linux desktop to control other devices signed in to your ChatGPT account"],
-  ["Allow this Mac to be discovered and controlled", "Allow this Linux desktop to be discovered and controlled"],
-  ["Control this Mac", "Control this Linux desktop"],
-  ["Devices you can control from this Mac", "Devices you can control from this Linux desktop"],
-  ["SSH connections from this Mac", "SSH connections from this Linux desktop"],
-  ["Use your Mac apps while locked", "Use your Linux apps while locked"],
-  ["Control Mac apps from your phone", "Control Linux apps from your phone"],
-  ["Let Codex control the apps on your Mac.", "Let Codex control apps on this Linux desktop."],
-  ["Let Codex control the apps on your Mac", "Let Codex control apps on this Linux desktop"],
-  ["Connect a device to this Mac", "Connect a device to this Linux desktop"],
-  ["Connect your phone to this Mac", "Connect your phone to this Linux desktop"],
+const REMOTE_CONTROL_SETTINGS_UX_MARKER = "codexLinuxRemoteControlSettingsTabs";
+const REMOTE_CONNECTIONS_REFRESH_MARKER = "codexLinuxRemoteConnectionsRefreshNow";
+const REMOTE_MOBILE_CHROME_BRIDGE_MARKER = "codexLinuxRemoteMobileBrowserBackends";
+const REMOTE_CONTROL_SELECTED_TAB_NEEDLE =
+  "function rr({selectedConnectionsTab:e,showControlThisMacTab:t,showRemoteControlConnectionsSection:n,showTabbedSshPage:r}){return n?e===`control-this-mac`&&!t||e===`ssh`&&!r?`access-other-devices`:e:`ssh`}";
+const REMOTE_CONTROL_SELECTED_TAB_REPLACEMENT =
+  "function rr({selectedConnectionsTab:e,showControlThisMacTab:t,showRemoteControlConnectionsSection:n,showTabbedSshPage:r}){let i=typeof navigator!=`undefined`&&navigator.userAgent.includes(`Linux`);if(i){if(!n)return`ssh`;if(e===`access-other-devices`)return t?`control-this-mac`:`ssh`;if(e===`control-this-mac`&&!t)return`ssh`;if(e===`ssh`&&!r)return t?`control-this-mac`:`ssh`;return e}return n?e===`control-this-mac`&&!t||e===`ssh`&&!r?`access-other-devices`:e:`ssh`}";
+const REMOTE_CONTROL_LINUX_LABEL_REPLACEMENTS = [
+  ["Control this Mac from your phone or other device", "Control this computer from your phone or other device"],
+  ["Add device to control this Mac remotely", "Add a device to control this computer remotely"],
+  ["Devices that can control this Mac", "Devices that can control this computer"],
+  ["Allow this Mac to be discovered and controlled", "Allow this computer to be discovered and controlled"],
+  ["Control other devices from this Mac", "Control other devices from this computer"],
+  ["Authorize this Mac to control other devices signed in to your ChatGPT account", "Authorize this computer to control other devices signed in to your ChatGPT account"],
+  ["Devices you can control from this Mac", "Devices you can control from this computer"],
+  ["Control this Mac", "Control this computer"],
+  ["Keep Mac awake", "Keep computer awake"],
+  ["this Mac", "this computer"],
+  ["local Mac", "local computer"],
 ];
 
 function linuxDeviceKeyProviderSource({ cryptoVar, fsVar, pathVar }) {
@@ -163,27 +164,130 @@ function applyLinuxRemoteControlVisibilityPatch(source) {
   return source.replace(REMOTE_CONTROL_VISIBILITY_NEEDLE, REMOTE_CONTROL_VISIBILITY_REPLACEMENT);
 }
 
-function applyLinuxRemoteControlCopyPatch(source) {
-  const hasMacCopy = REMOTE_CONTROL_LINUX_COPY_REPLACEMENTS.some(([macCopy]) =>
-    source.includes(macCopy),
+function wrapRemoteControlTabs(source, firstKey) {
+  const key = firstKey.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const pattern = new RegExp(
+    `tabs:(\\[\\{key:\`${key}\`[\\s\\S]*?\\}\\]),selectedKey:([A-Za-z_$][\\w$]*),variant:\`underline\`,onSelect:([A-Za-z_$][\\w$]*)\\}`,
+    "g",
   );
-  if (!hasMacCopy && (source.includes("this Linux desktop") || source.includes("Linux apps"))) {
+  return source.replace(
+    pattern,
+    "tabs:codexLinuxRemoteControlSettingsTabs($1),selectedKey:$2,variant:`underline`,onSelect:$3}",
+  );
+}
+
+function applyLinuxRemoteControlSettingsUxPatch(source) {
+  let patched = source;
+  for (const [from, to] of REMOTE_CONTROL_LINUX_LABEL_REPLACEMENTS) {
+    patched = patched.replaceAll(from, to);
+  }
+
+  if (!patched.includes(REMOTE_CONTROL_SETTINGS_UX_MARKER)) {
+    const helperNeedle = "function nr(e,t){return e.displayName.localeCompare(t.displayName)}";
+    if (!patched.includes(helperNeedle)) {
+      console.warn("WARN: Could not find remote-control settings helper needle - skipping Linux remote-control settings UX patch");
+      return patched;
+    }
+    const helper =
+      "function codexLinuxRemoteControlSettingsTabs(e){return typeof navigator!=`undefined`&&navigator.userAgent.includes(`Linux`)?e.filter(e=>e.key!==`access-other-devices`):e}";
+    patched = patched.replace(helperNeedle, `${helper}${helperNeedle}`);
+  }
+
+  patched = wrapRemoteControlTabs(patched, "control-this-mac");
+  patched = wrapRemoteControlTabs(patched, "access-other-devices");
+
+  if (patched.includes(REMOTE_CONTROL_SELECTED_TAB_REPLACEMENT)) {
+    return patched;
+  }
+  if (!patched.includes(REMOTE_CONTROL_SELECTED_TAB_NEEDLE)) {
+    console.warn("WARN: Could not find remote-control selected-tab needle - skipping Linux remote-control selected-tab patch");
+    return patched;
+  }
+  return patched.replace(REMOTE_CONTROL_SELECTED_TAB_NEEDLE, REMOTE_CONTROL_SELECTED_TAB_REPLACEMENT);
+}
+
+function applyLinuxRemoteConnectionsRefreshPatch(source) {
+  if (source.includes(REMOTE_CONNECTIONS_REFRESH_MARKER)) {
     return source;
   }
 
   let patched = source;
-  let changed = false;
-  for (const [macCopy, linuxCopy] of REMOTE_CONTROL_LINUX_COPY_REPLACEMENTS) {
-    if (patched.includes(macCopy)) {
-      patched = patched.split(macCopy).join(linuxCopy);
-      changed = true;
-    }
+  if (patched.includes("Qn=15e3")) {
+    patched = patched.replace("Qn=15e3", "Qn=5e3");
+  } else if (patched.includes("15e3") && patched.includes("refresh-remote-connections")) {
+    console.warn("WARN: Could not find remote-connections refresh interval constant - skipping interval patch");
   }
 
-  if (!changed) {
-    console.warn("WARN: Could not find remote-control Mac copy - skipping Linux remote-control copy patch");
+  const effectPattern =
+    /\(0,([A-Za-z_$][\w$]*)\.useEffect\)\(\(\)=>\{let ([A-Za-z_$][\w$]*)=null,([A-Za-z_$][\w$]*)=!1,([A-Za-z_$][\w$]*)=async\(\)=>\{if\(![A-Za-z_$][\w$]*\)\{[A-Za-z_$][\w$]*=!0,[A-Za-z_$][\w$]*=new AbortController;try\{await ([A-Za-z_$][\w$]*)\([A-Za-z_$][\w$]*\.signal\)\}finally\{[A-Za-z_$][\w$]*=null,[A-Za-z_$][\w$]*=!1\}\}\},([A-Za-z_$][\w$]*)=window\.setInterval\(\(\)=>\{[A-Za-z_$][\w$]*\(\)\},([A-Za-z_$][\w$]*)\);return\(\)=>\{[A-Za-z_$][\w$]*\?\.abort\(\),window\.clearInterval\([A-Za-z_$][\w$]*\)\}\},\[\]\);/;
+  const match = patched.match(effectPattern);
+  if (match == null) {
+    if (patched.includes("refresh-remote-connections") && patched.includes("setInterval")) {
+      console.warn("WARN: Could not find remote-connections auto-refresh effect - skipping resume refresh patch");
+    }
+    return patched;
+  }
+
+  const [
+    needle,
+    reactVar,
+    abortVar,
+    pendingVar,
+    refreshVar,
+    refreshEventVar,
+    intervalVar,
+    intervalConstantVar,
+  ] = match;
+  const replacement =
+    `(0,${reactVar}.useEffect)(()=>{let ${abortVar}=null,${pendingVar}=!1,${refreshVar}=async()=>{if(!${pendingVar}){${pendingVar}=!0,${abortVar}=new AbortController;try{await ${refreshEventVar}(${abortVar}.signal)}finally{${abortVar}=null,${pendingVar}=!1}}},` +
+    `${REMOTE_CONNECTIONS_REFRESH_MARKER}=()=>{document.visibilityState!==\`hidden\`&&${refreshVar}()},` +
+    `${intervalVar}=window.setInterval(()=>{${refreshVar}()},${intervalConstantVar});` +
+    `document.addEventListener(\`visibilitychange\`,${REMOTE_CONNECTIONS_REFRESH_MARKER}),` +
+    `window.addEventListener(\`focus\`,${REMOTE_CONNECTIONS_REFRESH_MARKER}),` +
+    `window.addEventListener(\`online\`,${REMOTE_CONNECTIONS_REFRESH_MARKER}),` +
+    `window.addEventListener(\`resume\`,${REMOTE_CONNECTIONS_REFRESH_MARKER});` +
+    `return()=>{${abortVar}?.abort(),window.clearInterval(${intervalVar}),` +
+    `document.removeEventListener(\`visibilitychange\`,${REMOTE_CONNECTIONS_REFRESH_MARKER}),` +
+    `window.removeEventListener(\`focus\`,${REMOTE_CONNECTIONS_REFRESH_MARKER}),` +
+    `window.removeEventListener(\`online\`,${REMOTE_CONNECTIONS_REFRESH_MARKER}),` +
+    `window.removeEventListener(\`resume\`,${REMOTE_CONNECTIONS_REFRESH_MARKER})}},[]);`;
+
+  return patched.replace(needle, replacement);
+}
+
+function applyLinuxRemoteMobileChromeBridgePatch(source) {
+  if (source.includes(REMOTE_MOBILE_CHROME_BRIDGE_MARKER)) {
     return source;
   }
+
+  const backendNeedle =
+    "var tE=\"x-codex-browser-use-available-backends\",X6=[\"chrome\",\"iab\",\"cdp\"];function rE(t){return X6.some(e=>e===t)}";
+  const backendReplacement =
+    "var tE=\"x-codex-browser-use-available-backends\",X6=[\"chrome\",\"iab\",\"cdp\"];function rE(t){return X6.some(e=>e===t)}function codexLinuxRemoteMobileBrowserBackends(e){if(e==null)return null;if(!Array.isArray(e))return[];let t=e.filter(rE);return typeof process!=`undefined`&&process.platform===`linux`&&!t.includes(`chrome`)?[`chrome`,...t]:t}";
+  const currentBackendNeedle =
+    "function yC(){let t=globalThis.nodeRepl?.requestMeta?.[tE];return t==null?null:Array.isArray(t)?t.filter(rE):[]}";
+  const currentBackendReplacement =
+    "function yC(){let t=globalThis.nodeRepl?.requestMeta?.[tE];return codexLinuxRemoteMobileBrowserBackends(t)}";
+
+  if (!source.includes(backendNeedle) || !source.includes(currentBackendNeedle)) {
+    console.warn("WARN: Could not find Chrome browser-client backend allowlist needles - skipping remote-mobile Chrome bridge patch");
+    return source;
+  }
+
+  let patched = source
+    .replace(backendNeedle, backendReplacement)
+    .replace(currentBackendNeedle, currentBackendReplacement);
+
+  const nativePipeNeedle =
+    "function Cm(){let t=import.meta.__codexNativePipeUnavailableMessage;return typeof t==\"string\"&&t.length>0?t:\"privileged native pipe bridge is not available; browser-client is not trusted\"}";
+  const nativePipeReplacement =
+    "function codexLinuxRemoteMobileBrowserBridgeDiagnostic(e){return typeof process!=`undefined`&&process.platform===`linux`?`${e}; Chrome bridge was not exposed to this remote/mobile session. Check that the Chrome plugin, native host manifest, and x-codex-browser-use-available-backends request metadata include chrome.`:e}function Cm(){let t=import.meta.__codexNativePipeUnavailableMessage,e=typeof t==\"string\"&&t.length>0?t:\"privileged native pipe bridge is not available; browser-client is not trusted\";return codexLinuxRemoteMobileBrowserBridgeDiagnostic(e)}";
+  if (patched.includes(nativePipeNeedle)) {
+    patched = patched.replace(nativePipeNeedle, nativePipeReplacement);
+  } else {
+    console.warn("WARN: Could not find Chrome browser-client native pipe diagnostic needle - leaving default bridge diagnostic unchanged");
+  }
+
   return patched;
 }
 
@@ -205,7 +309,7 @@ module.exports = [
   {
     id: "linux-remote-control-visibility",
     phase: "webview-asset",
-    pattern: /^(?:remote-control-connections-visibility|remote-connections-settings)-.*\.js$/,
+    pattern: /^remote-control-connections-visibility-.*\.js$/,
     order: 20_120,
     ciPolicy: "optional",
     missingDescription: "remote-control connections visibility bundle",
@@ -213,18 +317,30 @@ module.exports = [
     apply: applyLinuxRemoteControlVisibilityPatch,
   },
   {
-    id: "linux-remote-control-copy",
+    id: "linux-remote-control-settings-ux",
     phase: "webview-asset",
-    pattern: /^(?:codex-mobile-setup-flow|remote-connections-settings|use-codex-mobile-connected-settings)-.*\.js$/,
+    pattern: /^remote-connections-settings-.*\.js$/,
     order: 20_130,
     ciPolicy: "optional",
-    missingDescription: "remote-control settings or mobile setup bundle",
-    skipDescription: "Linux remote-control copy patch",
-    apply: applyLinuxRemoteControlCopyPatch,
+    missingDescription: "remote connections settings bundle",
+    skipDescription: "Linux remote-control settings UX patch",
+    apply: applyLinuxRemoteControlSettingsUxPatch,
+  },
+  {
+    id: "linux-remote-connections-refresh",
+    phase: "webview-asset",
+    pattern: /^remote-connections-settings-.*\.js$/,
+    order: 20_140,
+    ciPolicy: "optional",
+    missingDescription: "remote connections settings bundle",
+    skipDescription: "Linux remote-connections refresh patch",
+    apply: applyLinuxRemoteConnectionsRefreshPatch,
   },
 ];
 
 module.exports.applyLinuxRemoteControlDeviceKeyPatch = applyLinuxRemoteControlDeviceKeyPatch;
+module.exports.applyLinuxRemoteMobileChromeBridgePatch = applyLinuxRemoteMobileChromeBridgePatch;
 module.exports.applyLinuxRemoteControlPreserveConfigPatch = applyLinuxRemoteControlPreserveConfigPatch;
+module.exports.applyLinuxRemoteConnectionsRefreshPatch = applyLinuxRemoteConnectionsRefreshPatch;
 module.exports.applyLinuxRemoteControlVisibilityPatch = applyLinuxRemoteControlVisibilityPatch;
-module.exports.applyLinuxRemoteControlCopyPatch = applyLinuxRemoteControlCopyPatch;
+module.exports.applyLinuxRemoteControlSettingsUxPatch = applyLinuxRemoteControlSettingsUxPatch;

@@ -110,6 +110,12 @@ Feature-specific Nix outputs are additive. To enable both the Computer Use UI an
 nix run github:ilysenko/codex-desktop-linux#computer-use-ui-remote-mobile-control
 ```
 
+Because flakes do not include the git-ignored `linux-features/features.json` opt-in file, Nix exposes feature-specific app variants for optional integrations. To build and run Codex Desktop with the experimental mobile remote-control feature enabled:
+
+```bash
+nix run github:ilysenko/codex-desktop-linux#remote-mobile-control
+```
+
 `nix develop github:ilysenko/codex-desktop-linux` enters a dev shell with the required tooling.
 
 ### Cachix binary cache
@@ -315,6 +321,31 @@ bash scripts/install-deps.sh
 ```
 
 It auto-detects `apt`, `dnf5`, `dnf`, `pacman`, or `zypper`, installs system packages, and bootstraps Rust through `rustup` when needed.
+
+On immutable desktops such as Bluefin, prefer the checked-in devcontainer for ordinary development instead of installing Rust or build tools on the host:
+
+```bash
+# from VS Code / Dev Containers
+Dev Containers: Reopen in Container
+
+# once inside the devcontainer
+cargo test -p codex-computer-use-linux
+```
+
+### Devcontainer Web Mode
+
+The devcontainer path can install and run the Codex Desktop UI as a real browser-served web mode without mutating the Bluefin host. The default listener is loopback-only, bridge and app-server endpoints require a per-process web token, the profile is persisted under the workspace, Browser Use prefers container-local Chromium/CDP, and Computer Use stays browser-only so it cannot control the physical host desktop. The app-server child receives a devcontainer-scoped environment with host desktop variables such as `DISPLAY`, `WAYLAND_DISPLAY`, compositor sockets, and `YDOTOOL_SOCKET` stripped.
+
+```bash
+./scripts/devcontainer-homebrew-smoke.sh
+./scripts/devcontainer-codex-desktop-browser-smoke.sh
+
+codex-desktop serve --workspace /workspace --profile /workspace/.codex-desktop
+```
+
+Issue #9 acceptance should use the two smoke scripts above. They verify the local Homebrew cask install, loopback default, non-loopback token guard, token-protected bridge calls, container-local CDP restart behavior, persisted web state, and a headless browser screenshot of the real served UI.
+
+The old `scripts/devcontainer-codex-desktop-host.sh` Xvfb/noVNC path remains only as a Phase 1 compatibility harness. Do not use it as the target architecture for issue #9 acceptance.
 
 #### Apt-specific (Debian / Ubuntu / Pop!_OS / Mint)
 

@@ -1,8 +1,6 @@
 name: Update Nix upstream hashes
 
 on:
-  schedule:
-    - cron: '0 */2 * * *'
   workflow_dispatch: {}
 
 permissions:
@@ -21,7 +19,9 @@ jobs:
       CACHIX_CACHE_NAME: codex-desktop-linux
       CACHIX_AUTH_TOKEN: ${{ secrets.CACHIX_AUTH_TOKEN }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
+        with:
+          ref: main
 
       - uses: actions/setup-node@v4
         with:

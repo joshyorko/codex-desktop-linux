@@ -3,7 +3,7 @@ use crate::windowing::registry::{
     HYPRLAND_BACKEND, KWIN_BACKEND,
 };
 use schemars::JsonSchema;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, HashMap},
     env, fs,
@@ -29,6 +29,7 @@ const DESKTOP_ENV_KEYS: &[&str] = &[
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 pub struct DoctorReport {
     pub platform: PlatformReport,
+    pub bluefin: BluefinReport,
     pub portals: PortalReport,
     pub accessibility: AccessibilityReport,
     pub windowing: WindowingReport,
@@ -48,6 +49,18 @@ pub struct PlatformReport {
     pub dbus_session_bus_address: Option<String>,
     pub xdg_runtime_dir: Option<String>,
     pub gnome_shell_version: Check,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct BluefinReport {
+    pub detected: bool,
+    pub source: String,
+    pub image_ref: Option<String>,
+    pub variant: Option<String>,
+    pub package_boundary: String,
+    pub ujust: Check,
+    pub flatpak: Check,
+    pub brew: Check,
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
@@ -139,14 +152,16 @@ pub fn doctor_report() -> DoctorReport {
     hydrate_session_bus_env();
 
     let platform = platform_report();
+    let bluefin = bluefin_report();
     let portals = portal_report();
     let accessibility = accessibility_report();
     let windowing = windowing_report(&platform);
     let input = input_report();
-    let readiness = readiness_report(&platform, &accessibility, &windowing, &input);
+    let readiness = readiness_report(&platform, &accessibility, &windowing, &input, &bluefin);
 
     DoctorReport {
         platform,
+        bluefin,
         portals,
         accessibility,
         windowing,
@@ -386,6 +401,214 @@ fn platform_report() -> PlatformReport {
     }
 }
 
+fn bluefin_report() -> BluefinReport {
+    let os_release = read_os_release();
+    let image_status = image_status_json();
+    let mut report = bluefin_report_from_parts(&os_release, image_status.as_deref());
+    report.ujust = command_path_check("ujust");
+    report.flatpak = command_path_check("flatpak");
+    report.brew = command_path_check("brew");
+    report
+}
+
+fn bluefin_report_from_parts(
+    os_release: &BTreeMap<String, String>,
+    image_status: Option<&str>,
+) -> BluefinReport {
+    let image_ref = image_status.and_then(image_ref_from_status);
+    let detected_by_os = os_release_identifies_bluefin(os_release);
+    let detected_by_image = image_ref.as_deref().is_some_and(|value| {
+        value
+            .to_ascii_lowercase()
+            .contains("ghcr.io/ublue-os/bluefin")
+    });
+    let detected = detected_by_os || detected_by_image;
+    let variant = if detected {
+        variant_from_image_ref(image_ref.as_deref())
+            .or_else(|| variant_from_os_release(os_release))
+            .or_else(|| Some("base".to_string()))
+    } else {
+        None
+    };
+    let source = match (detected_by_os, detected_by_image) {
+        (true, true) => "os-release+image-status",
+        (true, false) => "os-release",
+        (false, true) => "image-status",
+        (false, false) => "none",
+    }
+    .to_string();
+    let package_boundary = if detected {
+        "Bluefin host: prefer Flatpak for GUI apps, Homebrew for host CLI tools, and checked-in containers/devcontainers for project runtimes; avoid base-image mutation for Computer Use setup."
+            .to_string()
+    } else {
+        "not a Bluefin/Universal Blue host".to_string()
+    };
+
+    BluefinReport {
+        detected,
+        source,
+        image_ref,
+        variant,
+        package_boundary,
+        ujust: Check::fail("not checked"),
+        flatpak: Check::fail("not checked"),
+        brew: Check::fail("not checked"),
+    }
+}
+
+fn read_os_release() -> BTreeMap<String, String> {
+    os_release_paths()
+        .into_iter()
+        .find_map(|path| fs::read_to_string(path).ok())
+        .map(|contents| parse_os_release(&contents))
+        .unwrap_or_default()
+}
+
+fn os_release_paths() -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    if let Some(path) = env_var("CODEX_COMPUTER_USE_OS_RELEASE_FILE")
+        .or_else(|| env_var("CODEX_DESKTOP_OS_RELEASE_FILE"))
+    {
+        paths.push(PathBuf::from(path));
+    }
+    paths.push(PathBuf::from("/etc/os-release"));
+    paths.push(PathBuf::from("/usr/lib/os-release"));
+    paths
+}
+
+fn parse_os_release(contents: &str) -> BTreeMap<String, String> {
+    contents
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                return None;
+            }
+            let (key, value) = line.split_once('=')?;
+            Some((key.to_string(), unquote_os_release_value(value)))
+        })
+        .collect()
+}
+
+fn unquote_os_release_value(value: &str) -> String {
+    let value = value.trim();
+    if value.len() >= 2 {
+        let bytes = value.as_bytes();
+        if (bytes[0] == b'"' && bytes[value.len() - 1] == b'"')
+            || (bytes[0] == b'\'' && bytes[value.len() - 1] == b'\'')
+        {
+            return value[1..value.len() - 1].to_string();
+        }
+    }
+    value.to_string()
+}
+
+fn os_release_identifies_bluefin(os_release: &BTreeMap<String, String>) -> bool {
+    let joined = ["ID", "ID_LIKE", "NAME", "VARIANT_ID"]
+        .iter()
+        .filter_map(|key| os_release.get(*key))
+        .map(|value| value.to_ascii_lowercase())
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    joined
+        .split_whitespace()
+        .any(|token| token == "bluefin" || token == "ublue")
+        || joined.contains("project bluefin")
+        || joined.contains("universal blue")
+        || joined.contains("ublue-os")
+}
+
+fn image_status_json() -> Option<String> {
+    command_stdout("bootc", &["status", "--json"])
+        .or_else(|| command_stdout("rpm-ostree", &["status", "--json"]))
+}
+
+fn command_stdout(command: &str, args: &[&str]) -> Option<String> {
+    let output = Command::new(command).args(args).output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    (!stdout.is_empty()).then_some(stdout)
+}
+
+#[derive(Debug, Deserialize)]
+struct StatusDeployment {
+    booted: Option<bool>,
+    #[serde(rename = "container-image-reference")]
+    container_image_reference: Option<String>,
+    origin: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RpmOstreeStatus {
+    deployments: Option<Vec<StatusDeployment>>,
+}
+
+fn image_ref_from_status(status: &str) -> Option<String> {
+    let parsed = serde_json::from_str::<RpmOstreeStatus>(status).ok()?;
+    let deployments = parsed.deployments?;
+    let deployment = deployments
+        .iter()
+        .find(|deployment| deployment.booted == Some(true))
+        .or_else(|| deployments.first())?;
+    deployment
+        .container_image_reference
+        .as_deref()
+        .or(deployment.origin.as_deref())
+        .and_then(normalize_image_ref)
+}
+
+fn normalize_image_ref(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    let stripped = trimmed
+        .strip_prefix("ostree-unverified-registry:")
+        .unwrap_or(trimmed)
+        .strip_prefix("ostree-image-signed:")
+        .unwrap_or_else(|| {
+            trimmed
+                .strip_prefix("ostree-unverified-registry:")
+                .unwrap_or(trimmed)
+        });
+
+    (!stripped.is_empty()).then(|| stripped.to_string())
+}
+
+fn variant_from_image_ref(image_ref: Option<&str>) -> Option<String> {
+    let lower = image_ref?.to_ascii_lowercase();
+    if lower.contains("bluefin-dx") && lower.contains("nvidia") {
+        Some("dx-nvidia".to_string())
+    } else if lower.contains("bluefin-dx") {
+        Some("dx".to_string())
+    } else if lower.contains("bluefin") && lower.contains("nvidia") {
+        Some("nvidia".to_string())
+    } else if lower.contains("bluefin") {
+        Some("base".to_string())
+    } else {
+        None
+    }
+}
+
+fn variant_from_os_release(os_release: &BTreeMap<String, String>) -> Option<String> {
+    let variant = os_release
+        .get("VARIANT_ID")
+        .or_else(|| os_release.get("ID"))
+        .map(|value| value.to_ascii_lowercase())?;
+
+    if variant.contains("bluefin-dx") && variant.contains("nvidia") {
+        Some("dx-nvidia".to_string())
+    } else if variant.contains("bluefin-dx") {
+        Some("dx".to_string())
+    } else if variant.contains("bluefin") && variant.contains("nvidia") {
+        Some("nvidia".to_string())
+    } else if variant.contains("bluefin") {
+        Some("base".to_string())
+    } else {
+        None
+    }
+}
+
 fn portal_report() -> PortalReport {
     PortalReport {
         desktop_portal: bus_name_check("org.freedesktop.portal.Desktop"),
@@ -486,6 +709,7 @@ fn readiness_report(
     accessibility: &AccessibilityReport,
     windowing: &WindowingReport,
     input: &InputReport,
+    bluefin: &BluefinReport,
 ) -> ReadinessReport {
     let mut blockers = Vec::new();
     let can_build_accessibility_tree = can_build_accessibility_tree(accessibility);
@@ -540,8 +764,13 @@ fn readiness_report(
     } else if !can_focus_windows {
         "Enable an exact-focus window backend before using window_id, title, or terminal-targeted input.".to_string()
     } else if !can_send_development_input {
-        "Fix ydotool input access: start ydotoold with a socket accessible to this desktop user."
-            .to_string()
+        if bluefin.detected {
+            "Bluefin host detected: fix ydotool input access through a Homebrew or user-scoped helper path, then start ydotoold with a socket accessible to this desktop user. Keep project build tools in the devcontainer and avoid base-image mutation for this check."
+                .to_string()
+        } else {
+            "Fix ydotool input access: start ydotoold with a socket accessible to this desktop user."
+                .to_string()
+        }
     } else {
         "Computer Use is ready: AT-SPI tree support, window targeting, and ydotool input fallback are available."
             .to_string()
@@ -887,6 +1116,19 @@ mod tests {
         }
     }
 
+    fn default_bluefin_report() -> BluefinReport {
+        BluefinReport {
+            detected: false,
+            source: "none".to_string(),
+            image_ref: None,
+            variant: None,
+            package_boundary: "not a Bluefin/Universal Blue host".to_string(),
+            ujust: Check::fail("not checked"),
+            flatpak: Check::fail("not checked"),
+            brew: Check::fail("not checked"),
+        }
+    }
+
     #[test]
     fn accessibility_tree_requires_reachable_at_spi_bus() {
         let report = accessibility_report(Check::fail("permission denied"), Check::ok("true"));
@@ -953,7 +1195,13 @@ mod tests {
         let windowing = windowing_report(true, false);
         let input = input_report(true);
 
-        let readiness = readiness_report(&platform, &accessibility, &windowing, &input);
+        let readiness = readiness_report(
+            &platform,
+            &accessibility,
+            &windowing,
+            &input,
+            &default_bluefin_report(),
+        );
 
         assert!(readiness.can_query_windows);
         assert!(!readiness.can_focus_windows);
@@ -977,7 +1225,13 @@ mod tests {
         windowing.can_focus_windows = true;
         let input = input_report(true);
 
-        let readiness = readiness_report(&platform, &accessibility, &windowing, &input);
+        let readiness = readiness_report(
+            &platform,
+            &accessibility,
+            &windowing,
+            &input,
+            &default_bluefin_report(),
+        );
 
         assert!(readiness.can_query_windows);
         assert!(readiness.can_focus_apps);
@@ -992,7 +1246,13 @@ mod tests {
         let windowing = windowing_report(true, true);
         let input = input_report(true);
 
-        let readiness = readiness_report(&platform, &accessibility, &windowing, &input);
+        let readiness = readiness_report(
+            &platform,
+            &accessibility,
+            &windowing,
+            &input,
+            &default_bluefin_report(),
+        );
 
         assert!(readiness.blockers.is_empty());
         assert!(readiness
@@ -1016,7 +1276,13 @@ mod tests {
             Check::fail("/dev/uinput: Permission denied"),
         );
 
-        let readiness = readiness_report(&platform, &accessibility, &windowing, &input);
+        let readiness = readiness_report(
+            &platform,
+            &accessibility,
+            &windowing,
+            &input,
+            &default_bluefin_report(),
+        );
 
         assert!(readiness.can_send_development_input);
         assert!(readiness.blockers.is_empty());
@@ -1034,7 +1300,13 @@ mod tests {
             Check::ok("read/write: /dev/uinput"),
         );
 
-        let readiness = readiness_report(&platform, &accessibility, &windowing, &input);
+        let readiness = readiness_report(
+            &platform,
+            &accessibility,
+            &windowing,
+            &input,
+            &default_bluefin_report(),
+        );
 
         assert!(!readiness.can_send_development_input);
         assert!(readiness
@@ -1055,7 +1327,13 @@ mod tests {
             Check::fail("/dev/uinput: Permission denied"),
         );
 
-        let readiness = readiness_report(&platform, &accessibility, &windowing, &input);
+        let readiness = readiness_report(
+            &platform,
+            &accessibility,
+            &windowing,
+            &input,
+            &default_bluefin_report(),
+        );
 
         assert!(!readiness.can_send_development_input);
         assert!(readiness
@@ -1113,11 +1391,97 @@ mod tests {
         let windowing = windowing_report(false, false);
         let input = input_report(true);
 
-        let readiness = readiness_report(&platform, &accessibility, &windowing, &input);
+        let readiness = readiness_report(
+            &platform,
+            &accessibility,
+            &windowing,
+            &input,
+            &default_bluefin_report(),
+        );
 
         assert!(readiness
             .blockers
             .iter()
             .any(|blocker| blocker.contains("COSMIC Wayland window introspection")));
+    }
+
+    #[test]
+    fn bluefin_detection_reads_os_release_and_image_variant() {
+        let os_release = parse_os_release(
+            r#"
+NAME="Bluefin"
+ID=bluefin
+ID_LIKE="ublue fedora"
+VARIANT_ID=bluefin-dx
+"#,
+        );
+        let image_status = r#"{
+  "deployments": [
+    {
+      "booted": true,
+      "container-image-reference": "ostree-unverified-registry:ghcr.io/ublue-os/bluefin-dx-nvidia-open:stable"
+    }
+  ]
+}"#;
+
+        let report = bluefin_report_from_parts(&os_release, Some(image_status));
+
+        assert!(report.detected);
+        assert_eq!(report.variant.as_deref(), Some("dx-nvidia"));
+        assert_eq!(
+            report.image_ref.as_deref(),
+            Some("ghcr.io/ublue-os/bluefin-dx-nvidia-open:stable")
+        );
+        assert!(report
+            .package_boundary
+            .contains("Flatpak for GUI apps, Homebrew for host CLI tools"));
+    }
+
+    #[test]
+    fn bluefin_detection_stays_quiet_on_generic_linux() {
+        let os_release = parse_os_release(
+            r#"
+NAME="Fedora Linux"
+ID=fedora
+ID_LIKE="rhel fedora"
+"#,
+        );
+
+        let report = bluefin_report_from_parts(&os_release, None);
+
+        assert!(!report.detected);
+        assert_eq!(report.variant, None);
+        assert_eq!(report.package_boundary, "not a Bluefin/Universal Blue host");
+    }
+
+    #[test]
+    fn readiness_uses_bluefin_specific_input_guidance() {
+        let platform = platform_report();
+        let accessibility = accessibility_report(Check::ok("bus"), Check::ok("true"));
+        let windowing = windowing_report(true, true);
+        let input = input_report_parts(
+            Check::fail("ydotool missing"),
+            Check::fail("ydotoold not running"),
+            Check::fail("no connectable ydotool socket"),
+            Check::fail("missing: /dev/uinput"),
+        );
+        let bluefin = BluefinReport {
+            detected: true,
+            source: "os-release".to_string(),
+            image_ref: Some("ghcr.io/ublue-os/bluefin-dx:stable".to_string()),
+            variant: Some("dx".to_string()),
+            package_boundary: "Bluefin host: prefer Flatpak for GUI apps, Homebrew for host CLI tools, and checked-in containers/devcontainers for project runtimes; avoid dnf/rpm-ostree host mutation for this setup.".to_string(),
+            ujust: Check::ok("/usr/bin/ujust"),
+            flatpak: Check::ok("/usr/bin/flatpak"),
+            brew: Check::ok("/home/linuxbrew/.linuxbrew/bin/brew"),
+        };
+
+        let readiness = readiness_report(&platform, &accessibility, &windowing, &input, &bluefin);
+
+        assert!(readiness.recommended_next_step.contains("Bluefin host"));
+        assert!(readiness
+            .recommended_next_step
+            .contains("Homebrew or user-scoped"));
+        assert!(!readiness.recommended_next_step.contains("dnf"));
     }
 }
