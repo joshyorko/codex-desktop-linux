@@ -314,6 +314,21 @@ Dev Containers: Reopen in Container
 cargo test -p codex-computer-use-linux
 ```
 
+### Devcontainer Web Mode
+
+The devcontainer path can install and run the Codex Desktop UI as a real browser-served web mode without mutating the Bluefin host. The default listener is loopback-only, bridge and app-server endpoints require a per-process web token, the profile is persisted under the workspace, Browser Use prefers container-local Chromium/CDP, and Computer Use stays browser-only so it cannot control the physical host desktop. The app-server child receives a devcontainer-scoped environment with host desktop variables such as `DISPLAY`, `WAYLAND_DISPLAY`, compositor sockets, and `YDOTOOL_SOCKET` stripped.
+
+```bash
+./scripts/devcontainer-homebrew-smoke.sh
+./scripts/devcontainer-codex-desktop-browser-smoke.sh
+
+codex-desktop serve --workspace /workspace --profile /workspace/.codex-desktop
+```
+
+Issue #9 acceptance should use the two smoke scripts above. They verify the local Homebrew cask install, loopback default, non-loopback token guard, token-protected bridge calls, container-local CDP restart behavior, persisted web state, and a headless browser screenshot of the real served UI.
+
+The old `scripts/devcontainer-codex-desktop-host.sh` Xvfb/noVNC path remains only as a Phase 1 compatibility harness. Do not use it as the target architecture for issue #9 acceptance.
+
 #### Apt-specific (Debian / Ubuntu / Pop!_OS / Mint)
 
 On apt-based systems, `install-deps.sh` can still bootstrap NodeSource Node.js for users who want a system Node.js toolchain:
