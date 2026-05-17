@@ -194,11 +194,62 @@ ELECTRON_PID=""
 RUNNING_APP_PID=""
 WARM_START=0
 
+codex_desktop_node_bin() {
+    if [ -x "$MANAGED_NODE_BIN_DIR/node" ]; then
+        printf '%s\n' "$MANAGED_NODE_BIN_DIR/node"
+        return 0
+    fi
+
+    command -v node
+}
+
+codex_desktop_web_mode() {
+    local command_name="$1"
+    shift
+
+    local node_bin
+    node_bin="$(codex_desktop_node_bin)" || {
+        echo "Node.js is required for codex-desktop web mode. Expected managed runtime at $MANAGED_NODE_BIN_DIR/node or node on PATH." >&2
+        exit 127
+    }
+
+    export CODEX_DESKTOP_WEB_MODE=1
+    export CODEX_DESKTOP_DEVCONTAINER_MODE="${CODEX_DESKTOP_DEVCONTAINER_MODE:-1}"
+    export CODEX_BROWSER_MODE="${CODEX_BROWSER_MODE:-container-chromium}"
+    export CODEX_COMPUTER_USE_BROWSER_ONLY="${CODEX_COMPUTER_USE_BROWSER_ONLY:-1}"
+    export CODEX_COMPUTER_CONTROL_MODE="${CODEX_COMPUTER_CONTROL_MODE:-browser-only}"
+
+    exec "$node_bin" "$SCRIPT_DIR/.codex-linux/web-mode-server.mjs" "$command_name" --app-dir "$SCRIPT_DIR" "$@"
+}
+
+case "${LAUNCHER_ARGS[0]:-}" in
+    serve)
+        codex_desktop_web_mode serve "${LAUNCHER_ARGS[@]:1}"
+        ;;
+    web)
+        if [ "${LAUNCHER_ARGS[1]:-}" = "--inspect" ]; then
+            codex_desktop_web_mode inspect "${LAUNCHER_ARGS[@]:2}"
+        fi
+        echo "codex-desktop web is now served by: codex-desktop serve --workspace <path>" >&2
+        exit 64
+        ;;
+    doctor)
+        codex_desktop_web_mode doctor "${LAUNCHER_ARGS[@]:1}"
+        ;;
+esac
+
 if [[ "${LAUNCHER_ARGS[0]:-}" == "--help" || "${LAUNCHER_ARGS[0]:-}" == "-h" ]]; then
     cat <<HELP
-Usage: ./start.sh [OPTIONS] [-- ELECTRON_FLAGS...]
+Usage: ./start.sh [COMMAND] [OPTIONS]
 
 Launches the $CODEX_LINUX_APP_DISPLAY_NAME app.
+
+Commands:
+  serve --workspace DIR --profile DIR
+                              Run devcontainer real web mode on a loopback listener
+  web --inspect               Print web-mode inspection JSON
+  doctor [--mode devcontainer]
+                              Print devcontainer web-mode diagnostics
 
 Options:
   -h, --help                  Show this help message and exit
