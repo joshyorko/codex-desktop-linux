@@ -1122,9 +1122,9 @@ set -euo pipefail
 CODEX_LINUX_WEBVIEW_PORT=${CODEX_WEBVIEW_PORT:-5175}
 SCRIPT
     awk '
-        /^case "\$CODEX_LINUX_WEBVIEW_PORT" in/ { emit = 1 }
+        /^normalize_tcp_port\(\) \{/ { emit = 1 }
+        /^launcher_port_is_open\(\) \{/ { exit }
         emit { print }
-        /^WEBVIEW_ORIGIN=/ { exit }
     ' "$REPO_DIR/launcher/start.sh.template" >> "$launcher_probe_script"
     cat >> "$launcher_probe_script" <<'SCRIPT'
 printf '%s\n' "$CODEX_LINUX_WEBVIEW_PORT"
@@ -1473,6 +1473,12 @@ test_launcher_template_sanity() {
     assert_contains "$REPO_DIR/launcher/start.sh.template" "x-scheme-handler/"
     assert_contains "$REPO_DIR/launcher/start.sh.template" "codex-browser-sidebar"
     assert_contains "$REPO_DIR/launcher/start.sh.template" "codex-linux-warm-start-enabled"
+    assert_contains "$REPO_DIR/launcher/start.sh.template" "--new-instance"
+    assert_contains "$REPO_DIR/launcher/start.sh.template" "CODEX_MULTI_LAUNCH"
+    assert_contains "$REPO_DIR/launcher/start.sh.template" "CODEX_MULTI_LAUNCH_PORT_RANGE"
+    assert_contains "$REPO_DIR/launcher/start.sh.template" "choose_multi_launch_port"
+    assert_contains "$REPO_DIR/launcher/start.sh.template" "configure_multi_launch_instance"
+    assert_contains "$REPO_DIR/launcher/start.sh.template" 'launcher-$CODEX_LINUX_INSTANCE_ID.log'
     assert_contains "$REPO_DIR/launcher/start.sh.template" "ADOPTED_WEBVIEW_PID"
     assert_contains "$REPO_DIR/launcher/start.sh.template" "Reusing webview server pid="
     python3 - "$REPO_DIR/launcher/start.sh.template" <<'PY'
@@ -1484,9 +1490,29 @@ detect_body = source.split("detect_warm_start() {", 1)[1].split("send_warm_start
 launch_body = source.split("launch_electron() {", 1)[1].split("load_packaged_runtime_helper", 1)[0]
 runtime_body = source.split("trap cleanup_launcher EXIT", 1)[1].split("launch_electron", 1)[0]
 stop_body = source.split("stop_owned_webview_server() {", 1)[1].split("owned_webview_server_pid() {", 1)[0]
+stale_body = source.split("pid_is_stale_webview_server() {", 1)[1].split("stop_owned_webview_server() {", 1)[0]
+multi_body = source.split("configure_multi_launch_instance() {", 1)[1].split('WEBVIEW_ORIGIN="http://127.0.0.1:$CODEX_LINUX_WEBVIEW_PORT"', 1)[0]
 adopt_body = source.split("adopt_existing_webview_server() {", 1)[1].split("ensure_webview_server() {", 1)[0]
 ensure_body = source.split("ensure_webview_server() {", 1)[1].split("wait_for_webview_server", 1)[0]
 reconcile_body = source.split("reconcile_runtime_state() {", 1)[1].split("set_electron_defaults() {", 1)[0]
+if 'LAUNCHER_ARGS=()' not in source:
+    raise SystemExit("launcher must keep a sanitized argv for launcher-only flags")
+if 'configure_multi_launch_instance "$@"' not in source:
+    raise SystemExit("launcher must configure multi-launch before deriving WEBVIEW_ORIGIN")
+if '$((CODEX_LINUX_WEBVIEW_PORT + 4))' not in source:
+    raise SystemExit("multi-launch default range must cap the default at five ports")
+if 'CODEX_LINUX_INSTANCE_ID="port-$CODEX_LINUX_WEBVIEW_PORT"' not in multi_body:
+    raise SystemExit("multi-launch must derive a stable instance id from the allocated port")
+if 'APP_STATE_DIR="$base_state_dir/instances/$CODEX_LINUX_INSTANCE_ID"' not in multi_body:
+    raise SystemExit("multi-launch must isolate app pid/webview state per allocated port")
+if 'LAUNCH_ACTION_RUNTIME_DIR="$XDG_RUNTIME_DIR/$CODEX_LINUX_APP_ID/instances/$CODEX_LINUX_INSTANCE_ID"' not in multi_body:
+    raise SystemExit("multi-launch must isolate warm-start sockets per allocated port")
+if 'CODEX_ELECTRON_USER_DATA_DIR="$APP_STATE_DIR/electron-user-data"' not in multi_body:
+    raise SystemExit("multi-launch must force a per-instance Electron user-data dir")
+if 'send_warm_start_launch_action "${LAUNCHER_ARGS[@]}"' not in source:
+    raise SystemExit("warm-start handoff must not receive launcher-only multi-launch flags")
+if 'launch_electron "${LAUNCHER_ARGS[@]}"' not in source:
+    raise SystemExit("Electron launch must receive sanitized launcher args")
 if 'RUNNING_APP_PID="$(find_running_app_pid)"' not in detect_body:
     raise SystemExit("detect_warm_start must record a pid-file running app even when warm start is disabled")
 if '[ -S "$LAUNCH_ACTION_SOCKET" ] && RUNNING_APP_PID="$(discover_running_app_pid)"' not in detect_body:
@@ -1519,6 +1545,10 @@ if "running_app_is_active" not in stop_body or "Preserving webview server" not i
     raise SystemExit("stop_owned_webview_server must not stop the live app webview server")
 if "stale_webview_server_pid" not in source or "stop_stale_webview_server" not in source:
     raise SystemExit("launcher must detect stale deleted webview servers left behind by previous installs")
+if 'current_webview_dir="$(canonical_path "$WEBVIEW_DIR")"' not in stale_body:
+    raise SystemExit("stale webview detection must compare against the current bundle path")
+if '[ "$cwd" != "$current_webview_dir" ]' not in stale_body:
+    raise SystemExit("stale webview detection must catch servers moved into backup bundle directories")
 if 'ADOPTED_WEBVIEW_PID="$pid"' not in adopt_body:
     raise SystemExit("adopt_existing_webview_server must not mark a running app server as started by this launcher")
 if 'STARTED_WEBVIEW_PID="$pid"' not in adopt_body:
@@ -1529,6 +1559,8 @@ if "if adopt_existing_webview_server; then" not in ensure_body:
     raise SystemExit("ensure_webview_server must split adoption from origin verification")
 if "stop_stale_webview_server" not in ensure_body:
     raise SystemExit("ensure_webview_server must clear stale deleted webview servers before treating the port as foreign")
+if ensure_body.find("stop_stale_webview_server") > ensure_body.find("is already serving Codex content"):
+    raise SystemExit("ensure_webview_server must try stale-server cleanup before foreign reachable-port failure")
 if "Keeping the live app untouched" not in ensure_body:
     raise SystemExit("ensure_webview_server must not stop a live app server when validation fails")
 if 'if live_app_pid="$(find_running_app_pid)" || { [ -S "$LAUNCH_ACTION_SOCKET" ] && live_app_pid="$(discover_running_app_pid)"; }; then' not in reconcile_body:
@@ -1727,6 +1759,12 @@ PY
     assert_contains "$REPO_DIR/packaging/linux/codex-desktop.desktop" "codex-update-manager install-ready"
     assert_contains "$REPO_DIR/contrib/user-local-install/files/.local/share/applications/codex-desktop.desktop" "@HOME@/.local/bin/codex-desktop %U"
     assert_contains "$REPO_DIR/contrib/user-local-install/files/.local/share/applications/codex-desktop.desktop" "MimeType=x-scheme-handler/codex;x-scheme-handler/codex-browser-sidebar;"
+    assert_contains "$REPO_DIR/contrib/user-local-install/files/.local/bin/codex-desktop" "CODEX_USER_LOCAL_OZONE_PLATFORM"
+    assert_contains "$REPO_DIR/contrib/user-local-install/files/.local/bin/codex-desktop" 'exec "${APP_DIR}/start.sh" --x11 "$@"'
+    assert_contains "$REPO_DIR/contrib/user-local-install/files/.local/bin/codex-desktop" 'exec "${APP_DIR}/start.sh" --wayland "$@"'
+    assert_contains "$REPO_DIR/contrib/user-local-install/install-user-local.sh" "--force-x11"
+    assert_contains "$REPO_DIR/contrib/user-local-install/install-user-local.sh" "user-local.env"
+    assert_contains "$REPO_DIR/contrib/user-local-install/README.md" "--force-x11"
 }
 
 test_side_by_side_launcher_identity() {
@@ -3539,6 +3577,49 @@ SCRIPT
     assert_file_exists "$marker"
 }
 
+test_user_local_install_preserves_persisted_x11_preference_on_refresh() {
+    info "Checking user-local X11 fallback preference persists across helper refreshes"
+    local workspace="$TMP_DIR/user-local-x11-preference"
+    local stub_bin="$workspace/bin"
+    local home="$workspace/home"
+    local config_home="$workspace/config"
+    local preference_file="$config_home/codex-desktop-linux/user-local.env"
+
+    mkdir -p "$stub_bin"
+    printf '#!/usr/bin/env bash\nexit 0\n' > "$stub_bin/7z"
+    printf '#!/usr/bin/env bash\nexit 0\n' > "$stub_bin/systemctl"
+    printf '#!/usr/bin/env bash\nexit 0\n' > "$stub_bin/update-desktop-database"
+    chmod +x "$stub_bin/7z" "$stub_bin/systemctl" "$stub_bin/update-desktop-database"
+
+    PATH="$stub_bin:$PATH" \
+        HOME="$home" \
+        XDG_CONFIG_HOME="$config_home" \
+        XDG_DATA_HOME="$workspace/data" \
+        XDG_STATE_HOME="$workspace/state" \
+        CODEX_USER_LOCAL_SOURCE_REPO_DIR="$REPO_DIR" \
+        bash "$REPO_DIR/contrib/user-local-install/install-user-local.sh" --force-x11 >/dev/null
+    assert_file_exists "$preference_file"
+    assert_contains "$preference_file" "CODEX_USER_LOCAL_OZONE_PLATFORM=x11"
+
+    PATH="$stub_bin:$PATH" \
+        HOME="$home" \
+        XDG_CONFIG_HOME="$config_home" \
+        XDG_DATA_HOME="$workspace/data" \
+        XDG_STATE_HOME="$workspace/state" \
+        CODEX_USER_LOCAL_SOURCE_REPO_DIR="$REPO_DIR" \
+        bash "$REPO_DIR/contrib/user-local-install/install-user-local.sh" --from-update >/dev/null
+    assert_contains "$preference_file" "CODEX_USER_LOCAL_OZONE_PLATFORM=x11"
+
+    PATH="$stub_bin:$PATH" \
+        HOME="$home" \
+        XDG_CONFIG_HOME="$config_home" \
+        XDG_DATA_HOME="$workspace/data" \
+        XDG_STATE_HOME="$workspace/state" \
+        CODEX_USER_LOCAL_SOURCE_REPO_DIR="$REPO_DIR" \
+        bash "$REPO_DIR/contrib/user-local-install/install-user-local.sh" --no-force-x11 >/dev/null
+    assert_contains "$preference_file" "CODEX_USER_LOCAL_OZONE_PLATFORM=auto"
+}
+
 test_user_local_prepare_build_repo_updates_existing_single_branch_fetch_refspec() {
     info "Checking user-local managed checkout can switch branches after a single-branch clone"
     local workspace="$TMP_DIR/user-local-single-branch-refspec"
@@ -3846,6 +3927,7 @@ main() {
     test_user_local_prepare_build_repo_ignores_stale_recorded_default_branch
     test_user_local_prepare_build_repo_ignores_stale_source_origin_head
     test_user_local_install_from_update_defers_record_only_metadata
+    test_user_local_install_preserves_persisted_x11_preference_on_refresh
     test_user_local_prepare_build_repo_updates_existing_single_branch_fetch_refspec
     test_user_local_prepare_build_repo_handles_deleted_overlay_paths
     test_user_local_prepare_build_repo_removes_rename_source_paths

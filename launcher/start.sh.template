@@ -31,24 +31,152 @@ APP_NOTIFICATION_ICON_NAME="$CODEX_LINUX_APP_ID"
 APP_NOTIFICATION_ICON_BUNDLE="$SCRIPT_DIR/.codex-linux/$APP_NOTIFICATION_ICON_NAME.png"
 APP_NOTIFICATION_ICON_SYSTEM="/usr/share/icons/hicolor/256x256/apps/$APP_NOTIFICATION_ICON_NAME.png"
 APP_NOTIFICATION_ICON_REPO="$SCRIPT_DIR/../assets/codex.png"
+MULTI_LAUNCH_REQUESTED=0
+MULTI_LAUNCH_ACTIVE=0
+CODEX_LINUX_INSTANCE_ID=""
+LAUNCHER_ARGS=()
 
-case "$CODEX_LINUX_WEBVIEW_PORT" in
-    ""|*[!0-9]*)
-        echo "CODEX_WEBVIEW_PORT must be a TCP port number" >&2
-        exit 1
-        ;;
-esac
-CODEX_LINUX_WEBVIEW_PORT_NUMBER="$CODEX_LINUX_WEBVIEW_PORT"
-while [ "${CODEX_LINUX_WEBVIEW_PORT_NUMBER#0}" != "$CODEX_LINUX_WEBVIEW_PORT_NUMBER" ]; do
-    CODEX_LINUX_WEBVIEW_PORT_NUMBER="${CODEX_LINUX_WEBVIEW_PORT_NUMBER#0}"
-done
-[ -n "$CODEX_LINUX_WEBVIEW_PORT_NUMBER" ] || CODEX_LINUX_WEBVIEW_PORT_NUMBER=0
-if [ "${#CODEX_LINUX_WEBVIEW_PORT_NUMBER}" -gt 5 ] || [ "$CODEX_LINUX_WEBVIEW_PORT_NUMBER" -lt 1 ] || [ "$CODEX_LINUX_WEBVIEW_PORT_NUMBER" -gt 65535 ]; then
-    echo "CODEX_WEBVIEW_PORT must be between 1 and 65535" >&2
+early_truthy_env_value() {
+    case "${1:-}" in
+        1|true|TRUE|yes|YES|on|ON) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+normalize_tcp_port() {
+    local name="$1"
+    local port="$2"
+    local value
+
+    case "$port" in
+        ""|*[!0-9]*)
+            echo "$name must be a TCP port number" >&2
+            return 1
+            ;;
+    esac
+    value="$port"
+    while [ "${value#0}" != "$value" ]; do
+        value="${value#0}"
+    done
+    [ -n "$value" ] || value=0
+
+    if [ "${#value}" -gt 5 ] || [ "$value" -lt 1 ] || [ "$value" -gt 65535 ]; then
+        echo "$name must be between 1 and 65535" >&2
+        return 1
+    fi
+
+    printf '%s\n' "$value"
+}
+
+validate_tcp_port() {
+    normalize_tcp_port "$1" "$2" >/dev/null
+}
+
+if ! CODEX_LINUX_WEBVIEW_PORT="$(normalize_tcp_port "CODEX_WEBVIEW_PORT" "$CODEX_LINUX_WEBVIEW_PORT")"; then
     exit 1
 fi
-CODEX_LINUX_WEBVIEW_PORT="$CODEX_LINUX_WEBVIEW_PORT_NUMBER"
 
+launcher_port_is_open() {
+    local port="$1"
+    ( exec 3<>/dev/tcp/127.0.0.1/"$port" ) 2>/dev/null
+}
+
+choose_multi_launch_port() {
+    local range="${CODEX_MULTI_LAUNCH_PORT_RANGE:-$CODEX_LINUX_WEBVIEW_PORT-$((CODEX_LINUX_WEBVIEW_PORT + 4))}"
+    local start end port
+
+    case "$range" in
+        *-*)
+            start="${range%-*}"
+            end="${range#*-}"
+            ;;
+        *)
+            start="$range"
+            end="$range"
+            ;;
+    esac
+
+    start="$(normalize_tcp_port "CODEX_MULTI_LAUNCH_PORT_RANGE start" "$start")" || return 1
+    end="$(normalize_tcp_port "CODEX_MULTI_LAUNCH_PORT_RANGE end" "$end")" || return 1
+    if [ "$start" -gt "$end" ]; then
+        echo "CODEX_MULTI_LAUNCH_PORT_RANGE start must be <= end" >&2
+        return 1
+    fi
+
+    for port in $(seq "$start" "$end"); do
+        if ! launcher_port_is_open "$port"; then
+            echo "$port"
+            return 0
+        fi
+    done
+
+    echo "No free Codex Desktop webview port found in CODEX_MULTI_LAUNCH_PORT_RANGE=$range" >&2
+    return 1
+}
+
+parse_launcher_args() {
+    local passthrough=0
+
+    LAUNCHER_ARGS=()
+    if early_truthy_env_value "${CODEX_MULTI_LAUNCH:-}"; then
+        MULTI_LAUNCH_REQUESTED=1
+    fi
+
+    while [ "$#" -gt 0 ]; do
+        if [ "$passthrough" -eq 1 ]; then
+            LAUNCHER_ARGS+=("$1")
+            shift
+            continue
+        fi
+
+        case "$1" in
+            --)
+                passthrough=1
+                LAUNCHER_ARGS+=("$1")
+                ;;
+            --new-instance|--multi-instance|--multi-launch)
+                MULTI_LAUNCH_REQUESTED=1
+                ;;
+            *)
+                LAUNCHER_ARGS+=("$1")
+                ;;
+        esac
+        shift
+    done
+}
+
+configure_multi_launch_instance() {
+    parse_launcher_args "$@"
+    [ "$MULTI_LAUNCH_REQUESTED" -eq 1 ] || return 0
+
+    local base_state_dir="$APP_STATE_DIR"
+    local selected_port
+
+    selected_port="$(choose_multi_launch_port)" || exit 1
+    CODEX_LINUX_WEBVIEW_PORT="$selected_port"
+    CODEX_LINUX_INSTANCE_ID="port-$CODEX_LINUX_WEBVIEW_PORT"
+    MULTI_LAUNCH_ACTIVE=1
+
+    APP_STATE_DIR="$base_state_dir/instances/$CODEX_LINUX_INSTANCE_ID"
+    APP_PID_FILE="$APP_STATE_DIR/app.pid"
+    WEBVIEW_PID_FILE="$APP_STATE_DIR/webview.pid"
+    if [ -n "${XDG_RUNTIME_DIR:-}" ]; then
+        LAUNCH_ACTION_RUNTIME_DIR="$XDG_RUNTIME_DIR/$CODEX_LINUX_APP_ID/instances/$CODEX_LINUX_INSTANCE_ID"
+    else
+        LAUNCH_ACTION_RUNTIME_DIR="$APP_STATE_DIR"
+    fi
+    LAUNCH_ACTION_SOCKET="$LAUNCH_ACTION_RUNTIME_DIR/launch-action.sock"
+    LOG_FILE="$LOG_DIR/launcher-$CODEX_LINUX_INSTANCE_ID.log"
+
+    if [ -n "${CODEX_ELECTRON_USER_DATA_DIR:-}" ]; then
+        CODEX_ELECTRON_USER_DATA_DIR="$CODEX_ELECTRON_USER_DATA_DIR/instances/$CODEX_LINUX_INSTANCE_ID"
+    else
+        CODEX_ELECTRON_USER_DATA_DIR="$APP_STATE_DIR/electron-user-data"
+    fi
+    export CODEX_ELECTRON_USER_DATA_DIR
+}
+
+configure_multi_launch_instance "$@"
 WEBVIEW_ORIGIN="http://127.0.0.1:$CODEX_LINUX_WEBVIEW_PORT"
 
 mkdir -p "$LOG_DIR" "$APP_CONFIG_DIR" "$APP_STATE_DIR" "$LAUNCH_ACTION_RUNTIME_DIR"
@@ -88,27 +216,23 @@ codex_desktop_web_mode() {
     exec "$node_bin" "$SCRIPT_DIR/.codex-linux/web-mode-server.mjs" "$command_name" --app-dir "$SCRIPT_DIR" "$@"
 }
 
-case "${1:-}" in
+case "${LAUNCHER_ARGS[0]:-}" in
     serve)
-        shift
-        codex_desktop_web_mode serve "$@"
+        codex_desktop_web_mode serve "${LAUNCHER_ARGS[@]:1}"
         ;;
     web)
-        shift
-        if [ "${1:-}" = "--inspect" ]; then
-            shift
-            codex_desktop_web_mode inspect "$@"
+        if [ "${LAUNCHER_ARGS[1]:-}" = "--inspect" ]; then
+            codex_desktop_web_mode inspect "${LAUNCHER_ARGS[@]:2}"
         fi
         echo "codex-desktop web is now served by: codex-desktop serve --workspace <path> --profile <path>" >&2
         exit 64
         ;;
     doctor)
-        shift
-        codex_desktop_web_mode doctor "$@"
+        codex_desktop_web_mode doctor "${LAUNCHER_ARGS[@]:1}"
         ;;
 esac
 
-if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+if [[ "${LAUNCHER_ARGS[0]:-}" == "--help" || "${LAUNCHER_ARGS[0]:-}" == "-h" ]]; then
     cat <<HELP
 Usage: ./start.sh [COMMAND] [OPTIONS]
 
@@ -123,6 +247,7 @@ Commands:
 
 Options:
   -h, --help                  Show this help message and exit
+  --new-instance              Start a separate app instance on the first free port in the multi-launch range
   --new-chat                  Open the main window on a new chat
   --quick-chat                Open a projectless quick chat
   --prompt-chat               Show the compact prompt for a new chat
@@ -143,8 +268,11 @@ Environment:
                               Override the launcher's default --disable-gpu-compositing decision
   CODEX_FORCE_RENDERER_ACCESSIBILITY=auto|0|1
                               Override --force-renderer-accessibility; auto skips it under WSLg
+  CODEX_MULTI_LAUNCH=1        Treat normal launches like --new-instance
+  CODEX_MULTI_LAUNCH_PORT_RANGE=START-END
+                              Port allocation range for --new-instance (default: CODEX_WEBVIEW_PORT through +4)
 
-Logs: ${XDG_CACHE_HOME:-$HOME/.cache}/$CODEX_LINUX_APP_ID/launcher.log
+Logs: $LOG_FILE
 HELP
     exit 0
 fi
@@ -152,6 +280,9 @@ fi
 exec >>"$LOG_FILE" 2>&1
 
 echo "[$(date -Is)] Starting $CODEX_LINUX_APP_DISPLAY_NAME launcher"
+if [ "$MULTI_LAUNCH_ACTIVE" -eq 1 ]; then
+    echo "Multi-launch instance: id=$CODEX_LINUX_INSTANCE_ID webview_port=$CODEX_LINUX_WEBVIEW_PORT state_dir=$APP_STATE_DIR user_data_dir=$CODEX_ELECTRON_USER_DATA_DIR"
+fi
 
 now_ms() {
     local value seconds nanos
@@ -1207,12 +1338,18 @@ pid_is_webview_server() {
 pid_is_stale_webview_server() {
     local pid="$1"
     local cwd
+    local current_webview_dir
     local deleted_webview_dir
 
     pid_has_webview_server_cmdline "$pid" || return 1
     cwd="$(readlink -f "/proc/$pid/cwd" 2>/dev/null || true)"
-    deleted_webview_dir="$(canonical_path "$WEBVIEW_DIR") (deleted)"
-    [ "$cwd" = "$deleted_webview_dir" ]
+    [ -n "$cwd" ] || return 1
+
+    current_webview_dir="$(canonical_path "$WEBVIEW_DIR")"
+    deleted_webview_dir="$current_webview_dir (deleted)"
+    [ "$cwd" = "$deleted_webview_dir" ] && return 0
+
+    [ "$cwd" != "$current_webview_dir" ]
 }
 
 stop_owned_webview_server() {
@@ -1357,6 +1494,10 @@ ensure_webview_server() {
             notify_error "Codex Desktop webview server is already running for pid $RUNNING_APP_PID, but origin validation failed. Keeping the live app untouched."
             exit 1
         fi
+    fi
+
+    if webview_port_is_open; then
+        stop_stale_webview_server
     fi
 
     if webview_port_is_open && webview_origin_is_reachable; then
@@ -1787,7 +1928,7 @@ reconcile_runtime_state
 detect_warm_start
 trap cleanup_launcher EXIT
 
-if send_warm_start_launch_action "$@"; then
+if send_warm_start_launch_action "${LAUNCHER_ARGS[@]}"; then
     echo "Sent launch args over warm-start IPC"
     log_phase "warm_start_ipc_sent"
     exit 0
@@ -1859,4 +2000,4 @@ resolve_browser_use_runtime_env
 echo "Using CODEX_CLI_PATH=${CODEX_CLI_PATH:-warm-start-skip}"
 echo "Using managed Node.js runtime=${CODEX_MANAGED_NODE_RUNTIME_DIR:-$SCRIPT_DIR/resources/node-runtime}"
 
-launch_electron "$@"
+launch_electron "${LAUNCHER_ARGS[@]}"
