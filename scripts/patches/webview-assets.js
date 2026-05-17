@@ -8,10 +8,18 @@ const path = require("node:path");
 function applyLinuxOpaqueWindowsDefaultPatch(currentSource) {
   let patchedSource = currentSource;
   let warnedMissingNeedle = false;
+  const mergeDefaultPatched = () =>
+    patchedSource.includes("opaqueWindows:e?.opaqueWindows??(typeof navigator<`u`&&");
+  const settingsDefaultPatched = () =>
+    patchedSource.includes("navigator.userAgent.includes(`Linux`)&&r?.opaqueWindows==null") ||
+    patchedSource.includes("navigator.userAgent.includes(`Linux`)&&x?.opaqueWindows==null") ||
+    /navigator\.userAgent\.includes\(`Linux`\)&&[A-Za-z_$][\w$]*\?\.opaqueWindows==null/u.test(patchedSource);
+  const runtimeDefaultPatched = () =>
+    patchedSource.includes("document.documentElement.dataset.codexOs===`linux`&&((o===`light`?l:f)?.opaqueWindows==null") ||
+    patchedSource.includes("document.documentElement.dataset.codexOs===`linux`&&((s===`light`?u:p)?.opaqueWindows==null") ||
+    /document\.documentElement\.dataset\.codexOs===`linux`&&\(\([A-Za-z_$][\w$]*===`light`\?[A-Za-z_$][\w$]*:[A-Za-z_$][\w$]*\)\?\.opaqueWindows==null/u.test(patchedSource);
   const linuxDefaultPatched = () =>
-    patchedSource.includes("opaqueWindows:e?.opaqueWindows??(typeof navigator<`u`&&") ||
-    patchedSource.includes("navigator.userAgent.includes(`Linux`)&&") ||
-    patchedSource.includes("document.documentElement.dataset.codexOs===`linux`&&");
+    mergeDefaultPatched() || settingsDefaultPatched() || runtimeDefaultPatched();
   const warnMissingNeedle = () => {
     if (warnedMissingNeedle || linuxDefaultPatched()) {
       return;
@@ -26,7 +34,7 @@ function applyLinuxOpaqueWindowsDefaultPatch(currentSource) {
   const mergePatch =
     "opaqueWindows:e?.opaqueWindows??(typeof navigator<`u`&&((navigator.userAgentData?.platform??navigator.platform??navigator.userAgent).toLowerCase().includes(`linux`))?!0:n.opaqueWindows),semanticColors:";
 
-  if (patchedSource.includes("opaqueWindows:e?.opaqueWindows??(typeof navigator<`u`&&")) {
+  if (mergeDefaultPatched()) {
     // Already patched.
   } else if (patchedSource.includes(mergeNeedle)) {
     patchedSource = patchedSource.replace(mergeNeedle, mergePatch);
@@ -86,7 +94,7 @@ function applyLinuxOpaqueWindowsDefaultPatch(currentSource) {
     patchedSource = patchedSource.replace(currentRuntimeNeedle, currentRuntimePatch);
   }
 
-  if (!patchedSource.includes("document.documentElement.dataset.codexOs===`linux`&&")) {
+  if (!runtimeDefaultPatched()) {
     const currentRuntimeRegex =
       /let\{data:([A-Za-z_$][\w$]*)\}=Qc\([A-Za-z_$][\w$]*\.APPEARANCE_LIGHT_CHROME_THEME,[A-Za-z_$][\w$]*\).*?let\{data:([A-Za-z_$][\w$]*)\}=Qc\([A-Za-z_$][\w$]*\.APPEARANCE_DARK_CHROME_THEME,[A-Za-z_$][\w$]*\).*?let ([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)===`light`\?([A-Za-z_$][\w$]*):([A-Za-z_$][\w$]*),/;
     const currentRuntimeMatch = patchedSource.match(currentRuntimeRegex);

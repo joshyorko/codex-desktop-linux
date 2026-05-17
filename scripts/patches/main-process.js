@@ -682,9 +682,15 @@ function applyLinuxSingleInstancePatch(currentSource) {
   const singleInstanceLockNeedle =
     "agentRunId:process.env.CODEX_ELECTRON_AGENT_RUN_ID?.trim()||null}});let A=Date.now();await n.app.whenReady()";
   const singleInstanceLockPatch =
-    "agentRunId:process.env.CODEX_ELECTRON_AGENT_RUN_ID?.trim()||null}});if(process.platform===`linux`&&!n.app.requestSingleInstanceLock()){n.app.quit();return}let A=Date.now();await n.app.whenReady()";
-  if (patchedSource.includes("process.platform===`linux`&&!n.app.requestSingleInstanceLock()")) {
+    "agentRunId:process.env.CODEX_ELECTRON_AGENT_RUN_ID?.trim()||null}});if(process.platform===`linux`&&process.env.CODEX_LINUX_MULTI_LAUNCH!==`1`&&!n.app.requestSingleInstanceLock()){n.app.quit();return}let A=Date.now();await n.app.whenReady()";
+  const unguardedSingleInstanceLock =
+    "process.platform===`linux`&&!n.app.requestSingleInstanceLock()";
+  const guardedSingleInstanceLock =
+    "process.platform===`linux`&&process.env.CODEX_LINUX_MULTI_LAUNCH!==`1`&&!n.app.requestSingleInstanceLock()";
+  if (patchedSource.includes(guardedSingleInstanceLock)) {
     // Already patched.
+  } else if (patchedSource.includes(unguardedSingleInstanceLock)) {
+    patchedSource = patchedSource.replaceAll(unguardedSingleInstanceLock, guardedSingleInstanceLock);
   } else if (patchedSource.includes(singleInstanceLockNeedle)) {
     patchedSource = patchedSource.replace(singleInstanceLockNeedle, singleInstanceLockPatch);
   } else if (patchedSource.includes("setSecondInstanceArgsHandler")) {

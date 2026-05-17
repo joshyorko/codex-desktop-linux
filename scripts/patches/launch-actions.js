@@ -37,8 +37,16 @@ function applyLinuxSettingsPersistencePatch(currentSource) {
       return patchedSource;
     }
     const stateFilePatch =
-      `var ${stateFileMatch[1]}=\`.codex-global-state.json\`;function codexLinuxSettingsPath(){let e=process.env.XDG_CONFIG_HOME||process.env.HOME&&${pathVar}.join(process.env.HOME,\`.config\`);return e?${pathVar}.join(e,\`codex-desktop\`,\`settings.json\`):null}function codexLinuxReadSettingsFile(){let e=codexLinuxSettingsPath();if(!e||!${fsVar}.existsSync(e))return{};try{let t=${fsVar}.readFileSync(e,\`utf8\`),n=JSON.parse(t);return n&&typeof n===\`object\`&&!Array.isArray(n)?n:{}}catch(e){return{}}}function codexLinuxPersistSettingsState(e,t){if(process.platform!==\`linux\`||![${Object.values(linuxSettingsKeys).map((key) => `\`${key}\``).join(",")}].includes(e))return;try{let n=codexLinuxSettingsPath();if(!n)return;let r=codexLinuxReadSettingsFile();t===void 0?delete r[e]:r[e]=t,${fsVar}.mkdirSync(${pathVar}.dirname(n),{recursive:!0,mode:448}),${fsVar}.writeFileSync(n,JSON.stringify(r,null,2)+\`\\n\`,\`utf8\`)}catch(e){}}`;
+      `var ${stateFileMatch[1]}=\`.codex-global-state.json\`;function codexLinuxSettingsAppId(){let e=process.env.CODEX_LINUX_APP_ID||process.env.CODEX_APP_ID||\`codex-desktop\`;return/^[A-Za-z0-9._-]+$/.test(e)?e:\`codex-desktop\`}function codexLinuxSettingsPath(){let e=process.env.CODEX_LINUX_SETTINGS_FILE;if(typeof e===\`string\`&&e.length>0)return e;let t=process.env.XDG_CONFIG_HOME||process.env.HOME&&${pathVar}.join(process.env.HOME,\`.config\`);return t?${pathVar}.join(t,codexLinuxSettingsAppId(),\`settings.json\`):null}function codexLinuxReadSettingsFile(){let e=codexLinuxSettingsPath();if(!e||!${fsVar}.existsSync(e))return{};try{let t=${fsVar}.readFileSync(e,\`utf8\`),n=JSON.parse(t);return n&&typeof n===\`object\`&&!Array.isArray(n)?n:{}}catch(e){return{}}}function codexLinuxPersistSettingsState(e,t){if(process.platform!==\`linux\`||![${Object.values(linuxSettingsKeys).map((key) => `\`${key}\``).join(",")}].includes(e))return;try{let n=codexLinuxSettingsPath();if(!n)return;let r=codexLinuxReadSettingsFile();t===void 0?delete r[e]:r[e]=t,${fsVar}.mkdirSync(${pathVar}.dirname(n),{recursive:!0,mode:448}),${fsVar}.writeFileSync(n,JSON.stringify(r,null,2)+\`\\n\`,\`utf8\`)}catch(e){}}`;
     patchedSource = patchedSource.replace(stateFileRegex, stateFilePatch);
+  } else if (!patchedSource.includes("function codexLinuxSettingsAppId()")) {
+    const legacySettingsPathRegex =
+      /function codexLinuxSettingsPath\(\)\{let ([A-Za-z_$][\w$]*)=process\.env\.XDG_CONFIG_HOME\|\|process\.env\.HOME&&([A-Za-z_$][\w$]*)\.join\(process\.env\.HOME,`\.config`\);return \1\?\2\.join\(\1,`codex-desktop`,`settings\.json`\):null\}/;
+    patchedSource = patchedSource.replace(
+      legacySettingsPathRegex,
+      (_match, _configVar, pathVar) =>
+        `function codexLinuxSettingsAppId(){let e=process.env.CODEX_LINUX_APP_ID||process.env.CODEX_APP_ID||\`codex-desktop\`;return/^[A-Za-z0-9._-]+$/.test(e)?e:\`codex-desktop\`}function codexLinuxSettingsPath(){let e=process.env.CODEX_LINUX_SETTINGS_FILE;if(typeof e===\`string\`&&e.length>0)return e;let t=process.env.XDG_CONFIG_HOME||process.env.HOME&&${pathVar}.join(process.env.HOME,\`.config\`);return t?${pathVar}.join(t,codexLinuxSettingsAppId(),\`settings.json\`):null}`,
+    );
   }
 
   if (/"set-global-state":async\(\{key:[A-Za-z_$][\w$]*,value:[A-Za-z_$][\w$]*,origin:[A-Za-z_$][\w$]*\}\)=>\(this\.globalState\.set\([A-Za-z_$][\w$]*,[A-Za-z_$][\w$]*\),codexLinuxPersistSettingsState\(/.test(patchedSource)) {

@@ -6,6 +6,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
+const vm = require("node:vm");
 
 const {
   COMPUTER_USE_UI_ENV_VAR,
@@ -31,7 +32,9 @@ const {
   applyLinuxQuitGuardPatch,
   applyLinuxHotkeyWindowPrewarmPatch,
   applyLinuxLaunchActionArgsPatch,
+  applyLinuxSettingsPersistencePatch,
   applyLinuxMenuPatch,
+  applyLinuxMultiInstanceBootstrapPatch,
   applyLinuxAppSunsetPatch,
   applyLinuxOpaqueBackgroundPatch,
   applyLinuxOpaqueWindowsDefaultPatch,
@@ -62,6 +65,7 @@ const {
 const {
   applyPersistentRateLimitFooterPatch,
 } = require("./patches/webview-assets.js");
+const { patchAssetFiles } = require("./patches/shared.js");
 
 const mainBundlePrefix =
   "let n=require(`electron`),i=require(`node:path`),o=require(`node:fs`);";
@@ -97,6 +101,29 @@ function captureWarns(fn) {
     console.warn = originalWarn;
   }
 }
+
+test("asset patch helpers match every file when passed a global regex", () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "codex-asset-global-"));
+  try {
+    const assetsDir = path.join(tempRoot, "webview", "assets");
+    fs.mkdirSync(assetsDir, { recursive: true });
+    fs.writeFileSync(path.join(assetsDir, "index-a.js"), "a", "utf8");
+    fs.writeFileSync(path.join(assetsDir, "index-b.js"), "b", "utf8");
+
+    const result = patchAssetFiles(
+      tempRoot,
+      /^index-.*\.js$/g,
+      (source) => source.toUpperCase(),
+      "missing index bundle",
+    );
+
+    assert.deepEqual(result, { matched: 2, changed: 2 });
+    assert.equal(fs.readFileSync(path.join(assetsDir, "index-a.js"), "utf8"), "A");
+    assert.equal(fs.readFileSync(path.join(assetsDir, "index-b.js"), "utf8"), "B");
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
 
 test("Linux target context parses distro, package, and desktop details", () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "codex-linux-target-"));
@@ -247,6 +274,7 @@ test("default core patch descriptors are grouped and unique", () => {
     "linux-explicit-ipc-quit",
     "linux-window-options",
     "linux-menu",
+    "linux-multi-instance-bootstrap-lock",
     "linux-set-icon",
     "linux-opaque-background",
     "linux-avatar-overlay-mouse-passthrough",
@@ -391,6 +419,35 @@ function currentLaunchActionBundleFixture() {
     "const e={gr:e=>({default:e,...e})};let n=require(`electron`);let i=require(`node:path`);i=e.gr(i);let o=require(`node:fs`);o=e.gr(o);let f=require(`node:net`);f=e.gr(f);",
     "async function CN(){let{setSecondInstanceArgsHandler:l}=t.y(),g={reportNonFatal(){}},k=new t.In;k.add(x);let j={globalState:{get(){return true}},repoRoot:`/tmp`,codexHome:`/tmp`},M={hotkeyWindowLifecycleManager:{hide(){},ensureHotkeyWindowController(){}},getPrimaryWindow(){},createFreshLocalWindow(){},ensureHostWindow(){},windowManager:{sendMessageToWindow(){}}},B=`local`,R={desktopNotificationManager:{dismissByNavigationPath(){}},getOrCreateContext(){},localHost:B},z={deepLinks:{queueProcessArgs(){},flushPendingDeepLinks(){}},navigateToRoute(){}};let A=Date.now(),w=()=>{},ae=e=>{e.isMinimized()&&e.restore(),e.show(),e.focus()},le=async()=>{try{M.hotkeyWindowLifecycleManager.hide();let e=M.getPrimaryWindow()??await M.createFreshLocalWindow(`/`);if(e==null)return;ae(e)}catch(e){g.reportNonFatal(e instanceof Error?e:`Failed to open window on second instance`,{kind:`second-instance-open-window-failed`})}};l(e=>{let n=t.t(t.g(e));if(z.deepLinks.queueProcessArgs(e)){n&&le();return}if(n){le();return}le()});let ue=async(e,t)=>{M.hotkeyWindowLifecycleManager.hide();let n=M.getPrimaryWindow(),r=n??await M.createFreshLocalWindow(e);r!=null&&(R.desktopNotificationManager.dismissByNavigationPath(e),n!=null&&t.navigateExistingWindow&&z.navigateToRoute(r,e),ae(r))};let ce=async()=>{};E&&ce();let be=await M.ensureHostWindow(B);be&&ae(be),w(`local window ensured`,A,{hostId:B,localWindowVisible:be?.isVisible()??!1}),A=Date.now(),await z.deepLinks.flushPendingDeepLinks();}",
   ].join("");
+}
+
+function settingsPersistenceBundleFixture() {
+  return [
+    "let i=require(`node:path`),o=require(`node:fs`);",
+    "var s=`.codex-global-state.json`;",
+    "const h={\"set-global-state\":async({key:a,value:b,origin:c})=>(this.globalState.set(a,b),Promise.resolve())};",
+  ].join("");
+}
+
+function legacySettingsPersistenceBundleFixture() {
+  return [
+    "let i=require(`node:path`),o=require(`node:fs`);",
+    "var s=`.codex-global-state.json`;function codexLinuxSettingsPath(){let e=process.env.XDG_CONFIG_HOME||process.env.HOME&&i.join(process.env.HOME,`.config`);return e?i.join(e,`codex-desktop`,`settings.json`):null}function codexLinuxReadSettingsFile(){let e=codexLinuxSettingsPath();if(!e||!o.existsSync(e))return{};try{let t=o.readFileSync(e,`utf8`),n=JSON.parse(t);return n&&typeof n===`object`&&!Array.isArray(n)?n:{}}catch(e){return{}}}function codexLinuxPersistSettingsState(e,t){if(process.platform!==`linux`||![`codex-linux-prompt-window-enabled`,`codex-linux-system-tray-enabled`,`codex-linux-warm-start-enabled`].includes(e))return;try{let n=codexLinuxSettingsPath();if(!n)return;let r=codexLinuxReadSettingsFile();t===void 0?delete r[e]:r[e]=t,o.mkdirSync(i.dirname(n),{recursive:!0,mode:448}),o.writeFileSync(n,JSON.stringify(r,null,2)+`\\n`,`utf8`)}catch(e){}}",
+    "const h={\"set-global-state\":async({key:a,value:b,origin:c})=>(this.globalState.set(a,b),codexLinuxPersistSettingsState(a,b),Promise.resolve())};",
+  ].join("");
+}
+
+function runSettingsPersistence(patchedSource, env, key, value) {
+  vm.runInNewContext(
+    `${patchedSource};codexLinuxPersistSettingsState(${JSON.stringify(key)},${JSON.stringify(value)});`,
+    {
+      console,
+      JSON,
+      Promise,
+      require,
+      process: { env, platform: "linux" },
+    },
+  );
 }
 
 function keybindsIndexBundleFixture() {
@@ -731,6 +788,18 @@ test("warns when a matched webview opaque bundle has no known insertion point", 
   ]);
 });
 
+test("does not treat unrelated Linux userAgent checks as opaque window patches", () => {
+  const { warnings } = captureWarns(() =>
+    applyLinuxOpaqueWindowsDefaultPatch(
+      "function unrelated(){return navigator.userAgent.includes(`Linux`)&&ready}function runtime(){let C=theme;if(C.opaqueWindows&&!ba()){}}",
+    ),
+  );
+
+  assert.deepEqual(warnings, [
+    "WARN: Could not find Linux opaque window default insertion point — skipping settings default patch",
+  ]);
+});
+
 test("adds Linux avatar overlay mouse passthrough recovery", () => {
   const patched = applyPatchTwice(
     applyLinuxAvatarOverlayMousePassthroughPatch,
@@ -929,7 +998,10 @@ test("scopes close-to-tray already-patched detection to the handler", () => {
 test("adds Linux single-instance lock and second-instance handoff", () => {
   const patched = applyPatchTwice(applyLinuxSingleInstancePatch, singleInstanceBundleFixture());
 
-  assert.match(patched, /process\.platform===`linux`&&!n\.app\.requestSingleInstanceLock\(\)/);
+  assert.match(
+    patched,
+    /process\.platform===`linux`&&process\.env\.CODEX_LINUX_MULTI_LAUNCH!==`1`&&!n\.app\.requestSingleInstanceLock\(\)/,
+  );
   assert.match(patched, /n\.app\.quit\(\);return/);
   assert.match(patched, /codexLinuxBeforeQuitHandler=\(\)=>\{typeof codexLinuxMarkQuitInProgress===`function`&&codexLinuxMarkQuitInProgress\(\)\}/);
   assert.match(patched, /n\.app\.on\(`before-quit`,codexLinuxBeforeQuitHandler\)/);
@@ -939,11 +1011,106 @@ test("adds Linux single-instance lock and second-instance handoff", () => {
   assert.match(patched, /n\.app\.off\(`second-instance`,codexLinuxSecondInstanceHandler\)/);
 });
 
+test("lets explicit Linux multi-instance launches bypass the bootstrap single-instance lock", () => {
+  const source =
+    "var S=t.x({isMacOS:b,isPackaged:n.app.isPackaged});if(!(!S||n.app.requestSingleInstanceLock()))t.Jr().info(`Exiting second desktop instance`,{safe:{packaged:n.app.isPackaged,platform:process.platform}}),n.app.exit(0);else{let e=t.C(x);}";
+  const patched = applyPatchTwice(applyLinuxMultiInstanceBootstrapPatch, source);
+
+  assert.match(
+    patched,
+    /if\(!\(!S\|\|process\.platform===`linux`&&process\.env\.CODEX_LINUX_MULTI_LAUNCH===`1`\|\|n\.app\.requestSingleInstanceLock\(\)\)\)/,
+  );
+  assert.match(patched, /Exiting second desktop instance/);
+});
+
 test("recognizes bootstrap-owned single-instance handoff in current bundles", () => {
   const source = "let{setSecondInstanceArgsHandler:l}=t.y();l(e=>{let n=t.t(t.g(e));if(z.deepLinks.queueProcessArgs(e)){n&&le();return}if(n){le();return}le()});";
   const patched = applyPatchTwice(applyLinuxSingleInstancePatch, source);
 
   assert.equal(patched, source);
+});
+
+test("persists Linux settings to the launcher-provided settings file", () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "codex-settings-path-"));
+  try {
+    const settingsFile = path.join(tempRoot, "config", "codex-cua-lab", "settings.json");
+    const patched = applyPatchTwice(applyLinuxSettingsPersistencePatch, settingsPersistenceBundleFixture());
+
+    assert.match(patched, /process\.env\.CODEX_LINUX_SETTINGS_FILE/);
+    runSettingsPersistence(
+      patched,
+      {
+        CODEX_LINUX_APP_ID: "codex-cua-lab",
+        CODEX_LINUX_SETTINGS_FILE: settingsFile,
+        HOME: path.join(tempRoot, "home"),
+      },
+      "codex-linux-warm-start-enabled",
+      false,
+    );
+
+    assert.equal(
+      JSON.parse(fs.readFileSync(settingsFile, "utf8"))["codex-linux-warm-start-enabled"],
+      false,
+    );
+    assert.equal(fs.existsSync(path.join(tempRoot, "home", ".config", "codex-desktop", "settings.json")), false);
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("persists Linux settings under the effective side-by-side app id", () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "codex-settings-app-id-"));
+  try {
+    const xdgConfig = path.join(tempRoot, "xdg-config");
+    const patched = applyPatchTwice(applyLinuxSettingsPersistencePatch, settingsPersistenceBundleFixture());
+
+    assert.match(patched, /process\.env\.CODEX_LINUX_APP_ID\|\|process\.env\.CODEX_APP_ID/);
+    runSettingsPersistence(
+      patched,
+      {
+        CODEX_LINUX_APP_ID: "codex-cua-lab",
+        XDG_CONFIG_HOME: xdgConfig,
+      },
+      "codex-linux-system-tray-enabled",
+      false,
+    );
+
+    assert.equal(
+      JSON.parse(fs.readFileSync(path.join(xdgConfig, "codex-cua-lab", "settings.json"), "utf8"))["codex-linux-system-tray-enabled"],
+      false,
+    );
+    assert.equal(fs.existsSync(path.join(xdgConfig, "codex-desktop", "settings.json")), false);
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("migrates already-patched Linux settings persistence away from codex-desktop", () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "codex-settings-migrate-"));
+  try {
+    const xdgConfig = path.join(tempRoot, "xdg-config");
+    const patched = applyPatchTwice(applyLinuxSettingsPersistencePatch, legacySettingsPersistenceBundleFixture());
+
+    assert.match(patched, /process\.env\.CODEX_LINUX_SETTINGS_FILE/);
+    assert.doesNotMatch(patched, /join\(e,`codex-desktop`,`settings\.json`\)/);
+    runSettingsPersistence(
+      patched,
+      {
+        CODEX_LINUX_APP_ID: "codex-cua-lab",
+        XDG_CONFIG_HOME: xdgConfig,
+      },
+      "codex-linux-prompt-window-enabled",
+      false,
+    );
+
+    assert.equal(
+      JSON.parse(fs.readFileSync(path.join(xdgConfig, "codex-cua-lab", "settings.json"), "utf8"))["codex-linux-prompt-window-enabled"],
+      false,
+    );
+    assert.equal(fs.existsSync(path.join(xdgConfig, "codex-desktop", "settings.json")), false);
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
 });
 
 test("adds Linux launch actions through current setSecondInstanceArgsHandler bundles", () => {
@@ -1511,7 +1678,7 @@ test("handles literal Chrome plugin gate names", () => {
   assert.doesNotMatch(patched, /installWhenMissing:!0,name:'chrome-internal'/);
 });
 
-test("reports missing required Chrome plugin auto-install gate as upstream validation failure", () => {
+test("reports missing required Chrome plugin auto-install gate as required upstream validation failure", () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "codex-patch-report-missing-chrome-"));
   try {
     const buildDir = path.join(tempRoot, ".vite", "build");
@@ -1522,11 +1689,11 @@ test("reports missing required Chrome plugin auto-install gate as upstream valid
     captureWarns(() => patchExtractedApp(tempRoot, { report }));
 
     const pluginGatePatch = report.patches.find((patch) => patch.name === "linux-chrome-plugin-auto-install");
-    assert.equal(pluginGatePatch.status, "skipped-optional");
+    assert.equal(pluginGatePatch.status, "failed-required");
     assert.match(pluginGatePatch.reason, /Could not find Chrome plugin gate literal/);
     assert.ok(
       validateReport(report, "upstream-build").some((failure) =>
-        failure.startsWith("linux-chrome-plugin-auto-install: skipped-optional"),
+        failure.startsWith("linux-chrome-plugin-auto-install: failed-required"),
       ),
     );
   } finally {
@@ -1554,7 +1721,7 @@ test("fails hard when the Computer Use gate is recognizable but unpatchable", ()
   );
 });
 
-test("reports missing required Computer Use plugin gate as upstream validation failure", () => {
+test("reports missing required Computer Use plugin gate as required upstream validation failure", () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "codex-patch-report-missing-computer-use-"));
   try {
     const buildDir = path.join(tempRoot, ".vite", "build");
@@ -1565,11 +1732,11 @@ test("reports missing required Computer Use plugin gate as upstream validation f
     captureWarns(() => patchExtractedApp(tempRoot, { report }));
 
     const pluginGatePatch = report.patches.find((patch) => patch.name === "linux-computer-use-plugin-gate");
-    assert.equal(pluginGatePatch.status, "skipped-optional");
+    assert.equal(pluginGatePatch.status, "failed-required");
     assert.match(pluginGatePatch.reason, /Could not find Computer Use plugin gate literal/);
     assert.ok(
       validateReport(report, "upstream-build").some((failure) =>
-        failure.startsWith("linux-computer-use-plugin-gate: skipped-optional"),
+        failure.startsWith("linux-computer-use-plugin-gate: failed-required"),
       ),
     );
   } finally {
@@ -1929,7 +2096,10 @@ test("patchMainBundleSource keeps non-icon patches active without an icon asset"
     patched,
     /process\.platform!==`win32`&&process\.platform!==`darwin`&&process\.platform!==`linux`\?null:/,
   );
-  assert.match(patched, /process\.platform===`linux`&&!n\.app\.requestSingleInstanceLock\(\)/);
+  assert.match(
+    patched,
+    /process\.platform===`linux`&&process\.env\.CODEX_LINUX_MULTI_LAUNCH!==`1`&&!n\.app\.requestSingleInstanceLock\(\)/,
+  );
   assert.match(patched, /\(t===`darwin`\|\|t===`linux`\)&&e\.computerUse/);
   assert.doesNotMatch(patched, /setIcon\(process\.resourcesPath\+`\/\.\.\/content\/webview\/assets\//);
   assert.doesNotMatch(
@@ -2078,7 +2248,54 @@ test("patchExtractedApp records a structured patch report", () => {
   }
 });
 
-test("patch report marks warned asset patches as skipped", () => {
+test("patch report marks missing required webview assets as required failures", () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "codex-patch-report-missing-webview-"));
+  try {
+    const buildDir = path.join(tempRoot, ".vite", "build");
+    fs.mkdirSync(buildDir, { recursive: true });
+    fs.writeFileSync(path.join(buildDir, "main.js"), mainBundlePrefix);
+    fs.writeFileSync(path.join(tempRoot, "package.json"), JSON.stringify({ name: "codex" }));
+
+    const report = createPatchReport();
+    captureWarns(() => patchExtractedApp(tempRoot, { report }));
+
+    const sunsetPatch = report.patches.find((patch) => patch.name === "linux-app-sunset-gate");
+    assert.equal(sunsetPatch.status, "failed-required");
+    assert.match(sunsetPatch.reason, /Could not find webview assets directory/);
+    assert.ok(
+      validateReport(report, "upstream-build").some((failure) =>
+        failure.startsWith("linux-app-sunset-gate: failed-required"),
+      ),
+    );
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("patch report marks missing required package metadata as required failure", () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "codex-patch-report-missing-package-json-"));
+  try {
+    const buildDir = path.join(tempRoot, ".vite", "build");
+    fs.mkdirSync(buildDir, { recursive: true });
+    fs.writeFileSync(path.join(buildDir, "main.js"), mainBundlePrefix);
+
+    const report = createPatchReport();
+    captureWarns(() => patchExtractedApp(tempRoot, { report }));
+
+    const packagePatch = report.patches.find((patch) => patch.name === "package-desktop-name");
+    assert.equal(packagePatch.status, "failed-required");
+    assert.match(packagePatch.reason, /package\.json missing or unreadable/);
+    assert.ok(
+      validateReport(report, "upstream-build").some((failure) =>
+        failure.startsWith("package-desktop-name: failed-required"),
+      ),
+    );
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("patch report marks warned asset patches as required failures", () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "codex-patch-report-warned-asset-"));
   try {
     const assetsDir = path.join(tempRoot, "webview", "assets");
@@ -2089,11 +2306,11 @@ test("patch report marks warned asset patches as skipped", () => {
     captureWarns(() => patchExtractedApp(tempRoot, { report }));
 
     const sunsetPatch = report.patches.find((patch) => patch.name === "linux-app-sunset-gate");
-    assert.equal(sunsetPatch.status, "skipped-optional");
+    assert.equal(sunsetPatch.status, "failed-required");
     assert.match(sunsetPatch.reason, /Could not find app sunset gate needle/);
     assert.ok(
       validateReport(report, "upstream-build").some((failure) =>
-        failure.startsWith("linux-app-sunset-gate: skipped-optional"),
+        failure.startsWith("linux-app-sunset-gate: failed-required"),
       ),
     );
   } finally {

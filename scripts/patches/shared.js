@@ -57,6 +57,11 @@ const COMPUTER_USE_UI_SETTINGS_KEY = "codex-linux-computer-use-ui-enabled";
 // stays unconditional — it is what we have shipped on by default since the
 // project's first release.
 
+function regexpTest(filenamePattern, name) {
+  filenamePattern.lastIndex = 0;
+  return filenamePattern.test(name);
+}
+
 function patchAssetFiles(extractedDir, filenamePattern, patchFn, missingWarnMessage) {
   const webviewAssetsDir = path.join(extractedDir, "webview", "assets");
   if (!fs.existsSync(webviewAssetsDir)) {
@@ -68,7 +73,7 @@ function patchAssetFiles(extractedDir, filenamePattern, patchFn, missingWarnMess
 
   const candidates = fs
     .readdirSync(webviewAssetsDir)
-    .filter((name) => filenamePattern.test(name))
+    .filter((name) => regexpTest(filenamePattern, name))
     .sort();
 
   if (candidates.length === 0) {
@@ -101,7 +106,7 @@ function findRequiredWebviewAsset(webviewAssetsDir, filenamePattern, marker, des
 
   const candidates = fs
     .readdirSync(webviewAssetsDir)
-    .filter((name) => filenamePattern.test(name))
+    .filter((name) => regexpTest(filenamePattern, name))
     .sort();
   const matches = marker == null
     ? candidates

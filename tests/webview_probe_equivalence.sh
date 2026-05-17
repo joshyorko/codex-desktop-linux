@@ -29,6 +29,7 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 TEMPLATE="$REPO_DIR/launcher/start.sh.template"
+MAIN_BASHPID="${BASHPID:-$$}"
 
 info() { echo "[probe-eq] $*" >&2; }
 fail() { echo "[probe-eq][FAIL] $*" >&2; exit 1; }
@@ -200,9 +201,28 @@ EOF
     PORT_OPEN=$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));p=s.getsockname()[1];s.close();print(p)')
     PORT_CLOSED=$(find_closed_tcp_port) || fail "could not find an unused closed localhost port"
 
-    # exec into python so $! is the python PID directly (not the subshell's),
-    # making teardown reliable and avoiding orphan http.server processes.
-    (cd "$FIXTURES" && exec python3 -m http.server "$PORT_OPEN" --bind 127.0.0.1 >/dev/null 2>&1) &
+    start_fixture_server || return 1
+}
+
+start_fixture_server() {
+    # Use a threaded server because the TCP-open probes intentionally connect
+    # without sending an HTTP request. A single-threaded http.server can spend
+    # enough time draining those empty probe connections that the next marker
+    # fetch flakes on slower CI runners.
+    (cd "$FIXTURES" && exec python3 - "$PORT_OPEN" <<'PY' >/dev/null 2>&1) &
+import http.server
+import sys
+
+
+class QuietHandler(http.server.SimpleHTTPRequestHandler):
+    def log_message(self, format, *args):
+        pass
+
+
+server = http.server.ThreadingHTTPServer(("127.0.0.1", int(sys.argv[1])), QuietHandler)
+server.daemon_threads = True
+server.serve_forever()
+PY
     SERVER_PID=$!
 
     # Readiness is HTTP-level, not just TCP — http.server binds before it can
@@ -216,9 +236,15 @@ EOF
     return 1
 }
 
-teardown() {
+stop_fixture_server() {
     [ -n "${SERVER_PID:-}" ] && kill "$SERVER_PID" 2>/dev/null
     [ -n "${SERVER_PID:-}" ] && wait "$SERVER_PID" 2>/dev/null
+    SERVER_PID=""
+}
+
+teardown() {
+    [ "${BASHPID:-$$}" = "$MAIN_BASHPID" ] || return 0
+    stop_fixture_server
     [ -n "${FIXTURES:-}"   ] && rm -rf "$FIXTURES"
     [ -n "${CURLRC_HOME:-}" ] && rm -rf "$CURLRC_HOME"
 }
@@ -248,17 +274,26 @@ main() {
     load_new_impls
     setup_server || fail "fixture server did not bind"
 
-    local URL_OK="http://127.0.0.1:$PORT_OPEN/index.html"
-    local URL_404="http://127.0.0.1:$PORT_OPEN/missing.html"
-    local URL_BADTITLE="http://127.0.0.1:$PORT_OPEN/wrong-title.html"
-    local URL_NOLOADER="http://127.0.0.1:$PORT_OPEN/missing-loader.html"
-    local URL_DEAD="http://127.0.0.1:$PORT_CLOSED/index.html"
-
     info "TCP probe — open / closed"
     assert_rc "orig  open  ($PORT_OPEN)"     0 webview_port_is_open__orig    "$PORT_OPEN"
     assert_rc "new   open  ($PORT_OPEN)"     0 webview_port_is_open_at__new  "$PORT_OPEN"
     assert_rc "orig  closed ($PORT_CLOSED)"  1 webview_port_is_open__orig    "$PORT_CLOSED"
     assert_rc "new   closed ($PORT_CLOSED)"  1 webview_port_is_open_at__new  "$PORT_CLOSED"
+
+    # Keep TCP probe side effects isolated from HTTP marker checks. The open
+    # probes intentionally create empty loopback connections, and the launcher
+    # only requires those verdicts to match; HTTP verification gets a fresh
+    # fixture server below.
+    stop_fixture_server
+    [ -n "${FIXTURES:-}" ] && rm -rf "$FIXTURES"
+    FIXTURES=""
+    setup_server || fail "fixture server did not bind after TCP probes"
+
+    local URL_OK="http://127.0.0.1:$PORT_OPEN/index.html"
+    local URL_404="http://127.0.0.1:$PORT_OPEN/missing.html"
+    local URL_BADTITLE="http://127.0.0.1:$PORT_OPEN/wrong-title.html"
+    local URL_NOLOADER="http://127.0.0.1:$PORT_OPEN/missing-loader.html"
+    local URL_DEAD="http://127.0.0.1:$PORT_CLOSED/index.html"
 
     info "HTTP origin verify — markers + failure modes"
     assert_rc "orig  ok markers"             0 verify_webview_origin__orig "$URL_OK"

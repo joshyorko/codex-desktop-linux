@@ -31,6 +31,7 @@ Anything systemd-based should work for the optional auto-updater service (`syste
 | Native packaging (`.deb` / `.rpm` / `.pkg.tar.zst`) | ✅ always | One-shot `make package` picks your distro |
 | AppImage self-build | ✅ manual | `make appimage` writes a local `dist/*.AppImage`; rebuild manually after upstream updates |
 | Linux tray + warm-start handoff | ✅ always | Single-instance lock, second-instance window focus |
+| Multi-instance launcher | 🧪 opt-in | `--new-instance` or `CODEX_MULTI_LAUNCH=1` allocates a bounded webview port and isolated Electron profile |
 | GUI install prompts (`kdialog` / `zenity`) | ✅ if installed | Falls back to interactive terminal prompt |
 | Linux browser annotations | ✅ always | Stored-anchor screenshots, isolated marker rendering |
 | Chrome plugin native host | ✅ always | Auto-installs the upstream Chrome plugin plus Linux native-messaging support for Chrome, Brave, and Chromium |
@@ -227,6 +228,23 @@ make run-dev-app
 ```
 
 Override the dev identity with `DEV_APP_ID`, `DEV_APP_NAME`, and `CODEX_WEBVIEW_PORT` if needed.
+
+### Multiple app instances
+
+By default, second launches reuse the running app through the Linux warm-start handoff. To intentionally open another independent Codex Desktop process, use:
+
+```bash
+./codex-app/start.sh --new-instance
+```
+
+The launcher picks the first free webview port from a bounded range, then uses per-port pid files, launch socket, log, and Electron user-data dir. This keeps Electron's single-instance lock scoped to that new instance while leaving normal launches unchanged. The default range allows up to five instances.
+
+Configure the range or make every launch use this mode with:
+
+```bash
+CODEX_MULTI_LAUNCH_PORT_RANGE=5175-5199 ./codex-app/start.sh --new-instance
+CODEX_MULTI_LAUNCH=1 CODEX_MULTI_LAUNCH_PORT_RANGE=5175-5199 ./codex-app/start.sh
+```
 
 ## Auto-update Manager
 
