@@ -1,8 +1,8 @@
 cask "codex-desktop-devcontainer" do
-  version "devcontainerweb.202605171903"
-  sha256 "46464f5dcb10c3aef16207d9558bc40a24e8670915a9e1bb761d09a7338ec8e2"
+  version "devcontainerweb.202605172030"
+  sha256 "f8bc0ea12bdee598847b41b347982dd8636b413309ae2a3051985c69be47e3cf"
 
-  url "https://github.com/joshyorko/homebrew-tools/releases/download/codex-desktop-linux-devcontainerweb.202605171903/codex-desktop-linux-devcontainerweb.202605171903.tar.gz"
+  url "https://github.com/joshyorko/homebrew-tools/releases/download/codex-desktop-linux-devcontainerweb.202605172030/codex-desktop-linux-devcontainerweb.202605172030.tar.gz"
   name "Codex Desktop Devcontainer"
   desc "Devcontainer-installable Codex Desktop Linux runtime"
   homepage "https://github.com/joshyorko/codex-desktop-linux"
@@ -87,14 +87,15 @@ cask "codex-desktop-devcontainer" do
       codex-desktop --help
       codex-desktop web --inspect
       codex-desktop doctor
-      codex-desktop serve --workspace /workspace --profile /workspace/.codex-desktop
+      codex-desktop serve --workspace /workspace
 
     Real devcontainer web-mode browser smoke:
       ./scripts/devcontainer-codex-desktop-browser-smoke.sh
 
-    Web mode serves the extracted Codex Desktop UI on 127.0.0.1 only, persists
-    profile state under the selected workspace profile, uses container-local
-    Chromium/CDP for Browser Use, and keeps Computer Use browser-only unless an
-    explicitly owned virtual display mode is added.
+    Web mode serves the extracted Codex Desktop UI on 127.0.0.1 only, reuses the
+    current shell's Codex identity by default, keeps web runtime state in the
+    selected profile, uses container-local Chromium/CDP for Browser Use, and
+    keeps Computer Use browser-only unless an explicitly owned virtual display
+    mode is added.
   EOS
 end

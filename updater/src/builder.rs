@@ -34,8 +34,14 @@ const REQUIRED_BUNDLE_FILES: [(&str, &str); 22] = [
     ("install.sh", "install.sh"),
     ("launcher/start.sh.template", "launcher/start.sh.template"),
     ("launcher/webview-server.py", "launcher/webview-server.py"),
-    ("launcher/web-mode-server.mjs", "launcher/web-mode-server.mjs"),
-    ("launcher/web-mode-bootstrap.js", "launcher/web-mode-bootstrap.js"),
+    (
+        "launcher/web-mode-server.mjs",
+        "launcher/web-mode-server.mjs",
+    ),
+    (
+        "launcher/web-mode-bootstrap.js",
+        "launcher/web-mode-bootstrap.js",
+    ),
     ("scripts/build-deb.sh", "scripts/build-deb.sh"),
     (
         "scripts/patch-linux-window-ui.js",
@@ -731,6 +737,14 @@ touch "${DIST_DIR_OVERRIDE}/codex-desktop-${VER}-1-x86_64.pkg.tar.zst"
             bundle_root.join("launcher/webview-server.py"),
             b"# fake webview server\n",
         )?;
+        fs::write(
+            bundle_root.join("launcher/web-mode-server.mjs"),
+            b"console.log('fake web mode server');\n",
+        )?;
+        fs::write(
+            bundle_root.join("launcher/web-mode-bootstrap.js"),
+            b"console.log('fake web mode bootstrap');\n",
+        )?;
         fs::write(bundle_root.join("assets/codex.png"), b"png")?;
         fs::write(bundle_root.join("assets/codex-linux.png"), b"linux png")?;
         fs::write(
@@ -900,6 +914,14 @@ fi
             .exists());
         assert!(artifacts
             .workspace_dir
+            .join("builder/launcher/web-mode-server.mjs")
+            .exists());
+        assert!(artifacts
+            .workspace_dir
+            .join("builder/launcher/web-mode-bootstrap.js")
+            .exists());
+        assert!(artifacts
+            .workspace_dir
             .join("builder/scripts/lib/node-runtime.sh")
             .exists());
         assert_fresh_patch_bundle(&artifacts.workspace_dir.join("builder"));
@@ -945,6 +967,14 @@ fi
             source_root.join("launcher/webview-server.py"),
             b"# fake webview server\n",
         )?;
+        fs::write(
+            source_root.join("launcher/web-mode-server.mjs"),
+            b"console.log('fake web mode server');\n",
+        )?;
+        fs::write(
+            source_root.join("launcher/web-mode-bootstrap.js"),
+            b"console.log('fake web mode bootstrap');\n",
+        )?;
         fs::write(source_root.join("scripts/build-deb.sh"), b"#!/bin/bash\n")?;
         fs::write(
             source_root.join("scripts/validate-upstream-dmg.js"),
@@ -981,6 +1011,15 @@ fi
             .exists());
         assert!(destination_root.join("launcher/webview-server.py").exists());
         assert_fresh_patch_bundle(&destination_root);
+        assert!(destination_root
+            .join("launcher/web-mode-server.mjs")
+            .exists());
+        assert!(destination_root
+            .join("launcher/web-mode-bootstrap.js")
+            .exists());
+        assert!(destination_root
+            .join("scripts/patches/registry.js")
+            .exists());
         assert!(destination_root.join("computer-use-linux").exists());
         assert!(!destination_root.join("global-dictation-linux").exists());
         assert!(destination_root.join("read-aloud-linux").exists());

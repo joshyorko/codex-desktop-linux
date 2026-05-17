@@ -32,7 +32,7 @@ const TEXT_MIME_TYPES = new Map([
 
 function usage() {
   console.error(`Usage:
-  codex-desktop serve --workspace <dir> --profile <dir> [--bind 127.0.0.1] [--port 3773]
+  codex-desktop serve --workspace <dir> [--profile <dir>] [--codex-home <dir>|--isolated] [--bind 127.0.0.1] [--port 3773]
   codex-desktop web --inspect
   codex-desktop doctor --mode devcontainer`);
 }
@@ -45,6 +45,8 @@ function parseArgs(argv) {
     port: 3773,
     workspace: process.cwd(),
     profile: null,
+    codexHome: null,
+    isolated: false,
     requireToken: false,
     onceHealthCheck: false,
     mode: null,
@@ -62,6 +64,10 @@ function parseArgs(argv) {
       args.workspace = path.resolve(argv[++index] ?? "");
     } else if (arg === "--profile") {
       args.profile = path.resolve(argv[++index] ?? "");
+    } else if (arg === "--codex-home") {
+      args.codexHome = path.resolve(argv[++index] ?? "");
+    } else if (arg === "--isolated") {
+      args.isolated = true;
     } else if (arg === "--bind") {
       args.bind = argv[++index] ?? "";
     } else if (arg === "--port") {
@@ -87,14 +93,19 @@ function parseArgs(argv) {
   }
 
   args.profile = args.profile ?? path.join(args.workspace, ".codex-desktop");
+  args.codexHome =
+    args.codexHome ??
+    (args.isolated
+      ? path.join(args.profile, "identity", "codex-home")
+      : path.resolve(process.env.CODEX_HOME || path.join(process.env.HOME || args.workspace, ".codex")));
   args.webviewDir = path.join(args.appDir, "content", "webview");
   args.bootstrapPath = path.join(args.appDir, ".codex-linux", "web-mode-bootstrap.js");
   args.webHostDir = path.join(args.profile, "run");
   args.logsDir = path.join(args.profile, "logs");
   args.browserProfileDir = path.join(args.profile, "browser");
-  args.codexProfileDir = path.join(args.profile, "profile");
+  args.identityDir = path.join(args.profile, "identity");
   args.runDir = path.join(args.profile, "run");
-  args.webStatePath = path.join(args.codexProfileDir, "web-state.json");
+  args.webStatePath = path.join(args.profile, "web-state.json");
 
   return args;
 }
@@ -131,17 +142,26 @@ async function exists(targetPath) {
 async function ensureProfileDirs(args) {
   for (const directory of [
     args.profile,
-    args.codexProfileDir,
     args.browserProfileDir,
     args.runDir,
     args.logsDir,
-    path.join(args.codexProfileDir, "codex-home"),
-    path.join(args.codexProfileDir, "xdg-config"),
-    path.join(args.codexProfileDir, "xdg-cache"),
-    path.join(args.codexProfileDir, "xdg-state"),
     path.join(args.runDir, "browser-use"),
   ]) {
     await fs.mkdir(directory, { recursive: true, mode: 0o700 });
+  }
+
+  if (args.isolated) {
+    for (const directory of [
+      args.identityDir,
+      args.codexHome,
+      path.join(args.identityDir, "xdg-config"),
+      path.join(args.identityDir, "xdg-cache"),
+      path.join(args.identityDir, "xdg-state"),
+    ]) {
+      await fs.mkdir(directory, { recursive: true, mode: 0o700 });
+    }
+  } else {
+    await fs.mkdir(args.codexHome, { recursive: true, mode: 0o700 });
   }
 }
 
@@ -241,17 +261,9 @@ function handleAppServerMessage(state, line) {
 }
 
 function appServerEnv(args) {
-  const codexHome = path.join(args.codexProfileDir, "codex-home");
-  const xdgConfigHome = path.join(args.codexProfileDir, "xdg-config");
-  const xdgCacheHome = path.join(args.codexProfileDir, "xdg-cache");
-  const xdgStateHome = path.join(args.codexProfileDir, "xdg-state");
-
   const env = {
     ...process.env,
-    CODEX_HOME: codexHome,
-    XDG_CONFIG_HOME: xdgConfigHome,
-    XDG_CACHE_HOME: xdgCacheHome,
-    XDG_STATE_HOME: xdgStateHome,
+    CODEX_HOME: args.codexHome,
     CODEX_DESKTOP_WEB_MODE: "1",
     CODEX_DESKTOP_DEVCONTAINER_MODE: "1",
     CODEX_BROWSER_MODE: process.env.CODEX_BROWSER_MODE || "container-chromium",
@@ -260,6 +272,12 @@ function appServerEnv(args) {
     CODEX_COMPUTER_USE_BROWSER_ONLY: "1",
     CODEX_COMPUTER_CONTROL_MODE: "browser-only",
   };
+
+  if (args.isolated) {
+    env.XDG_CONFIG_HOME = path.join(args.identityDir, "xdg-config");
+    env.XDG_CACHE_HOME = path.join(args.identityDir, "xdg-cache");
+    env.XDG_STATE_HOME = path.join(args.identityDir, "xdg-state");
+  }
 
   for (const key of [
     "DISPLAY",
@@ -559,6 +577,8 @@ function health(state, serverAddress = null) {
     url: serverAddress ? `http://${args.bind}:${serverAddress.port}/` : null,
     workspace: args.workspace,
     profile: args.profile,
+    codex_home: args.codexHome,
+    isolated: args.isolated,
     webview_dir: args.webviewDir,
     webview_dir_exists: null,
     started_at: state.startedAt,

@@ -3828,7 +3828,8 @@ test_devcontainer_homebrew_cask_is_local_tap_installable() {
     assert_contains "$cask" 'depends_on formula: "desktop-file-utils"'
     assert_contains "$cask" 'codex-desktop web --inspect'
     assert_contains "$cask" 'codex-desktop doctor'
-    assert_contains "$cask" 'codex-desktop serve --workspace /workspace --profile /workspace/.codex-desktop'
+    assert_contains "$cask" 'codex-desktop serve --workspace /workspace'
+    assert_contains "$cask" "reuses the"
     assert_contains "$cask" 'Real devcontainer web-mode browser smoke'
     assert_contains "$cask" 'container-local'
     assert_not_contains "$cask" 'depends_on cask:'
@@ -3968,6 +3969,45 @@ test_web_mode_security_token_env_and_cdp_static_contract() {
     assert_contains "$bootstrap" 'codex_web_token=${encodeURIComponent(bridgeToken)}'
     assert_contains "$bootstrap" 'window.postMessage(message, window.location.origin)'
     assert_contains "$bootstrap" 'Electron worker bridge is unavailable in devcontainer web mode'
+}
+
+test_web_mode_codex_home_policy() {
+    info "Checking web mode Codex identity/profile policy"
+    local server="$REPO_DIR/launcher/web-mode-server.mjs"
+    local workspace="$TMP_DIR/web-mode-codex-home/workspace"
+    local profile="$TMP_DIR/web-mode-codex-home/profile"
+    local shared_home="$TMP_DIR/web-mode-codex-home/shared-codex"
+    local custom_home="$TMP_DIR/web-mode-codex-home/custom-codex"
+    local home_dir="$TMP_DIR/web-mode-codex-home/home"
+    local default_home="$home_dir/.codex"
+
+    mkdir -p "$workspace" "$profile" "$shared_home" "$custom_home" "$home_dir"
+
+    CODEX_HOME="$shared_home" node "$server" inspect \
+        --workspace "$workspace" \
+        --profile "$profile" > "$TMP_DIR/web-mode-shared-home.json"
+    assert_contains "$TMP_DIR/web-mode-shared-home.json" "\"codex_home\": \"$shared_home\""
+    assert_contains "$TMP_DIR/web-mode-shared-home.json" "\"profile\": \"$profile\""
+    assert_contains "$TMP_DIR/web-mode-shared-home.json" "\"isolated\": false"
+    assert_not_contains "$TMP_DIR/web-mode-shared-home.json" "$profile/identity/codex-home"
+
+    HOME="$home_dir" env -u CODEX_HOME node "$server" inspect \
+        --workspace "$workspace" \
+        --profile "$profile" > "$TMP_DIR/web-mode-default-home.json"
+    assert_contains "$TMP_DIR/web-mode-default-home.json" "\"codex_home\": \"$default_home\""
+
+    env -u CODEX_HOME node "$server" inspect \
+        --workspace "$workspace" \
+        --profile "$profile" \
+        --codex-home "$custom_home" > "$TMP_DIR/web-mode-custom-home.json"
+    assert_contains "$TMP_DIR/web-mode-custom-home.json" "\"codex_home\": \"$custom_home\""
+
+    env -u CODEX_HOME node "$server" inspect \
+        --workspace "$workspace" \
+        --profile "$profile" \
+        --isolated > "$TMP_DIR/web-mode-isolated-home.json"
+    assert_contains "$TMP_DIR/web-mode-isolated-home.json" "\"codex_home\": \"$profile/identity/codex-home\""
+    assert_contains "$TMP_DIR/web-mode-isolated-home.json" "\"isolated\": true"
 }
 
 test_web_mode_inventory_script_reports_host_markers() {
@@ -5118,7 +5158,8 @@ test_launcher_template_sanity() {
     assert_contains "$REPO_DIR/launcher/start.sh.template" 'python3 "$SCRIPT_DIR/.codex-linux/webview-server.py" "$CODEX_LINUX_WEBVIEW_PORT" --bind 127.0.0.1'
     assert_contains "$REPO_DIR/launcher/start.sh.template" "codex_desktop_web_mode"
     assert_contains "$REPO_DIR/launcher/start.sh.template" "codex_desktop_web_mode serve"
-    assert_contains "$REPO_DIR/launcher/start.sh.template" "serve --workspace DIR --profile DIR"
+    assert_contains "$REPO_DIR/launcher/start.sh.template" "serve --workspace DIR"
+    assert_contains "$REPO_DIR/launcher/start.sh.template" "--codex-home DIR|--isolated"
     assert_contains "$REPO_DIR/launcher/start.sh.template" "CODEX_DESKTOP_WEB_MODE=1"
     assert_contains "$REPO_DIR/launcher/start.sh.template" "CODEX_BROWSER_MODE"
     assert_contains "$REPO_DIR/launcher/start.sh.template" "CODEX_COMPUTER_CONTROL_MODE"
@@ -5136,6 +5177,11 @@ test_launcher_template_sanity() {
     assert_contains "$REPO_DIR/launcher/web-mode-server.mjs" 'CODEX_BROWSER_USE_SOCKET_DIR'
     assert_contains "$REPO_DIR/launcher/web-mode-server.mjs" 'CODEX_COMPUTER_USE_BROWSER_ONLY'
     assert_contains "$REPO_DIR/launcher/web-mode-server.mjs" 'CODEX_COMPUTER_CONTROL_MODE'
+    assert_contains "$REPO_DIR/launcher/web-mode-server.mjs" 'CODEX_HOME: args.codexHome'
+    assert_contains "$REPO_DIR/launcher/web-mode-server.mjs" 'process.env.CODEX_HOME'
+    assert_contains "$REPO_DIR/launcher/web-mode-server.mjs" '--codex-home'
+    assert_contains "$REPO_DIR/launcher/web-mode-server.mjs" '--isolated'
+    assert_contains "$REPO_DIR/launcher/web-mode-bootstrap.js" 'health?.codex_home'
     assert_contains "$REPO_DIR/launcher/web-mode-server.mjs" 'browser-only'
     assert_contains "$REPO_DIR/launcher/start.sh.template" "WEBVIEW_PID_FILE"
     assert_contains "$REPO_DIR/launcher/start.sh.template" "owned_webview_server_pid"
@@ -9340,6 +9386,7 @@ main() {
     test_devcontainer_homebrew_validation_script_targets_ror_image
     test_devcontainer_desktop_host_is_loopback_and_container_scoped
     test_web_mode_security_token_env_and_cdp_static_contract
+    test_web_mode_codex_home_policy
     test_web_mode_inventory_script_reports_host_markers
     test_installer_detects_electron_version_from_plist
     test_installer_keeps_electron_fallback_for_bad_metadata

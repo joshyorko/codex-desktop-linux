@@ -95,6 +95,8 @@ exec "$CONTAINER_ENGINE" run --rm \
     grep -q "\"mode\": \"devcontainer-web\"" /tmp/codex-web-health.json
     grep -q "\"bind\": \"127.0.0.1\"" /tmp/codex-web-health.json
     grep -q "\"loopback_only_default\": true" /tmp/codex-web-health.json
+    grep -q "\"codex_home\": \"${CODEX_HOME:-$HOME/.codex}\"" /tmp/codex-web-health.json
+    ! grep -q "\"codex_home\": \"$profile_dir" /tmp/codex-web-health.json
     grep -q "\"mode\": \"container-chromium\"" /tmp/codex-web-health.json
     grep -q "\"cdp_ready\": true" /tmp/codex-web-health.json
     grep -q "\"mode\": \"browser-only\"" /tmp/codex-web-health.json
