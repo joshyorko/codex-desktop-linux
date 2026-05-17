@@ -805,6 +805,8 @@ stage_update_builder_bundle() {
     cp "$REPO_DIR/CHANGELOG.md" "$update_builder_root/CHANGELOG.md"
     cp "$REPO_DIR/launcher/start.sh.template" "$update_builder_root/launcher/start.sh.template"
     cp "$REPO_DIR/launcher/webview-server.py" "$update_builder_root/launcher/webview-server.py"
+    cp "$REPO_DIR/launcher/web-mode-server.mjs" "$update_builder_root/launcher/web-mode-server.mjs"
+    cp "$REPO_DIR/launcher/web-mode-bootstrap.js" "$update_builder_root/launcher/web-mode-bootstrap.js"
     cp "$REPO_DIR/Cargo.toml" "$update_builder_root/Cargo.toml"
     cp "$REPO_DIR/Cargo.lock" "$update_builder_root/Cargo.lock"
     cp -r "$REPO_DIR/computer-use-linux" "$update_builder_root/computer-use-linux"

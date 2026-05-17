@@ -225,6 +225,9 @@ SCRIPT
     chmod +x "$INSTALL_DIR/start.sh"
     mkdir -p "$INSTALL_DIR/.codex-linux"
     cp "$SCRIPT_DIR/launcher/webview-server.py" "$INSTALL_DIR/.codex-linux/webview-server.py"
+    cp "$SCRIPT_DIR/launcher/web-mode-server.mjs" "$INSTALL_DIR/.codex-linux/web-mode-server.mjs"
+    cp "$SCRIPT_DIR/launcher/web-mode-bootstrap.js" "$INSTALL_DIR/.codex-linux/web-mode-bootstrap.js"
+    chmod +x "$INSTALL_DIR/.codex-linux/web-mode-server.mjs"
     local linux_icon_source="$LINUX_ICON_SOURCE"
     [ -f "$linux_icon_source" ] || linux_icon_source="$ICON_SOURCE"
     if [ -f "$linux_icon_source" ]; then
