@@ -1,8 +1,8 @@
 cask "codex-desktop-devcontainer" do
-  version "devcontainerweb.202605171903"
-  sha256 "46464f5dcb10c3aef16207d9558bc40a24e8670915a9e1bb761d09a7338ec8e2"
+  version "devcontainerweb.202605171914"
+  sha256 "daf54e60644a1975d17b1c69f70a9aa034f8434abb84972208f65baf0da096d3"
 
-  url "https://github.com/joshyorko/homebrew-tools/releases/download/codex-desktop-linux-devcontainerweb.202605171903/codex-desktop-linux-devcontainerweb.202605171903.tar.gz"
+  url "https://github.com/joshyorko/homebrew-tools/releases/download/codex-desktop-linux-devcontainerweb.202605171914/codex-desktop-linux-devcontainerweb.202605171914.tar.gz"
   name "Codex Desktop Devcontainer"
   desc "Devcontainer-installable Codex Desktop Linux runtime"
   homepage "https://github.com/joshyorko/codex-desktop-linux"
