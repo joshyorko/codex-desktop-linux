@@ -5,12 +5,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Added
+
+- New opt-in Linux feature `read-aloud-mcp` that stages a standalone Rust Read
+  Aloud MCP plugin with `doctor`, `read_aloud`, and `stop` tools. The MCP server
+  reuses the Kokoro runner/model configuration from the Read Aloud UI feature
+  and stays out of the default install unless enabled in
+  `linux-features/features.json`. When bundled, the feature patches Codex's
+  bundled plugin registry so the app keeps `read-aloud` installed, and the
+  launcher syncs the plugin cache so new Codex windows expose the MCP tools
+  through the same auto-install path as Computer Use.
+
 ### Fixed
 
 - The Chrome native-messaging host now evicts stale browser clients when a newer Codex browser client connects, preventing old Node REPL sessions from repeatedly reattaching CDP and driving extension service-worker CPU.
 - The bundled Chrome plugin is now auto-installed during app startup, matching Browser Use, so the plugin page no longer falls back to an install button after restart when the Linux native host is already staged.
 - Nix builds, installer apps, and dev shells now use modern `7zz`, and the installer dependency check accepts `7zz` without requiring a separate legacy `7z` binary.
 - Codex Desktop no longer removes user-enabled `remote_control = true` from the local Linux config before starting the app server.
+- Linux webview bundles no longer ask current Codex CLI app servers to enable unsupported feature flags, avoiding connector authentication sync errors.
 
 ## [0.8.0] - 2026-05-16
 

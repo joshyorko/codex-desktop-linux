@@ -36,6 +36,7 @@ Anything systemd-based should work for the optional auto-updater service (`syste
 | Linux browser annotations | ✅ always | Stored-anchor screenshots, isolated marker rendering |
 | Chrome plugin native host | ✅ always | Auto-installs the upstream Chrome plugin plus Linux native-messaging support for Chrome, Brave, and Chromium |
 | Linux Computer Use | ⚠️ opt-in | MCP backend registers by default; the in-app UI is opt-in. Supports screenshots, accessibility, window targeting, and input synthesis |
+| Linux Read Aloud | 🧪 opt-in experiment | `linux-features/read-aloud` adds an explicit response speaker button; `linux-features/read-aloud-mcp` stages a separate MCP plugin so the agent can read text aloud on request |
 | Mobile remote control host | 🧪 opt-in experiment | SSH remote projects work normally. Phone/Android host access is upstream macOS-only by default; `linux-features/remote-mobile-control` adds experimental Linux device-key, visibility, and host-enablement patches |
 | Server-gated features (e.g. `gpt-5.5`) | 🟡 server-side | OpenAI rolls per-account, not project-controlled. Building a fresh package does not unlock these. |
 
@@ -476,6 +477,7 @@ make clean-state
 | `ERR_CONNECTION_REFUSED` on the webview port | The webview HTTP server failed to start. Ensure `python3` works and the configured port is free |
 | Stuck on Codex logo splash | Check `~/.cache/codex-desktop/launcher.log`. If webview origin validation failed, another process is probably serving the configured webview port or the extracted `content/webview/` bundle is incomplete |
 | `CODEX_CLI_PATH` error | Reopen the app to retry the automatic CLI install flow, or install manually with `npm i -g @openai/codex` / `npm i -g --prefix ~/.local @openai/codex` |
+| `gh auth status` works in a terminal but fails inside Codex Desktop | The app shell may be using isolated XDG paths or missing keyring DBus access. See [GitHub CLI auth in app-launched shells](docs/github-cli-auth.md) |
 | Electron hangs while CLI is outdated | Re-run the launcher and check `~/.cache/codex-desktop/launcher.log` plus `~/.local/state/codex-update-manager/service.log`. Best-effort CLI preflight will warn if the automatic refresh fails |
 | GPU / Vulkan / Wayland errors | Under Wayland with `DISPLAY` available, the launcher uses `--ozone-platform=x11` for window-positioning compatibility. Otherwise it uses `--ozone-platform-hint=auto`. GPU sandbox / compositing are disabled by default |
 | Window flickering | GPU compositing is disabled by default. If flickering persists, try `./codex-app/start.sh --disable-gpu` to fully disable GPU acceleration |

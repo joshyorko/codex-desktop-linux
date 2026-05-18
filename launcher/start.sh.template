@@ -878,6 +878,73 @@ sync_computer_use_bundled_plugin_cache() {
     fi
 }
 
+sync_read_aloud_bundled_plugin_cache() {
+    local source_plugin="$SCRIPT_DIR/resources/plugins/openai-bundled/plugins/read-aloud"
+    local source_marketplace="$SCRIPT_DIR/resources/plugins/openai-bundled/.agents/plugins/marketplace.json"
+    local plugin_json="$source_plugin/.codex-plugin/plugin.json"
+    local source_backend="$source_plugin/bin/codex-read-aloud-linux"
+    local source_runner="$source_plugin/bin/kokoro-stdin"
+    local source_python_runner="$source_plugin/bin/kokoro_stdin.py"
+    local codex_home="${CODEX_HOME:-$HOME/.codex}"
+    local version
+    local cache_root
+    local cache_plugin
+    local cache_backend
+    local cache_runner
+    local cache_python_runner
+    local cache_parent
+    local tmp_plugin
+    local marketplace_root
+    local marketplace_plugins_dir
+
+    [ -f "$plugin_json" ] || return 0
+    [ -x "$source_backend" ] || return 0
+    [ -x "$source_runner" ] || return 0
+    [ -f "$source_python_runner" ] || return 0
+
+    marketplace_root="$codex_home/.tmp/bundled-marketplaces/openai-bundled"
+    marketplace_plugins_dir="$marketplace_root/.agents/plugins"
+    if [ -f "$source_marketplace" ]; then
+        mkdir -p "$marketplace_plugins_dir"
+        rm -f "$marketplace_plugins_dir/marketplace.json"
+        cp "$source_marketplace" "$marketplace_plugins_dir/marketplace.json" && \
+            chmod u+w "$marketplace_plugins_dir/marketplace.json" || \
+            echo "Read Aloud bundled marketplace sync failed; continuing with existing marketplace cache."
+    fi
+
+    version="$(bundled_plugin_version "$plugin_json" 2>/dev/null || true)"
+    [ -n "$version" ] || return 0
+
+    cache_root="$codex_home/plugins/cache/openai-bundled/read-aloud"
+    cache_plugin="$cache_root/$version"
+    cache_backend="$cache_plugin/bin/codex-read-aloud-linux"
+    cache_runner="$cache_plugin/bin/kokoro-stdin"
+    cache_python_runner="$cache_plugin/bin/kokoro_stdin.py"
+
+    if [ -f "$cache_backend" ] && [ -f "$cache_runner" ] && [ -f "$cache_python_runner" ] && \
+        cmp -s "$source_backend" "$cache_backend" && \
+        cmp -s "$source_runner" "$cache_runner" && \
+        cmp -s "$source_python_runner" "$cache_python_runner"; then
+        return 0
+    fi
+
+    cache_parent="$(dirname "$cache_plugin")"
+    tmp_plugin="$cache_parent/.read-aloud-$version.tmp.$$"
+    remove_tree_if_exists "$tmp_plugin"
+    mkdir -p "$cache_parent"
+
+    if cp -R "$source_plugin" "$tmp_plugin"; then
+        make_tree_owner_writable "$tmp_plugin"
+        find "$tmp_plugin" -type f -name '*:com.apple.*' -delete
+        remove_tree_if_exists "$cache_plugin"
+        mv "$tmp_plugin" "$cache_plugin"
+        echo "Read Aloud plugin cache synced from bundled resources: $cache_plugin"
+    else
+        remove_tree_if_exists "$tmp_plugin"
+        echo "Read Aloud plugin cache sync failed; continuing with existing cache."
+    fi
+}
+
 resolve_browser_use_runtime_env() {
     if [ -z "${CODEX_ELECTRON_RESOURCES_PATH:-}" ]; then
         export CODEX_ELECTRON_RESOURCES_PATH="$SCRIPT_DIR/resources"
@@ -2003,6 +2070,7 @@ if needs_cold_start; then
     sync_browser_use_bundled_plugin_cache
     sync_chrome_bundled_plugin_cache
     sync_computer_use_bundled_plugin_cache
+    sync_read_aloud_bundled_plugin_cache
 fi
 resolve_browser_use_runtime_env
 

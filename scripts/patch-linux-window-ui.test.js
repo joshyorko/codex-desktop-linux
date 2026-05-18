@@ -65,6 +65,7 @@ const {
 } = require("./ci/validate-patch-report.js");
 const {
   applyPersistentRateLimitFooterPatch,
+  applyLinuxAppServerFeatureEnablementPatch,
 } = require("./patches/webview-assets.js");
 const { patchAssetFiles } = require("./patches/shared.js");
 
@@ -327,6 +328,7 @@ test("default core patch descriptors are grouped and unique", () => {
     "linux-hotkey-window-prewarm",
     "linux-git-origins-source-fallback",
     "linux-app-sunset-gate",
+    "linux-app-server-feature-enablement",
     "opaque-window-default-general-settings",
     "opaque-window-default-webview-index",
     "opaque-window-default-resolved-theme",
@@ -693,6 +695,37 @@ test("adds a bounded will-quit drain fallback for Linux explicit quit", () => {
   assert.doesNotThrow(() => new Function(patched));
 });
 
+test("patches remaining before-quit and drain guards when another copy is already patched", () => {
+  const promptBypassExpression =
+    "(typeof codexLinuxShouldBypassQuitPrompt===`function`&&codexLinuxShouldBypassQuitPrompt())||";
+  const patchedPrompt = `if(${promptBypassExpression}e||i.canQuitWithoutPrompt()||r||!s&&!c){g=!0,a.markAppQuitting();return}`;
+  const unpatchedPrompt =
+    "if(e||i.canQuitWithoutPrompt()||r||!s&&!c){g=!0,a.markAppQuitting();return}";
+  const patchedPromptSource = applyPatchTwice(
+    applyLinuxExplicitQuitPromptBypassPatch,
+    `${patchedPrompt}function secondPrompt(){${unpatchedPrompt}}`,
+  );
+  assert.equal((patchedPromptSource.match(/codexLinuxShouldBypassQuitPrompt\(\)/g) ?? []).length, 2);
+  assert.match(
+    patchedPromptSource,
+    /function secondPrompt\(\)\{if\(\(typeof codexLinuxShouldBypassQuitPrompt===`function`&&codexLinuxShouldBypassQuitPrompt\(\)\)\|\|e\|\|i\.canQuitWithoutPrompt\(\)\|\|r\|\|!s&&!c\)\{g=!0,a\.markAppQuitting\(\);return\}\}/,
+  );
+
+  const unpatchedDrain =
+    "Promise.all([...u.values()].map(e=>e.flush())).finally(()=>{d(),f.dispose(),n.app.quit()})";
+  const patchedDrain =
+    "(()=>{let codexLinuxFinalizeQuit=()=>{d(),f.dispose(),n.app.quit()},codexLinuxDrainPromise=Promise.all([...u.values()].map(e=>e.flush()));if(process.platform===`linux`&&(typeof codexLinuxIsQuitInProgress===`function`&&codexLinuxIsQuitInProgress())){Promise.race([codexLinuxDrainPromise,new Promise(e=>setTimeout(e,typeof codexLinuxExplicitQuitDrainTimeoutMs===`number`?codexLinuxExplicitQuitDrainTimeoutMs:3e3))]).finally(codexLinuxFinalizeQuit);return}codexLinuxDrainPromise.finally(codexLinuxFinalizeQuit)})()";
+  const patchedDrainSource = applyPatchTwice(
+    applyLinuxWillQuitDrainTimeoutPatch,
+    `${patchedDrain}function secondDrain(){${unpatchedDrain}}`,
+  );
+  assert.equal((patchedDrainSource.match(/codexLinuxDrainPromise=Promise\.all/g) ?? []).length, 2);
+  assert.match(
+    patchedDrainSource,
+    /function secondDrain\(\)\{\(\(\)=>\{let codexLinuxFinalizeQuit=\(\)=>\{d\(\),f\.dispose\(\),n\.app\.quit\(\)\},codexLinuxDrainPromise=Promise\.all\(\[\.\.\.u\.values\(\)\]\.map\(e=>e\.flush\(\)\)\);/,
+  );
+});
+
 test("marks Linux quit-in-progress for the tray quit path", () => {
   const source = `${mainBundlePrefix}${explicitQuitBundleFixture()}`;
   const patched = applyPatchTwice(
@@ -752,6 +785,35 @@ test("supports explicit IPC quit patching when minified aliases drift", () => {
   );
 });
 
+test("patches remaining explicit quit handlers when another copy is already patched", () => {
+  const quitMarkerExpression =
+    "typeof codexLinuxPrepareForExplicitQuit===`function`?codexLinuxPrepareForExplicitQuit():typeof codexLinuxMarkQuitInProgress===`function`&&codexLinuxMarkQuitInProgress(),";
+  const patchedTrayQuit = `{label:rB(this.appName),click:()=>{${quitMarkerExpression}n.app.quit()}}`;
+  const unpatchedTrayQuit = "{label:rB(this.appName),click:()=>{n.app.quit()}}";
+  const patchedIpcQuit = `if(o.type===\`quit-app\`){${quitMarkerExpression}n.app.quit();return}`;
+  const unpatchedIpcQuit = "if(o.type===`quit-app`){n.app.quit();return}";
+
+  const patchedTray = applyPatchTwice(
+    applyLinuxExplicitTrayQuitPatch,
+    `${patchedTrayQuit}function createSecondTray(){return ${unpatchedTrayQuit}}`,
+  );
+  const patchedIpc = applyPatchTwice(
+    applyLinuxExplicitIpcQuitPatch,
+    `${patchedIpcQuit}function createSecondIpc(){${unpatchedIpcQuit}}`,
+  );
+
+  assert.equal((patchedTray.match(/codexLinuxPrepareForExplicitQuit\(\)/g) ?? []).length, 2);
+  assert.match(
+    patchedTray,
+    /function createSecondTray\(\)\{return \{label:rB\(this\.appName\),click:\(\)=>\{typeof codexLinuxPrepareForExplicitQuit===`function`\?codexLinuxPrepareForExplicitQuit\(\):typeof codexLinuxMarkQuitInProgress===`function`&&codexLinuxMarkQuitInProgress\(\),n\.app\.quit\(\)\}\}\}/,
+  );
+  assert.equal((patchedIpc.match(/codexLinuxPrepareForExplicitQuit\(\)/g) ?? []).length, 2);
+  assert.match(
+    patchedIpc,
+    /function createSecondIpc\(\)\{if\(o\.type===`quit-app`\)\{typeof codexLinuxPrepareForExplicitQuit===`function`\?codexLinuxPrepareForExplicitQuit\(\):typeof codexLinuxMarkQuitInProgress===`function`&&codexLinuxMarkQuitInProgress\(\),n\.app\.quit\(\);return\}\}/,
+  );
+});
+
 test("adds Linux menu hiding next to Windows removeMenu calls", () => {
   const source = "process.platform===`win32`&&k.removeMenu(),k.on(`closed`,()=>{})";
   const patched = applyPatchTwice(applyLinuxMenuPatch, source);
@@ -759,6 +821,20 @@ test("adds Linux menu hiding next to Windows removeMenu calls", () => {
   assert.equal(
     patched,
     "process.platform===`linux`&&k.setMenuBarVisibility(!1),process.platform===`win32`&&k.removeMenu(),k.on(`closed`,()=>{})",
+  );
+});
+
+test("patches remaining Windows menu snippets when another copy is already Linux-patched", () => {
+  const windowsMenuSnippet = "process.platform===`win32`&&k.removeMenu(),";
+  const linuxMenuPatch = "process.platform===`linux`&&k.setMenuBarVisibility(!1),";
+  const source = `${linuxMenuPatch}${windowsMenuSnippet}function createSecondWindow(){${windowsMenuSnippet}}`;
+
+  const patched = applyPatchTwice(applyLinuxMenuPatch, source);
+
+  assert.equal((patched.match(/setMenuBarVisibility\(!1\)/g) ?? []).length, 2);
+  assert.match(
+    patched,
+    /function createSecondWindow\(\)\{process\.platform===`linux`&&k\.setMenuBarVisibility\(!1\),process\.platform===`win32`&&k\.removeMenu\(\),\}/,
   );
 });
 
@@ -919,6 +995,40 @@ test("adds Linux window icon handling when an icon asset is available", () => {
   );
   assert.match(patchedMain, new RegExp(`icon:${escapeRegExp(iconPathExpression)}`));
   assert.match(patchedMain, new RegExp(`D\\.setIcon\\(${escapeRegExp(iconPathExpression)}\\)`));
+});
+
+test("patches remaining Linux window icon snippets when another window is already patched", () => {
+  const iconAsset = "app-test.png";
+  const iconPathExpression = "process.resourcesPath+`/../content/webview/assets/app-test.png`";
+  const windowOptionsSource = "...process.platform===`win32`?{autoHideMenuBar:!0}:{},";
+  const patchedWindowOptionsNeedle =
+    `...process.platform===\`win32\`||process.platform===\`linux\`?{autoHideMenuBar:!0,...process.platform===\`linux\`?{icon:${iconPathExpression}}:{}}:{},`;
+  const readyToShowSource = "D.once(`ready-to-show`,()=>{})";
+  const readyToShowSource2 = "E.once(`ready-to-show`,()=>{})";
+  const patchedSetIconNeedle =
+    `process.platform===\`linux\`&&D.setIcon(${iconPathExpression}),${readyToShowSource}`;
+
+  const patchedWindowOptions = applyPatchTwice(
+    applyLinuxWindowOptionsPatch,
+    `${patchedWindowOptionsNeedle}function createSecondWindow(){return {${windowOptionsSource}}}`,
+    iconAsset,
+  );
+  const patchedSetIcon = applyPatchTwice(
+    applyLinuxSetIconPatch,
+    `${patchedSetIconNeedle}function createSecondWindow(){${readyToShowSource2}}`,
+    iconAsset,
+  );
+
+  assert.equal((patchedWindowOptions.match(/icon:process\.resourcesPath/g) ?? []).length, 2);
+  assert.match(
+    patchedWindowOptions,
+    /function createSecondWindow\(\)\{return \{\.\.\.process\.platform===`win32`\|\|process\.platform===`linux`\?\{autoHideMenuBar:!0,\.\.\.process\.platform===`linux`\?\{icon:process\.resourcesPath\+`\/\.\.\/content\/webview\/assets\/app-test\.png`\}:\{\}\}:\{\},\}\}/,
+  );
+  assert.equal((patchedSetIcon.match(/\.setIcon\(/g) ?? []).length, 2);
+  assert.match(
+    patchedSetIcon,
+    /function createSecondWindow\(\)\{process\.platform===`linux`&&E\.setIcon\(process\.resourcesPath\+`\/\.\.\/content\/webview\/assets\/app-test\.png`\),E\.once\(`ready-to-show`,\(\)=>\{\}\)\}/,
+  );
 });
 
 test("adds Linux tray support including the platform guard", () => {
@@ -1332,6 +1442,62 @@ test("warns when the app sunset key is present but the gate shape drifts", () =>
   ]);
 });
 
+test("removes unsupported features from default app-server feature sync", () => {
+  const source = [
+    "var GF=[`apps`,`auth_elicitation`,`enable_mcp_apps`,`memories`,`plugins`,`tool_call_mcp_elicitation`,`tool_search`,`tool_suggest`,te];",
+    "function KF(){let e=(0,Z.c)(6),t=K(G),[n]=ts(`statsig_default_enable_features`),r=Lc(),i=Io(),a,o;",
+    "return e[0]!==r?(a=()=>{let r=qF(n);qn(`set-experimental-feature-enablement-for-host`,{hostId:t,enablement:r}).catch(n=>{q.error(`Failed to sync experimental feature enablement`,{sensitive:{error:n}})})},o=[r],e[0]=r,e[1]=a,e[2]=o):(a=e[1],o=e[2]),null}",
+    "function qF(e){let t={};for(let n of GF){let r=e[n];r!=null&&(t[n]=r)}return t}",
+  ].join("");
+
+  const patched = applyPatchTwice(applyLinuxAppServerFeatureEnablementPatch, source);
+
+  assert.match(
+    patched,
+    /var GF=\[`apps`,`memories`,`plugins`,`tool_call_mcp_elicitation`,`tool_search`,`tool_suggest`\];/,
+  );
+  assert.doesNotMatch(patched, /`auth_elicitation`/);
+  assert.doesNotMatch(patched, /`enable_mcp_apps`/);
+  assert.doesNotMatch(patched, /,te\]/);
+});
+
+test("patches the matched app-server feature sync array when an identical array appears earlier", () => {
+  const unsupportedFeatureArray =
+    "var GF=[`apps`,`auth_elicitation`,`enable_mcp_apps`,`memories`,`plugins`,`tool_call_mcp_elicitation`,`tool_search`,`tool_suggest`,te];";
+  const supportedFeatureArray =
+    "var GF=[`apps`,`memories`,`plugins`,`tool_call_mcp_elicitation`,`tool_search`,`tool_suggest`];";
+  const source = [
+    unsupportedFeatureArray,
+    "function OF(){return GF}",
+    unsupportedFeatureArray,
+    "function KF(){let e=(0,Z.c)(6),t=K(G),[n]=ts(`statsig_default_enable_features`),r=Lc(),i=Io(),a,o;",
+    "return e[0]!==r?(a=()=>{let r=qF(n);qn(`set-experimental-feature-enablement-for-host`,{hostId:t,enablement:r})},o=[r],e[0]=r,e[1]=a,e[2]=o):(a=e[1],o=e[2]),null}",
+  ].join("");
+
+  const patched = applyPatchTwice(applyLinuxAppServerFeatureEnablementPatch, source);
+
+  assert.equal(patched.indexOf(unsupportedFeatureArray), 0);
+  assert.match(patched, new RegExp(`${escapeRegExp(unsupportedFeatureArray)}function OF`));
+  assert.match(patched, new RegExp(`function OF\\(\\)\\{return GF\\}${escapeRegExp(supportedFeatureArray)}function KF`));
+});
+
+test("warns when app-server feature sync still has unsupported features but the list shape drifts", () => {
+  const source = [
+    "var GF=new Set([`apps`,unsupportedAuthFeature]);",
+    "function KF(){let e=ts(`statsig_default_enable_features`);",
+    "return qn(`set-experimental-feature-enablement-for-host`,{enablement:{name:`auth_elicitation`}})}",
+  ].join("");
+
+  const { value: patched, warnings } = captureWarns(() =>
+    applyLinuxAppServerFeatureEnablementPatch(source),
+  );
+
+  assert.equal(patched, source);
+  assert.deepEqual(warnings, [
+    "WARN: Could not find app-server feature enablement list — skipping unsupported feature compatibility patch",
+  ]);
+});
+
 test("adds Linux package updater behind the existing app updater manager", () => {
   const patched = applyPatchTwice(applyLinuxAppUpdaterBridgePatch, appUpdaterBundleFixture());
 
@@ -1603,6 +1769,20 @@ test("keeps scanning Computer Use gates after an already patched match", () => {
   assert.doesNotMatch(patched, /r===`darwin`&&n\.computerUse/);
 });
 
+test("patches all unpatched Computer Use gates in one pass", () => {
+  const source = [
+    "var tn=`computer-use`;",
+    "var $n=[{name:tn,isEnabled:({features:e,platform:t})=>t===`darwin`&&e.computerUse,migrate:on},{name:tn,isEnabled:({features:n,platform:r})=>r===`darwin`&&n.computerUse,migrate:wn}];",
+  ].join("");
+
+  const patched = applyLinuxComputerUsePluginGatePatch(source);
+
+  assert.equal((patched.match(/installWhenMissing:!0,name:tn/g) || []).length, 2);
+  assert.match(patched, /\(t===`darwin`\|\|t===`linux`\)&&e\.computerUse/);
+  assert.match(patched, /\(r===`darwin`\|\|r===`linux`\)&&n\.computerUse/);
+  assert.doesNotMatch(patched, /===`darwin`&&/);
+});
+
 test("handles reordered Computer Use gate destructuring", () => {
   const darwinOnlySource = [
     "var tn=`computer-use`;",
@@ -1802,6 +1982,21 @@ test("enables current Computer Use desktop features on Linux", () => {
   assert.match(patched, /CODEX_ELECTRON_ENABLE_WINDOWS_COMPUTER_USE/);
 });
 
+test("patches all Computer Use desktop feature gates in one pass", () => {
+  const patchedFeature =
+    "function A(e,{env:t=process.env,platform:n=process.platform}={}){return n===`linux`?{...e,computerUse:!0,computerUseNodeRepl:!0}:n!==`win32`||t.CODEX_ELECTRON_ENABLE_WINDOWS_COMPUTER_USE!==`1`?e:{...e,computerUse:!0,computerUseNodeRepl:!0}}";
+  const unpatchedFeature =
+    "function B(e,{env:r=process.env,platform:i=process.platform}={}){return i!==`win32`||r.CODEX_ELECTRON_ENABLE_WINDOWS_COMPUTER_USE!==`1`?e:{...e,computerUse:!0,computerUseNodeRepl:!0}}";
+
+  const patched = applyLinuxComputerUseFeaturePatch(`${patchedFeature}${unpatchedFeature}`);
+
+  assert.equal((patched.match(/===`linux`/g) || []).length, 2);
+  assert.doesNotMatch(
+    patched,
+    /function B\(e,\{env:r=process\.env,platform:i=process\.platform\}=\{\}\)\{return i!==`win32`/,
+  );
+});
+
 test("shows Computer Use plugin UI on Linux without the upstream rollout flag", () => {
   const patched = applyPatchTwice(
     applyLinuxComputerUseRendererAvailabilityPatch,
@@ -1829,6 +2024,34 @@ test("shows current Computer Use plugin UI on Linux without the upstream rollout
   );
 });
 
+test("warns without partially patching when Computer Use renderer availability gate drifts", () => {
+  const source =
+    "function g(e){return e===`macOS`||e===`windows`}" +
+    "const isComputerUseAvailable=true;" +
+    "function _(e){let t=(0,d.c)(8),{enabled:n,hostId:r,isHostLocal:i}=e,a=n===void 0?!0:n,{isLoading:o,platform:c}=u(),l=s(`1506311413`),f;t[0]===r?f=t[1]:(f={featureName:`computer_use`,hostId:r},t[0]=r,t[1]=f);let p=h(f),m;t[2]===c?m=t[3]:(m=g(c),t[2]=c,t[3]=m);let _=a&&i&&l&&(o||m||drifted),v=_&&!o&&p.enabled&&!p.isLoading,y=_&&p.isLoading,b=_&&(o||p.isLoading),x;return x}";
+
+  const { value: patched, warnings } = captureWarns(() =>
+    applyLinuxComputerUseRendererAvailabilityPatch(source),
+  );
+
+  assert.equal(patched, source);
+  assert.deepEqual(warnings, [
+    "WARN: Could not find Computer Use renderer availability gate — skipping Linux Computer Use UI availability patch",
+  ]);
+});
+
+test("patches all Computer Use renderer availability gates in one pass", () => {
+  const source = [
+    "let m=a&&(i||l===`linux`)&&s===`electron`&&(l===`linux`||u&&(c||p)),h=m&&!c&&(l===`linux`||f.enabled)&&!f.isLoading,g=m&&l!==`linux`&&f.isLoading,_=m&&(c||l!==`linux`&&f.isLoading),v;",
+    "let _=a&&i&&l&&(o||m),v=_&&!o&&p.enabled&&!p.isLoading,y=_&&p.isLoading,b=_&&(o||p.isLoading),x;",
+  ].join("");
+
+  const patched = applyLinuxComputerUseRendererAvailabilityPatch(source);
+
+  assert.match(patched, /c===`linux`\|\|l&&\(o\|\|m\)/);
+  assert.doesNotMatch(patched, /let _=a&&i&&l&&\(o\|\|m\)/);
+});
+
 test("allows Computer Use install flow on Linux", () => {
   const patched = applyPatchTwice(
     applyLinuxComputerUseInstallFlowPatch,
@@ -1853,6 +2076,18 @@ test("allows current Computer Use install flow on Linux", () => {
   );
 });
 
+test("patches all Computer Use install flow gates in one pass", () => {
+  const source = [
+    "ne=f({featureName:`computer_use`,hostId:t}),re=!ne.isLoading&&ne.enabled||navigator.userAgent.includes(`Linux`),",
+    "xe=g({featureName:`computer_use`,hostId:o}),ye=!xe.isLoading&&xe.enabled,",
+  ].join("");
+
+  const patched = applyLinuxComputerUseInstallFlowPatch(source);
+
+  assert.equal((patched.match(/navigator\.userAgent\.includes\(`Linux`\)/g) || []).length, 2);
+  assert.doesNotMatch(patched, /ye=!xe\.isLoading&&xe\.enabled,/);
+});
+
 test("auto-approves the app-provided Browser Use node_repl bridge", () => {
   const source =
     "return{[`mcp_servers.${pt}`]:{command:i.nodeReplPath,args:[],startup_timeout_sec:120,env:{[dt]:l,[ft]:i.nodePath}}}";
@@ -1861,6 +2096,18 @@ test("auto-approves the app-provided Browser Use node_repl bridge", () => {
 
   assert.match(patched, /tools:\{js:\{approval_mode:`approve`\}\}/);
   assert.match(patched, /env:\{\[dt\]:l,\[ft\]:i\.nodePath/);
+});
+
+test("patches all Browser Use node_repl approval configs in one pass", () => {
+  const source = [
+    "startup_timeout_sec:120,tools:{js:{approval_mode:`approve`}},env:{[dt]:l}",
+    "startup_timeout_sec:120,env:{[ft]:i.nodePath}",
+  ].join("");
+
+  const patched = applyBrowserUseNodeReplApprovalPatch(source);
+
+  assert.equal((patched.match(/approval_mode:`approve`/g) || []).length, 2);
+  assert.doesNotMatch(patched, /startup_timeout_sec:120,env:\{/);
 });
 
 test("shows the Linux IAB panel after Browser Use creates or reuses a tab", () => {
@@ -1879,6 +2126,18 @@ test("shows the Linux IAB panel after Browser Use creates or reuses a tab", () =
     patched,
     /return \(\(\)=>\{try\{n\.setBrowserVisibleForBrowserUse\(!0,e\.turnId\)\}/,
   );
+});
+
+test("patches all Browser Use IAB tab-creation paths in one pass", () => {
+  const source = [
+    "if(t!=null)return await this.navigateTabToInitialPage(t),this.serializeTab(t);let n=this.getRequiredBrowserHost(e);n.setBrowserUseActive(!0,e.turnId);let r=await n.openPageForBrowserUse({startingUrl:this.initialPageUrl,turnId:e.turnId}),i=this.updateTabForPage(r,n.routeKey);return",
+    "if(a!=null)return await this.navigateTabToInitialPage(a),this.serializeTab(a);let b=this.getRequiredBrowserHost(s);b.setBrowserUseActive(!0,s.turnId);let c=await b.openPageForBrowserUse({startingUrl:this.initialPageUrl,turnId:s.turnId}),d=this.updateTabForPage(c,b.routeKey);return",
+  ].join(";");
+
+  const patched = applyLinuxBrowserUseIabVisibleOnCreatePatch(source);
+
+  assert.equal((patched.match(/codexLinuxBrowserUseAutoVisible/g) || []).length, 4);
+  assert.doesNotMatch(patched, /return await this\.navigateTabToInitialPage\([ta]\),this\.serializeTab/);
 });
 
 test("detects Chrome extension installation from Linux browser profiles", () => {
