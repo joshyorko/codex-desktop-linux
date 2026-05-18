@@ -66,6 +66,18 @@ exec "$CONTAINER_ENGINE" run --rm \
 
     install -d -m 700 "$profile_dir"
     mkdir -p /workspace/codex-desktop-linux/dist-next
+
+    CODEX_COMPUTER_CONTROL_MODE=browser-only \
+      CODEX_BROWSER_USE_BROWSER_COMMAND=/nonexistent/chromium \
+      codex-desktop serve \
+      --workspace "'"$CONTAINER_WORKSPACE"'" \
+      --profile "$profile_dir" \
+      --bind 127.0.0.1 \
+      --port 0 \
+      --once-health-check >/tmp/codex-web-browser-only-health.json 2>&1
+    grep -q "\"mode\": \"browser-only\"" /tmp/codex-web-browser-only-health.json
+    grep -q "\"physical_host_control\": false" /tmp/codex-web-browser-only-health.json
+
     CODEX_BROWSER_USE_BROWSER_COMMAND=chromium \
       codex-desktop serve \
       --workspace "'"$CONTAINER_WORKSPACE"'" \
@@ -99,8 +111,8 @@ exec "$CONTAINER_ENGINE" run --rm \
     ! grep -q "\"codex_home\": \"$profile_dir" /tmp/codex-web-health.json
     grep -q "\"mode\": \"container-chromium\"" /tmp/codex-web-health.json
     grep -q "\"cdp_ready\": true" /tmp/codex-web-health.json
-    grep -q "\"mode\": \"browser-only\"" /tmp/codex-web-health.json
-    grep -q "\"physical_host_control\": false" /tmp/codex-web-health.json
+    grep -q "\"mode\": \"desktop\"" /tmp/codex-web-health.json
+    grep -q "\"physical_host_control\": true" /tmp/codex-web-health.json
     curl --silent --fail --max-time 1 "http://127.0.0.1:9333/json/version" >/tmp/codex-browser-use-cdp-version.json
     ss -ltnp | grep -q "127.0.0.1:'"$SERVE_PORT"'"
     ! ss -ltnp | grep -q "0.0.0.0:'"$SERVE_PORT"'"

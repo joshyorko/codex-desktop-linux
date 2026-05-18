@@ -4,7 +4,54 @@
   const localHostId = "local";
   const sessionKey = "codex-desktop-web-session-id";
   const vscodeStateKey = "codex-desktop-web-vscode-state";
+  const navigationStateKey = "codex-desktop-web-navigation-state";
   const cssPreloadErrorPrefix = "Unable to preload CSS for ";
+  const noHostRpcFallback = Symbol("no-host-rpc-fallback");
+  const localHttpFetchProxyPrefixes = [
+    "/accounts/",
+    "/api/",
+    "/backend-api/",
+    "/beacons/",
+    "/checkout_pricing_config/",
+    "/files/",
+    "/oauth/",
+    "/subscriptions/",
+    "/wham/",
+  ];
+  const hostFetchAppServerRpcMethods = new Map([
+    ["batch-write-config-value", "config/batchWrite"],
+    ["batch-write-config-value-for-host", "config/batchWrite"],
+    ["get-config-requirements-for-host", "configRequirements/read"],
+    ["install-plugin", "plugin/install"],
+    ["list-experimental-features", "experimentalFeature/list"],
+    ["list-hooks-for-host", "hooks/list"],
+    ["list-mcp-server-status", "mcpServerStatus/list"],
+    ["list-models-for-host", "model/list"],
+    ["list-plugins", "plugin/list"],
+    ["list-skills-for-host", "skills/list"],
+    ["read-config-for-host", "config/read"],
+    ["read-mcp-resource", "mcpServer/resource/read"],
+    ["read-plugin", "plugin/read"],
+    ["read-plugin-skill", "plugin/skill/read"],
+    ["remove-marketplace", "marketplace/remove"],
+    ["uninstall-plugin", "plugin/uninstall"],
+    ["upgrade-marketplaces", "marketplace/upgrade"],
+    ["write-config-value", "config/value/write"],
+    ["write-skill-config", "skills/config/write"],
+  ]);
+  const browserUseStateKey = "browser-use-origin-state";
+  const defaultBrowserUseState = {
+    approvalMode: "alwaysAsk",
+    historyApprovalMode: "alwaysAsk",
+    downloadApprovalMode: "alwaysAsk",
+    uploadApprovalMode: "alwaysAsk",
+    allowedOrigins: [],
+    deniedOrigins: [],
+    allowedDownloadOrigins: [],
+    deniedDownloadOrigins: [],
+    allowedUploadOrigins: [],
+    deniedUploadOrigins: [],
+  };
 
   const fallbackState = {
     persistedAtoms: {},
@@ -25,6 +72,7 @@
   let persistTimer = null;
 
   installCssPreloadErrorGuard();
+  installNavigationStatePersistence();
 
   function installCssPreloadErrorGuard() {
     window.addEventListener("vite:preloadError", (event) => {
@@ -107,7 +155,6 @@
 
   function refreshWorkspaceObjects() {
     const workspace = health?.workspace || "/workspace";
-    const profile = health?.profile || `${workspace}/.codex-desktop`;
     const codexHome = health?.codex_home || "~/.codex";
     webState.sharedObjects.host_config = {
       id: localHostId,
@@ -119,6 +166,77 @@
     webState.globalState["workspace-root-options"] ??= { roots: [workspace] };
     webState.globalState["codex-home"] ??= codexHome;
     webState.globalState["home-directory"] ??= workspace;
+  }
+
+  function webModeHostRpcFallback(method) {
+    switch (method) {
+      case "list-automations":
+        return { items: [] };
+      case "get-is-conversation-archiving-for-host":
+        return false;
+      case "hotkey-window-hotkey-state":
+        return { configuredHotkey: null };
+      default:
+        return noHostRpcFallback;
+    }
+  }
+
+  function browserUseState() {
+    const saved = webState.globalState?.[browserUseStateKey];
+    if (saved == null || typeof saved !== "object" || Array.isArray(saved)) {
+      return structuredCloneSafe(defaultBrowserUseState);
+    }
+    return {
+      ...structuredCloneSafe(defaultBrowserUseState),
+      ...saved,
+    };
+  }
+
+  function writeBrowserUseState(nextState) {
+    webState.globalState[browserUseStateKey] = nextState;
+    queuePersist();
+    return nextState;
+  }
+
+  function browserUseOriginListName(kind, transferKind = null) {
+    const prefix = kind === "allowed" ? "allowed" : "denied";
+    if (transferKind === "download") {
+      return `${prefix}DownloadOrigins`;
+    }
+    if (transferKind === "upload") {
+      return `${prefix}UploadOrigins`;
+    }
+    return `${prefix}Origins`;
+  }
+
+  function updateBrowserUseOrigin(params, add) {
+    const targetOrigin = typeof params.targetOrigin === "string" ? params.targetOrigin.trim() : "";
+    if (targetOrigin.length === 0) {
+      return browserUseState();
+    }
+    const state = browserUseState();
+    const listName = browserUseOriginListName(params.kind, params.transferKind);
+    const existing = Array.isArray(state[listName]) ? state[listName] : [];
+    const nextList = add
+      ? Array.from(new Set([...existing, targetOrigin]))
+      : existing.filter((origin) => origin !== targetOrigin);
+    return writeBrowserUseState({ ...state, [listName]: nextList });
+  }
+
+  function updateBrowserUseApprovalMode(params) {
+    const state = browserUseState();
+    return writeBrowserUseState({ ...state, approvalMode: params.approvalMode || state.approvalMode });
+  }
+
+  function updateBrowserUseHistoryApprovalMode(params) {
+    const state = browserUseState();
+    return writeBrowserUseState({ ...state, historyApprovalMode: params.approvalMode || state.historyApprovalMode });
+  }
+
+  function updateBrowserUseFileTransferApprovalMode(params) {
+    const state = browserUseState();
+    const key = params.kind === "upload" ? "uploadApprovalMode" : "downloadApprovalMode";
+    return writeBrowserUseState({ ...state, [key]: params.approvalMode || state[key] });
   }
 
   function queuePersist() {
@@ -184,8 +302,169 @@
     return typeof url === "string" && url.startsWith(marker) ? url.slice(marker.length) : null;
   }
 
+  function localHttpPathFromUrl(url) {
+    try {
+      const parsed = new URL(url, window.location.origin);
+      if (parsed.origin !== window.location.origin) {
+        return null;
+      }
+      return `${parsed.pathname}${parsed.search}`;
+    } catch {
+      return null;
+    }
+  }
+
+  function shouldProxyLocalHttpFetch(url) {
+    const path = localHttpPathFromUrl(url);
+    return path != null && localHttpFetchProxyPrefixes.some((prefix) => path.startsWith(prefix));
+  }
+
+  function base64ToUtf8(base64) {
+    if (typeof base64 !== "string") {
+      return "";
+    }
+    const bytes = Uint8Array.from(atob(base64), (character) => character.charCodeAt(0));
+    return new TextDecoder().decode(bytes);
+  }
+
+  async function proxyLocalHttpFetch(message) {
+    const path = localHttpPathFromUrl(message.url);
+    if (path == null) {
+      throw new Error(`Cannot proxy non-local web-mode fetch: ${message.url}`);
+    }
+    const response = await fetch(path, {
+      method: message.method || "GET",
+      headers: message.headers ?? {},
+      body: message.body,
+    });
+    const text = await response.text();
+    const body = text.length === 0 ? {} : JSON.parse(text);
+    const headers = Object.fromEntries(response.headers.entries());
+    successFetch(message, body, response.status, headers);
+  }
+
+  async function readHostFile(params) {
+    const response = await request("appServer.rpc", {
+      method: "fs/readFile",
+      params: {
+        path: params.path,
+        hostId: params.hostId || localHostId,
+      },
+    });
+    return response.result ?? {};
+  }
+
+  async function requestAppServerRpc(method, params, timeoutMs) {
+    const response = await request("appServer.rpc", {
+      method,
+      params: params ?? {},
+      timeoutMs,
+    });
+    return response.result;
+  }
+
+  async function writeAppServerMessage(message) {
+    await request("appServer.write", { message });
+  }
+
+  async function readHostFileMetadata(params) {
+    const response = await request("fs.metadata", {
+      path: params.path,
+      hostId: params.hostId || localHostId,
+    });
+    return response.result ?? {};
+  }
+
+  async function interruptConversation(conversationId, conversationState = null) {
+    if (typeof conversationId !== "string" || conversationId.trim().length === 0) {
+      return { interrupted: false, reason: "missing-conversation-id" };
+    }
+    const response = await request("conversation.interrupt", { conversationId, conversationState });
+    return response.result ?? response;
+  }
+
+  function installNavigationStatePersistence() {
+    const navigation = window.navigation;
+    if (!navigation || typeof navigation.addEventListener !== "function") {
+      return;
+    }
+
+    restoreNavigationState(navigation);
+
+    const save = () => {
+      try {
+        const entry = navigation.currentEntry;
+        if (!entry?.url) {
+          return;
+        }
+        const url = new URL(entry.url, window.location.origin);
+        if (url.origin !== window.location.origin) {
+          return;
+        }
+        window.sessionStorage.setItem(
+          navigationStateKey,
+          JSON.stringify({
+            url: `${url.pathname}${url.search}${url.hash}`,
+            state: typeof entry.getState === "function" ? entry.getState() : null,
+          }),
+        );
+      } catch {
+        // Navigation state is a convenience only; routing must continue if it
+        // cannot be serialized.
+      }
+    };
+
+    navigation.addEventListener("currententrychange", save);
+    navigation.addEventListener("navigatesuccess", save);
+    window.addEventListener("pagehide", save);
+  }
+
+  function restoreNavigationState(navigation) {
+    let saved;
+    try {
+      saved = JSON.parse(window.sessionStorage.getItem(navigationStateKey) || "null");
+    } catch {
+      saved = null;
+    }
+    if (!saved || typeof saved.url !== "string") {
+      return;
+    }
+
+    try {
+      const savedUrl = new URL(saved.url, window.location.origin);
+      if (savedUrl.origin !== window.location.origin) {
+        return;
+      }
+      const currentEntry = navigation.currentEntry;
+      const currentUrl = new URL(currentEntry?.url || window.location.href, window.location.origin);
+      const currentRoute = `${currentUrl.pathname}${currentUrl.search}${currentUrl.hash}`;
+      const explicitInitialRoute = document?.querySelector?.('meta[name="initial-route"]')?.getAttribute?.("content");
+      if (explicitInitialRoute || (currentRoute !== "/" && currentRoute !== "/index.html")) {
+        return;
+      }
+      if (typeof navigation.updateCurrentEntry === "function") {
+        navigation.updateCurrentEntry({ state: saved.state ?? null });
+      }
+      if (currentRoute === saved.url) {
+        return;
+      }
+      window.history.replaceState(saved.state ?? window.history.state, "", saved.url);
+    } catch {
+      // If the browser rejects the saved URL/state, leave the app on its
+      // default route instead of blocking startup.
+    }
+  }
+
   async function handleFetch(message) {
     await ready;
+    if (shouldProxyLocalHttpFetch(message.url)) {
+      try {
+        await proxyLocalHttpFetch(message);
+      } catch (error) {
+        errorFetch(message, error);
+      }
+      return;
+    }
     const method = codexMethodFromUrl(message.url);
     const body = parseFetchBody(message);
     const params = body?.params ?? body ?? {};
@@ -224,7 +503,7 @@
         case "extension-info": {
           successFetch(message, {
             version: "0.0.0-devcontainer-web",
-            extensionKind: "web",
+            extensionKind: "electron",
             devcontainerWebMode: true,
           });
           return;
@@ -241,11 +520,188 @@
           successFetch(message, { bindings: [] });
           return;
         }
+        case "read-file": {
+          const file = await readHostFile(params);
+          const contentsBase64 = file.contentsBase64 ?? file.dataBase64 ?? "";
+          successFetch(message, {
+            ...file,
+            contents: file.contents ?? base64ToUtf8(contentsBase64),
+            contentsBase64,
+          });
+          return;
+        }
+        case "read-file-binary": {
+          const file = await readHostFile(params);
+          successFetch(message, {
+            contentsBase64: file.contentsBase64 ?? file.dataBase64 ?? "",
+          });
+          return;
+        }
+        case "chrome-extension-installed-read": {
+          const response = await request("chromeExtension.installed", {
+            extensionId: params.extensionId,
+          });
+          successFetch(message, response.result ?? response);
+          return;
+        }
+        case "interrupt-conversation": {
+          successFetch(message, await interruptConversation(params.conversationId, params.conversationState));
+          return;
+        }
+        case "thread-follower-interrupt-turn-for-host": {
+          successFetch(message, {
+            ok: true,
+            ...(await interruptConversation(params.conversationId, params.conversationState)),
+          });
+          return;
+        }
+        case "node-repl-active-execs-kill": {
+          successFetch(message, { failedCount: 0 });
+          return;
+        }
+        case "mcp-codex-config": {
+          successFetch(message, { config: {} });
+          return;
+        }
+        case "read-file-metadata": {
+          successFetch(message, await readHostFileMetadata(params));
+          return;
+        }
+        case "set-default-model-config-for-host": {
+          const prefix = params.profile ? `profiles.${params.profile}.` : "";
+          successFetch(
+            message,
+            await requestAppServerRpc("config/batchWrite", {
+              edits: [
+                { keyPath: `${prefix}model`, value: params.model, mergeStrategy: "upsert" },
+                {
+                  keyPath: `${prefix}model_reasoning_effort`,
+                  value: params.reasoningEffort,
+                  mergeStrategy: "upsert",
+                },
+              ],
+              filePath: null,
+              expectedVersion: null,
+              reloadUserConfig: true,
+            }),
+          );
+          return;
+        }
+        case "set-experimental-feature-enablement-for-host":
+        case "set-local-app-server-feature-enablement": {
+          successFetch(
+            message,
+            await requestAppServerRpc("experimentalFeature/enablement/set", {
+              ...params,
+              enablement: params.enablement ?? params.enabled,
+            }),
+          );
+          return;
+        }
+        case "browser-use-origin-state-read": {
+          successFetch(message, browserUseState());
+          return;
+        }
+        case "browser-use-approval-mode-write": {
+          successFetch(message, updateBrowserUseApprovalMode(params));
+          return;
+        }
+        case "browser-use-history-approval-mode-write": {
+          successFetch(message, updateBrowserUseHistoryApprovalMode(params));
+          return;
+        }
+        case "browser-use-file-transfer-approval-mode-write": {
+          successFetch(message, updateBrowserUseFileTransferApprovalMode(params));
+          return;
+        }
+        case "browser-use-origin-add": {
+          successFetch(message, updateBrowserUseOrigin(params, true));
+          return;
+        }
+        case "browser-use-origin-remove": {
+          successFetch(message, updateBrowserUseOrigin(params, false));
+          return;
+        }
+        case "browser-use-file-transfer-origin-add": {
+          successFetch(message, updateBrowserUseOrigin(params, true));
+          return;
+        }
+        case "browser-use-file-transfer-origin-remove": {
+          successFetch(message, updateBrowserUseOrigin(params, false));
+          return;
+        }
+        case "browser-browsing-data-clear": {
+          successFetch(message, { ok: true });
+          return;
+        }
+        case "chrome-native-host-install":
+        case "chrome-native-host-uninstall":
+        case "chrome-extension-settings-open": {
+          successFetch(message, { ok: true });
+          return;
+        }
+        case "computer-use-app-approvals-visibility": {
+          successFetch(message, { visible: true });
+          return;
+        }
+        case "computer-use-app-approvals-read": {
+          successFetch(message, { approvedApps: [] });
+          return;
+        }
+        case "computer-use-app-approval-remove": {
+          successFetch(message, { approvedApps: [] });
+          return;
+        }
+        case "computer-use-sound-mode-read": {
+          successFetch(message, { value: webState.globalState["computer-use-sound-mode"] ?? "foregroundClicks" });
+          return;
+        }
+        case "computer-use-sound-mode-write": {
+          webState.globalState["computer-use-sound-mode"] = params.value ?? "foregroundClicks";
+          queuePersist();
+          successFetch(message, { value: webState.globalState["computer-use-sound-mode"] });
+          return;
+        }
+        case "computer-use-background-auth-read": {
+          successFetch(message, {
+            enabled: Boolean(webState.globalState["computer-use-background-auth-enabled"]),
+            computerIconDataURL: null,
+            lockIconDataURL: null,
+          });
+          return;
+        }
+        case "computer-use-background-auth-write": {
+          webState.globalState["computer-use-background-auth-enabled"] = Boolean(params.enabled);
+          queuePersist();
+          successFetch(message, {
+            enabled: Boolean(params.enabled),
+            computerIconDataURL: null,
+            lockIconDataURL: null,
+          });
+          return;
+        }
+        case "list-automations": {
+          successFetch(message, webModeHostRpcFallback(method));
+          return;
+        }
+        case "get-is-conversation-archiving-for-host": {
+          successFetch(message, webModeHostRpcFallback(method));
+          return;
+        }
+        case "hotkey-window-hotkey-state": {
+          successFetch(message, webModeHostRpcFallback(method));
+          return;
+        }
         case "paths-exist": {
           successFetch(message, { existingPaths: [] });
           return;
         }
         default: {
+          const appServerMethod = hostFetchAppServerRpcMethods.get(method);
+          if (appServerMethod) {
+            successFetch(message, await requestAppServerRpc(appServerMethod, params));
+            return;
+          }
           successFetch(message, {});
         }
       }
@@ -258,6 +714,18 @@
     await ready;
     const rpc = message.request;
     if (!rpc?.method || rpc.id == null) {
+      return;
+    }
+    const fallback = webModeHostRpcFallback(rpc.method);
+    if (fallback !== noHostRpcFallback) {
+      emit({
+        type: "mcp-response",
+        hostId: message.hostId || localHostId,
+        message: {
+          id: rpc.id,
+          result: fallback,
+        },
+      });
       return;
     }
     try {
@@ -339,9 +807,24 @@
         });
         return;
       }
+      case "mcp-response":
+        await writeAppServerMessage(message.message ?? message.response ?? message);
+        return;
       case "fetch":
         await handleFetch(message);
         return;
+      case "send-cli-request-for-host":
+        return await requestAppServerRpc(message.method, message.params ?? {}, message.timeoutMs);
+      case "open-in-browser":
+        if (typeof message.url === "string" && message.url.trim().length > 0) {
+          window.open(message.url, "_blank", "noopener,noreferrer");
+        }
+        return;
+      case "browser-sidebar-command":
+        return;
+      case "interrupt-conversation":
+      case "thread-follower-interrupt-turn-for-host":
+        return await interruptConversation(message.conversationId, message.conversationState);
       case "cancel-fetch":
       case "cancel-fetch-stream":
         return;
@@ -371,7 +854,7 @@
       events.onmessage = (event) => {
         try {
           const message = JSON.parse(event.data);
-          if (message.id != null && message.method) {
+          if (message.method) {
             emit({ type: "mcp-request", hostId: localHostId, request: message });
           }
         } catch (error) {
@@ -405,7 +888,7 @@
 
   window.electronBridge = {
     async sendMessageFromView(message) {
-      await handleMessageFromView(message);
+      return await handleMessageFromView(message);
     },
     getSentryInitOptions() {
       return null;
@@ -444,7 +927,7 @@
       return () => {};
     },
     async sendWorkerMessageFromView() {
-      throw new Error("Electron worker bridge is unavailable in devcontainer web mode");
+      return { ok: false, reason: "electron-worker-bridge-unavailable-in-web-mode" };
     },
   };
 

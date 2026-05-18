@@ -334,7 +334,7 @@ cargo test -p codex-computer-use-linux
 
 ### Devcontainer Web Mode
 
-The devcontainer path can install and run the Codex Desktop UI as a real browser-served web mode without mutating the Bluefin host. The default listener is loopback-only, bridge and app-server endpoints require a per-process web token, Browser Use prefers container-local Chromium/CDP, and Computer Use stays browser-only so it cannot control the physical host desktop. Web mode uses the same Codex identity as the current shell by default (`CODEX_HOME`, else `~/.codex`); `--profile` is only for browser sidecar state, sockets, logs, cache, and web bridge state. Use `--isolated` or `--codex-home <dir>` when a disposable or explicit Codex identity is desired. The app-server child receives a devcontainer-scoped environment with host desktop variables such as `DISPLAY`, `WAYLAND_DISPLAY`, compositor sockets, and `YDOTOOL_SOCKET` stripped.
+The devcontainer path can install and run the Codex Desktop UI as a real browser-served web mode without mutating the Bluefin host. The default listener is loopback-only, bridge and app-server endpoints require a per-process web token, Browser Use prefers container-local Chromium/CDP, and Computer Use defaults to desktop parity (`CODEX_COMPUTER_CONTROL_MODE=desktop`; health reports `physical_host_control: true`). Web mode uses the same Codex identity as the current shell by default (`CODEX_HOME`, else `~/.codex`); `--profile` is only for browser sidecar state, sockets, logs, cache, and web bridge state. Use `--isolated` or `--codex-home <dir>` when a disposable or explicit Codex identity is desired. Use `CODEX_COMPUTER_CONTROL_MODE=browser-only` or `CODEX_COMPUTER_USE_BROWSER_ONLY=1` when you want browser-only isolation; that mode strips host desktop variables such as `DISPLAY`, `WAYLAND_DISPLAY`, compositor sockets, and `YDOTOOL_SOCKET` from the app-server child.
 
 ```bash
 ./scripts/devcontainer-homebrew-smoke.sh
@@ -343,7 +343,7 @@ The devcontainer path can install and run the Codex Desktop UI as a real browser
 codex-desktop serve --workspace /workspace
 ```
 
-Issue #9 acceptance should use the two smoke scripts above. They verify the local Homebrew cask install, loopback default, non-loopback token guard, token-protected bridge calls, container-local CDP restart behavior, persisted web state, and a headless browser screenshot of the real served UI.
+Issue #9 acceptance should use the two smoke scripts above. They verify the local Homebrew cask install, loopback default, non-loopback token guard, token-protected bridge calls, desktop-mode Computer Use defaults, explicit browser-only isolation, container-local CDP restart behavior, persisted web state, and a headless browser screenshot of the real served UI.
 
 The old `scripts/devcontainer-codex-desktop-host.sh` Xvfb/noVNC path remains only as a Phase 1 compatibility harness. Do not use it as the target architecture for issue #9 acceptance.
 

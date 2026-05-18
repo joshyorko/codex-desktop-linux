@@ -855,6 +855,11 @@ test_devcontainer_homebrew_validation_script_targets_ror_image() {
     assert_contains "$script" 'YDOTOOL_SOCKET'
     assert_contains "$script" 'codex-desktop doctor'
     assert_contains "$script" 'CODEX_DESKTOP_RUN_COMPUTER_USE_DOCTOR=0'
+    assert_contains "$script" 'mode.*desktop'
+    assert_contains "$script" 'physical_host_control.*true'
+    assert_contains "$script" 'CODEX_COMPUTER_CONTROL_MODE=browser-only'
+    assert_contains "$script" 'mode.*browser-only'
+    assert_contains "$script" 'physical_host_control.*false'
     assert_not_contains "$script" 'joshyorko/homebrew-tools'
 }
 
@@ -905,6 +910,11 @@ test_devcontainer_desktop_host_is_loopback_and_container_scoped() {
     assert_contains "$smoke" 'http://127.0.0.1:9333'
     assert_contains "$smoke" 'http://127.0.0.1:9334'
     assert_contains "$smoke" 'http://127.0.0.1:9334/json/version'
+    assert_contains "$smoke" 'CODEX_COMPUTER_CONTROL_MODE=browser-only'
+    assert_contains "$smoke" 'mode.*desktop'
+    assert_contains "$smoke" 'physical_host_control.*true'
+    assert_contains "$smoke" 'mode.*browser-only'
+    assert_contains "$smoke" 'physical_host_control.*false'
     assert_contains "$smoke" 'physical_host_control'
     assert_contains "$smoke" 'devcontainer-smoke-marker'
     assert_contains "$smoke" 'codex-web-forbidden-ui-transport'
@@ -932,8 +942,14 @@ test_web_mode_security_token_env_and_cdp_static_contract() {
     assert_contains "$server" 'codex_web_token'
     assert_contains "$server" 'non-loopback bind requires --require-token'
     assert_contains "$server" 'delete env\[key\]'
-    assert_contains "$server" 'CODEX_COMPUTER_USE_BROWSER_ONLY: "1"'
-    assert_contains "$server" 'CODEX_COMPUTER_CONTROL_MODE: "browser-only"'
+    assert_contains "$server" 'computerUseBrowserOnlyRequested()'
+    assert_contains "$server" 'CODEX_COMPUTER_USE_BROWSER_ONLY: computerUseBrowserOnly ? "1" : "0"'
+    assert_contains "$server" 'CODEX_COMPUTER_CONTROL_MODE: computerUseBrowserOnly ? "browser-only" : process.env.CODEX_COMPUTER_CONTROL_MODE || "desktop"'
+    assert_contains "$server" 'mode: "desktop"'
+    assert_contains "$server" 'desktop_control: "enabled"'
+    assert_contains "$server" 'physical_host_control: true'
+    assert_contains "$server" 'mode: "browser-only"'
+    assert_contains "$server" 'desktop_control: "disabled_by_mode"'
     assert_contains "$server" 'physical_host_control: false'
     assert_contains "$server" 'app-server", "--listen", "stdio://"'
     assert_contains "$server" '--remote-debugging-address=127.0.0.1'
@@ -943,6 +959,42 @@ test_web_mode_security_token_env_and_cdp_static_contract() {
     assert_contains "$server" '/json/version'
     assert_contains "$server" '/__codex/browser/status'
     assert_contains "$server" 'container-local Chromium/CDP sidecar ready'
+    assert_contains "$server" 'WEB_MODE_FORCED_FEATURE_GATES'
+    assert_contains "$server" '"4166894088"'
+    assert_contains "$server" '"410065390"'
+    assert_contains "$server" '"410262010"'
+    assert_contains "$server" '"1506311413"'
+    assert_contains "$server" 'patchWebModeStatsigGateDefaults'
+    assert_contains "$server" 'shouldServeSpaFallback'
+    assert_contains "$server" 'WEB_MODE_API_PREFIXES'
+    assert_contains "$server" 'requestPath.startsWith(prefix)'
+    assert_contains "$server" '"/wham/"'
+    assert_contains "$server" '"/accounts/"'
+    assert_contains "$server" '"/wham/accounts/check"'
+    assert_contains "$server" '"/wham/tasks/list"'
+    assert_contains "$server" '"/wham/usage"'
+    assert_contains "$server" '"/beacons/home"'
+    assert_contains "$server" '"account/rateLimits/read"'
+    assert_contains "$server" 'account_ordering'
+    assert_contains "$server" 'beacon_ui_response'
+    assert_contains "$server" 'additional_rate_limits'
+    assert_contains "$server" 'primary_window'
+    assert_contains "$server" 'limit_window_seconds'
+    assert_contains "$server" 'browser_use: browserStatus(state)'
+    assert_contains "$server" 'computer_use: state.computer'
+    assert_contains "$server" 'chromeExtension.installed'
+    assert_contains "$server" 'appServer.write'
+    assert_contains "$server" 'fs.metadata'
+    assert_contains "$server" 'thread/turns/list'
+    assert_contains "$server" 'thread/backgroundTerminals/clean'
+    assert_contains "$server" 'normalizedTimeoutMs'
+    assert_contains "$server" 'name="initial-route"'
+    assert_contains "$server" 'escapeHtmlAttribute'
+    assert_contains "$server" 'rewriteIndexAssetUrls'
+    assert_contains "$server" 'src="./assets/'
+    assert_contains "$server" 'src="/assets/'
+    assert_contains "$server" 'serveIndexWithInitialRoute'
+    assert_contains "$server" 'path.extname(requestPath) === ""'
 
     for stripped_env in \
         DISPLAY \
@@ -965,7 +1017,584 @@ test_web_mode_security_token_env_and_cdp_static_contract() {
     assert_contains "$bootstrap" '"x-codex-web-token": bridgeToken'
     assert_contains "$bootstrap" 'codex_web_token=${encodeURIComponent(bridgeToken)}'
     assert_contains "$bootstrap" 'window.postMessage(message, window.location.origin)'
-    assert_contains "$bootstrap" 'Electron worker bridge is unavailable in devcontainer web mode'
+    assert_contains "$bootstrap" 'electron-worker-bridge-unavailable-in-web-mode'
+    assert_contains "$bootstrap" 'case "list-automations"'
+    assert_contains "$bootstrap" 'return { items: \[\] }'
+    assert_contains "$bootstrap" 'case "get-is-conversation-archiving-for-host"'
+    assert_contains "$bootstrap" 'case "hotkey-window-hotkey-state"'
+    assert_contains "$bootstrap" 'localHttpFetchProxyPrefixes'
+    assert_contains "$bootstrap" 'shouldProxyLocalHttpFetch'
+    assert_contains "$bootstrap" 'proxyLocalHttpFetch'
+    assert_contains "$bootstrap" 'case "read-file"'
+    assert_contains "$bootstrap" 'case "read-file-binary"'
+    assert_contains "$bootstrap" 'method: "fs/readFile"'
+    assert_contains "$bootstrap" 'case "chrome-extension-installed-read"'
+    assert_contains "$bootstrap" 'chromeExtension.installed'
+    assert_contains "$bootstrap" 'hostFetchAppServerRpcMethods'
+    assert_contains "$bootstrap" 'case "send-cli-request-for-host"'
+    assert_contains "$bootstrap" 'appServer.write'
+    assert_contains "$bootstrap" 'case "mcp-response"'
+    assert_contains "$bootstrap" 'batch-write-config-value-for-host'
+    assert_contains "$bootstrap" 'list-skills-for-host'
+    assert_contains "$bootstrap" 'read-plugin-skill'
+    assert_contains "$bootstrap" 'write-skill-config'
+    assert_contains "$bootstrap" 'case "set-default-model-config-for-host"'
+    assert_contains "$bootstrap" 'case "set-local-app-server-feature-enablement"'
+    assert_contains "$bootstrap" 'case "browser-use-origin-state-read"'
+    assert_contains "$bootstrap" 'case "computer-use-app-approvals-read"'
+    assert_contains "$bootstrap" 'case "read-file-metadata"'
+    assert_contains "$bootstrap" 'case "thread-follower-interrupt-turn-for-host"'
+    assert_contains "$bootstrap" '"/wham/"'
+    assert_contains "$bootstrap" '"/accounts/"'
+}
+
+test_web_mode_server_desktop_settings_contract() {
+    info "Checking web mode server desktop settings contract"
+    local server="$REPO_DIR/launcher/web-mode-server.mjs"
+
+node - "$server" <<'NODE'
+const fs = require("fs");
+const source = fs.readFileSync(process.argv[2], "utf8");
+
+const required = [
+  "WEB_MODE_FORCED_FEATURE_GATES",
+  "\"4166894088\"",
+  "\"410065390\"",
+  "\"410262010\"",
+  "\"1506311413\"",
+  "patchWebModeStatsigGateDefaults",
+  "computerUseBrowserOnlyRequested",
+  "mode: \"desktop\"",
+  "desktop_control: \"enabled\"",
+  "physical_host_control: true",
+  "mode: \"browser-only\"",
+  "desktop_control: \"disabled_by_mode\"",
+  "physical_host_control: false",
+  "browser_use: browserStatus(state)",
+  "computer_use: state.computer",
+  "chromeExtension.installed",
+  "appServer.write",
+  "fs.metadata",
+  "localFileMetadata",
+  "thread/turns/list",
+  "thread/backgroundTerminals/clean",
+  "normalizedTimeoutMs",
+  "name=\"initial-route\"",
+  "escapeHtmlAttribute",
+  "rewriteIndexAssetUrls",
+  "src=\"./assets/",
+  "src=\"/assets/",
+  "serveIndexWithInitialRoute",
+  "basename.startsWith(\"src-\")",
+  "WEB_MODE_API_PREFIXES",
+  "\"/wham/\"",
+  "\"/accounts/\"",
+  "requestPath.startsWith(prefix)",
+  "\"/wham/accounts/check\"",
+  "\"/wham/tasks/list\"",
+  "\"/wham/usage\"",
+  "\"/beacons/home\"",
+  "\"account/rateLimits/read\"",
+  "webModeWhamAccountsCheckResponse",
+  "webModeWhamUsageResponse",
+  "account_ordering",
+  "beacon_ui_response",
+  "additional_rate_limits",
+  "primary_window",
+  "limit_window_seconds",
+  "shouldServeSpaFallback",
+  "requestPath.startsWith(\"/__codex/\")",
+  "requestPath.startsWith(\"/assets/\")",
+  "path.extname(requestPath) === \"\"",
+];
+
+for (const needle of required) {
+  if (!source.includes(needle)) {
+    throw new Error(`missing web-mode settings server contract marker: ${needle}`);
+  }
+}
+
+const statsigNeedle = "t(!1,{onMount:(t,n)=>{let r=n.get(i);return r!=null&&t(r.checkGate(e)),n.set(a,t=>t.includes(e)?t:[...t,e])";
+const statsigReplacement = "t(${forcedGate},{onMount:(t,n)=>{let r=n.get(i);return r!=null&&t(${forcedGate}||r.checkGate(e)),n.set(a,t=>t.includes(e)?t:[...t,e])";
+if (!source.includes(statsigNeedle) || !source.includes(statsigReplacement)) {
+  throw new Error("web-mode statsig patch must set an initial forced gate value and preserve it after checkGate");
+}
+NODE
+}
+
+test_web_mode_bootstrap_desktop_fallback_contract() {
+    info "Checking web mode bootstrap desktop fallback contract"
+    local bootstrap="$REPO_DIR/launcher/web-mode-bootstrap.js"
+
+node - "$bootstrap" <<'NODE'
+const fs = require("fs");
+const vm = require("vm");
+
+(async () => {
+const source = fs.readFileSync(process.argv[2], "utf8");
+const posted = [];
+const fetches = [];
+const listeners = new Map();
+const storage = new Map();
+const eventSources = [];
+const encodedFile = Buffer.from("hello web mode", "utf8").toString("base64");
+
+for (const needle of [
+  "hostFetchAppServerRpcMethods",
+  "case \"read-file\"",
+  "case \"read-file-binary\"",
+  "method: \"fs/readFile\"",
+  "case \"chrome-extension-installed-read\"",
+  "chromeExtension.installed",
+  "case \"send-cli-request-for-host\"",
+  "case \"mcp-response\"",
+  "appServer.write",
+  "batch-write-config-value-for-host",
+  "list-skills-for-host",
+  "read-plugin-skill",
+  "write-skill-config",
+  "case \"set-default-model-config-for-host\"",
+  "case \"set-local-app-server-feature-enablement\"",
+  "case \"browser-use-origin-state-read\"",
+  "case \"computer-use-app-approvals-read\"",
+  "case \"read-file-metadata\"",
+  "case \"thread-follower-interrupt-turn-for-host\"",
+  "meta[name=\"initial-route\"]",
+  "currentRoute !== \"/\" && currentRoute !== \"/index.html\"",
+]) {
+  if (!source.includes(needle)) {
+    throw new Error(`missing web-mode bootstrap desktop bridge marker: ${needle}`);
+  }
+}
+
+const window = {
+  __CODEX_WEB_TOKEN__: "test-token",
+  location: { origin: "http://127.0.0.1:3773" },
+  structuredClone: (value) => JSON.parse(JSON.stringify(value)),
+  clearTimeout,
+  setTimeout,
+  console,
+  crypto: { randomUUID: () => "session-id" },
+  sessionStorage: {
+    getItem: (key) => storage.get(key) ?? null,
+    setItem: (key, value) => {
+      storage.set(key, String(value));
+    },
+  },
+  addEventListener(type, callback) {
+    const callbacks = listeners.get(type) ?? [];
+    callbacks.push(callback);
+    listeners.set(type, callbacks);
+  },
+  postMessage(message) {
+    posted.push(message);
+  },
+  matchMedia() {
+    return {
+      matches: false,
+      addEventListener() {},
+      removeEventListener() {},
+    };
+  },
+};
+
+class EventSource {
+  constructor() {
+    this.onmessage = null;
+    eventSources.push(this);
+  }
+}
+
+async function fetch(url, options = {}) {
+  const body = options.body == null ? null : JSON.parse(options.body);
+  fetches.push(body?.method === "appServer.rpc" ? `${body.method}:${body.params?.method}` : body?.method ?? url);
+  if (body?.method === "webState.read") {
+    return {
+      ok: true,
+      json: async () => ({
+        result: {
+          persistedAtoms: {},
+          globalState: {},
+          sharedObjects: {},
+        },
+      }),
+    };
+  }
+  if (body?.method === "health.read") {
+    return {
+      ok: true,
+      json: async () => ({
+        result: {
+          workspace: "/workspace",
+          profile: "/workspace/.codex-desktop",
+          codex_home: "/home/user/.codex",
+        },
+      }),
+    };
+  }
+  if (body?.method === "chromeExtension.installed") {
+    return {
+      ok: true,
+      json: async () => ({
+        ok: true,
+        result: { installed: true },
+      }),
+    };
+  }
+  if (body?.method === "conversation.interrupt") {
+    return {
+      ok: true,
+      json: async () => ({
+        ok: true,
+        result: { interrupted: true, turnId: "turn-1" },
+      }),
+    };
+  }
+  if (body?.method === "fs.metadata") {
+    return {
+      ok: true,
+      json: async () => ({
+        ok: true,
+        result: { path: body.params?.path, isFile: true, sizeBytes: 14 },
+      }),
+    };
+  }
+  if (body?.method === "appServer.write") {
+    return {
+      ok: true,
+      json: async () => ({ ok: true }),
+    };
+  }
+  if (url === "/wham/usage") {
+    return {
+      ok: true,
+      status: 200,
+      headers: new Map([["content-type", "application/json"]]),
+      text: async () => JSON.stringify({ plan_type: "prolite", rate_limit: { primary_window: { used_percent: 1 } } }),
+    };
+  }
+  if (body?.method === "appServer.rpc" && body.params?.method === "fs/readFile") {
+    return {
+      ok: true,
+      json: async () => ({
+        ok: true,
+        result: {
+          path: body.params?.params?.path,
+          contentsBase64: encodedFile,
+        },
+      }),
+    };
+  }
+  if (body?.method === "appServer.rpc" && body.params?.method === "plugin/list") {
+    return {
+      ok: true,
+      json: async () => ({
+        ok: true,
+        result: {
+          marketplaces: [],
+          featuredPluginIds: [],
+          marketplaceLoadErrors: [],
+        },
+      }),
+    };
+  }
+  if (body?.method === "appServer.rpc" && body.params?.method === "config/batchWrite") {
+    return {
+      ok: true,
+      json: async () => ({
+        ok: true,
+        result: { wroteConfig: true, params: body.params?.params },
+      }),
+    };
+  }
+  if (body?.method === "appServer.rpc" && body.params?.method === "experimentalFeature/enablement/set") {
+    return {
+      ok: true,
+      json: async () => ({
+        ok: true,
+        result: { wroteFeature: true, params: body.params?.params },
+      }),
+    };
+  }
+  if (body?.method === "appServer.rpc") {
+    throw new Error(`unexpected app-server call for ${body.params?.method}`);
+  }
+  return {
+    ok: true,
+    status: 200,
+    headers: new Map([["content-type", "application/json"]]),
+    json: async () => ({ ok: true }),
+    text: async () => JSON.stringify({ ok: true }),
+  };
+}
+
+const context = vm.createContext({
+  window,
+  document: {},
+  navigator: { userAgent: "Linux x86_64" },
+  console,
+  setTimeout,
+  clearTimeout,
+  crypto: window.crypto,
+  EventSource,
+  fetch,
+  Symbol,
+  URL,
+  atob: (value) => Buffer.from(value, "base64").toString("binary"),
+  TextDecoder,
+});
+
+vm.runInContext(source, context);
+await new Promise((resolve) => setTimeout(resolve, 0));
+
+const vscode = window.acquireVsCodeApi();
+vscode.postMessage({
+  type: "mcp-request",
+  hostId: "local",
+  request: { id: 1, method: "list-automations", params: {} },
+});
+vscode.postMessage({
+  type: "mcp-request",
+  hostId: "local",
+  request: { id: 2, method: "get-is-conversation-archiving-for-host", params: {} },
+});
+vscode.postMessage({
+  type: "mcp-request",
+  hostId: "local",
+  request: { id: 3, method: "hotkey-window-hotkey-state", params: {} },
+});
+vscode.postMessage({
+  type: "fetch",
+  hostId: "local",
+  requestId: "fetch-1",
+  url: "vscode://codex/list-automations",
+  body: JSON.stringify({ params: {} }),
+});
+vscode.postMessage({
+  type: "fetch",
+  hostId: "local",
+  requestId: "fetch-2",
+  url: "vscode://codex/get-is-conversation-archiving-for-host",
+  body: JSON.stringify({ params: { conversationId: "thread-id" } }),
+});
+vscode.postMessage({
+  type: "fetch",
+  hostId: "local",
+  requestId: "fetch-3",
+  url: "vscode://codex/hotkey-window-hotkey-state",
+  body: JSON.stringify({ params: {} }),
+});
+vscode.postMessage({
+  type: "fetch",
+  hostId: "local",
+  requestId: "fetch-4",
+  method: "GET",
+  url: "/wham/usage",
+});
+vscode.postMessage({
+  type: "fetch",
+  hostId: "local",
+  requestId: "fetch-5",
+  url: "vscode://codex/read-file",
+  body: JSON.stringify({ params: { path: "/workspace/README.md" } }),
+});
+vscode.postMessage({
+  type: "fetch",
+  hostId: "local",
+  requestId: "fetch-6",
+  url: "vscode://codex/read-file-binary",
+  body: JSON.stringify({ params: { path: "/workspace/logo.png" } }),
+});
+vscode.postMessage({
+  type: "fetch",
+  hostId: "local",
+  requestId: "fetch-7",
+  url: "vscode://codex/chrome-extension-installed-read",
+  body: JSON.stringify({ params: { extensionId: "abcdefghijklmnopabcdefghijklmnop" } }),
+});
+vscode.postMessage({
+  type: "fetch",
+  hostId: "local",
+  requestId: "fetch-8",
+  url: "vscode://codex/interrupt-conversation",
+  body: JSON.stringify({ params: { conversationId: "thread-id" } }),
+});
+vscode.postMessage({
+  type: "fetch",
+  hostId: "local",
+  requestId: "fetch-9",
+  url: "vscode://codex/list-plugins",
+  body: JSON.stringify({ params: { hostId: "local" } }),
+});
+vscode.postMessage({
+  type: "fetch",
+  hostId: "local",
+  requestId: "fetch-10",
+  url: "vscode://codex/browser-use-origin-state-read",
+  body: JSON.stringify({ params: {} }),
+});
+vscode.postMessage({
+  type: "fetch",
+  hostId: "local",
+  requestId: "fetch-11",
+  url: "vscode://codex/read-file-metadata",
+  body: JSON.stringify({ params: { path: "/workspace/logo.png" } }),
+});
+vscode.postMessage({
+  type: "fetch",
+  hostId: "local",
+  requestId: "fetch-12",
+  url: "vscode://codex/computer-use-app-approvals-read",
+  body: JSON.stringify({ params: {} }),
+});
+vscode.postMessage({
+  type: "fetch",
+  hostId: "local",
+  requestId: "fetch-13",
+  url: "vscode://codex/set-local-app-server-feature-enablement",
+  body: JSON.stringify({ params: { featureName: "remote_control", enabled: true } }),
+});
+vscode.postMessage({
+  type: "fetch",
+  hostId: "local",
+  requestId: "fetch-14",
+  url: "vscode://codex/set-default-model-config-for-host",
+  body: JSON.stringify({ params: { model: "gpt-5.5", reasoningEffort: "low", profile: null } }),
+});
+const workerResult = await window.electronBridge.sendWorkerMessageFromView({ type: "cancel" });
+const cliResult = await window.electronBridge.sendMessageFromView({
+  type: "send-cli-request-for-host",
+  hostId: "local",
+  method: "plugin/list",
+  params: {},
+});
+await window.electronBridge.sendMessageFromView({
+  type: "mcp-response",
+  hostId: "local",
+  message: { id: "server-request-1", result: { ok: true } },
+});
+eventSources[0]?.onmessage?.({
+  data: JSON.stringify({ method: "thread/updated", params: { threadId: "thread-id" } }),
+});
+await new Promise((resolve) => setTimeout(resolve, 0));
+
+const responses = posted.filter((message) => message.type === "mcp-response");
+if (responses.length !== 3) {
+  throw new Error(`expected 3 fallback responses, got ${responses.length}: ${JSON.stringify(posted)}`);
+}
+if (JSON.stringify(responses[0].message.result) !== JSON.stringify({ items: [] })) {
+  throw new Error(`list-automations fallback had wrong shape: ${JSON.stringify(responses[0])}`);
+}
+if (responses[1].message.result !== false) {
+  throw new Error(`archiving fallback had wrong shape: ${JSON.stringify(responses[1])}`);
+}
+if (JSON.stringify(responses[2].message.result) !== JSON.stringify({ configuredHotkey: null })) {
+  throw new Error(`hotkey fallback had wrong shape: ${JSON.stringify(responses[2])}`);
+}
+const fetchResponses = posted.filter((message) => message.type === "fetch-response");
+if (fetchResponses.length !== 14) {
+  throw new Error(`expected 14 fetch fallback/proxy responses, got ${fetchResponses.length}: ${JSON.stringify(posted)}`);
+}
+const fetchByRequestId = new Map(fetchResponses.map((message) => [message.requestId, JSON.parse(message.bodyJsonString)]));
+if (JSON.stringify(fetchByRequestId.get("fetch-1")) !== JSON.stringify({ items: [] })) {
+  throw new Error(`fetch list-automations fallback had wrong shape: ${JSON.stringify(fetchResponses)}`);
+}
+if (fetchByRequestId.get("fetch-2") !== false) {
+  throw new Error(`fetch archiving fallback had wrong shape: ${JSON.stringify(fetchResponses)}`);
+}
+if (JSON.stringify(fetchByRequestId.get("fetch-3")) !== JSON.stringify({ configuredHotkey: null })) {
+  throw new Error(`fetch hotkey fallback had wrong shape: ${JSON.stringify(fetchResponses)}`);
+}
+if (fetchByRequestId.get("fetch-4")?.plan_type !== "prolite" || fetchByRequestId.get("fetch-4")?.rate_limit?.primary_window?.used_percent !== 1) {
+  throw new Error(`local HTTP fetch proxy had wrong shape: ${JSON.stringify(fetchResponses)}`);
+}
+if (fetchByRequestId.get("fetch-5")?.contents !== "hello web mode" || fetchByRequestId.get("fetch-5")?.contentsBase64 !== encodedFile) {
+  throw new Error(`read-file fallback had wrong shape: ${JSON.stringify(fetchResponses)}`);
+}
+if (fetchByRequestId.get("fetch-6")?.contentsBase64 !== encodedFile) {
+  throw new Error(`read-file-binary fallback had wrong shape: ${JSON.stringify(fetchResponses)}`);
+}
+if (fetchByRequestId.get("fetch-7")?.installed !== true) {
+  throw new Error(`chrome extension fallback had wrong shape: ${JSON.stringify(fetchResponses)}`);
+}
+if (fetchByRequestId.get("fetch-8")?.interrupted !== true || fetchByRequestId.get("fetch-8")?.turnId !== "turn-1") {
+  throw new Error(`interrupt fallback had wrong shape: ${JSON.stringify(fetchResponses)}`);
+}
+if (!Array.isArray(fetchByRequestId.get("fetch-9")?.marketplaces)) {
+  throw new Error(`list-plugins forwarding had wrong shape: ${JSON.stringify(fetchResponses)}`);
+}
+if (fetchByRequestId.get("fetch-10")?.approvalMode !== "alwaysAsk") {
+  throw new Error(`browser-use origin state fallback had wrong shape: ${JSON.stringify(fetchResponses)}`);
+}
+if (fetchByRequestId.get("fetch-11")?.sizeBytes !== 14 || fetchByRequestId.get("fetch-11")?.isFile !== true) {
+  throw new Error(`read-file-metadata fallback had wrong shape: ${JSON.stringify(fetchResponses)}`);
+}
+if (!Array.isArray(fetchByRequestId.get("fetch-12")?.approvedApps)) {
+  throw new Error(`computer-use app approvals fallback had wrong shape: ${JSON.stringify(fetchResponses)}`);
+}
+if (fetchByRequestId.get("fetch-13")?.wroteFeature !== true || fetchByRequestId.get("fetch-13")?.params?.enablement !== true) {
+  throw new Error(`local feature enablement forwarding had wrong shape: ${JSON.stringify(fetchResponses)}`);
+}
+if (
+  fetchByRequestId.get("fetch-14")?.wroteConfig !== true ||
+  !fetchByRequestId.get("fetch-14")?.params?.edits?.some((edit) => edit.keyPath === "model")
+) {
+  throw new Error(`default model config forwarding had wrong shape: ${JSON.stringify(fetchResponses)}`);
+}
+if (workerResult?.reason !== "electron-worker-bridge-unavailable-in-web-mode") {
+  throw new Error(`worker bridge fallback threw or returned wrong result: ${JSON.stringify(workerResult)}`);
+}
+if (!Array.isArray(cliResult?.marketplaces)) {
+  throw new Error(`send-cli-request-for-host did not return plugin/list result: ${JSON.stringify(cliResult)}`);
+}
+const unexpectedAppServerCalls = fetches.filter(
+  (entry) =>
+    entry.startsWith("appServer.rpc:") &&
+    ![
+      "appServer.rpc:fs/readFile",
+      "appServer.rpc:plugin/list",
+      "appServer.rpc:config/batchWrite",
+      "appServer.rpc:experimentalFeature/enablement/set",
+    ].includes(entry),
+);
+if (unexpectedAppServerCalls.length > 0) {
+  throw new Error(`fallback methods should not be forwarded to app-server: ${JSON.stringify(fetches)}`);
+}
+if (fetches.filter((entry) => entry === "appServer.rpc:fs/readFile").length !== 2) {
+  throw new Error(`read-file methods should be forwarded through fs/readFile: ${JSON.stringify(fetches)}`);
+}
+if (fetches.filter((entry) => entry === "appServer.rpc:plugin/list").length !== 2) {
+  throw new Error(`plugin list should be forwarded by fetch and send-cli-request-for-host: ${JSON.stringify(fetches)}`);
+}
+if (!fetches.includes("appServer.rpc:config/batchWrite")) {
+  throw new Error(`default model config should be forwarded through config/batchWrite: ${JSON.stringify(fetches)}`);
+}
+if (!fetches.includes("appServer.rpc:experimentalFeature/enablement/set")) {
+  throw new Error(`feature enablement should be forwarded through experimentalFeature/enablement/set: ${JSON.stringify(fetches)}`);
+}
+if (!fetches.includes("chromeExtension.installed")) {
+  throw new Error(`chrome extension status should be forwarded to the web-mode server: ${JSON.stringify(fetches)}`);
+}
+if (!fetches.includes("conversation.interrupt")) {
+  throw new Error(`interrupt conversation should be forwarded to the web-mode server: ${JSON.stringify(fetches)}`);
+}
+if (!fetches.includes("appServer.write")) {
+  throw new Error(`mcp-response should be written back to the app-server: ${JSON.stringify(fetches)}`);
+}
+if (!fetches.includes("fs.metadata")) {
+  throw new Error(`read-file-metadata should be forwarded to the web-mode server: ${JSON.stringify(fetches)}`);
+}
+if (!fetches.includes("/wham/usage")) {
+  throw new Error(`local HTTP fetch proxy did not hit the expected route: ${JSON.stringify(fetches)}`);
+}
+if (!posted.some((message) => message.type === "mcp-request" && message.request?.method === "thread/updated")) {
+  throw new Error(`app-server notifications should be relayed to the renderer: ${JSON.stringify(posted)}`);
+}
+})().catch((error) => {
+  console.error(error);
+  process.exit(1);
+});
+NODE
 }
 
 test_web_mode_codex_home_policy() {
@@ -980,13 +1609,21 @@ test_web_mode_codex_home_policy() {
 
     mkdir -p "$workspace" "$profile" "$shared_home" "$custom_home" "$home_dir"
 
-    CODEX_HOME="$shared_home" node "$server" inspect \
+    env -u CODEX_COMPUTER_CONTROL_MODE -u CODEX_COMPUTER_USE_BROWSER_ONLY CODEX_HOME="$shared_home" node "$server" inspect \
         --workspace "$workspace" \
         --profile "$profile" > "$TMP_DIR/web-mode-shared-home.json"
     assert_contains "$TMP_DIR/web-mode-shared-home.json" "\"codex_home\": \"$shared_home\""
     assert_contains "$TMP_DIR/web-mode-shared-home.json" "\"profile\": \"$profile\""
     assert_contains "$TMP_DIR/web-mode-shared-home.json" "\"isolated\": false"
+    assert_contains "$TMP_DIR/web-mode-shared-home.json" "\"mode\": \"desktop\""
+    assert_contains "$TMP_DIR/web-mode-shared-home.json" "\"physical_host_control\": true"
     assert_not_contains "$TMP_DIR/web-mode-shared-home.json" "$profile/identity/codex-home"
+
+    env -u CODEX_COMPUTER_USE_BROWSER_ONLY CODEX_COMPUTER_CONTROL_MODE=browser-only CODEX_HOME="$shared_home" node "$server" inspect \
+        --workspace "$workspace" \
+        --profile "$profile" > "$TMP_DIR/web-mode-browser-only.json"
+    assert_contains "$TMP_DIR/web-mode-browser-only.json" "\"mode\": \"browser-only\""
+    assert_contains "$TMP_DIR/web-mode-browser-only.json" "\"physical_host_control\": false"
 
     HOME="$home_dir" env -u CODEX_HOME node "$server" inspect \
         --workspace "$workspace" \
@@ -1484,6 +2121,10 @@ test_launcher_template_sanity() {
     assert_contains "$REPO_DIR/launcher/start.sh.template" "CODEX_DESKTOP_WEB_MODE=1"
     assert_contains "$REPO_DIR/launcher/start.sh.template" "CODEX_BROWSER_MODE"
     assert_contains "$REPO_DIR/launcher/start.sh.template" "CODEX_COMPUTER_CONTROL_MODE"
+    assert_contains "$REPO_DIR/launcher/start.sh.template" 'CODEX_COMPUTER_CONTROL_MODE="${CODEX_COMPUTER_CONTROL_MODE:-desktop}"'
+    assert_contains "$REPO_DIR/launcher/start.sh.template" 'early_truthy_env_value "${CODEX_COMPUTER_USE_BROWSER_ONLY:-}"'
+    assert_not_contains "$REPO_DIR/launcher/start.sh.template" 'CODEX_COMPUTER_USE_BROWSER_ONLY="${CODEX_COMPUTER_USE_BROWSER_ONLY:-1}"'
+    assert_not_contains "$REPO_DIR/launcher/start.sh.template" 'CODEX_COMPUTER_CONTROL_MODE="${CODEX_COMPUTER_CONTROL_MODE:-browser-only}"'
     assert_contains "$REPO_DIR/launcher/web-mode-server.mjs" 'codex app-server'
     assert_contains "$REPO_DIR/launcher/web-mode-server.mjs" 'app-server'
     assert_contains "$REPO_DIR/launcher/web-mode-server.mjs" 'stdio://'
@@ -4014,6 +4655,8 @@ main() {
     test_devcontainer_homebrew_validation_script_targets_ror_image
     test_devcontainer_desktop_host_is_loopback_and_container_scoped
     test_web_mode_security_token_env_and_cdp_static_contract
+    test_web_mode_server_desktop_settings_contract
+    test_web_mode_bootstrap_desktop_fallback_contract
     test_web_mode_codex_home_policy
     test_web_mode_inventory_script_reports_host_markers
     test_installer_detects_electron_version_from_plist
