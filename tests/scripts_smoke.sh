@@ -2431,6 +2431,15 @@ test_web_mode_contract_harness_fixture() {
     assert_contains "$REPO_DIR/docs/superpowers/plans/2026-05-18-codex-desktop-serve-contract-spike.md" "Do not fake Connections"
 }
 
+test_web_mode_remote_control_controller_fixture() {
+    info "Checking web mode remote-control websocket controller fixture"
+    local test_script="$REPO_DIR/tests/web-mode-remote-control-controller.test.mjs"
+
+    assert_file_exists "$test_script"
+    node --check "$test_script"
+    node "$test_script"
+}
+
 test_installer_detects_electron_version_from_plist() {
     info "Checking Electron version detection from app metadata"
     local workspace="$TMP_DIR/electron-version"
@@ -5417,6 +5426,7 @@ main() {
     test_web_mode_codex_home_policy
     test_web_mode_inventory_script_reports_host_markers
     test_web_mode_contract_harness_fixture
+    test_web_mode_remote_control_controller_fixture
     test_installer_detects_electron_version_from_plist
     test_installer_keeps_electron_fallback_for_bad_metadata
     test_port_validation_rejects_oversized_numeric_values

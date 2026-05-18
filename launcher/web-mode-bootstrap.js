@@ -763,6 +763,7 @@
   async function startConversation(params = {}) {
     const normalized = normalizeConversationStartParams(params);
     const threadResult = await requestAppServerRpc("thread/start", {
+      hostId: normalized.hostId,
       cwd: normalized.cwd,
       approvalsReviewer: normalized.approvalsReviewer,
       model: normalized.model,
@@ -781,6 +782,7 @@
     let turnResult = null;
     if (conversationId && input.length > 0) {
       turnResult = await requestAppServerRpc("turn/start", {
+        hostId: normalized.hostId,
         threadId: conversationId,
         input,
         cwd: normalized.cwd,
@@ -812,6 +814,7 @@
     const turnStartParams = params.turnStartParams ?? {};
     const result = await requestAppServerRpc("turn/start", {
       ...turnStartParams,
+      hostId: params.hostId ?? turnStartParams.hostId ?? localHostId,
       threadId: conversationId,
       input: Array.isArray(turnStartParams.input) ? turnStartParams.input : [],
     });
