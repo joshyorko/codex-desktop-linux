@@ -151,6 +151,69 @@ function applyLinuxAppSunsetPatch(currentSource) {
   return currentSource;
 }
 
+function applyLinuxAppServerFeatureEnablementPatch(currentSource) {
+  const supportedFeatures = new Set([
+    "apps",
+    "memories",
+    "plugins",
+    "remote_control",
+    "tool_call_mcp_elicitation",
+    "tool_search",
+    "tool_suggest",
+  ]);
+  const defaultFeaturesMarker = "statsig_default_enable_features";
+  const syncMethodMarker = "set-experimental-feature-enablement-for-host";
+  if (
+    !currentSource.includes(defaultFeaturesMarker) ||
+    !currentSource.includes(syncMethodMarker)
+  ) {
+    return currentSource;
+  }
+
+  const featureArrayRegex =
+    /var ([A-Za-z_$][\w$]*)=\[([^\]]*?)\];function ([A-Za-z_$][\w$]*)\(\)\{let [\s\S]{0,2400}?statsig_default_enable_features[\s\S]{0,2400}?set-experimental-feature-enablement-for-host/u;
+  const featureArrayMatch = currentSource.match(featureArrayRegex);
+
+  if (featureArrayMatch == null) {
+    console.warn(
+      "WARN: Could not find app-server feature enablement list — skipping unsupported feature compatibility patch",
+    );
+    return currentSource;
+  }
+
+  const [, arrayVar, featureArrayItems] = featureArrayMatch;
+  const supportedFeatureArrayItems = featureArrayItems
+    .split(",")
+    .filter((entry) => {
+      const featureMatch = entry.trim().match(/^`([^`]+)`$/u);
+      return featureMatch != null && supportedFeatures.has(featureMatch[1]);
+    })
+    .join(",");
+  if (supportedFeatureArrayItems === featureArrayItems) {
+    return currentSource;
+  }
+
+  const featureArrayNeedle = `var ${arrayVar}=[${featureArrayItems}];`;
+  const featureArrayPatch = `var ${arrayVar}=[${supportedFeatureArrayItems}];`;
+  const featureArrayIndex = featureArrayMatch.index;
+  if (
+    featureArrayIndex == null ||
+    currentSource.slice(featureArrayIndex, featureArrayIndex + featureArrayNeedle.length) !==
+      featureArrayNeedle
+  ) {
+    console.warn(
+      "WARN: Could not locate matched app-server feature enablement list — skipping unsupported feature compatibility patch",
+    );
+    return currentSource;
+  }
+
+  return [
+    currentSource.slice(0, featureArrayIndex),
+    featureArrayPatch,
+    currentSource.slice(featureArrayIndex + featureArrayNeedle.length),
+  ].join("");
+}
+
 function applyBrowserAnnotationScreenshotPatch(currentSource) {
   let patchedSource = currentSource;
 
@@ -464,6 +527,7 @@ function patchCommentPreloadBundle(extractedDir) {
 
 module.exports = {
   applyBrowserAnnotationScreenshotPatch,
+  applyLinuxAppServerFeatureEnablementPatch,
   applyPersistentRateLimitFooterPatch,
   applyLinuxAppSunsetPatch,
   applyLinuxOpaqueWindowsDefaultPatch,
