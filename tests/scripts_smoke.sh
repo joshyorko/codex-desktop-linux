@@ -4160,6 +4160,24 @@ const fetches = [];
 const listeners = new Map();
 const storage = new Map();
 const eventSources = [];
+const editable = {
+  value: "",
+  textContent: "",
+  isContentEditable: false,
+  selectionStart: 0,
+  selectionEnd: 0,
+  focus() {
+    document.activeElement = this;
+  },
+  setSelectionRange(start, end) {
+    this.selectionStart = start;
+    this.selectionEnd = end;
+  },
+  dispatchEvent(event) {
+    posted.push({ type: "dom-event", eventType: event.type, value: this.value, textContent: this.textContent });
+    return true;
+  },
+};
 const encodedFile = Buffer.from("hello web mode", "utf8").toString("base64");
 
 for (const needle of [
@@ -4242,7 +4260,12 @@ const window = {
 class EventSource {
   constructor() {
     this.onmessage = null;
+    this.onerror = null;
+    this.closed = false;
     eventSources.push(this);
+  }
+  close() {
+    this.closed = true;
   }
 }
 
@@ -4421,6 +4444,32 @@ async function fetch(url, options = {}) {
       }),
     };
   }
+  if (body?.method === "appServer.rpc" && body.params?.method === "thread/turns/list") {
+    return {
+      ok: true,
+      json: async () => ({
+        ok: true,
+        result: {
+          turns: [
+            {
+              id: "turn-started",
+              threadId: body.params?.params?.threadId,
+              status: "completed",
+              durationMs: 12,
+              error: null,
+              items: [
+                {
+                  id: "agent-item-1",
+                  type: "agentMessage",
+                  text: "done",
+                },
+              ],
+            },
+          ],
+        },
+      }),
+    };
+  }
   if (body?.method === "appServer.rpc") {
     throw new Error(`unexpected app-server call for ${body.params?.method}`);
   }
@@ -4433,9 +4482,64 @@ async function fetch(url, options = {}) {
   };
 }
 
+const document = {
+  activeElement: editable,
+  querySelector(selector) {
+    if (selector === '[contenteditable="true"]' || selector === "textarea" || selector === '[role="textbox"]') {
+      return editable;
+    }
+    return null;
+  },
+  execCommand(command, _showUi, value) {
+    if (command === "insertText") {
+      editable.value += value;
+      editable.textContent += value;
+      editable.selectionStart = editable.value.length;
+      editable.selectionEnd = editable.value.length;
+      return true;
+    }
+    return false;
+  },
+};
+
+class InputEvent {
+  constructor(type, init = {}) {
+    this.type = type;
+    this.bubbles = Boolean(init.bubbles);
+    this.inputType = init.inputType;
+    this.data = init.data;
+  }
+}
+
+class FakeSpeechRecognition {
+  constructor() {
+    this.continuous = false;
+    this.interimResults = false;
+    this.lang = "";
+    FakeSpeechRecognition.instances.push(this);
+  }
+  start() {
+    this.onresult?.({
+      results: [
+        {
+          isFinal: true,
+          0: { transcript: " dictated text" },
+        },
+      ],
+    });
+    this.onend?.();
+  }
+  stop() {
+    this.onend?.();
+  }
+}
+FakeSpeechRecognition.instances = [];
+window.SpeechRecognition = FakeSpeechRecognition;
+window.webkitSpeechRecognition = FakeSpeechRecognition;
+
 const context = vm.createContext({
   window,
-  document: {},
+  document,
   navigator: { userAgent: "Linux x86_64" },
   console,
   setTimeout,
@@ -4445,6 +4549,7 @@ const context = vm.createContext({
   fetch,
   Symbol,
   URL,
+  InputEvent,
   atob: (value) => Buffer.from(value, "base64").toString("binary"),
   TextDecoder,
 });
@@ -4626,6 +4731,14 @@ await window.electronBridge.sendMessageFromView({
 eventSources[0]?.onmessage?.({
   data: JSON.stringify({ method: "thread/updated", params: { threadId: "thread-id" } }),
 });
+eventSources[0]?.onerror?.(new Error("disconnect"));
+await new Promise((resolve) => setTimeout(resolve, 300));
+eventSources[1]?.onmessage?.({
+  data: JSON.stringify({ method: "thread/status/changed", params: { threadId: "thread-started", status: { type: "idle" } } }),
+});
+await window.electronBridge.sendMessageFromView({
+  type: "global-dictation-start",
+});
 await new Promise((resolve) => setTimeout(resolve, 0));
 
 const responses = posted.filter((message) => message.type === "mcp-response");
@@ -4738,6 +4851,7 @@ const unexpectedAppServerCalls = fetches.filter(
       "appServer.rpc:experimentalFeature/enablement/set",
       "appServer.rpc:thread/start",
       "appServer.rpc:turn/start",
+      "appServer.rpc:thread/turns/list",
     ].includes(entry),
 );
 if (unexpectedAppServerCalls.length > 0) {
@@ -4754,6 +4868,9 @@ if (fetches.filter((entry) => entry === "appServer.rpc:thread/start").length !==
 }
 if (fetches.filter((entry) => entry === "appServer.rpc:turn/start").length !== 2) {
   throw new Error(`chat starts and follower turns should be forwarded through turn/start: ${JSON.stringify(fetches)}`);
+}
+if (fetches.filter((entry) => entry === "appServer.rpc:thread/turns/list").length < 1) {
+  throw new Error(`active turns should be recovered through thread/turns/list: ${JSON.stringify(fetches)}`);
 }
 if (!fetches.includes("appServer.rpc:config/batchWrite")) {
   throw new Error(`default model config should be forwarded through config/batchWrite: ${JSON.stringify(fetches)}`);
@@ -4785,8 +4902,20 @@ if (!fetches.includes("workspace.selectDirectory")) {
 if (!fetches.includes("/wham/usage")) {
   throw new Error(`local HTTP fetch proxy did not hit the expected route: ${JSON.stringify(fetches)}`);
 }
-if (!posted.some((message) => message.type === "mcp-request" && message.request?.method === "thread/updated")) {
-  throw new Error(`app-server notifications should be relayed to the renderer: ${JSON.stringify(posted)}`);
+if (posted.some((message) => message.type === "mcp-request" && message.request?.method === "thread/updated")) {
+  throw new Error(`app-server notifications must not be relayed as renderer-originated requests: ${JSON.stringify(posted)}`);
+}
+if (!posted.some((message) => message.type === "mcp-notification" && message.method === "thread/updated")) {
+  throw new Error(`app-server notifications should be relayed as mcp-notification: ${JSON.stringify(posted)}`);
+}
+if (!posted.some((message) => message.type === "mcp-notification" && message.method === "turn/completed")) {
+  throw new Error(`active turn recovery should synthesize a completed turn notification: ${JSON.stringify(posted)}`);
+}
+if (!eventSources[0]?.closed || eventSources.length < 2) {
+  throw new Error(`event stream should close and reconnect after errors`);
+}
+if (!editable.value.includes("dictated text")) {
+  throw new Error(`dictation should insert recognized text into the focused composer: ${JSON.stringify(editable)}`);
 }
 })().catch((error) => {
   console.error(error);
