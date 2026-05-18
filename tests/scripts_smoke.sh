@@ -1289,11 +1289,18 @@ async function fetch(url, options = {}) {
     };
   }
   if (body?.method === "fs.metadata") {
+    if (body.params?.path === "/workspace/missing") {
+      return {
+        ok: false,
+        status: 500,
+        json: async () => ({ error: "not_found" }),
+      };
+    }
     return {
       ok: true,
       json: async () => ({
         ok: true,
-        result: { path: body.params?.path, isFile: true, sizeBytes: 14 },
+        result: { path: body.params?.path, isFile: true, isDirectory: body.params?.path?.includes("workspace"), sizeBytes: 14 },
       }),
     };
   }
@@ -1556,6 +1563,13 @@ vscode.postMessage({
   url: "vscode://codex/set-default-model-config-for-host",
   body: JSON.stringify({ params: { model: "gpt-5.5", reasoningEffort: "low", profile: null } }),
 });
+vscode.postMessage({
+  type: "fetch",
+  hostId: "local",
+  requestId: "fetch-15",
+  url: "vscode://codex/paths-exist",
+  body: JSON.stringify({ params: { paths: ["/workspace/existing", "/workspace/missing"] } }),
+});
 const workerResult = await window.electronBridge.sendWorkerMessageFromView({ type: "cancel" });
 const cliResult = await window.electronBridge.sendMessageFromView({
   type: "send-cli-request-for-host",
@@ -1625,8 +1639,8 @@ if (JSON.stringify(responses[2].message.result) !== JSON.stringify({ configuredH
   throw new Error(`hotkey fallback had wrong shape: ${JSON.stringify(responses[2])}`);
 }
 const fetchResponses = posted.filter((message) => message.type === "fetch-response");
-if (fetchResponses.length !== 14) {
-  throw new Error(`expected 14 fetch fallback/proxy responses, got ${fetchResponses.length}: ${JSON.stringify(posted)}`);
+if (fetchResponses.length !== 15) {
+  throw new Error(`expected 15 fetch fallback/proxy responses, got ${fetchResponses.length}: ${JSON.stringify(posted)}`);
 }
 const fetchByRequestId = new Map(fetchResponses.map((message) => [message.requestId, JSON.parse(message.bodyJsonString)]));
 if (JSON.stringify(fetchByRequestId.get("fetch-1")) !== JSON.stringify({ items: [] })) {
@@ -1673,6 +1687,9 @@ if (
   !fetchByRequestId.get("fetch-14")?.params?.edits?.some((edit) => edit.keyPath === "model")
 ) {
   throw new Error(`default model config forwarding had wrong shape: ${JSON.stringify(fetchResponses)}`);
+}
+if (JSON.stringify(fetchByRequestId.get("fetch-15")?.existingPaths) !== JSON.stringify(["/workspace/existing"])) {
+  throw new Error(`paths-exist should return existing local paths only: ${JSON.stringify(fetchResponses)}`);
 }
 if (workerResult?.reason !== "electron-worker-bridge-unavailable-in-web-mode") {
   throw new Error(`worker bridge fallback threw or returned wrong result: ${JSON.stringify(workerResult)}`);
