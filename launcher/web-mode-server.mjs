@@ -45,6 +45,18 @@ const WEB_MODE_API_PREFIXES = [
 const BUNDLED_PLUGIN_NAMES = ["browser-use", "chrome", "computer-use"];
 const SHUTDOWN_TIMEOUT_MS = 3000;
 
+function redactHome(targetPath) {
+  const home = process.env.HOME;
+  if (!home || typeof targetPath !== "string") {
+    return targetPath;
+  }
+  return targetPath === home || targetPath.startsWith(`${home}${path.sep}`) ? `~${targetPath.slice(home.length)}` : targetPath;
+}
+
+function printServeLine(message = "") {
+  process.stderr.write(`${message}\n`);
+}
+
 function usage() {
   console.error(`Usage:
   codex-desktop serve --workspace <dir> [--profile <dir>] [--codex-home <dir>|--isolated] [--bind 127.0.0.1] [--port 3773]
@@ -213,6 +225,10 @@ function createState(args) {
       profile_dir: args.browserProfileDir,
       cdp_endpoint: null,
     },
+    chrome_native_host: {
+      status: "not_checked",
+      manifests: [],
+    },
     computer: computerUseBrowserOnly
       ? {
           mode: "browser-only",
@@ -241,6 +257,16 @@ function createState(args) {
           blocked_host_env: [],
         },
   };
+}
+
+function appendServeLog(state, event, fields = {}, level = "info") {
+  const entry = {
+    at: new Date().toISOString(),
+    level,
+    event,
+    ...fields,
+  };
+  fs.appendFile(path.join(state.args.logsDir, "serve.jsonl"), `${JSON.stringify(entry)}\n`).catch(() => {});
 }
 
 function appendAppServerLog(state, chunk) {
@@ -640,11 +666,13 @@ function startAppServer(state) {
   child.on("error", (error) => {
     state.appServer.status = "error";
     state.appServer.last_error = error.message;
+    appendServeLog(state, "app_server_error", { error: error.message }, "error");
   });
   child.on("exit", (code, signal) => {
     state.appServer.status = "exited";
     state.appServer.pid = null;
     state.appServer.last_error = `exited code=${code} signal=${signal}`;
+    appendServeLog(state, "app_server_exited", { code, signal }, code === 0 ? "info" : "warn");
   });
 
   sendAppServerRpc(
@@ -669,10 +697,12 @@ function startAppServer(state) {
       if (state.appServer.child?.stdin?.writable) {
         state.appServer.child.stdin.write(`${JSON.stringify({ method: "initialized" })}\n`);
       }
+      appendServeLog(state, "app_server_ready", { pid: state.appServer.pid });
     })
     .catch((error) => {
       state.appServer.status = "error";
       state.appServer.last_error = error.message;
+      appendServeLog(state, "app_server_initialize_failed", { error: error.message }, "error");
     });
 }
 
@@ -759,8 +789,71 @@ function appServerStatus(state) {
   };
 }
 
+function formatCapabilityStatus(label, status, detail = null) {
+  return detail ? `${label}: ${status} (${detail})` : `${label}: ${status}`;
+}
+
+function printStartupSummary(state, url) {
+  const browser = browserStatus(state);
+  const healthUrl = `${url}__codex/health`;
+  const doctorUrl = `${url}__codex/doctor`;
+  const tokenNote = state.args.requireToken || isLoopback(state.args.bind) ? "bridge token enabled" : "bridge token required";
+
+  printServeLine("");
+  printServeLine("Codex Desktop Web");
+  printServeLine("-----------------");
+  printServeLine(`URL:         ${url}`);
+  printServeLine(`Workspace:   ${redactHome(state.args.workspace)}`);
+  printServeLine(`Profile:     ${redactHome(state.args.profile)}`);
+  printServeLine(`Codex home:  ${redactHome(state.args.codexHome)}${state.args.isolated ? " (isolated)" : ""}`);
+  printServeLine(`Bind:        ${state.args.bind}:${state.args.port === 0 ? new URL(url).port : state.args.port} (${tokenNote})`);
+  printServeLine("");
+  printServeLine("Runtime");
+  printServeLine(`  ${formatCapabilityStatus("App server", state.appServer.status, "stdio bridge")}`);
+  printServeLine(`  ${formatCapabilityStatus("Browser Use", browser.mode, browser.reason)}`);
+  printServeLine(
+    `  ${formatCapabilityStatus(
+      "Computer Use",
+      state.computer.mode,
+      state.computer.physical_host_control ? "desktop session control enabled" : "host desktop variables stripped",
+    )}`,
+  );
+  printServeLine(`  ${formatCapabilityStatus("Chrome native host", state.chrome_native_host.status)}`);
+  printServeLine("");
+  printServeLine("Diagnostics");
+  printServeLine(`  Health:     ${healthUrl}`);
+  printServeLine(`  Doctor:     ${doctorUrl}`);
+  printServeLine(`  Logs:       ${redactHome(path.join(state.args.logsDir, "serve.jsonl"))}`);
+  printServeLine(`  App logs:   ${redactHome(path.join(state.args.logsDir, "app-server.log"))}`);
+  printServeLine("");
+  printServeLine("Press Ctrl-C to stop Codex Desktop Web.");
+  printServeLine("");
+}
+
+function portConflictMessage(args, error) {
+  if (error?.code !== "EADDRINUSE") {
+    return error?.message ?? String(error);
+  }
+  return [
+    `port ${args.port} is already in use on ${args.bind}`,
+    `choose another port: codex-desktop serve --workspace ${JSON.stringify(args.workspace)} --port 0`,
+    `or inspect the listener: ss -ltnp 'sport = :${args.port}'`,
+  ].join("\n");
+}
+
 function health(state, serverAddress = null) {
   const { args } = state;
+  const browser = browserStatus(state);
+  const warnings = [];
+  if (state.appServer.status === "error" || state.appServer.status === "exited") {
+    warnings.push(`app-server ${state.appServer.status}: ${state.appServer.last_error}`);
+  }
+  if (browser.mode === "disabled") {
+    warnings.push(`Browser Use sidecar disabled: ${browser.reason}`);
+  }
+  if (state.computer.physical_host_control) {
+    warnings.push("Computer Use is in desktop mode; in a devcontainer this may target the container desktop session, not the Bluefin host.");
+  }
   return {
     package: "codex-desktop-linux",
     mode: "devcontainer-web",
@@ -779,8 +872,24 @@ function health(state, serverAddress = null) {
       required: true,
       token_present: Boolean(state.token),
     },
+    logs: {
+      serve_jsonl: path.join(args.logsDir, "serve.jsonl"),
+      app_server: path.join(args.logsDir, "app-server.log"),
+      browser_use: path.join(args.logsDir, "browser-use.log"),
+    },
+    diagnostics: {
+      status: warnings.length === 0 ? "ok" : "degraded",
+      warnings,
+      capabilities: {
+        app_server_bridge: "stdio",
+        browser_sidecar: browser.mode,
+        computer_use_mode: state.computer.mode,
+        chrome_native_host: state.chrome_native_host.status,
+      },
+    },
     app_server: appServerStatus(state),
-    browser_use: browserStatus(state),
+    browser_use: browser,
+    chrome_native_host: state.chrome_native_host,
     computer_use: state.computer,
   };
 }
@@ -1083,18 +1192,18 @@ async function chromeExtensionMetadata(pluginDir) {
 async function writeChromeNativeHostManifests(args) {
   const arch = chromeExtensionHostArch();
   if (arch == null) {
-    return;
+    return { status: "unsupported_arch", arch: process.arch, manifests: [] };
   }
 
   const pluginDir = path.join(args.codexHome, "plugins", "cache", "openai-bundled", "chrome", "latest");
   const hostPath = path.join(pluginDir, "extension-host", "linux", arch, "extension-host");
   if (!(await exists(hostPath))) {
-    return;
+    return { status: "host_missing", arch, host_path: hostPath, manifests: [] };
   }
 
   const { extensionId, hostName } = await chromeExtensionMetadata(pluginDir);
   if (!/^[a-p]{32}$/.test(extensionId ?? "") || !/^[A-Za-z0-9_.]+$/.test(hostName ?? "")) {
-    return;
+    return { status: "metadata_missing", arch, host_path: hostPath, manifests: [] };
   }
 
   const manifest = JSON.stringify({
@@ -1106,17 +1215,20 @@ async function writeChromeNativeHostManifests(args) {
   });
 
   const homeDir = process.env.HOME || args.workspace;
-  await Promise.all(
+  const manifests = await Promise.all(
     [
-      ".config/google-chrome/NativeMessagingHosts",
-      ".config/BraveSoftware/Brave-Browser/NativeMessagingHosts",
-      ".config/chromium/NativeMessagingHosts",
-    ].map(async (relative) => {
+      { browser: "google-chrome", relative: ".config/google-chrome/NativeMessagingHosts" },
+      { browser: "brave", relative: ".config/BraveSoftware/Brave-Browser/NativeMessagingHosts" },
+      { browser: "chromium", relative: ".config/chromium/NativeMessagingHosts" },
+    ].map(async ({ browser, relative }) => {
       const directory = path.join(homeDir, relative);
       await fs.mkdir(directory, { recursive: true, mode: 0o700 });
-      await fs.writeFile(path.join(directory, `${hostName}.json`), manifest, { mode: 0o600 });
+      const manifestPath = path.join(directory, `${hostName}.json`);
+      await fs.writeFile(manifestPath, manifest, { mode: 0o600 });
+      return { browser, path: manifestPath };
     }),
   );
+  return { status: "installed", arch, host_path: hostPath, extension_id: extensionId, host_name: hostName, manifests };
 }
 
 async function syncBundledPlugins(args) {
@@ -1129,9 +1241,14 @@ async function syncBundledPlugins(args) {
   if (syncedPlugins.length > 0) {
     await syncBundledMarketplace(args, syncedPlugins);
   }
+  let chromeNativeHost = { status: "not_synced", manifests: [] };
   if (syncedPlugins.includes("chrome")) {
-    await writeChromeNativeHostManifests(args);
+    chromeNativeHost = await writeChromeNativeHostManifests(args);
   }
+  return {
+    synced_plugins: syncedPlugins,
+    chrome_native_host: chromeNativeHost,
+  };
 }
 
 async function localFileMetadata(filePath) {
@@ -1644,21 +1761,36 @@ async function serve(args) {
   }
 
   await ensureProfileDirs(args);
-  await syncBundledPlugins(args);
   const state = createState(args);
+  appendServeLog(state, "starting", {
+    workspace: args.workspace,
+    profile: args.profile,
+    codex_home: args.codexHome,
+    bind: args.bind,
+    port: args.port,
+    isolated: args.isolated,
+  });
+  const pluginSync = await syncBundledPlugins(args);
+  state.chrome_native_host = pluginSync.chrome_native_host;
+  appendServeLog(state, "bundled_plugins_synced", pluginSync);
   await startBrowserSidecar(state);
+  appendServeLog(state, "browser_sidecar_status", browserStatus(state), state.browser.mode === "disabled" ? "warn" : "info");
   startAppServer(state);
+  appendServeLog(state, "app_server_starting", appServerStatus(state));
   const server = createServer(state);
   let shutdownPromise = null;
 
   const shutdown = (exitCode = null, reason = "shutdown") => {
     shutdownPromise ??= (async () => {
-      console.error(`[codex-web] ${reason}; shutting down`);
+      appendServeLog(state, "shutdown_started", { reason }, exitCode == null ? "info" : "warn");
+      printServeLine(`[codex-web] ${reason}; shutting down`);
       await closeHttpServer(server);
       await Promise.all([stopBrowserSidecar(state), stopAppServer(state)]);
+      appendServeLog(state, "shutdown_complete", { reason });
     })()
       .catch((error) => {
-        console.error(`[codex-web] shutdown failed: ${error.message}`);
+        appendServeLog(state, "shutdown_failed", { error: error.message }, "error");
+        printServeLine(`[codex-web] shutdown failed: ${error.message}`);
       })
       .finally(() => {
         if (exitCode != null) {
@@ -1678,16 +1810,25 @@ async function serve(args) {
     void shutdown(143, "received SIGTERM");
   });
 
-  await new Promise((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(args.port, args.bind, resolve);
-  });
+  try {
+    await new Promise((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(args.port, args.bind, resolve);
+    });
+  } catch (error) {
+    appendServeLog(state, "listen_failed", { code: error.code, message: error.message }, "error");
+    await Promise.all([stopBrowserSidecar(state), stopAppServer(state)]);
+    throw new Error(portConflictMessage(args, error));
+  }
 
   const address = server.address();
   const url = `http://${args.bind}:${address.port}/`;
-  console.error(`[codex-web] serving ${url}`);
-  console.error(`[codex-web] workspace=${args.workspace}`);
-  console.error(`[codex-web] profile=${args.profile}`);
+  appendServeLog(state, "listening", {
+    url,
+    health: `${url}__codex/health`,
+    doctor: `${url}__codex/doctor`,
+  });
+  printServeLine(`[codex-web] serving ${url}`);
 
   if (args.onceHealthCheck) {
     const body = await new Promise((resolve, reject) => {
@@ -1704,6 +1845,7 @@ async function serve(args) {
     return;
   }
 
+  printStartupSummary(state, url);
   console.log(url);
 }
 
@@ -1728,9 +1870,13 @@ async function doctor(args) {
   process.stdout.write(`mode: devcontainer-web\n`);
   process.stdout.write(`workspace: ${args.workspace}\n`);
   process.stdout.write(`profile: ${args.profile}\n`);
+  process.stdout.write(`codex_home: ${args.codexHome}${args.isolated ? " (isolated)" : ""}\n`);
   process.stdout.write(`listener_default: loopback-only\n`);
   process.stdout.write(`webview_dir: ${args.webviewDir} (${webviewExists ? "ok" : "missing"})\n`);
-  process.stdout.write(`Browser Use: container-chromium or playwright-cdp; current status checked by serve\n`);
+  process.stdout.write(`logs: ${path.join(args.logsDir, "serve.jsonl")}\n`);
+  process.stdout.write(`app_server: stdio bridge; live status is available from /__codex/health while serve is running\n`);
+  process.stdout.write(`Browser Use: container-chromium or playwright-cdp; live CDP status is available from /__codex/browser/status\n`);
+  process.stdout.write(`Chrome native host: synced during serve startup when the bundled chrome plugin is present\n`);
   process.stdout.write(`Computer Use: desktop by default; set CODEX_COMPUTER_CONTROL_MODE=browser-only to isolate host desktop control\n`);
 }
 

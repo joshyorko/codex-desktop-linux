@@ -3961,6 +3961,10 @@ test_web_mode_security_token_env_and_cdp_static_contract() {
     assert_contains "$server" 'waitForCdpEndpoint'
     assert_contains "$server" '/json/version'
     assert_contains "$server" '/__codex/browser/status'
+    assert_contains "$server" 'Codex Desktop Web'
+    assert_contains "$server" 'Press Ctrl-C to stop Codex Desktop Web.'
+    assert_contains "$server" 'serve.jsonl'
+    assert_contains "$server" 'port ${args.port} is already in use'
     assert_contains "$server" 'container-local Chromium/CDP sidecar ready'
     assert_contains "$server" 'WEB_MODE_FORCED_FEATURE_GATES'
     assert_contains "$server" '"4166894088"'
@@ -3983,7 +3987,9 @@ test_web_mode_security_token_env_and_cdp_static_contract() {
     assert_contains "$server" 'additional_rate_limits'
     assert_contains "$server" 'primary_window'
     assert_contains "$server" 'limit_window_seconds'
-    assert_contains "$server" 'browser_use: browserStatus(state)'
+    assert_contains "$server" 'browser_use: browser'
+    assert_contains "$server" 'chrome_native_host'
+    assert_contains "$server" 'diagnostics'
     assert_contains "$server" 'computer_use: state.computer'
     assert_contains "$server" 'chromeExtension.installed'
     assert_contains "$server" 'appServer.write'
@@ -4074,7 +4080,9 @@ const required = [
   "mode: \"browser-only\"",
   "desktop_control: \"disabled_by_mode\"",
   "physical_host_control: false",
-  "browser_use: browserStatus(state)",
+  "browser_use: browser",
+  "chrome_native_host",
+  "diagnostics",
   "computer_use: state.computer",
   "chromeExtension.installed",
   "appServer.write",
