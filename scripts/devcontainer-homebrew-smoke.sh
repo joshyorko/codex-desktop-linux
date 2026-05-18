@@ -53,16 +53,12 @@ exec "$CONTAINER_ENGINE" run --rm \
     grep -q "\"required\": true" /tmp/codex-desktop-web.json
     grep -q "\"token_present\": true" /tmp/codex-desktop-web.json
     grep -q "\"blocked_host_env\"" /tmp/codex-desktop-web.json
-    grep -q "\"DISPLAY\"" /tmp/codex-desktop-web.json
-    grep -q "\"WAYLAND_DISPLAY\"" /tmp/codex-desktop-web.json
-    grep -q "\"DBUS_SESSION_BUS_ADDRESS\"" /tmp/codex-desktop-web.json
-    grep -q "\"YDOTOOL_SOCKET\"" /tmp/codex-desktop-web.json
-    grep -q "\"mode\": \"browser-only\"" /tmp/codex-desktop-web.json
-    grep -q "\"physical_host_control\": false" /tmp/codex-desktop-web.json
+    grep -q "\"mode\": \"desktop\"" /tmp/codex-desktop-web.json
+    grep -q "\"physical_host_control\": true" /tmp/codex-desktop-web.json
 
     CODEX_DESKTOP_RUN_COMPUTER_USE_DOCTOR=0 codex-desktop doctor > /tmp/codex-desktop-doctor.log || doctor_status=$?
     grep -q "Codex Desktop Linux doctor" /tmp/codex-desktop-doctor.log
-    grep -q "Linux Computer Use readiness" /tmp/codex-desktop-doctor.log
+    grep -q "Computer Use:" /tmp/codex-desktop-doctor.log
 
     if codex-desktop serve \
       --workspace /workspace \
@@ -91,6 +87,22 @@ exec "$CONTAINER_ENGINE" run --rm \
     grep -q "\"auth\"" /tmp/codex-desktop-serve-health.log
     grep -q "\"required\": true" /tmp/codex-desktop-serve-health.log
     grep -q "\"token_present\": true" /tmp/codex-desktop-serve-health.log
-    grep -q "\"mode\": \"browser-only\"" /tmp/codex-desktop-serve-health.log
-    grep -q "\"physical_host_control\": false" /tmp/codex-desktop-serve-health.log
+    grep -q "\"mode\": \"desktop\"" /tmp/codex-desktop-serve-health.log
+    grep -q "\"physical_host_control\": true" /tmp/codex-desktop-serve-health.log
+
+    CODEX_COMPUTER_CONTROL_MODE=browser-only \
+      CODEX_BROWSER_USE_BROWSER_COMMAND=/nonexistent/chromium \
+      CODEX_HOME=/tmp/codex-shared-home \
+      codex-desktop serve \
+      --workspace /workspace \
+      --profile /tmp/codex-desktop-profile \
+      --bind 127.0.0.1 \
+      --port 0 \
+      --once-health-check >/tmp/codex-desktop-browser-only-health.log 2>&1
+    grep -q "\"mode\": \"browser-only\"" /tmp/codex-desktop-browser-only-health.log
+    grep -q "\"physical_host_control\": false" /tmp/codex-desktop-browser-only-health.log
+    grep -q "\"DISPLAY\"" /tmp/codex-desktop-browser-only-health.log
+    grep -q "\"WAYLAND_DISPLAY\"" /tmp/codex-desktop-browser-only-health.log
+    grep -q "\"DBUS_SESSION_BUS_ADDRESS\"" /tmp/codex-desktop-browser-only-health.log
+    grep -q "\"YDOTOOL_SOCKET\"" /tmp/codex-desktop-browser-only-health.log
   '

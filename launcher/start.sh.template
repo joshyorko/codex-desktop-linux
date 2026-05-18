@@ -277,8 +277,11 @@ codex_desktop_web_mode() {
     export CODEX_DESKTOP_WEB_MODE=1
     export CODEX_DESKTOP_DEVCONTAINER_MODE="${CODEX_DESKTOP_DEVCONTAINER_MODE:-1}"
     export CODEX_BROWSER_MODE="${CODEX_BROWSER_MODE:-container-chromium}"
-    export CODEX_COMPUTER_USE_BROWSER_ONLY="${CODEX_COMPUTER_USE_BROWSER_ONLY:-1}"
-    export CODEX_COMPUTER_CONTROL_MODE="${CODEX_COMPUTER_CONTROL_MODE:-browser-only}"
+    if early_truthy_env_value "${CODEX_COMPUTER_USE_BROWSER_ONLY:-}"; then
+        export CODEX_COMPUTER_CONTROL_MODE="browser-only"
+    else
+        export CODEX_COMPUTER_CONTROL_MODE="${CODEX_COMPUTER_CONTROL_MODE:-desktop}"
+    fi
 
     exec "$node_bin" "$SCRIPT_DIR/.codex-linux/web-mode-server.mjs" "$command_name" --app-dir "$SCRIPT_DIR" "$@"
 }
