@@ -4066,6 +4066,7 @@ const required = [
   "\"410262010\"",
   "\"1506311413\"",
   "patchWebModeStatsigGateDefaults",
+  "patchWebModeProjectlessOutputDirectory",
   "computerUseBrowserOnlyRequested",
   "mode: \"desktop\"",
   "desktop_control: \"enabled\"",
@@ -4134,6 +4135,12 @@ const statsigNeedle = "t(!1,{onMount:(t,n)=>{let r=n.get(i);return r!=null&&t(r.
 const statsigReplacement = "t(${forcedGate},{onMount:(t,n)=>{let r=n.get(i);return r!=null&&t(${forcedGate}||r.checkGate(e)),n.set(a,t=>t.includes(e)?t:[...t,e])";
 if (!source.includes(statsigNeedle) || !source.includes(statsigReplacement)) {
   throw new Error("web-mode statsig patch must set an initial forced gate value and preserve it after checkGate");
+}
+
+const projectlessNeedle = "if(m===`projectless`&&h==null)throw Error(`Projectless conversations require an output directory`);";
+const projectlessReplacement = "if(m===`projectless`&&h==null&&(h=l??t?.[0]??null),m===`projectless`&&h==null)throw Error(`Projectless conversations require an output directory`);";
+if (!source.includes(projectlessNeedle) || !source.includes(projectlessReplacement)) {
+  throw new Error("web-mode projectless composer patch must synthesize an output directory from cwd or workspace roots");
 }
 NODE
 }

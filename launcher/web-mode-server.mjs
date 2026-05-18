@@ -869,6 +869,14 @@ function patchWebModeStatsigGateDefaults(source) {
   return source.includes(needle) ? source.replace(needle, replacement) : source;
 }
 
+function patchWebModeProjectlessOutputDirectory(source) {
+  const needle =
+    "if(m===`projectless`&&h==null)throw Error(`Projectless conversations require an output directory`);";
+  const replacement =
+    "if(m===`projectless`&&h==null&&(h=l??t?.[0]??null),m===`projectless`&&h==null)throw Error(`Projectless conversations require an output directory`);";
+  return source.includes(needle) ? source.replace(needle, replacement) : source;
+}
+
 function patchWebModeAssetSource(target, source) {
   const basename = path.basename(target);
   if (basename.startsWith("electron-menu-shortcuts-")) {
@@ -876,6 +884,9 @@ function patchWebModeAssetSource(target, source) {
   }
   if (basename.startsWith("src-")) {
     return patchWebModeStatsigGateDefaults(source);
+  }
+  if (basename.startsWith("reply-")) {
+    return patchWebModeProjectlessOutputDirectory(source);
   }
   return source;
 }
