@@ -554,6 +554,28 @@
     return response.result ?? {};
   }
 
+  async function existingHostPaths(params) {
+    const paths = Array.isArray(params.paths) ? params.paths : [];
+    const existingPaths = [];
+    for (const candidate of paths) {
+      if (typeof candidate !== "string" || candidate.trim().length === 0) {
+        continue;
+      }
+      try {
+        const metadata = await readHostFileMetadata({
+          hostId: params.hostId || localHostId,
+          path: candidate,
+        });
+        if (metadata.path) {
+          existingPaths.push(metadata.path);
+        }
+      } catch {
+        // Missing paths are expected here; the caller only needs positives.
+      }
+    }
+    return { existingPaths };
+  }
+
   async function interruptConversation(conversationId, conversationState = null) {
     if (typeof conversationId !== "string" || conversationId.trim().length === 0) {
       return { interrupted: false, reason: "missing-conversation-id" };
@@ -872,7 +894,7 @@
           return;
         }
         case "paths-exist": {
-          successFetch(message, { existingPaths: [] });
+          successFetch(message, await existingHostPaths(params));
           return;
         }
         default: {
