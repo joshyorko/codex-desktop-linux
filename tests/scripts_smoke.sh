@@ -4339,7 +4339,13 @@ class EventSource {
 
 async function fetch(url, options = {}) {
   const body = options.body == null ? null : JSON.parse(options.body);
-  fetches.push(body?.method === "appServer.rpc" ? `${body.method}:${body.params?.method}` : body?.method ?? url);
+  fetches.push(
+    body?.method === "appServer.rpc"
+      ? `${body.method}:${body.params?.method}`
+      : body?.method === "desktopHost.request"
+        ? `${body.method}:${body.params?.method}`
+        : body?.method ?? url,
+  );
   if (body?.method === "webState.read") {
     return {
       ok: true,
@@ -4381,6 +4387,119 @@ async function fetch(url, options = {}) {
         result: { interrupted: true, turnId: "turn-1" },
       }),
     };
+  }
+  if (body?.method === "desktopHost.request") {
+    const method = body.params?.method;
+    const params = body.params?.params ?? {};
+    if (method === "refresh-remote-control-connections") {
+      return {
+        ok: true,
+        json: async () => ({
+          ok: true,
+          result: {
+            remoteControlConnections: [],
+            connections: [],
+            state: {
+              available: true,
+              accessRequired: false,
+              authRequired: false,
+              clientAuthorized: false,
+            },
+            sharedObjects: {
+              remote_control_connections: [],
+              remote_control_connections_state: {
+                available: true,
+                accessRequired: false,
+                authRequired: false,
+                clientAuthorized: false,
+              },
+            },
+          },
+        }),
+      };
+    }
+    if (method === "set-remote-control-connections-enabled") {
+      return {
+        ok: true,
+        json: async () => ({
+          ok: true,
+          result: {
+            enabled: Boolean(params.enabled),
+            remoteControlConnections: [],
+            state: {
+              available: Boolean(params.enabled),
+              accessRequired: false,
+              authRequired: false,
+              clientAuthorized: false,
+            },
+            sharedObjects: {
+              local_app_server_feature_enablement: {
+                remote_control: Boolean(params.enabled),
+              },
+              remote_control_connections: [],
+              remote_control_connections_state: {
+                available: Boolean(params.enabled),
+                accessRequired: false,
+                authRequired: false,
+                clientAuthorized: false,
+              },
+            },
+          },
+        }),
+      };
+    }
+    if (method === "refresh-remote-connections") {
+      return {
+        ok: true,
+        json: async () => ({
+          ok: true,
+          result: { remoteConnections: [], connections: [], sharedObjects: { remote_connections: [] } },
+        }),
+      };
+    }
+    if (method === "set-remote-connection-auto-connect") {
+      return {
+        ok: true,
+        json: async () => ({
+          ok: true,
+          result: {
+            hostId: params.hostId,
+            autoConnect: Boolean(params.autoConnect),
+            remoteConnections: [],
+            remoteControlConnections: [],
+            connections: [],
+            state: "disconnected",
+            error: null,
+            sharedObjects: {
+              remote_connections: [],
+              remote_control_connections: [],
+            },
+          },
+        }),
+      };
+    }
+    if (method === "remote-workspace-directory-entries") {
+      return {
+        ok: true,
+        json: async () => ({
+          ok: true,
+          result: {
+            directoryPath: params.directoryPath,
+            entries: [{ type: "directory", name: "project", path: `${params.directoryPath}/project`, isDirectory: true, isFile: false }],
+          },
+        }),
+      };
+    }
+    if (method === "app-server-connection-state") {
+      return {
+        ok: true,
+        json: async () => ({
+          ok: true,
+          result: { state: "connected", status: "connected", error: null },
+        }),
+      };
+    }
+    throw new Error(`unexpected desktop host call for ${method}`);
   }
   if (body?.method === "fs.metadata") {
     if (body.params?.path === "/workspace/missing") {
@@ -4831,6 +4950,42 @@ const appConnectCallback = await window.electronBridge.sendMessageFromView({
   method: "app-connect-oauth-callback-url",
   params: {},
 });
+const remoteControlRefresh = await window.electronBridge.sendMessageFromView({
+  type: "send-cli-request-for-host",
+  hostId: "local",
+  method: "refresh-remote-control-connections",
+  params: {},
+});
+const remoteControlEnable = await window.electronBridge.sendMessageFromView({
+  type: "send-cli-request-for-host",
+  hostId: "local",
+  method: "set-remote-control-connections-enabled",
+  params: { enabled: true },
+});
+const remoteConnectionsRefresh = await window.electronBridge.sendMessageFromView({
+  type: "send-cli-request-for-host",
+  hostId: "local",
+  method: "refresh-remote-connections",
+  params: {},
+});
+const remoteAutoConnect = await window.electronBridge.sendMessageFromView({
+  type: "send-cli-request-for-host",
+  hostId: "local",
+  method: "set-remote-connection-auto-connect",
+  params: { hostId: "remote-control:test", autoConnect: true },
+});
+const remoteDirectoryEntries = await window.electronBridge.sendMessageFromView({
+  type: "send-cli-request-for-host",
+  hostId: "local",
+  method: "remote-workspace-directory-entries",
+  params: { hostId: "local", directoryPath: "/workspace", directoriesOnly: true },
+});
+const appServerConnectionState = await window.electronBridge.sendMessageFromView({
+  type: "send-cli-request-for-host",
+  hostId: "local",
+  method: "app-server-connection-state",
+  params: { hostId: "local" },
+});
 const projectlessStart = await window.electronBridge.sendMessageFromView({
   type: "send-cli-request-for-host",
   hostId: "local",
@@ -4987,6 +5142,41 @@ if (capabilitiesResult?.realtimeVoice !== true || capabilitiesResult?.voiceInput
 if (appConnectCallback?.callbackUrl !== "http://127.0.0.1:3773/oauth/callback") {
   throw new Error(`app connect callback URL had wrong shape: ${JSON.stringify(appConnectCallback)}`);
 }
+if (remoteControlRefresh?.state?.available !== true || !Array.isArray(remoteControlRefresh?.connections)) {
+  throw new Error(`remote control refresh did not use desktop host contract: ${JSON.stringify(remoteControlRefresh)}`);
+}
+if (!Array.isArray(remoteControlRefresh?.remoteControlConnections)) {
+  throw new Error(`remote control refresh should return desktop remoteControlConnections: ${JSON.stringify(remoteControlRefresh)}`);
+}
+if (
+  !posted.some(
+    (message) =>
+      message.type === "shared-object-updated" &&
+      message.key === "remote_control_connections_state" &&
+      message.value?.available === true,
+  )
+) {
+  throw new Error(`desktop host sharedObjects should hydrate subscribed web state: ${JSON.stringify(posted)}`);
+}
+if (remoteControlEnable?.enabled !== true || remoteControlEnable?.state?.available !== true) {
+  throw new Error(`remote control enablement did not use desktop host contract: ${JSON.stringify(remoteControlEnable)}`);
+}
+if (!Array.isArray(remoteConnectionsRefresh?.connections)) {
+  throw new Error(`remote connections refresh did not use desktop host contract: ${JSON.stringify(remoteConnectionsRefresh)}`);
+}
+if (remoteAutoConnect?.autoConnect !== true || !Array.isArray(remoteAutoConnect?.connections) || remoteAutoConnect?.state !== "disconnected") {
+  throw new Error(`remote auto-connect did not use desktop host contract: ${JSON.stringify(remoteAutoConnect)}`);
+}
+if (
+  remoteDirectoryEntries?.directoryPath !== "/workspace" ||
+  !Array.isArray(remoteDirectoryEntries?.entries) ||
+  remoteDirectoryEntries.entries[0]?.type !== "directory"
+) {
+  throw new Error(`remote workspace directory lookup did not use desktop host contract: ${JSON.stringify(remoteDirectoryEntries)}`);
+}
+if (appServerConnectionState?.state !== "connected") {
+  throw new Error(`app-server connection state did not use desktop host contract: ${JSON.stringify(appServerConnectionState)}`);
+}
 if (
   projectlessStart?.resultType !== "success" ||
   projectlessStart?.result?.conversationId !== "thread-started" ||
@@ -5065,6 +5255,24 @@ if (!fetches.includes("chromeExtension.installed")) {
 }
 if (!fetches.includes("conversation.interrupt")) {
   throw new Error(`interrupt conversation should be forwarded to the web-mode server: ${JSON.stringify(fetches)}`);
+}
+if (!fetches.includes("desktopHost.request:refresh-remote-control-connections")) {
+  throw new Error(`remote control refresh should be handled by desktopHost.request: ${JSON.stringify(fetches)}`);
+}
+if (!fetches.includes("desktopHost.request:set-remote-control-connections-enabled")) {
+  throw new Error(`remote control enablement should be handled by desktopHost.request: ${JSON.stringify(fetches)}`);
+}
+if (!fetches.includes("desktopHost.request:refresh-remote-connections")) {
+  throw new Error(`remote connections refresh should be handled by desktopHost.request: ${JSON.stringify(fetches)}`);
+}
+if (!fetches.includes("desktopHost.request:set-remote-connection-auto-connect")) {
+  throw new Error(`remote auto-connect should be handled by desktopHost.request: ${JSON.stringify(fetches)}`);
+}
+if (!fetches.includes("desktopHost.request:remote-workspace-directory-entries")) {
+  throw new Error(`remote directory lookup should be handled by desktopHost.request: ${JSON.stringify(fetches)}`);
+}
+if (!fetches.includes("desktopHost.request:app-server-connection-state")) {
+  throw new Error(`app-server connection state should be handled by desktopHost.request: ${JSON.stringify(fetches)}`);
 }
 if (!fetches.includes("appServer.write")) {
   throw new Error(`mcp-response should be written back to the app-server: ${JSON.stringify(fetches)}`);

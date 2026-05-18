@@ -1239,19 +1239,637 @@ function webModeWhamUsageResponse(rateLimitResult, accountResult = null) {
   };
 }
 
-function webModeRemoteControlClientsResponse(state) {
-  const physicalHostControl = state.computer.physical_host_control === true;
+function stableWebModeId(prefix, value) {
+  return `${prefix}-${crypto.createHash("sha256").update(String(value)).digest("hex").slice(0, 24)}`;
+}
+
+function jwtPayload(token) {
+  if (typeof token !== "string") {
+    return null;
+  }
+  const parts = token.split(".");
+  if (parts.length < 2 || !parts[1]) {
+    return null;
+  }
+  try {
+    return JSON.parse(Buffer.from(parts[1], "base64url").toString("utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function authClaimFromToken(token) {
+  const payload = jwtPayload(token);
+  const claim = payload?.["https://api.openai.com/auth"];
+  return claim && typeof claim === "object" && !Array.isArray(claim) ? claim : {};
+}
+
+function tokenExpiresSoon(token, nowMs = Date.now()) {
+  const exp = jwtPayload(token)?.exp;
+  return typeof exp === "number" && exp * 1000 <= nowMs + 60_000;
+}
+
+async function readCodexAuth(args) {
+  try {
+    const auth = await readJsonFile(path.join(args.codexHome, "auth.json"));
+    return auth && typeof auth === "object" && !Array.isArray(auth) ? auth : {};
+  } catch (error) {
+    if (error.code === "ENOENT") {
+      return {};
+    }
+    throw error;
+  }
+}
+
+async function accessTokenForRemoteControl(state, { refreshToken = false } = {}) {
+  let auth = await readCodexAuth(state.args);
+  let token = auth.tokens?.access_token;
+  if ((refreshToken || tokenExpiresSoon(token)) && state.appServer.child) {
+    await sendAppServerRpc(state, "account/read", { refreshToken: true }).catch(() => null);
+    auth = await readCodexAuth(state.args);
+    token = auth.tokens?.access_token;
+  }
+  return typeof token === "string" && token.trim().length > 0 ? token : null;
+}
+
+function remoteControlApiBaseUrl() {
+  const override = process.env.CODEX_API_BASE_URL?.trim();
+  if (override) {
+    return override.replace(/\/+$/, "");
+  }
+  return (process.env.CODEX_API_ENDPOINT ?? "").toLowerCase() === "localhost"
+    ? "http://localhost:8000/api"
+    : "https://chatgpt.com/backend-api";
+}
+
+function remoteControlApiUrl(apiPath) {
+  return `${remoteControlApiBaseUrl()}/${String(apiPath).replace(/^\/+/, "")}`;
+}
+
+async function remoteControlAuthHeaders(state, { headers = {}, refreshToken = false } = {}) {
+  const token = await accessTokenForRemoteControl(state, { refreshToken });
+  if (!token) {
+    throw Object.assign(new Error("Sign in to ChatGPT in Codex Desktop to load remote control environments."), {
+      statusCode: 401,
+      remoteControlKind: "auth_required",
+    });
+  }
+  const authClaim = authClaimFromToken(token);
+  const accountId = authClaim.chatgpt_account_id ?? authClaim.account_id ?? (await readCodexAuth(state.args)).tokens?.account_id;
   return {
-    status: physicalHostControl ? "degraded" : "unavailable",
-    clients: [],
-    data: [],
+    ...headers,
+    Authorization: `Bearer ${token}`,
+    ...(accountId ? { "ChatGPT-Account-Id": accountId } : {}),
+    originator: "Codex Desktop",
+    "User-Agent": `Codex Desktop Web (Linux; ${process.arch})`,
+  };
+}
+
+async function remoteControlApiFetch(state, apiPath, options = {}) {
+  const method = options.method ?? "GET";
+  let headers = await remoteControlAuthHeaders(state, {
+    headers: options.headers ?? {},
+    refreshToken: false,
+  });
+  let response = await fetch(remoteControlApiUrl(apiPath), {
+    method,
+    headers,
+    body: options.body == null ? undefined : JSON.stringify(options.body),
+  });
+  if (response.status === 401) {
+    headers = await remoteControlAuthHeaders(state, {
+      headers: options.headers ?? {},
+      refreshToken: true,
+    });
+    response = await fetch(remoteControlApiUrl(apiPath), {
+      method,
+      headers,
+      body: options.body == null ? undefined : JSON.stringify(options.body),
+    });
+  }
+  return response;
+}
+
+async function remoteControlResponseText(response) {
+  try {
+    return await response.text();
+  } catch {
+    return response.statusText || "Unknown error";
+  }
+}
+
+async function remoteControlJsonResponse(response) {
+  const text = await remoteControlResponseText(response);
+  if (!text) {
+    return {};
+  }
+  return JSON.parse(text);
+}
+
+function remoteControlEnvironmentPath(envId) {
+  return `/codex/remote/control/environments/${encodeURIComponent(envId)}`;
+}
+
+function remoteControlEnvironmentsPath(cursor = null) {
+  const params = new URLSearchParams({ limit: "100" });
+  if (cursor != null) {
+    params.set("cursor", cursor);
+  }
+  return `/codex/remote/control/environments?${params.toString()}`;
+}
+
+function remoteControlConnectionFromEnvironment(environment) {
+  const envId = environment?.env_id ?? environment?.environment_id ?? environment?.id;
+  const displayName = [environment?.display_name, environment?.displayName, environment?.name, environment?.host_name, environment?.hostName, envId]
+    .find((value) => typeof value === "string" && value.trim().length > 0)
+    ?.trim();
+  const hostName = [environment?.host_name, environment?.hostName, environment?.name, environment?.display_name, environment?.displayName, displayName]
+    .find((value) => typeof value === "string" && value.trim().length > 0)
+    ?.trim();
+  return {
+    hostId: `remote-control:${envId}`,
+    displayName: displayName || String(envId),
+    hostName: hostName || displayName || String(envId),
+    autoConnect: false,
+    source: "remote-control",
+    envId,
+    environmentKind: environment?.kind ?? null,
+    clientType: environment?.client_type ?? "CODEX_UNKNOWN",
+    online: Boolean(environment?.online),
+    busy: Boolean(environment?.busy),
+    os: environment?.os ?? null,
+    arch: environment?.arch ?? null,
+    appServerVersion: environment?.app_server_version ?? null,
+    installationId: environment?.installation_id ?? null,
+    lastSeenAt: environment?.last_seen_at ?? null,
+  };
+}
+
+async function fetchRemoteControlEnvironments(state, cursor = null) {
+  const response = await remoteControlApiFetch(state, remoteControlEnvironmentsPath(cursor));
+  if (response.status === 404) {
+    throw Object.assign(new Error("remote control feature unavailable"), { remoteControlKind: "feature_unavailable" });
+  }
+  if (response.status === 403) {
+    throw Object.assign(new Error(await remoteControlResponseText(response)), { remoteControlKind: "access_required" });
+  }
+  if (response.status === 401) {
+    throw Object.assign(new Error("remote control auth required"), { remoteControlKind: "auth_required" });
+  }
+  if (!response.ok) {
+    throw new Error(`Remote control environments request failed (${response.status}): ${await remoteControlResponseText(response)}`);
+  }
+  const body = await remoteControlJsonResponse(response);
+  const items = Array.isArray(body.items) ? body.items.map(remoteControlConnectionFromEnvironment) : [];
+  return body.cursor == null ? items : items.concat(await fetchRemoteControlEnvironments(state, body.cursor));
+}
+
+async function writeRemoteControlUnavailableState(state, kind) {
+  const stateByKind = {
+    feature_unavailable: {
+      available: false,
+      accessRequired: false,
+      authRequired: false,
+      clientAuthorized: false,
+    },
+    access_required: {
+      available: false,
+      accessRequired: true,
+      authRequired: false,
+      clientAuthorized: false,
+    },
+    auth_required: {
+      available: true,
+      accessRequired: false,
+      authRequired: true,
+      clientAuthorized: false,
+    },
+  };
+  return await updateWebModeSharedObjects(state, {
+    local_remote_control_client_id: null,
+    remote_control_connections: [],
+    remote_control_connections_state: stateByKind[kind] ?? defaultRemoteControlConnectionsState(true, false),
+  });
+}
+
+function defaultRemoteControlConnectionsState(enabled = true, clientAuthorized = false) {
+  return {
+    available: Boolean(enabled),
+    accessRequired: false,
+    authRequired: false,
+    clientAuthorized: Boolean(clientAuthorized),
+  };
+}
+
+function remoteControlSharedObjectDefaults(state, enabled = true) {
+  const clientId = stableWebModeId("web-client", `${state.args.profile}:${state.args.codexHome}`);
+  const environmentId = stableWebModeId("web-env", state.args.workspace);
+  const installationId = stableWebModeId("web-install", `${state.args.appDir}:${state.args.codexHome}`);
+  return {
+    local_app_server_feature_enablement: {
+      remote_control: Boolean(enabled),
+    },
+    local_remote_control_client_id: clientId,
+    local_remote_control_environment_id: environmentId,
+    local_remote_control_installation_id: installationId,
+    remote_control_connections_state: defaultRemoteControlConnectionsState(enabled, false),
+    remote_control_connections: [],
+    remote_connections: [],
+  };
+}
+
+async function updateWebModeSharedObjects(state, patch) {
+  const webState = await readWebState(state.args);
+  const sharedObjects =
+    webState.sharedObjects && typeof webState.sharedObjects === "object" && !Array.isArray(webState.sharedObjects)
+      ? webState.sharedObjects
+      : {};
+  const nextSharedObjects = {
+    ...sharedObjects,
+    ...patch,
+    local_app_server_feature_enablement: {
+      ...(sharedObjects.local_app_server_feature_enablement ?? {}),
+      ...(patch.local_app_server_feature_enablement ?? {}),
+    },
+  };
+  const nextState = {
+    ...webState,
+    persistedAtoms: webState.persistedAtoms ?? {},
+    globalState: webState.globalState ?? {},
+    sharedObjects: nextSharedObjects,
+  };
+  await writeWebState(state.args, nextState);
+  return nextSharedObjects;
+}
+
+async function ensureRemoteControlSharedObjects(state, { enabled = true } = {}) {
+  const webState = await readWebState(state.args);
+  const sharedObjects =
+    webState.sharedObjects && typeof webState.sharedObjects === "object" && !Array.isArray(webState.sharedObjects)
+      ? webState.sharedObjects
+      : {};
+  const existingEnablement = sharedObjects.local_app_server_feature_enablement?.remote_control;
+  const effectiveEnabled = existingEnablement == null ? Boolean(enabled) : Boolean(existingEnablement);
+  return await updateWebModeSharedObjects(state, {
+    ...remoteControlSharedObjectDefaults(state, effectiveEnabled),
+    ...Object.fromEntries(
+      [
+        "local_remote_control_client_id",
+        "local_remote_control_environment_id",
+        "local_remote_control_installation_id",
+        "remote_control_connections",
+        "remote_connections",
+      ]
+        .filter((key) => sharedObjects[key] != null)
+        .map((key) => [key, sharedObjects[key]]),
+    ),
+    remote_control_connections_state:
+      sharedObjects.remote_control_connections_state && typeof sharedObjects.remote_control_connections_state === "object"
+        ? {
+            ...defaultRemoteControlConnectionsState(effectiveEnabled, false),
+            ...sharedObjects.remote_control_connections_state,
+            available: effectiveEnabled && sharedObjects.remote_control_connections_state.available !== false,
+          }
+        : defaultRemoteControlConnectionsState(effectiveEnabled, false),
+    local_app_server_feature_enablement: {
+      ...(sharedObjects.local_app_server_feature_enablement ?? {}),
+      remote_control: effectiveEnabled,
+    },
+  });
+}
+
+function remoteControlRefreshResult(sharedObjects) {
+  const remoteControlConnections = Array.isArray(sharedObjects.remote_control_connections)
+    ? sharedObjects.remote_control_connections
+    : [];
+  const remoteConnections = Array.isArray(sharedObjects.remote_connections) ? sharedObjects.remote_connections : [];
+  return {
+    remoteControlConnections,
+    connections: remoteControlConnections,
+    state: sharedObjects.remote_control_connections_state ?? defaultRemoteControlConnectionsState(true, false),
+    clientId: sharedObjects.local_remote_control_client_id ?? null,
+    environmentId: sharedObjects.local_remote_control_environment_id ?? null,
+    installationId: sharedObjects.local_remote_control_installation_id ?? null,
+    sharedObjects: {
+      local_app_server_feature_enablement: sharedObjects.local_app_server_feature_enablement ?? { remote_control: true },
+      local_remote_control_client_id: sharedObjects.local_remote_control_client_id ?? null,
+      local_remote_control_environment_id: sharedObjects.local_remote_control_environment_id ?? null,
+      local_remote_control_installation_id: sharedObjects.local_remote_control_installation_id ?? null,
+      remote_control_connections_state: sharedObjects.remote_control_connections_state ?? defaultRemoteControlConnectionsState(true, false),
+      remote_control_connections: remoteControlConnections,
+      remote_connections: remoteConnections,
+    },
+  };
+}
+
+async function refreshRemoteControlConnections(state) {
+  const sharedObjects = await ensureRemoteControlSharedObjects(state);
+  if (sharedObjects.local_app_server_feature_enablement?.remote_control === false) {
+    const nextSharedObjects = await updateWebModeSharedObjects(state, {
+      remote_control_connections: [],
+      remote_control_connections_state: defaultRemoteControlConnectionsState(false, false),
+    });
+    return remoteControlRefreshResult(nextSharedObjects);
+  }
+
+  try {
+    const remoteControlConnections = await fetchRemoteControlEnvironments(state);
+    const nextSharedObjects = await updateWebModeSharedObjects(state, {
+      remote_control_connections: remoteControlConnections,
+      remote_control_connections_state: {
+        available: true,
+        accessRequired: false,
+        authRequired: false,
+        clientAuthorized: sharedObjects.remote_control_connections_state?.clientAuthorized === true,
+      },
+    });
+    return remoteControlRefreshResult(nextSharedObjects);
+  } catch (error) {
+    if (error?.remoteControlKind) {
+      return remoteControlRefreshResult(await writeRemoteControlUnavailableState(state, error.remoteControlKind));
+    }
+    const nextSharedObjects = await updateWebModeSharedObjects(state, {
+      local_remote_control_client_id: null,
+      remote_control_connections: [],
+      remote_control_connections_state: defaultRemoteControlConnectionsState(true, false),
+    });
+    appendServeLog(state, "remote_control_refresh_failed", { error: error instanceof Error ? error.message : String(error) }, "warn");
+    return {
+      ...remoteControlRefreshResult(nextSharedObjects),
+      warning: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+async function setRemoteControlConnectionsEnabled(state, enabled) {
+  const nextEnabled = Boolean(enabled);
+  const existingSharedObjects = await ensureRemoteControlSharedObjects(state, { enabled: nextEnabled });
+  const sharedObjects = await updateWebModeSharedObjects(state, {
+    remote_control_connections_state: defaultRemoteControlConnectionsState(nextEnabled, false),
+    ...(nextEnabled ? {} : { remote_control_connections: [] }),
+    local_app_server_feature_enablement: {
+      ...(existingSharedObjects.local_app_server_feature_enablement ?? {}),
+      remote_control: nextEnabled,
+    },
+  });
+  return nextEnabled
+    ? { enabled: true, ...(await refreshRemoteControlConnections(state)) }
+    : { enabled: false, ...remoteControlRefreshResult(sharedObjects) };
+}
+
+async function updateRemoteControlConnection(state, updater) {
+  const sharedObjects = await ensureRemoteControlSharedObjects(state);
+  const connections = Array.isArray(sharedObjects.remote_control_connections)
+    ? updater(sharedObjects.remote_control_connections)
+    : updater([]);
+  const nextSharedObjects = await updateWebModeSharedObjects(state, {
+    remote_control_connections: connections,
+  });
+  return remoteControlRefreshResult(nextSharedObjects);
+}
+
+function connectionHostId(params = {}) {
+  return params.hostId ?? params.host_id ?? params.connection?.hostId ?? params.connection?.host_id ?? null;
+}
+
+function normalizeRemoteConnectionState(stateValue = "disconnected", error = null) {
+  return {
+    state: stateValue,
+    status: stateValue,
+    error,
+  };
+}
+
+function unsupportedRemoteConnectionResult(reason) {
+  return {
+    ok: false,
+    supported: false,
+    state: "error",
+    status: "error",
+    reason,
+    error: {
+      code: "connection-failed",
+      message: reason,
+    },
+  };
+}
+
+async function setRemoteConnectionAutoConnect(state, params = {}) {
+  const hostId = connectionHostId(params);
+  const autoConnect = Boolean(params.autoConnect ?? params.auto_connect ?? params.enabled);
+  const sharedObjects = await ensureRemoteControlSharedObjects(state);
+  const remoteConnections = Array.isArray(sharedObjects.remote_connections)
+    ? sharedObjects.remote_connections.map((connection) =>
+        connection?.hostId === hostId ? { ...connection, autoConnect } : connection,
+      )
+    : [];
+  const remoteControlConnections = Array.isArray(sharedObjects.remote_control_connections)
+    ? sharedObjects.remote_control_connections.map((connection) =>
+        connection?.hostId === hostId ? { ...connection, autoConnect } : connection,
+      )
+    : [];
+  const nextSharedObjects = await updateWebModeSharedObjects(state, {
+    remote_connections: remoteConnections,
+    remote_control_connections: remoteControlConnections,
+  });
+  return {
+    hostId,
+    autoConnect,
+    remoteConnections,
+    remoteControlConnections,
+    connections: [...remoteConnections, ...remoteControlConnections],
+    state: "disconnected",
+    error: null,
+    sharedObjects: {
+      remote_connections: nextSharedObjects.remote_connections ?? [],
+      remote_control_connections: nextSharedObjects.remote_control_connections ?? [],
+    },
+  };
+}
+
+async function localDirectoryEntries(directoryPath, { directoriesOnly = false } = {}) {
+  const resolved = path.resolve(String(directoryPath || process.cwd()));
+  const entries = await fs.readdir(resolved, { withFileTypes: true });
+  return {
+    directoryPath: resolved,
+    entries: entries
+      .filter((entry) => !directoriesOnly || entry.isDirectory())
+      .map((entry) => ({
+        type: entry.isDirectory() ? "directory" : "file",
+        name: entry.name,
+        path: path.join(resolved, entry.name),
+        isDirectory: entry.isDirectory(),
+        isFile: entry.isFile(),
+      }))
+      .sort((left, right) => {
+        if (left.isDirectory !== right.isDirectory) {
+          return left.isDirectory ? -1 : 1;
+        }
+        return left.name.localeCompare(right.name);
+      }),
+  };
+}
+
+async function remoteWorkspaceDirectoryEntries(state, params = {}) {
+  const hostId = connectionHostId(params);
+  const directoryPath = params.directoryPath ?? params.path ?? state.args.workspace;
+  if (!hostId || hostId === "local") {
+    return await localDirectoryEntries(directoryPath, { directoriesOnly: Boolean(params.directoriesOnly ?? params.directories_only) });
+  }
+  throw Object.assign(
+    new Error("Remote workspace browsing in web mode needs a remote-control websocket controller."),
+    { statusCode: 501 },
+  );
+}
+
+async function handleDesktopHostRequest(state, method, params = {}) {
+  switch (method) {
+    case "app-server-connection-state": {
+      const hostId = connectionHostId(params);
+      return hostId === "local" || !hostId
+        ? normalizeRemoteConnectionState("connected")
+        : normalizeRemoteConnectionState("error", {
+            code: "connection-failed",
+            message: "Web mode can list remote-control environments, but remote host command execution needs the websocket controller.",
+          });
+    }
+    case "refresh-remote-control-connections":
+      return await refreshRemoteControlConnections(state);
+    case "set-remote-control-connections-enabled":
+      return await setRemoteControlConnectionsEnabled(state, params.enabled ?? params.enablement);
+    case "set-remote-connection-auto-connect":
+      return await setRemoteConnectionAutoConnect(state, params);
+    case "remote-workspace-directory-entries":
+      return await remoteWorkspaceDirectoryEntries(state, params);
+    case "install-remote-codex":
+      return unsupportedRemoteConnectionResult("Installing Codex on a remote host from web mode needs a remote-control websocket controller.");
+    case "start-remote-chatgpt-login-port-forward":
+      throw Object.assign(
+        new Error("Remote ChatGPT login port forwarding is not available until web mode owns the remote-control websocket controller."),
+        { statusCode: 501 },
+      );
+    case "stop-remote-chatgpt-login-port-forward":
+      return { ok: true, stopped: false, reason: "no web-mode remote login port forward was active" };
+    case "authorize-remote-control-connections": {
+      const sharedObjects = await ensureRemoteControlSharedObjects(state);
+      const nextSharedObjects = await updateWebModeSharedObjects(state, {
+        remote_control_connections_state: {
+          ...defaultRemoteControlConnectionsState(true, false),
+          ...(sharedObjects.remote_control_connections_state ?? {}),
+          available: true,
+          authRequired: true,
+          clientAuthorized: false,
+        },
+      });
+      return {
+        authorized: false,
+        status: "auth_required",
+        reason: "web mode has exposed the remote-control host contract but does not have a desktop auth enrollment token yet",
+        ...remoteControlRefreshResult(nextSharedObjects),
+      };
+    }
+    case "rename-remote-control-environment": {
+      const envId = params.envId ?? params.environmentId;
+      const name = typeof params.name === "string" ? params.name.trim() : "";
+      if (!envId) {
+        throw Object.assign(new Error("missing remote control environment id"), { statusCode: 400 });
+      }
+      if (!name) {
+        throw Object.assign(new Error("Remote control display name cannot be empty."), { statusCode: 400 });
+      }
+      const response = await remoteControlApiFetch(state, remoteControlEnvironmentPath(envId), {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: { name },
+      });
+      if (!response.ok) {
+        throw Object.assign(
+          new Error(`Remote control rename failed (${response.status}): ${await remoteControlResponseText(response)}`),
+          { statusCode: response.status },
+        );
+      }
+      const updatedConnection = remoteControlConnectionFromEnvironment(await remoteControlJsonResponse(response));
+      const result = await updateRemoteControlConnection(state, (connections) =>
+        connections.map((connection) => (connection?.envId === envId ? { ...updatedConnection, autoConnect: connection.autoConnect === true } : connection)),
+      );
+      return {
+        ...result,
+        remoteControlConnection: result.remoteControlConnections.find((connection) => connection.envId === envId) ?? updatedConnection,
+      };
+    }
+    case "delete-remote-control-environment": {
+      const envId = params.envId ?? params.environmentId;
+      if (!envId) {
+        throw Object.assign(new Error("missing remote control environment id"), { statusCode: 400 });
+      }
+      const sharedObjects = await ensureRemoteControlSharedObjects(state);
+      const existing = Array.isArray(sharedObjects.remote_control_connections)
+        ? sharedObjects.remote_control_connections.find((connection) => connection?.envId === envId)
+        : null;
+      if (existing?.online) {
+        throw Object.assign(new Error("Only offline remote control environments can be deleted."), { statusCode: 400 });
+      }
+      const response = await remoteControlApiFetch(state, remoteControlEnvironmentPath(envId), {
+        method: "DELETE",
+      });
+      if (!response.ok) {
+        throw Object.assign(
+          new Error(`Remote control delete failed (${response.status}): ${await remoteControlResponseText(response)}`),
+          { statusCode: response.status },
+        );
+      }
+      return await updateRemoteControlConnection(state, (connections) =>
+        connections.filter((connection) => connection?.envId !== envId),
+      );
+    }
+    case "refresh-remote-connections": {
+      const sharedObjects = await ensureRemoteControlSharedObjects(state);
+      const remoteConnections = Array.isArray(sharedObjects.remote_connections) ? sharedObjects.remote_connections : [];
+      return {
+        remoteConnections,
+        connections: remoteConnections,
+        sharedObjects: {
+          remote_connections: remoteConnections,
+        },
+      };
+    }
+    case "discover-remote-ssh-connections":
+      return { discoveredRemoteConnections: [], connections: [] };
+    case "save-codex-managed-remote-ssh-connections": {
+      const connections = Array.isArray(params.remoteConnections)
+        ? params.remoteConnections
+        : Array.isArray(params.connections)
+          ? params.connections
+          : [];
+      const sharedObjects = await updateWebModeSharedObjects(state, { remote_connections: connections });
+      const remoteConnections = Array.isArray(sharedObjects.remote_connections) ? sharedObjects.remote_connections : [];
+      return {
+        remoteConnections,
+        connections: remoteConnections,
+        sharedObjects: {
+          remote_connections: remoteConnections,
+        },
+      };
+    }
+    default:
+      throw Object.assign(new Error(`unsupported desktop host method: ${method}`), { statusCode: 404 });
+  }
+}
+
+async function webModeRemoteControlClientsResponse(state) {
+  const sharedObjects = await ensureRemoteControlSharedObjects(state);
+  return {
+    status: sharedObjects.remote_control_connections_state?.available === false ? "unavailable" : "available",
+    clients: Array.isArray(sharedObjects.remote_control_connections) ? sharedObjects.remote_control_connections : [],
+    data: Array.isArray(sharedObjects.remote_control_connections) ? sharedObjects.remote_control_connections : [],
     nextCursor: null,
-    reason: physicalHostControl
-      ? "remote control client discovery is not implemented by codex-desktop serve yet"
-      : "remote control clients require a real desktop control backend, but this serve runtime is browser-only",
+    state: sharedObjects.remote_control_connections_state ?? defaultRemoteControlConnectionsState(true, false),
+    client_id: sharedObjects.local_remote_control_client_id ?? null,
+    environment_id: sharedObjects.local_remote_control_environment_id ?? null,
+    installation_id: sharedObjects.local_remote_control_installation_id ?? null,
     runtime: {
       computer_use_mode: state.computer.mode,
-      physical_host_control: physicalHostControl,
+      physical_host_control: state.computer.physical_host_control === true,
     },
   };
 }
@@ -2447,6 +3065,22 @@ function createServer(state) {
           jsonResponse(response, 200, { ok: true });
           return;
         }
+        if (message?.method === "desktopHost.request") {
+          try {
+            const result = await handleDesktopHostRequest(
+              state,
+              message.params?.method,
+              message.params?.params ?? {},
+            );
+            jsonResponse(response, 200, { ok: true, result });
+          } catch (error) {
+            jsonResponse(response, error.statusCode ?? 500, {
+              ok: false,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
+          return;
+        }
         if (message?.method === "webState.read") {
           jsonResponse(response, 200, { ok: true, result: await readWebState(state.args) });
           return;
@@ -2595,7 +3229,7 @@ function createServer(state) {
           jsonResponse(response, 405, { error: "method_not_allowed" });
           return;
         }
-        jsonResponse(response, 200, webModeRemoteControlClientsResponse(state));
+        jsonResponse(response, 200, await webModeRemoteControlClientsResponse(state));
         return;
       }
 
