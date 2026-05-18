@@ -4175,6 +4175,9 @@ for (const needle of [
   "case \"computer-use-app-approvals-read\"",
   "case \"read-file-metadata\"",
   "case \"thread-follower-interrupt-turn-for-host\"",
+  "projectlessOutputDirectory",
+  "startConversation",
+  "case \"thread-follower-start-turn\"",
   "case \"electron-add-new-workspace-root-option\"",
   "case \"electron-create-new-workspace-root-option\"",
   "case \"electron-set-active-workspace-root\"",
@@ -4374,6 +4377,36 @@ async function fetch(url, options = {}) {
       }),
     };
   }
+  if (body?.method === "appServer.rpc" && body.params?.method === "thread/start") {
+    return {
+      ok: true,
+      json: async () => ({
+        ok: true,
+        result: {
+          thread: {
+            id: "thread-started",
+            sessionId: "thread-started",
+            cwd: body.params?.params?.cwd,
+          },
+        },
+      }),
+    };
+  }
+  if (body?.method === "appServer.rpc" && body.params?.method === "turn/start") {
+    return {
+      ok: true,
+      json: async () => ({
+        ok: true,
+        result: {
+          turn: {
+            id: "turn-started",
+            threadId: body.params?.params?.threadId,
+            input: body.params?.params?.input,
+          },
+        },
+      }),
+    };
+  }
   if (body?.method === "appServer.rpc") {
     throw new Error(`unexpected app-server call for ${body.params?.method}`);
   }
@@ -4526,6 +4559,22 @@ const cliResult = await window.electronBridge.sendMessageFromView({
   method: "plugin/list",
   params: {},
 });
+const projectlessStart = await window.electronBridge.sendMessageFromView({
+  type: "send-cli-request-for-host",
+  hostId: "local",
+  method: "start-conversation",
+  params: {
+    workspaceKind: "projectless",
+    input: [{ type: "text", text: "hello", text_elements: [] }],
+  },
+});
+const followerTurn = await window.electronBridge.sendMessageFromView({
+  type: "thread-follower-start-turn",
+  conversationId: "thread-started",
+  turnStartParams: {
+    input: [{ type: "text", text: "follow-up", text_elements: [] }],
+  },
+});
 const addedRoot = await window.electronBridge.sendMessageFromView({
   type: "electron-add-new-workspace-root-option",
   root: "/workspace/existing",
@@ -4627,6 +4676,16 @@ if (workerResult?.reason !== "electron-worker-bridge-unavailable-in-web-mode") {
 if (!Array.isArray(cliResult?.marketplaces)) {
   throw new Error(`send-cli-request-for-host did not return plugin/list result: ${JSON.stringify(cliResult)}`);
 }
+if (
+  projectlessStart?.resultType !== "success" ||
+  projectlessStart?.result?.conversationId !== "thread-started" ||
+  projectlessStart?.result?.projectlessOutputDirectory !== "/workspace"
+) {
+  throw new Error(`projectless start did not synthesize output directory: ${JSON.stringify(projectlessStart)}`);
+}
+if (followerTurn?.resultType !== "success" || followerTurn?.result?.turn?.threadId !== "thread-started") {
+  throw new Error(`thread-follower-start-turn did not map to turn/start: ${JSON.stringify(followerTurn)}`);
+}
 if (addedRoot?.root !== "/workspace/existing" || !addedRoot?.activeWorkspaceRoots?.roots?.includes("/workspace/existing")) {
   throw new Error(`explicit workspace root add failed: ${JSON.stringify(addedRoot)}`);
 }
@@ -4653,6 +4712,8 @@ const unexpectedAppServerCalls = fetches.filter(
       "appServer.rpc:plugin/list",
       "appServer.rpc:config/batchWrite",
       "appServer.rpc:experimentalFeature/enablement/set",
+      "appServer.rpc:thread/start",
+      "appServer.rpc:turn/start",
     ].includes(entry),
 );
 if (unexpectedAppServerCalls.length > 0) {
@@ -4663,6 +4724,12 @@ if (fetches.filter((entry) => entry === "appServer.rpc:fs/readFile").length !== 
 }
 if (fetches.filter((entry) => entry === "appServer.rpc:plugin/list").length !== 2) {
   throw new Error(`plugin list should be forwarded by fetch and send-cli-request-for-host: ${JSON.stringify(fetches)}`);
+}
+if (fetches.filter((entry) => entry === "appServer.rpc:thread/start").length !== 1) {
+  throw new Error(`projectless chat should start one app-server thread: ${JSON.stringify(fetches)}`);
+}
+if (fetches.filter((entry) => entry === "appServer.rpc:turn/start").length !== 2) {
+  throw new Error(`chat starts and follower turns should be forwarded through turn/start: ${JSON.stringify(fetches)}`);
 }
 if (!fetches.includes("appServer.rpc:config/batchWrite")) {
   throw new Error(`default model config should be forwarded through config/batchWrite: ${JSON.stringify(fetches)}`);

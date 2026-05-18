@@ -450,6 +450,98 @@
     return response.result;
   }
 
+  function defaultProjectlessOutputDirectory() {
+    const homeDirectory = webState.globalState?.["home-directory"];
+    return typeof homeDirectory === "string" && homeDirectory.trim().length > 0
+      ? homeDirectory
+      : defaultWorkspaceRoot();
+  }
+
+  function normalizeConversationStartParams(params = {}) {
+    const cwd = typeof params.cwd === "string" && params.cwd.trim().length > 0
+      ? params.cwd
+      : defaultWorkspaceRoot();
+    const workspaceRoots = coerceWorkspaceRoots(params.workspaceRoots ?? params.workspace_roots);
+    const normalized = {
+      ...params,
+      hostId: params.hostId || localHostId,
+      cwd,
+      workspaceKind: params.workspaceKind || params.workspace_kind || "project",
+      workspaceRoots: workspaceRoots.length > 0 ? workspaceRoots : [cwd],
+    };
+    if (
+      normalized.workspaceKind === "projectless" &&
+      (typeof normalized.projectlessOutputDirectory !== "string" ||
+        normalized.projectlessOutputDirectory.trim().length === 0)
+    ) {
+      normalized.projectlessOutputDirectory = defaultProjectlessOutputDirectory();
+    }
+    return normalized;
+  }
+
+  async function startConversation(params = {}) {
+    const normalized = normalizeConversationStartParams(params);
+    const threadResult = await requestAppServerRpc("thread/start", {
+      cwd: normalized.cwd,
+      approvalsReviewer: normalized.approvalsReviewer,
+      model: normalized.model,
+      serviceTier: normalized.serviceTier,
+      threadSource: normalized.threadSource,
+      sessionStartSource: normalized.sessionStartSource,
+      permissions: normalized.permissions,
+      sandbox: normalized.sandbox,
+    });
+    const thread = threadResult?.thread ?? threadResult;
+    const conversationId = thread?.id ?? thread?.sessionId ?? null;
+    const input = Array.isArray(normalized.input) ? normalized.input : [];
+    let turnResult = null;
+    if (conversationId && input.length > 0) {
+      turnResult = await requestAppServerRpc("turn/start", {
+        threadId: conversationId,
+        input,
+        cwd: normalized.cwd,
+        model: normalized.model,
+        effort: normalized.reasoningEffort ?? normalized.effort,
+        approvalsReviewer: normalized.approvalsReviewer,
+        permissions: normalized.permissions,
+        sandboxPolicy: normalized.sandboxPolicy,
+      });
+    }
+    return {
+      resultType: "success",
+      result: {
+        conversationId,
+        thread,
+        turn: turnResult?.turn ?? null,
+        projectlessOutputDirectory: normalized.projectlessOutputDirectory ?? null,
+      },
+    };
+  }
+
+  async function startFollowerTurn(params = {}) {
+    const conversationId = params.conversationId ?? params.threadId;
+    if (typeof conversationId !== "string" || conversationId.trim().length === 0) {
+      return { resultType: "error", error: "missing-conversation-id" };
+    }
+    const turnStartParams = params.turnStartParams ?? {};
+    const result = await requestAppServerRpc("turn/start", {
+      ...turnStartParams,
+      threadId: conversationId,
+      input: Array.isArray(turnStartParams.input) ? turnStartParams.input : [],
+    });
+    return { resultType: "success", result };
+  }
+
+  async function requestDesktopIpc(method, params, timeoutMs) {
+    if (method === "start-conversation") {
+      return await startConversation(params);
+    }
+    if (method === "thread-follower-start-turn") {
+      return await startFollowerTurn(params);
+    }
+    return await requestAppServerRpc(method, params, timeoutMs);
+  }
+
   async function writeAppServerMessage(message) {
     await request("appServer.write", { message });
   }
@@ -949,7 +1041,11 @@
         await handleFetch(message);
         return;
       case "send-cli-request-for-host":
-        return await requestAppServerRpc(message.method, message.params ?? {}, message.timeoutMs);
+        return await requestDesktopIpc(message.method, message.params ?? {}, message.timeoutMs);
+      case "start-conversation":
+        return await startConversation(message.params ?? message);
+      case "thread-follower-start-turn":
+        return await startFollowerTurn(message.params ?? message);
       case "open-in-browser":
         if (typeof message.url === "string" && message.url.trim().length > 0) {
           window.open(message.url, "_blank", "noopener,noreferrer");
