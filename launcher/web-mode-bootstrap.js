@@ -10,6 +10,7 @@
   const localHttpFetchProxyPrefixes = [
     "/accounts/",
     "/api/",
+    "/aip/",
     "/backend-api/",
     "/beacons/",
     "/checkout_pricing_config/",
@@ -18,7 +19,9 @@
     "/subscriptions/",
     "/wham/",
   ];
+  const appServerAssetUrlMethods = new Set(["app/list", "mcpServerStatus/list", "plugin/list", "plugin/read"]);
   const hostFetchAppServerRpcMethods = new Map([
+    ["add-marketplace", "marketplace/add"],
     ["batch-write-config-value", "config/batchWrite"],
     ["batch-write-config-value-for-host", "config/batchWrite"],
     ["get-config-requirements-for-host", "configRequirements/read"],
@@ -27,6 +30,7 @@
     ["list-hooks-for-host", "hooks/list"],
     ["list-mcp-server-status", "mcpServerStatus/list"],
     ["list-models-for-host", "model/list"],
+    ["list-apps", "app/list"],
     ["list-plugins", "plugin/list"],
     ["list-skills-for-host", "skills/list"],
     ["read-config-for-host", "config/read"],
@@ -272,6 +276,10 @@
         return false;
       case "hotkey-window-hotkey-state":
         return { configuredHotkey: null };
+      case "global-dictation-history":
+        return { items: [] };
+      case "global-dictation-copy-history-item":
+        return { ok: true };
       default:
         return noHostRpcFallback;
     }
@@ -588,6 +596,40 @@
     return new TextDecoder().decode(bytes);
   }
 
+  function localAssetFilePath(filePath) {
+    return filePath.replace(/[?#].*$/, "");
+  }
+
+  function localAssetUrl(filePath) {
+    const params = new URLSearchParams({
+      path: localAssetFilePath(filePath),
+      codex_web_token: bridgeToken,
+    });
+    return `${window.location.origin}/__codex/local-file?${params.toString()}`;
+  }
+
+  function shouldRewriteLocalAssetUrl(value) {
+    return (
+      typeof value === "string" &&
+      value.startsWith("/") &&
+      !value.includes("://") &&
+      /\.(?:avif|gif|ico|jpe?g|png|svg|webp)(?:[?#].*)?$/i.test(value)
+    );
+  }
+
+  function rewriteLocalAssetUrls(value) {
+    if (shouldRewriteLocalAssetUrl(value)) {
+      return localAssetUrl(value);
+    }
+    if (Array.isArray(value)) {
+      return value.map((item) => rewriteLocalAssetUrls(item));
+    }
+    if (value && typeof value === "object") {
+      return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, rewriteLocalAssetUrls(item)]));
+    }
+    return value;
+  }
+
   async function proxyLocalHttpFetch(message) {
     const path = localHttpPathFromUrl(message.url);
     if (path == null) {
@@ -621,7 +663,15 @@
       params: params ?? {},
       timeoutMs,
     });
-    return response.result;
+    const result = response.result;
+    if (method === "modelProvider/capabilities/read" && result && typeof result === "object") {
+      return {
+        ...result,
+        realtimeVoice: true,
+        voiceInput: true,
+      };
+    }
+    return appServerAssetUrlMethods.has(method) ? rewriteLocalAssetUrls(result) : result;
   }
 
   function defaultProjectlessOutputDirectory() {
@@ -713,11 +763,18 @@
   }
 
   async function requestDesktopIpc(method, params, timeoutMs) {
+    if (method === "app-connect-oauth-callback-url") {
+      return { callbackUrl: `${window.location.origin}/oauth/callback` };
+    }
     if (method === "start-conversation") {
       return await startConversation(params);
     }
     if (method === "thread-follower-start-turn") {
       return await startFollowerTurn(params);
+    }
+    const appServerMethod = hostFetchAppServerRpcMethods.get(method);
+    if (appServerMethod) {
+      return await requestAppServerRpc(appServerMethod, params, timeoutMs);
     }
     return await requestAppServerRpc(method, params, timeoutMs);
   }
@@ -1070,6 +1127,14 @@
           return;
         }
         case "hotkey-window-hotkey-state": {
+          successFetch(message, webModeHostRpcFallback(method));
+          return;
+        }
+        case "global-dictation-history": {
+          successFetch(message, webModeHostRpcFallback(method));
+          return;
+        }
+        case "global-dictation-copy-history-item": {
           successFetch(message, webModeHostRpcFallback(method));
           return;
         }
