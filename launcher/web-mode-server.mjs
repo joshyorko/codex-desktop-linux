@@ -43,6 +43,7 @@ const WEB_MODE_API_PREFIXES = [
 ];
 
 const BUNDLED_PLUGIN_NAMES = ["browser-use", "chrome", "computer-use"];
+const SHUTDOWN_TIMEOUT_MS = 3000;
 
 function usage() {
   console.error(`Usage:
@@ -477,10 +478,8 @@ async function waitForCdpEndpoint(endpoint, timeoutMs) {
   throw lastError ?? new Error("timed out");
 }
 
-function stopBrowserSidecar(state) {
-  if (state.browser.child && !state.browser.child.killed) {
-    state.browser.child.kill("SIGTERM");
-  }
+async function stopBrowserSidecar(state) {
+  await terminateChild(state.browser.child, "browser sidecar");
 }
 
 async function sendAppServerRpc(state, method, params = {}, timeoutMs = 30000) {
@@ -677,9 +676,70 @@ function startAppServer(state) {
     });
 }
 
-function stopAppServer(state) {
-  if (state.appServer.child && !state.appServer.child.killed) {
-    state.appServer.child.kill("SIGTERM");
+function rejectPendingRpc(state, reason) {
+  for (const pending of state.pendingRpc.values()) {
+    pending.reject(reason);
+  }
+  state.pendingRpc.clear();
+}
+
+async function stopAppServer(state) {
+  rejectPendingRpc(state, new Error("web-mode server is shutting down"));
+  await terminateChild(state.appServer.child, "app-server");
+}
+
+async function terminateChild(child, label) {
+  if (!child || child.exitCode != null || child.signalCode != null) {
+    return;
+  }
+
+  await new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      if (child.exitCode == null && child.signalCode == null) {
+        child.kill("SIGKILL");
+      }
+      resolve();
+    }, SHUTDOWN_TIMEOUT_MS);
+
+    child.once("exit", () => {
+      clearTimeout(timer);
+      resolve();
+    });
+
+    try {
+      child.kill("SIGTERM");
+    } catch (error) {
+      clearTimeout(timer);
+      console.error(`[codex-web] failed to terminate ${label}: ${error.message}`);
+      resolve();
+    }
+  });
+}
+
+async function closeHttpServer(server) {
+  if (!server.listening) {
+    return;
+  }
+
+  server.closeIdleConnections?.();
+  const closePromise = new Promise((resolve, reject) => {
+    server.close((error) => {
+      if (error && error.code !== "ERR_SERVER_NOT_RUNNING") {
+        reject(error);
+        return;
+      }
+      resolve();
+    });
+  });
+
+  const forceTimer = setTimeout(() => {
+    server.closeAllConnections?.();
+  }, 500);
+
+  try {
+    await closePromise;
+  } finally {
+    clearTimeout(forceTimer);
   }
 }
 
@@ -1074,6 +1134,108 @@ async function localFileMetadata(filePath) {
   };
 }
 
+async function localWorkspaceRootMetadata(rootPath) {
+  if (typeof rootPath !== "string" || rootPath.trim().length === 0) {
+    throw new Error("workspace root path is required");
+  }
+  return localFileMetadata(path.resolve(rootPath));
+}
+
+function sanitizeProjectName(projectName) {
+  const sanitized = String(projectName ?? "")
+    .trim()
+    .replace(/[\\/:\0]/g, "-")
+    .replace(/\s+/g, " ")
+    .replace(/^\.+$/, "")
+    .slice(0, 80);
+  return sanitized.length > 0 ? sanitized : "New project";
+}
+
+async function createWorkspaceProject(args, projectName) {
+  const basePath = path.resolve(args.workspace);
+  const baseName = sanitizeProjectName(projectName);
+  let targetPath = path.join(basePath, baseName);
+  const baseWithSeparator = `${basePath}${path.sep}`;
+  if (targetPath !== basePath && !targetPath.startsWith(baseWithSeparator)) {
+    throw new Error("project path escapes workspace");
+  }
+
+  for (let attempt = 2; await exists(targetPath); attempt += 1) {
+    targetPath = path.join(basePath, `${baseName} ${attempt}`);
+  }
+
+  await fs.mkdir(targetPath, { recursive: true, mode: 0o700 });
+  return localFileMetadata(targetPath);
+}
+
+async function captureCommand(command, args, timeoutMs = 30000) {
+  const child = spawn(command, args, {
+    stdio: ["ignore", "pipe", "pipe"],
+    env: process.env,
+  });
+  let stdout = "";
+  let stderr = "";
+  child.stdout.setEncoding("utf8");
+  child.stderr.setEncoding("utf8");
+  child.stdout.on("data", (chunk) => {
+    stdout += chunk;
+  });
+  child.stderr.on("data", (chunk) => {
+    stderr += chunk;
+  });
+
+  return await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL");
+      reject(new Error(`${command} timed out`));
+    }, timeoutMs);
+
+    child.on("error", (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+    child.on("exit", (code, signal) => {
+      clearTimeout(timer);
+      if (code === 0) {
+        resolve(stdout.trim());
+        return;
+      }
+      if (code === 1) {
+        resolve("");
+        return;
+      }
+      reject(new Error(`${command} exited code=${code} signal=${signal}: ${stderr.trim()}`));
+    });
+  });
+}
+
+async function selectWorkspaceDirectory(args, initialRoot) {
+  if (!process.env.DISPLAY && !process.env.WAYLAND_DISPLAY) {
+    return { cancelled: true, reason: "no graphical session available" };
+  }
+
+  const initialPath = path.resolve(
+    typeof initialRoot === "string" && initialRoot.trim().length > 0 ? initialRoot : args.workspace,
+  );
+  const kdialog = await findExecutable("kdialog");
+  if (kdialog) {
+    const selected = await captureCommand(kdialog, ["--getexistingdirectory", initialPath]);
+    return selected ? await localWorkspaceRootMetadata(selected) : { cancelled: true };
+  }
+
+  const zenity = await findExecutable("zenity");
+  if (zenity) {
+    const selected = await captureCommand(zenity, [
+      "--file-selection",
+      "--directory",
+      `--filename=${initialPath.endsWith(path.sep) ? initialPath : `${initialPath}${path.sep}`}`,
+    ]);
+    return selected ? await localWorkspaceRootMetadata(selected) : { cancelled: true };
+  }
+
+  return { cancelled: true, reason: "no supported folder picker found" };
+}
+
 function chromeProfileRoots(homeDir = process.env.HOME || "") {
   return [
     path.join(homeDir, ".config", "BraveSoftware", "Brave-Browser"),
@@ -1268,6 +1430,27 @@ function createServer(state) {
           });
           return;
         }
+        if (message?.method === "workspace.rootMetadata") {
+          jsonResponse(response, 200, {
+            ok: true,
+            result: await localWorkspaceRootMetadata(message.params?.root),
+          });
+          return;
+        }
+        if (message?.method === "workspace.createProject") {
+          jsonResponse(response, 200, {
+            ok: true,
+            result: await createWorkspaceProject(state.args, message.params?.projectName),
+          });
+          return;
+        }
+        if (message?.method === "workspace.selectDirectory") {
+          jsonResponse(response, 200, {
+            ok: true,
+            result: await selectWorkspaceDirectory(state.args, message.params?.initialRoot),
+          });
+          return;
+        }
         if (message?.method === "chromeExtension.installed") {
           jsonResponse(response, 200, {
             ok: true,
@@ -1451,16 +1634,33 @@ async function serve(args) {
   await startBrowserSidecar(state);
   startAppServer(state);
   const server = createServer(state);
+  let shutdownPromise = null;
+
+  const shutdown = (exitCode = null, reason = "shutdown") => {
+    shutdownPromise ??= (async () => {
+      console.error(`[codex-web] ${reason}; shutting down`);
+      await closeHttpServer(server);
+      await Promise.all([stopBrowserSidecar(state), stopAppServer(state)]);
+    })()
+      .catch((error) => {
+        console.error(`[codex-web] shutdown failed: ${error.message}`);
+      })
+      .finally(() => {
+        if (exitCode != null) {
+          process.exit(exitCode);
+        }
+      });
+    return shutdownPromise;
+  };
 
   process.once("SIGINT", () => {
-    stopBrowserSidecar(state);
-    stopAppServer(state);
-    process.exit(130);
+    void shutdown(130, "received SIGINT");
+  });
+  process.once("SIGHUP", () => {
+    void shutdown(129, "received SIGHUP");
   });
   process.once("SIGTERM", () => {
-    stopBrowserSidecar(state);
-    stopAppServer(state);
-    process.exit(143);
+    void shutdown(143, "received SIGTERM");
   });
 
   await new Promise((resolve, reject) => {
@@ -1485,9 +1685,7 @@ async function serve(args) {
     });
     JSON.parse(body);
     process.stdout.write(body);
-    await new Promise((resolve) => server.close(resolve));
-    stopBrowserSidecar(state);
-    stopAppServer(state);
+    await shutdown(null, "once health check complete");
     return;
   }
 

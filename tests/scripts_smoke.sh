@@ -4078,7 +4078,20 @@ const required = [
   "chromeExtension.installed",
   "appServer.write",
   "fs.metadata",
+  "workspace.rootMetadata",
+  "workspace.createProject",
+  "workspace.selectDirectory",
+  "localWorkspaceRootMetadata",
+  "createWorkspaceProject",
+  "selectWorkspaceDirectory",
+  "--getexistingdirectory",
+  "--file-selection",
   "localFileMetadata",
+  "SHUTDOWN_TIMEOUT_MS",
+  "terminateChild",
+  "closeHttpServer",
+  "closeAllConnections",
+  "received SIGHUP",
   "thread/turns/list",
   "thread/backgroundTerminals/clean",
   "normalizedTimeoutMs",
@@ -4162,6 +4175,15 @@ for (const needle of [
   "case \"computer-use-app-approvals-read\"",
   "case \"read-file-metadata\"",
   "case \"thread-follower-interrupt-turn-for-host\"",
+  "case \"electron-add-new-workspace-root-option\"",
+  "case \"electron-create-new-workspace-root-option\"",
+  "case \"electron-set-active-workspace-root\"",
+  "case \"electron-clear-active-workspace-root\"",
+  "case \"electron-update-workspace-root-options\"",
+  "workspace.rootMetadata",
+  "workspace.createProject",
+  "workspace.selectDirectory",
+  "electron-saved-workspace-roots",
   "meta[name=\"initial-route\"]",
   "currentRoute !== \"/\" && currentRoute !== \"/index.html\"",
 ]) {
@@ -4191,6 +4213,12 @@ const window = {
   },
   postMessage(message) {
     posted.push(message);
+  },
+  prompt() {
+    return "/workspace/from-prompt";
+  },
+  alert(message) {
+    posted.push({ type: "alert", message });
   },
   matchMedia() {
     return {
@@ -4259,6 +4287,33 @@ async function fetch(url, options = {}) {
       json: async () => ({
         ok: true,
         result: { path: body.params?.path, isFile: true, sizeBytes: 14 },
+      }),
+    };
+  }
+  if (body?.method === "workspace.rootMetadata") {
+    return {
+      ok: true,
+      json: async () => ({
+        ok: true,
+        result: { path: body.params?.root, isDirectory: true, sizeBytes: 0 },
+      }),
+    };
+  }
+  if (body?.method === "workspace.createProject") {
+    return {
+      ok: true,
+      json: async () => ({
+        ok: true,
+        result: { path: `/workspace/${body.params?.projectName || "New project"}`, isDirectory: true, sizeBytes: 0 },
+      }),
+    };
+  }
+  if (body?.method === "workspace.selectDirectory") {
+    return {
+      ok: true,
+      json: async () => ({
+        ok: true,
+        result: { cancelled: true },
       }),
     };
   }
@@ -4471,6 +4526,28 @@ const cliResult = await window.electronBridge.sendMessageFromView({
   method: "plugin/list",
   params: {},
 });
+const addedRoot = await window.electronBridge.sendMessageFromView({
+  type: "electron-add-new-workspace-root-option",
+  root: "/workspace/existing",
+});
+const promptedRoot = await window.electronBridge.sendMessageFromView({
+  type: "electron-add-new-workspace-root-option",
+});
+const createdRoot = await window.electronBridge.sendMessageFromView({
+  type: "electron-create-new-workspace-root-option",
+  projectName: "Created project",
+});
+const activeRoot = await window.electronBridge.sendMessageFromView({
+  type: "electron-set-active-workspace-root",
+  root: "/workspace/existing",
+});
+const updatedRoots = await window.electronBridge.sendMessageFromView({
+  type: "electron-update-workspace-root-options",
+  roots: ["/workspace/existing", "/workspace/second"],
+});
+const clearedRoot = await window.electronBridge.sendMessageFromView({
+  type: "electron-clear-active-workspace-root",
+});
 await window.electronBridge.sendMessageFromView({
   type: "mcp-response",
   hostId: "local",
@@ -4550,6 +4627,24 @@ if (workerResult?.reason !== "electron-worker-bridge-unavailable-in-web-mode") {
 if (!Array.isArray(cliResult?.marketplaces)) {
   throw new Error(`send-cli-request-for-host did not return plugin/list result: ${JSON.stringify(cliResult)}`);
 }
+if (addedRoot?.root !== "/workspace/existing" || !addedRoot?.activeWorkspaceRoots?.roots?.includes("/workspace/existing")) {
+  throw new Error(`explicit workspace root add failed: ${JSON.stringify(addedRoot)}`);
+}
+if (promptedRoot?.root !== "/workspace/from-prompt") {
+  throw new Error(`prompted workspace root add failed: ${JSON.stringify(promptedRoot)}`);
+}
+if (createdRoot?.root !== "/workspace/Created project") {
+  throw new Error(`created workspace root add failed: ${JSON.stringify(createdRoot)}`);
+}
+if (activeRoot?.activeWorkspaceRoots?.roots?.[0] !== "/workspace/existing") {
+  throw new Error(`active workspace root set failed: ${JSON.stringify(activeRoot)}`);
+}
+if (JSON.stringify(updatedRoots?.workspaceRootOptions?.roots) !== JSON.stringify(["/workspace/existing", "/workspace/second"])) {
+  throw new Error(`workspace root options update failed: ${JSON.stringify(updatedRoots)}`);
+}
+if (JSON.stringify(clearedRoot?.activeWorkspaceRoots?.roots) !== JSON.stringify([])) {
+  throw new Error(`workspace root clear failed: ${JSON.stringify(clearedRoot)}`);
+}
 const unexpectedAppServerCalls = fetches.filter(
   (entry) =>
     entry.startsWith("appServer.rpc:") &&
@@ -4586,6 +4681,15 @@ if (!fetches.includes("appServer.write")) {
 }
 if (!fetches.includes("fs.metadata")) {
   throw new Error(`read-file-metadata should be forwarded to the web-mode server: ${JSON.stringify(fetches)}`);
+}
+if (fetches.filter((entry) => entry === "workspace.rootMetadata").length < 4) {
+  throw new Error(`workspace root changes should validate local directories through web-mode server: ${JSON.stringify(fetches)}`);
+}
+if (!fetches.includes("workspace.createProject")) {
+  throw new Error(`new workspace projects should be created through web-mode server: ${JSON.stringify(fetches)}`);
+}
+if (!fetches.includes("workspace.selectDirectory")) {
+  throw new Error(`use existing folder should ask web-mode server for a native folder picker: ${JSON.stringify(fetches)}`);
 }
 if (!fetches.includes("/wham/usage")) {
   throw new Error(`local HTTP fetch proxy did not hit the expected route: ${JSON.stringify(fetches)}`);
