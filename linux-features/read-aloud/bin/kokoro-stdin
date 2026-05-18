@@ -7,6 +7,13 @@ model="${CODEX_LINUX_READ_ALOUD_KOKORO_MODEL:-$data_home/kokoro/kokoro-v1.0.onnx
 voices="${CODEX_LINUX_READ_ALOUD_KOKORO_VOICES:-$data_home/kokoro/voices-v1.0.bin}"
 runner_dir="$(cd "$(dirname "$0")" && pwd)"
 
+if [ -z "${XDG_RUNTIME_DIR:-}" ]; then
+    uid="$(id -u 2>/dev/null || true)"
+    if [ -n "$uid" ] && { [ -S "/run/user/$uid/pipewire-0" ] || [ -S "/run/user/$uid/pulse/native" ]; }; then
+        export XDG_RUNTIME_DIR="/run/user/$uid"
+    fi
+fi
+
 [ -x "$python_bin" ] || {
     echo "Kokoro Python runtime not found: $python_bin" >&2
     exit 127

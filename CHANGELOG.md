@@ -5,6 +5,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Added
+
+- New opt-in Linux feature `read-aloud-mcp` that stages a standalone Rust Read
+  Aloud MCP plugin with `doctor`, `read_aloud`, and `stop` tools. The MCP server
+  reuses the Kokoro runner/model configuration from the Read Aloud UI feature
+  and stays out of the default install unless enabled in
+  `linux-features/features.json`. When bundled, the feature patches Codex's
+  bundled plugin registry so the app keeps `read-aloud` installed, and the
+  launcher syncs the plugin cache so new Codex windows expose the MCP tools
+  through the same auto-install path as Computer Use.
+
 ### Fixed
 
 - The Chrome native-messaging host now evicts stale browser clients when a newer Codex browser client connects, preventing old Node REPL sessions from repeatedly reattaching CDP and driving extension service-worker CPU.

@@ -59,6 +59,11 @@ hidden inside message rendering:
 That keeps the safe primitive small while leaving room for a real back-and-forth
 voice experience.
 
+For the first agent-facing primitive, enable `linux-features/read-aloud-mcp`.
+That stages a separate `read-aloud` MCP plugin with `doctor`, `read_aloud`, and
+`stop` tools. It reuses the same Kokoro paths and runtime overrides documented
+below.
+
 ## Voice model
 
 Default speech uses an opt-in Kokoro ONNX runtime, similar in shape to `readd`

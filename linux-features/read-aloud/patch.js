@@ -51,7 +51,8 @@ function applyMainBundlePatch(source) {
     `function codexLinuxReadAloudHasHebrew(e){return /[\\u0590-\\u05ff]/u.test(e)}`,
     `function codexLinuxReadAloudHome(){return process.env.HOME||process.env.USERPROFILE||${osVar}.homedir?.()||\`\`}`,
     `function codexLinuxReadAloudDataHome(){let e=codexLinuxReadAloudHome(),t=process.env.XDG_DATA_HOME||e&&${pathVar}.join(e,\`.local\`,\`share\`);return t||\`\`}`,
-    `function codexLinuxReadAloudSettingsPath(){let e=codexLinuxReadAloudHome(),t=process.env.XDG_CONFIG_HOME||e&&${pathVar}.join(e,\`.config\`);return t?${pathVar}.join(t,\`codex-desktop\`,\`settings.json\`):null}`,
+    `function codexLinuxReadAloudSettingsAppId(){let e=process.env.CODEX_LINUX_APP_ID||process.env.CODEX_APP_ID||\`codex-desktop\`;return/^[A-Za-z0-9._-]+$/.test(e)?e:\`codex-desktop\`}`,
+    `function codexLinuxReadAloudSettingsPath(){let e=process.env.CODEX_LINUX_SETTINGS_FILE;if(typeof e===\`string\`&&e.length>0)return e;let t=codexLinuxReadAloudHome(),n=process.env.XDG_CONFIG_HOME||t&&${pathVar}.join(t,\`.config\`);return n?${pathVar}.join(n,codexLinuxReadAloudSettingsAppId(),\`settings.json\`):null}`,
     `function codexLinuxReadAloudSettings(){try{let e=codexLinuxReadAloudSettingsPath();if(!e||!${fsVar}.existsSync(e))return{};let t=JSON.parse(${fsVar}.readFileSync(e,\`utf8\`));return t&&typeof t===\`object\`&&!Array.isArray(t)?t:{}}catch{return{}}}`,
     `function codexLinuxReadAloudWriteSettings(e){let t=codexLinuxReadAloudSettingsPath();if(!t)throw Error(\`settings path unavailable\`);${fsVar}.mkdirSync(${pathVar}.dirname(t),{recursive:!0});${fsVar}.writeFileSync(t,JSON.stringify(e,null,2)+\`\\n\`)}`,
     `function codexLinuxReadAloudEnabled(){if(process.env.CODEX_LINUX_READ_ALOUD_ENABLED===\`1\`)return!0;let e=codexLinuxReadAloudSettings();return e[${JSON.stringify(SETTINGS_KEY)}]===!0}`,
@@ -137,6 +138,10 @@ function readAloudButtonRowSource(itemVar, copyVar, conversationVar, eventVar) {
 }
 
 function applyIndexRuntimePatch(source) {
+  return ensureReadAloudRuntime(source);
+}
+
+function ensureReadAloudRuntime(source) {
   if (source.includes(RUNTIME_VERSION)) {
     return source;
   }
@@ -243,7 +248,7 @@ function applyGeneralSettingsPatch(source) {
   } else {
     patched = patched.replace(functionNeedle, `${generalSettingsReadAloudBlockSource()}${functionNeedle}`);
   }
-  return applyGeneralSettingsExportPatch(applyGeneralSettingsRowPlacement(patched));
+  return ensureReadAloudRuntime(applyGeneralSettingsExportPatch(applyGeneralSettingsRowPlacement(patched)));
 }
 
 function applyGeneralSettingsExportPatch(source) {

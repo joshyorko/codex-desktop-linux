@@ -14,14 +14,19 @@ use std::{
 use tokio::process::Command;
 use tracing::info;
 
-const REQUIRED_BUNDLE_FILES: [(&str, &str); 15] = [
+const REQUIRED_BUNDLE_FILES: [(&str, &str); 17] = [
     ("Cargo.toml", "Cargo.toml"),
     ("Cargo.lock", "Cargo.lock"),
     ("computer-use-linux", "computer-use-linux"),
+    ("read-aloud-linux", "read-aloud-linux"),
     ("updater", "updater"),
     (
         "plugins/openai-bundled/plugins/computer-use",
         "plugins/openai-bundled/plugins/computer-use",
+    ),
+    (
+        "plugins/openai-bundled/plugins/read-aloud",
+        "plugins/openai-bundled/plugins/read-aloud",
     ),
     ("install.sh", "install.sh"),
     ("launcher/start.sh.template", "launcher/start.sh.template"),
@@ -463,7 +468,7 @@ touch "${DIST_DIR_OVERRIDE}/codex-desktop-${VER}-1-x86_64.pkg.tar.zst"
     fn write_fake_computer_use_bundle(root: &Path) -> Result<()> {
         fs::write(
             root.join("Cargo.toml"),
-            b"[workspace]\nmembers = [\"computer-use-linux\", \"updater\"]\n",
+            b"[workspace]\nmembers = [\"computer-use-linux\", \"read-aloud-linux\", \"updater\"]\n",
         )?;
         fs::write(root.join("Cargo.lock"), b"# fake lock\n")?;
         fs::create_dir_all(root.join("computer-use-linux/src"))?;
@@ -475,6 +480,12 @@ touch "${DIST_DIR_OVERRIDE}/codex-desktop-${VER}-1-x86_64.pkg.tar.zst"
             root.join("computer-use-linux/src/main.rs"),
             b"fn main() {}\n",
         )?;
+        fs::create_dir_all(root.join("read-aloud-linux/src"))?;
+        fs::write(
+            root.join("read-aloud-linux/Cargo.toml"),
+            b"[package]\nname = \"codex-read-aloud-linux\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )?;
+        fs::write(root.join("read-aloud-linux/src/main.rs"), b"fn main() {}\n")?;
         fs::create_dir_all(root.join("updater/src"))?;
         fs::write(
             root.join("updater/Cargo.toml"),
@@ -488,6 +499,15 @@ touch "${DIST_DIR_OVERRIDE}/codex-desktop-${VER}-1-x86_64.pkg.tar.zst"
         )?;
         fs::write(
             root.join("plugins/openai-bundled/plugins/computer-use/.mcp.json"),
+            b"{\"mcpServers\":{}}\n",
+        )?;
+        fs::create_dir_all(root.join("plugins/openai-bundled/plugins/read-aloud/.codex-plugin"))?;
+        fs::write(
+            root.join("plugins/openai-bundled/plugins/read-aloud/.codex-plugin/plugin.json"),
+            b"{\"name\":\"read-aloud\",\"version\":\"0.1.0\"}\n",
+        )?;
+        fs::write(
+            root.join("plugins/openai-bundled/plugins/read-aloud/.mcp.json"),
             b"{\"mcpServers\":{}}\n",
         )?;
         Ok(())
@@ -746,9 +766,13 @@ chmod +x "${CODEX_INSTALL_DIR}/start.sh"
             .join("scripts/patches/registry.js")
             .exists());
         assert!(destination_root.join("computer-use-linux").exists());
+        assert!(destination_root.join("read-aloud-linux").exists());
         assert!(destination_root.join("updater").exists());
         assert!(destination_root
             .join("plugins/openai-bundled/plugins/computer-use/.mcp.json")
+            .exists());
+        assert!(destination_root
+            .join("plugins/openai-bundled/plugins/read-aloud/.mcp.json")
             .exists());
         assert!(destination_root
             .join("scripts/lib/node-runtime.sh")

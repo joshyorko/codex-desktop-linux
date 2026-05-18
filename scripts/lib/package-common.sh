@@ -416,10 +416,13 @@ stage_update_builder_bundle() {
     cp "$REPO_DIR/Cargo.toml" "$update_builder_root/Cargo.toml"
     cp "$REPO_DIR/Cargo.lock" "$update_builder_root/Cargo.lock"
     cp -r "$REPO_DIR/computer-use-linux" "$update_builder_root/computer-use-linux"
+    cp -r "$REPO_DIR/read-aloud-linux" "$update_builder_root/read-aloud-linux"
     cp -r "$REPO_DIR/updater" "$update_builder_root/updater"
     mkdir -p "$update_builder_root/plugins/openai-bundled/plugins"
     cp -r "$REPO_DIR/plugins/openai-bundled/plugins/computer-use" \
         "$update_builder_root/plugins/openai-bundled/plugins/computer-use"
+    cp -r "$REPO_DIR/plugins/openai-bundled/plugins/read-aloud" \
+        "$update_builder_root/plugins/openai-bundled/plugins/read-aloud"
     cp "$REPO_DIR/scripts/build-deb.sh" "$update_builder_root/scripts/build-deb.sh"
     cp "$REPO_DIR/scripts/build-rpm.sh" "$update_builder_root/scripts/build-rpm.sh"
     cp "$REPO_DIR/scripts/build-pacman.sh" "$update_builder_root/scripts/build-pacman.sh"
