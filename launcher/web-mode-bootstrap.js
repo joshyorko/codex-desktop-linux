@@ -43,6 +43,22 @@
     ["write-config-value", "config/value/write"],
     ["write-skill-config", "skills/config/write"],
   ]);
+  const desktopHostRequestMethods = new Set([
+    "app-server-connection-state",
+    "authorize-remote-control-connections",
+    "delete-remote-control-environment",
+    "discover-remote-ssh-connections",
+    "install-remote-codex",
+    "refresh-remote-connections",
+    "refresh-remote-control-connections",
+    "remote-workspace-directory-entries",
+    "rename-remote-control-environment",
+    "save-codex-managed-remote-ssh-connections",
+    "set-remote-connection-auto-connect",
+    "set-remote-control-connections-enabled",
+    "start-remote-chatgpt-login-port-forward",
+    "stop-remote-chatgpt-login-port-forward",
+  ]);
   const browserUseStateKey = "browser-use-origin-state";
   const activeTurnRecoveryTimeoutMs = 90_000;
   const activeTurnRecoveryInitialDelayMs = 0;
@@ -67,6 +83,18 @@
     sharedObjects: {
       remote_connections: [],
       remote_control_connections: [],
+      remote_control_connections_state: {
+        available: true,
+        accessRequired: false,
+        authRequired: false,
+        clientAuthorized: false,
+      },
+      local_app_server_feature_enablement: {
+        remote_control: true,
+      },
+      local_remote_control_client_id: null,
+      local_remote_control_environment_id: null,
+      local_remote_control_installation_id: null,
       host_config: {
         id: localHostId,
         display_name: "Local",
@@ -674,6 +702,35 @@
     return appServerAssetUrlMethods.has(method) ? rewriteLocalAssetUrls(result) : result;
   }
 
+  async function requestDesktopHost(method, params, timeoutMs) {
+    const response = await request("desktopHost.request", {
+      method,
+      params: params ?? {},
+      timeoutMs,
+    });
+    const result = response.result ?? {};
+    applySharedObjectUpdates(result.sharedObjects);
+    return result;
+  }
+
+  function applySharedObjectUpdates(sharedObjects) {
+    if (!sharedObjects || typeof sharedObjects !== "object" || Array.isArray(sharedObjects)) {
+      return;
+    }
+    webState.sharedObjects = {
+      ...(webState.sharedObjects ?? {}),
+      ...sharedObjects,
+    };
+    for (const [key, value] of Object.entries(sharedObjects)) {
+      emit({
+        type: "shared-object-updated",
+        key,
+        value,
+      });
+    }
+    queuePersist();
+  }
+
   function defaultProjectlessOutputDirectory() {
     const homeDirectory = webState.globalState?.["home-directory"];
     return typeof homeDirectory === "string" && homeDirectory.trim().length > 0
@@ -775,6 +832,9 @@
     const appServerMethod = hostFetchAppServerRpcMethods.get(method);
     if (appServerMethod) {
       return await requestAppServerRpc(appServerMethod, params, timeoutMs);
+    }
+    if (desktopHostRequestMethods.has(method)) {
+      return await requestDesktopHost(method, params, timeoutMs);
     }
     return await requestAppServerRpc(method, params, timeoutMs);
   }
@@ -1143,6 +1203,10 @@
           return;
         }
         default: {
+          if (desktopHostRequestMethods.has(method)) {
+            successFetch(message, await requestDesktopHost(method, params));
+            return;
+          }
           const appServerMethod = hostFetchAppServerRpcMethods.get(method);
           if (appServerMethod) {
             successFetch(message, await requestAppServerRpc(appServerMethod, params));

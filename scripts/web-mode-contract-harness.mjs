@@ -163,6 +163,52 @@ const SCREEN_CONTRACTS = [
           );
         },
       },
+      {
+        id: "remote-control-host-refresh",
+        description: "Connections remote-control refresh is handled by the web-mode desktop host, not app-server RPC",
+        hostCalls: ["desktopHost.request:refresh-remote-control-connections"],
+        run: async (context) => {
+          const result = await context.desktopHostRequest("refresh-remote-control-connections", {});
+          const state = result?.state ?? result?.remoteControlConnectionsState ?? null;
+          return passIf(Array.isArray(result?.remoteControlConnections) && state?.available === true, {
+            keys: objectKeys(result),
+            state,
+          });
+        },
+      },
+      {
+        id: "remote-secondary-host-calls",
+        description: "Connections secondary remote host calls have typed web-mode desktop responses",
+        hostCalls: [
+          "desktopHost.request:app-server-connection-state",
+          "desktopHost.request:remote-workspace-directory-entries",
+          "desktopHost.request:set-remote-connection-auto-connect",
+        ],
+        run: async (context) => {
+          const state = await context.desktopHostRequest("app-server-connection-state", { hostId: "local" });
+          const entries = await context.desktopHostRequest("remote-workspace-directory-entries", {
+            hostId: "local",
+            directoryPath: ".",
+            directoriesOnly: true,
+          });
+          const autoConnect = await context.desktopHostRequest("set-remote-connection-auto-connect", {
+            hostId: "remote-control:fixture",
+            autoConnect: true,
+          });
+          return passIf(
+            typeof state?.state === "string" &&
+              Array.isArray(entries?.entries) &&
+              entries.entries.every((entry) => entry?.type === "directory" || entry?.type === "file") &&
+              Array.isArray(autoConnect?.connections) &&
+              typeof autoConnect?.state === "string",
+            {
+              state: state?.state ?? null,
+              entry_count: Array.isArray(entries?.entries) ? entries.entries.length : null,
+              auto_connect_keys: objectKeys(autoConnect),
+            },
+          );
+        },
+      },
     ],
   },
   {
@@ -569,6 +615,18 @@ class HarnessContext {
     }
     return response.body.result;
   }
+
+  async desktopHostRequest(method, params) {
+    const response = await this.postJson(
+      "/__codex/bridge",
+      { method: "desktopHost.request", params: { method, params } },
+      { token: true },
+    );
+    if (response.status !== 200 || response.body?.ok !== true) {
+      throw new Error(`desktop host request ${method} failed: HTTP ${response.status} ${JSON.stringify(response.body)}`);
+    }
+    return response.body.result;
+  }
 }
 
 async function runCheck(context, check) {
@@ -794,6 +852,56 @@ async function startFixtureServer() {
       }
       if (body?.method === "conversation.interrupt") {
         fixtureJson(response, 200, { ok: true, result: { interrupted: false, reason: "no-active-turn" } });
+        return;
+      }
+      if (body?.method === "desktopHost.request") {
+        const method = body.params?.method;
+        if (method === "refresh-remote-control-connections") {
+          fixtureJson(response, 200, {
+            ok: true,
+            result: {
+              remoteControlConnections: [],
+              connections: [],
+              state: {
+                available: true,
+                accessRequired: false,
+                authRequired: false,
+                clientAuthorized: false,
+              },
+            },
+          });
+          return;
+        }
+        if (method === "app-server-connection-state") {
+          fixtureJson(response, 200, { ok: true, result: { state: "connected", status: "connected", error: null } });
+          return;
+        }
+        if (method === "remote-workspace-directory-entries") {
+          fixtureJson(response, 200, {
+            ok: true,
+            result: {
+              directoryPath: body.params?.params?.directoryPath ?? ".",
+              entries: [{ type: "directory", name: "fixture", path: "fixture" }],
+            },
+          });
+          return;
+        }
+        if (method === "set-remote-connection-auto-connect") {
+          fixtureJson(response, 200, {
+            ok: true,
+            result: {
+              hostId: body.params?.params?.hostId ?? null,
+              autoConnect: Boolean(body.params?.params?.autoConnect),
+              remoteConnections: [],
+              remoteControlConnections: [],
+              connections: [],
+              state: "disconnected",
+              error: null,
+            },
+          });
+          return;
+        }
+        fixtureJson(response, 200, { ok: true, result: {} });
         return;
       }
       if (body?.method === "appServer.rpc") {
