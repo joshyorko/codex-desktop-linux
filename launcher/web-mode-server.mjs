@@ -8,6 +8,7 @@ import net from "node:net";
 import { endianness } from "node:os";
 import path from "node:path";
 import process from "node:process";
+import tls from "node:tls";
 import { fileURLToPath } from "node:url";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -49,6 +50,16 @@ const WEB_MODE_API_PREFIXES = [
 
 const BUNDLED_PLUGIN_NAMES = ["browser-use", "chrome", "computer-use"];
 const SHUTDOWN_TIMEOUT_MS = 3000;
+const REMOTE_CONTROL_ENROLLMENTS_KEY = "electron-remote-control-client-enrollments";
+const REMOTE_CONTROL_PROTOCOL_VERSION = "3";
+const REMOTE_CONTROL_REQUIRED_SCOPE = "remote_control_controller_websocket";
+const REMOTE_CONTROL_STEP_UP_SCOPE = "codex.remote_control.enroll";
+const REMOTE_CONTROL_DEVICE_KEY_ALGORITHM = "ecdsa_p256_sha256";
+const REMOTE_CONTROL_DEVICE_KEY_PROTECTION_CLASS = "os_protected_nonextractable";
+const REMOTE_CONTROL_DEVICE_KEY_DOMAIN = "codex-device-key-sign-payload/v1";
+const REMOTE_CONTROL_SEGMENT_MESSAGE_BYTES = 100 * 1024;
+const REMOTE_CONTROL_SEGMENT_ENVELOPE_BYTES = 150 * 1024;
+const REMOTE_CONTROL_MAX_REASSEMBLED_BYTES = 1024 * 1024 * 1024;
 
 function redactHome(targetPath) {
   const home = process.env.HOME;
@@ -276,6 +287,11 @@ function createState(args) {
     chrome_native_host: {
       status: "not_checked",
       manifests: [],
+    },
+    remoteControl: {
+      connections: new Map(),
+      session: null,
+      last_error: null,
     },
     computer: computerUseBrowserOnly
       ? {
@@ -1366,6 +1382,1164 @@ async function remoteControlJsonResponse(response) {
   return JSON.parse(text);
 }
 
+function remoteControlWebSocketUrl() {
+  const url = new URL(remoteControlApiUrl("/codex/remote/control/client"));
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  return url.toString();
+}
+
+function httpTargetForWebSocketUrl(websocketUrl) {
+  const url = new URL(websocketUrl);
+  url.protocol = url.protocol === "wss:" ? "https:" : "http:";
+  return url;
+}
+
+function remoteControlConnectionKey() {
+  const baseUrl = remoteControlApiBaseUrl();
+  return ["Codex Desktop", baseUrl, baseUrl].join("\n");
+}
+
+function remoteControlChallengeField(challenge, snakeName, camelName = snakeName.replace(/_([a-z])/g, (_, char) => char.toUpperCase())) {
+  return challenge?.[snakeName] ?? challenge?.[camelName] ?? null;
+}
+
+function remoteControlDateMs(value) {
+  const time = Date.parse(String(value ?? ""));
+  return Number.isFinite(time) ? time : null;
+}
+
+function remoteControlTimestampSeconds(value) {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return Math.floor(value);
+  }
+  const timeMs = remoteControlDateMs(value);
+  return timeMs == null ? null : Math.floor(timeMs / 1000);
+}
+
+function remoteControlScopeList(value) {
+  if (Array.isArray(value)) {
+    return value.map(String);
+  }
+  if (typeof value === "string") {
+    return value.split(/\s+/).filter(Boolean);
+  }
+  return [];
+}
+
+function remoteControlStepUpTokenFrom(params = {}) {
+  return (
+    params.stepUpToken ??
+    params.step_up_token ??
+    process.env.CODEX_WEB_MODE_REMOTE_CONTROL_STEP_UP_TOKEN ??
+    process.env.CODEX_REMOTE_CONTROL_STEP_UP_TOKEN ??
+    null
+  );
+}
+
+function validateRemoteControlStepUpToken(token, { accountId, accountUserId }) {
+  const payload = jwtPayload(token);
+  if (!payload) {
+    throw Object.assign(new Error("remote-control step-up token is not a JWT"), { remoteControlKind: "auth_required", statusCode: 401 });
+  }
+  const nowSeconds = Date.now() / 1000;
+  if (typeof payload.exp === "number" && payload.exp <= nowSeconds) {
+    throw Object.assign(new Error("remote-control step-up token is expired"), { remoteControlKind: "auth_required", statusCode: 401 });
+  }
+  if (typeof payload.iat === "number" && payload.iat < nowSeconds - 300) {
+    throw Object.assign(new Error("remote-control step-up token is too old"), { remoteControlKind: "auth_required", statusCode: 401 });
+  }
+  if (typeof payload.pwd_auth_time === "number" && payload.pwd_auth_time < nowSeconds - 300) {
+    throw Object.assign(new Error("remote-control step-up token needs fresh authentication"), {
+      remoteControlKind: "auth_required",
+      statusCode: 401,
+    });
+  }
+  const scopes = remoteControlScopeList(payload.scope ?? payload.scp);
+  if (!scopes.includes(REMOTE_CONTROL_STEP_UP_SCOPE)) {
+    throw Object.assign(new Error(`remote-control step-up token needs ${REMOTE_CONTROL_STEP_UP_SCOPE}`), {
+      remoteControlKind: "auth_required",
+      statusCode: 401,
+    });
+  }
+  const claim = authClaimFromToken(token);
+  const tokenAccountId = claim.chatgpt_account_id ?? claim.account_id;
+  const tokenAccountUserId = claim.chatgpt_account_user_id ?? claim.account_user_id ?? claim.user_id ?? payload.sub;
+  if (accountId && tokenAccountId && tokenAccountId !== accountId) {
+    throw Object.assign(new Error("remote-control step-up token account does not match the active Codex account"), {
+      remoteControlKind: "auth_required",
+      statusCode: 401,
+    });
+  }
+  if (accountUserId && tokenAccountUserId && tokenAccountUserId !== accountUserId) {
+    throw Object.assign(new Error("remote-control step-up token user does not match the active Codex account"), {
+      remoteControlKind: "auth_required",
+      statusCode: 401,
+    });
+  }
+  return payload;
+}
+
+async function remoteControlAccountIdentity(state) {
+  const token = await accessTokenForRemoteControl(state);
+  if (!token) {
+    throw Object.assign(new Error("Sign in to ChatGPT in Codex Desktop to authorize remote control."), {
+      remoteControlKind: "auth_required",
+      statusCode: 401,
+    });
+  }
+  const claim = authClaimFromToken(token);
+  return {
+    accountId: claim.chatgpt_account_id ?? claim.account_id ?? (await readCodexAuth(state.args)).tokens?.account_id ?? null,
+    accountUserId: claim.chatgpt_account_user_id ?? claim.account_user_id ?? claim.user_id ?? jwtPayload(token)?.sub ?? null,
+  };
+}
+
+function remoteControlDeviceKeyStorePath(state) {
+  if (state.args.isolated) {
+    return path.join(state.args.identityDir, "xdg-config", "codex-desktop", "remote-control-device-keys-v1.json");
+  }
+  const configHome =
+    process.env.XDG_CONFIG_HOME?.trim() ||
+    (process.env.HOME ? path.join(process.env.HOME, ".config") : path.join(state.args.identityDir, "xdg-config"));
+  return path.join(configHome, "codex-desktop", "remote-control-device-keys-v1.json");
+}
+
+async function readRemoteControlDeviceKeyStore(state) {
+  try {
+    const store = await readJsonFile(remoteControlDeviceKeyStorePath(state));
+    return store && typeof store === "object" && !Array.isArray(store) ? store : {};
+  } catch (error) {
+    if (error.code === "ENOENT") {
+      return {};
+    }
+    throw error;
+  }
+}
+
+async function writeRemoteControlDeviceKeyStore(state, store) {
+  const storePath = remoteControlDeviceKeyStorePath(state);
+  await fs.mkdir(path.dirname(storePath), { recursive: true, mode: 0o700 });
+  await fs.writeFile(storePath, `${JSON.stringify(store, null, 2)}\n`, { mode: 0o600 });
+}
+
+function remoteControlDeviceIdentityForKey(record) {
+  return {
+    key_id: record.key_id ?? record.keyId,
+    public_key_spki_der_base64: record.public_key_spki_der_base64 ?? record.publicKeySpkiDerBase64,
+    algorithm: record.algorithm ?? REMOTE_CONTROL_DEVICE_KEY_ALGORITHM,
+    protection_class: record.protection_class ?? record.protectionClass ?? REMOTE_CONTROL_DEVICE_KEY_PROTECTION_CLASS,
+  };
+}
+
+function remoteControlDeviceIdentityHash(identity) {
+  return crypto
+    .createHash("sha256")
+    .update(
+      JSON.stringify({
+        algorithm: identity.algorithm,
+        keyId: identity.key_id,
+        protectionClass: identity.protection_class,
+        publicKeySpkiDerBase64: identity.public_key_spki_der_base64,
+      }),
+    )
+    .digest("base64url");
+}
+
+async function ensureRemoteControlDeviceKey(state, keyId = null) {
+  const store = await readRemoteControlDeviceKeyStore(state);
+  const keys = store.keys && typeof store.keys === "object" && !Array.isArray(store.keys) ? store.keys : {};
+  if (keyId && keys[keyId]) {
+    return keys[keyId];
+  }
+  const existing = Object.values(keys).find((record) => record?.algorithm === REMOTE_CONTROL_DEVICE_KEY_ALGORITHM);
+  if (existing) {
+    return existing;
+  }
+  const { publicKey, privateKey } = crypto.generateKeyPairSync("ec", { namedCurve: "P-256" });
+  const newKeyId = crypto.randomUUID();
+  const record = {
+    algorithm: REMOTE_CONTROL_DEVICE_KEY_ALGORITHM,
+    keyId: newKeyId,
+    protectionClass: REMOTE_CONTROL_DEVICE_KEY_PROTECTION_CLASS,
+    publicKeySpkiDerBase64: publicKey.export({ type: "spki", format: "der" }).toString("base64"),
+    privateKeyPkcs8Pem: privateKey.export({ type: "pkcs8", format: "pem" }),
+    createdAt: new Date().toISOString(),
+  };
+  keys[record.keyId] = record;
+  await writeRemoteControlDeviceKeyStore(state, { ...store, keys });
+  return record;
+}
+
+function remoteControlSignedPayload(payload) {
+  return {
+    domain: REMOTE_CONTROL_DEVICE_KEY_DOMAIN,
+    payload,
+  };
+}
+
+function signRemoteControlDeviceKey(keyRecord, payload) {
+  const signedPayload = JSON.stringify(remoteControlSignedPayload(payload));
+  const signer = crypto.createSign("sha256");
+  signer.update(Buffer.from(signedPayload, "utf8"));
+  signer.end();
+  const privateKey = crypto.createPrivateKey({
+    key: keyRecord.privateKeyPkcs8Pem ?? Buffer.from(keyRecord.private_key_pkcs8_der_base64, "base64"),
+    format: keyRecord.privateKeyPkcs8Pem ? "pem" : "der",
+    type: "pkcs8",
+  });
+  return {
+    keyId: keyRecord.key_id ?? keyRecord.keyId,
+    signatureDerBase64: signer.sign(privateKey).toString("base64"),
+    signedPayloadBase64: Buffer.from(signedPayload, "utf8").toString("base64"),
+    algorithm: REMOTE_CONTROL_DEVICE_KEY_ALGORITHM,
+  };
+}
+
+function signRemoteControlEnrollmentProof(keyRecord, challenge, payload) {
+  const signature = signRemoteControlDeviceKey(keyRecord, payload);
+  return {
+    challenge_token: remoteControlChallengeField(challenge, "challenge_token"),
+    key_id: signature.keyId,
+    signature_der_base64: signature.signatureDerBase64,
+    signed_payload_base64: signature.signedPayloadBase64,
+    algorithm: signature.algorithm,
+  };
+}
+
+function signRemoteControlWebSocketProof(keyRecord, payload) {
+  return {
+    type: "device_key_proof",
+    ...signRemoteControlDeviceKey(keyRecord, payload),
+  };
+}
+
+function remoteControlEnvelopeByteLength(envelope) {
+  return Buffer.byteLength(JSON.stringify(envelope), "utf8");
+}
+
+function remoteControlSegmentEnvelope(envelope) {
+  if (envelope.type !== "client_message" || remoteControlEnvelopeByteLength(envelope) <= REMOTE_CONTROL_SEGMENT_MESSAGE_BYTES) {
+    return [envelope];
+  }
+  const messageBytes = Buffer.from(JSON.stringify(envelope.message), "utf8");
+  let segmentCount = Math.max(1, Math.ceil(messageBytes.length / REMOTE_CONTROL_SEGMENT_MESSAGE_BYTES));
+  for (;;) {
+    const chunkSize = Math.max(1, Math.ceil(messageBytes.length / segmentCount));
+    const chunks = [];
+    for (let offset = 0; offset < messageBytes.length; offset += chunkSize) {
+      chunks.push(messageBytes.subarray(offset, offset + chunkSize));
+    }
+    segmentCount = chunks.length;
+    const envelopes = chunks.map((chunk, segmentId) => ({
+      ...envelope,
+      type: "client_message_chunk",
+      message: undefined,
+      segment_id: segmentId,
+      segment_count: segmentCount,
+      message_size_bytes: messageBytes.length,
+      message_chunk_base64: chunk.toString("base64"),
+    }));
+    if (envelopes.every((item) => remoteControlEnvelopeByteLength(item) <= REMOTE_CONTROL_SEGMENT_ENVELOPE_BYTES)) {
+      return envelopes;
+    }
+    if (chunkSize === 1) {
+      throw new Error("remote-control client message is too large to segment");
+    }
+    segmentCount += 1;
+  }
+}
+
+function assertRemoteControlChallengeTarget(challenge, targetUrl) {
+  const expectedTarget = targetUrl.protocol === "wss:" || targetUrl.protocol === "ws:" ? httpTargetForWebSocketUrl(targetUrl.toString()) : targetUrl;
+  const targetOrigin = remoteControlChallengeField(challenge, "target_origin");
+  const targetPath = remoteControlChallengeField(challenge, "target_path");
+  if (!targetOrigin || !targetPath) {
+    throw new Error("remote-control device challenge is missing target fields");
+  }
+  if (targetOrigin !== expectedTarget.origin) {
+    throw new Error(`remote-control device challenge target origin mismatch: ${targetOrigin}`);
+  }
+  if (targetPath !== expectedTarget.pathname) {
+    throw new Error(`remote-control device challenge target path mismatch: ${targetPath}`);
+  }
+}
+
+function assertRemoteControlEnrollmentChallenge(challenge, { clientId, accountUserId, targetUrl, requireDeviceIdentityHash = false, identityHash = null }) {
+  if (remoteControlChallengeField(challenge, "purpose") !== "remote_control_client_enrollment") {
+    throw new Error("remote-control enrollment challenge has unexpected purpose");
+  }
+  if (remoteControlChallengeField(challenge, "audience") !== "remote_control_client_enrollment") {
+    throw new Error("remote-control enrollment challenge has unexpected audience");
+  }
+  if (remoteControlChallengeField(challenge, "client_id") !== clientId) {
+    throw new Error("remote-control enrollment challenge client does not match");
+  }
+  if (remoteControlChallengeField(challenge, "account_user_id") !== accountUserId) {
+    throw new Error("remote-control enrollment challenge account user does not match");
+  }
+  if (!remoteControlChallengeField(challenge, "nonce") || !remoteControlChallengeField(challenge, "challenge_token")) {
+    throw new Error("remote-control enrollment challenge is missing required nonce or challenge token");
+  }
+  const expiresAt = remoteControlTimestampSeconds(remoteControlChallengeField(challenge, "challenge_expires_at"));
+  if (expiresAt == null || expiresAt <= Math.floor(Date.now() / 1000)) {
+    throw new Error("remote-control enrollment challenge is expired");
+  }
+  if (requireDeviceIdentityHash && !remoteControlChallengeField(challenge, "device_identity_hash")) {
+    throw new Error("remote-control enrollment challenge is missing device identity hash");
+  }
+  if (identityHash && remoteControlChallengeField(challenge, "device_identity_hash") && remoteControlChallengeField(challenge, "device_identity_hash") !== identityHash) {
+    throw new Error("remote-control enrollment challenge device identity hash does not match");
+  }
+  assertRemoteControlChallengeTarget(challenge, targetUrl);
+}
+
+function remoteControlEnrollmentProofPayload(challenge, clientId, accountUserId, deviceIdentity) {
+  return {
+    type: "remoteControlClientEnrollment",
+    nonce: remoteControlChallengeField(challenge, "nonce"),
+    audience: remoteControlChallengeField(challenge, "audience"),
+    challengeId: remoteControlChallengeField(challenge, "challenge_id"),
+    targetOrigin: remoteControlChallengeField(challenge, "target_origin"),
+    targetPath: remoteControlChallengeField(challenge, "target_path"),
+    accountUserId,
+    clientId,
+    deviceIdentitySha256Base64url: remoteControlDeviceIdentityHash(deviceIdentity),
+    challengeExpiresAt: remoteControlChallengeField(challenge, "challenge_expires_at"),
+  };
+}
+
+function remoteControlConnectionProofPayload(challenge, session, websocketUrl) {
+  const target = httpTargetForWebSocketUrl(websocketUrl);
+  assertRemoteControlChallengeTarget(challenge, target);
+  if (remoteControlChallengeField(challenge, "purpose") !== "remote_control_client_websocket") {
+    throw new Error("remote-control websocket challenge has unexpected purpose");
+  }
+  if (remoteControlChallengeField(challenge, "audience") !== "remote_control_client_websocket") {
+    throw new Error("remote-control websocket challenge has unexpected audience");
+  }
+  if (!remoteControlChallengeField(challenge, "nonce")) {
+    throw new Error("remote-control websocket challenge is missing nonce");
+  }
+  if (remoteControlChallengeField(challenge, "account_user_id") !== session.accountUserId) {
+    throw new Error("remote-control websocket challenge account user does not match");
+  }
+  if (remoteControlChallengeField(challenge, "client_id") !== session.clientId) {
+    throw new Error("remote-control websocket challenge client does not match");
+  }
+  const expectedTokenHash = crypto.createHash("sha256").update(session.remoteControlToken).digest("base64url");
+  const challengeTokenHash = remoteControlChallengeField(challenge, "token_sha256_base64url");
+  if (!challengeTokenHash || challengeTokenHash !== expectedTokenHash) {
+    throw new Error("remote-control websocket challenge token hash mismatch");
+  }
+  const tokenExpiresAt = remoteControlChallengeField(challenge, "token_expires_at");
+  if (tokenExpiresAt == null || tokenExpiresAt <= Math.floor(Date.now() / 1000) || tokenExpiresAt !== session.tokenExpiresAt) {
+    throw new Error("remote-control websocket challenge token expiration does not match enrollment");
+  }
+  const scopes = remoteControlScopeList(remoteControlChallengeField(challenge, "scopes"));
+  if (scopes.length !== session.scopes.length || scopes.some((scope, index) => scope !== session.scopes[index])) {
+    throw new Error("remote-control websocket challenge scopes do not match enrollment");
+  }
+  return {
+    type: "remoteControlClientConnection",
+    nonce: remoteControlChallengeField(challenge, "nonce"),
+    audience: remoteControlChallengeField(challenge, "audience"),
+    sessionId: remoteControlChallengeField(challenge, "session_id"),
+    targetOrigin: target.origin,
+    targetPath: target.pathname,
+    accountUserId: session.accountUserId,
+    clientId: session.clientId,
+    tokenSha256Base64url: expectedTokenHash,
+    tokenExpiresAt,
+    scopes,
+  };
+}
+
+async function updateWebModeGlobalState(state, patch) {
+  const webState = await readWebState(state.args);
+  const globalState = webState.globalState && typeof webState.globalState === "object" && !Array.isArray(webState.globalState)
+    ? webState.globalState
+    : {};
+  const nextState = {
+    ...webState,
+    persistedAtoms: webState.persistedAtoms ?? {},
+    sharedObjects: webState.sharedObjects ?? {},
+    globalState: {
+      ...globalState,
+      ...patch,
+    },
+  };
+  await writeWebState(state.args, nextState);
+  return nextState.globalState;
+}
+
+function electronGlobalStatePath(state) {
+  return path.join(state.args.codexHome, ".codex-global-state.json");
+}
+
+async function readElectronGlobalState(state) {
+  try {
+    const parsed = await readJsonFile(electronGlobalStatePath(state));
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch (error) {
+    if (error.code === "ENOENT") {
+      return {};
+    }
+    throw error;
+  }
+}
+
+async function writeElectronGlobalState(state, nextState) {
+  const statePath = electronGlobalStatePath(state);
+  await fs.mkdir(path.dirname(statePath), { recursive: true, mode: 0o700 });
+  const previous = await fs.readFile(statePath).catch((error) => (error.code === "ENOENT" ? null : Promise.reject(error)));
+  if (previous) {
+    await fs.writeFile(`${statePath}.bak`, previous, { mode: 0o600 });
+  }
+  await fs.writeFile(statePath, `${JSON.stringify(nextState ?? {}, null, 2)}\n`, { mode: 0o600 });
+}
+
+async function updateElectronGlobalState(state, patch) {
+  const globalState = await readElectronGlobalState(state);
+  const nextState = {
+    ...globalState,
+    ...patch,
+  };
+  await writeElectronGlobalState(state, nextState);
+  return nextState;
+}
+
+async function remoteControlEnrollmentRecord(state) {
+  const electronState = await readElectronGlobalState(state);
+  const electronEnrollments = electronState?.[REMOTE_CONTROL_ENROLLMENTS_KEY];
+  const webState = await readWebState(state.args);
+  const enrollments = webState.globalState?.[REMOTE_CONTROL_ENROLLMENTS_KEY];
+  const connectionKey = remoteControlConnectionKey();
+  for (const candidate of [electronEnrollments, enrollments]) {
+    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
+      continue;
+    }
+    const record = candidate[connectionKey] ?? candidate.default ?? Object.values(candidate).find((value) => value?.clientId || value?.client_id) ?? null;
+    if (record && typeof record === "object") {
+      return record;
+    }
+  }
+  return null;
+}
+
+async function saveRemoteControlEnrollmentRecord(state, record) {
+  const electronState = await readElectronGlobalState(state);
+  const webState = await readWebState(state.args);
+  const existingElectronEnrollments = electronState?.[REMOTE_CONTROL_ENROLLMENTS_KEY];
+  const existingWebEnrollments = webState.globalState?.[REMOTE_CONTROL_ENROLLMENTS_KEY];
+  const nextElectronEnrollments = existingElectronEnrollments && typeof existingElectronEnrollments === "object" && !Array.isArray(existingElectronEnrollments)
+    ? { ...existingElectronEnrollments }
+    : {};
+  const nextWebEnrollments = existingWebEnrollments && typeof existingWebEnrollments === "object" && !Array.isArray(existingWebEnrollments)
+    ? { ...existingWebEnrollments }
+    : {};
+  if (record == null) {
+    delete nextElectronEnrollments[remoteControlConnectionKey()];
+    delete nextWebEnrollments[remoteControlConnectionKey()];
+  } else {
+    nextElectronEnrollments[remoteControlConnectionKey()] = record;
+    nextWebEnrollments[remoteControlConnectionKey()] = record;
+  }
+  await updateElectronGlobalState(state, {
+    [REMOTE_CONTROL_ENROLLMENTS_KEY]: nextElectronEnrollments,
+  });
+  await updateWebModeGlobalState(state, {
+    [REMOTE_CONTROL_ENROLLMENTS_KEY]: nextWebEnrollments,
+  });
+}
+
+function remoteControlWebSocketAccept(key) {
+  return crypto.createHash("sha1").update(`${key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`).digest("base64");
+}
+
+class RemoteControlWebSocket {
+  constructor(url, headers = {}) {
+    this.url = new URL(url);
+    this.headers = headers;
+    this.socket = null;
+    this.buffer = Buffer.alloc(0);
+    this.open = false;
+    this.onMessage = () => {};
+    this.onClose = () => {};
+  }
+
+  async connect() {
+    const port = Number(this.url.port || (this.url.protocol === "wss:" ? 443 : 80));
+    const host = this.url.hostname;
+    const socket =
+      this.url.protocol === "wss:"
+        ? tls.connect({ host, port, servername: host })
+        : net.createConnection({ host, port });
+    this.socket = socket;
+
+    await new Promise((resolve, reject) => {
+      const onError = (error) => {
+        cleanup();
+        reject(error);
+      };
+      const onConnect = () => {
+        cleanup();
+        resolve();
+      };
+      const cleanup = () => {
+        socket.off("error", onError);
+        socket.off(this.url.protocol === "wss:" ? "secureConnect" : "connect", onConnect);
+      };
+      socket.once("error", onError);
+      socket.once(this.url.protocol === "wss:" ? "secureConnect" : "connect", onConnect);
+    });
+
+    const key = crypto.randomBytes(16).toString("base64");
+    const pathAndSearch = `${this.url.pathname}${this.url.search}`;
+    const hostHeader = this.url.port ? `${this.url.hostname}:${this.url.port}` : this.url.hostname;
+    const lines = [
+      `GET ${pathAndSearch} HTTP/1.1`,
+      `Host: ${hostHeader}`,
+      "Upgrade: websocket",
+      "Connection: Upgrade",
+      `Sec-WebSocket-Key: ${key}`,
+      "Sec-WebSocket-Version: 13",
+      ...Object.entries(this.headers)
+        .filter(([, value]) => value != null)
+        .map(([name, value]) => `${name}: ${value}`),
+      "",
+      "",
+    ];
+    socket.write(lines.join("\r\n"));
+
+    await this.waitForHandshake(key);
+    this.open = true;
+    socket.on("data", (chunk) => this.handleData(chunk));
+    socket.on("close", () => {
+      this.open = false;
+      this.onClose();
+    });
+    socket.on("error", (error) => {
+      this.open = false;
+      this.onClose(error);
+    });
+    if (this.buffer.length > 0) {
+      const buffered = this.buffer;
+      this.buffer = Buffer.alloc(0);
+      this.handleData(buffered);
+    }
+  }
+
+  async waitForHandshake(key) {
+    await new Promise((resolve, reject) => {
+      let handshake = Buffer.alloc(0);
+      const socket = this.socket;
+      const timer = setTimeout(() => {
+        cleanup();
+        socket.destroy();
+        reject(new Error("remote-control websocket handshake timed out"));
+      }, 10000);
+      const onError = (error) => {
+        cleanup();
+        reject(error);
+      };
+      const onClose = () => {
+        cleanup();
+        reject(new Error("remote-control websocket closed before handshake completed"));
+      };
+      const onData = (chunk) => {
+        handshake = Buffer.concat([handshake, chunk]);
+        const headerEnd = handshake.indexOf("\r\n\r\n");
+        if (headerEnd === -1) {
+          return;
+        }
+        cleanup();
+        const head = handshake.subarray(0, headerEnd).toString("latin1");
+        const rest = handshake.subarray(headerEnd + 4);
+        const [statusLine, ...headerLines] = head.split("\r\n");
+        if (!/^HTTP\/1\.[01] 101\b/.test(statusLine)) {
+          reject(new Error(`remote-control websocket upgrade failed: ${statusLine}`));
+          return;
+        }
+        const headers = Object.fromEntries(
+          headerLines
+            .map((line) => line.split(/:\s*/))
+            .filter(([name, value]) => name && value)
+            .map(([name, ...valueParts]) => [name.toLowerCase(), valueParts.join(": ")]),
+        );
+        if (headers["sec-websocket-accept"] !== remoteControlWebSocketAccept(key)) {
+          reject(new Error("remote-control websocket accept header mismatch"));
+          return;
+        }
+        if (rest.length > 0) {
+          this.buffer = Buffer.concat([this.buffer, rest]);
+        }
+        resolve();
+      };
+      const cleanup = () => {
+        clearTimeout(timer);
+        socket.off("error", onError);
+        socket.off("close", onClose);
+        socket.off("end", onClose);
+        socket.off("data", onData);
+      };
+      socket.on("error", onError);
+      socket.on("close", onClose);
+      socket.on("end", onClose);
+      socket.on("data", onData);
+    });
+  }
+
+  handleData(chunk) {
+    this.buffer = Buffer.concat([this.buffer, chunk]);
+    while (this.buffer.length >= 2) {
+      const first = this.buffer[0];
+      const second = this.buffer[1];
+      const opcode = first & 0x0f;
+      let payloadLength = second & 0x7f;
+      let offset = 2;
+      if (payloadLength === 126) {
+        if (this.buffer.length < offset + 2) {
+          return;
+        }
+        payloadLength = this.buffer.readUInt16BE(offset);
+        offset += 2;
+      } else if (payloadLength === 127) {
+        if (this.buffer.length < offset + 8) {
+          return;
+        }
+        const high = this.buffer.readUInt32BE(offset);
+        const low = this.buffer.readUInt32BE(offset + 4);
+        if (high !== 0) {
+          this.close();
+          return;
+        }
+        payloadLength = low;
+        offset += 8;
+      }
+      const masked = Boolean(second & 0x80);
+      const maskOffset = offset;
+      if (masked) {
+        offset += 4;
+      }
+      if (this.buffer.length < offset + payloadLength) {
+        return;
+      }
+      let payload = this.buffer.subarray(offset, offset + payloadLength);
+      if (masked) {
+        const mask = this.buffer.subarray(maskOffset, maskOffset + 4);
+        payload = Buffer.from(payload.map((byte, index) => byte ^ mask[index % 4]));
+      }
+      this.buffer = this.buffer.subarray(offset + payloadLength);
+
+      if (opcode === 0x1) {
+        this.onMessage(payload.toString("utf8"));
+      } else if (opcode === 0x8) {
+        this.close();
+      } else if (opcode === 0x9) {
+        this.writeFrame(0x0a, payload);
+      }
+    }
+  }
+
+  sendJson(message) {
+    this.writeFrame(0x1, Buffer.from(JSON.stringify(message), "utf8"));
+  }
+
+  writeFrame(opcode, payload = Buffer.alloc(0)) {
+    if (!this.socket || this.socket.destroyed) {
+      throw new Error("remote-control websocket is closed");
+    }
+    const body = Buffer.isBuffer(payload) ? payload : Buffer.from(payload);
+    let header;
+    if (body.length < 126) {
+      header = Buffer.from([0x80 | opcode, 0x80 | body.length]);
+    } else if (body.length <= 0xffff) {
+      header = Buffer.alloc(4);
+      header[0] = 0x80 | opcode;
+      header[1] = 0x80 | 126;
+      header.writeUInt16BE(body.length, 2);
+    } else {
+      header = Buffer.alloc(10);
+      header[0] = 0x80 | opcode;
+      header[1] = 0x80 | 127;
+      header.writeUInt32BE(0, 2);
+      header.writeUInt32BE(body.length, 6);
+    }
+    const mask = crypto.randomBytes(4);
+    const masked = Buffer.from(body.map((byte, index) => byte ^ mask[index % 4]));
+    this.socket.write(Buffer.concat([header, mask, masked]));
+  }
+
+  close() {
+    if (!this.socket || this.socket.destroyed) {
+      return;
+    }
+    try {
+      this.writeFrame(0x8);
+    } catch {
+      // Socket may already be closing.
+    }
+    this.socket.end();
+  }
+}
+
+async function remoteControlSessionFromEnrollment(state, params = {}) {
+  const identity = await remoteControlAccountIdentity(state);
+  let record = await remoteControlEnrollmentRecord(state);
+  let keyRecord = record?.device_key_id || record?.keyId
+    ? await ensureRemoteControlDeviceKey(state, record.device_key_id ?? record.keyId)
+    : await ensureRemoteControlDeviceKey(state);
+
+  if (!(record?.client_id ?? record?.clientId)) {
+    const stepUpToken = remoteControlStepUpTokenFrom(params);
+    if (!stepUpToken) {
+      throw Object.assign(
+        new Error("Remote control enrollment needs a fresh step-up token; desktop web mode cannot complete browser reauth silently."),
+        { remoteControlKind: "auth_required", statusCode: 401 },
+      );
+    }
+    validateRemoteControlStepUpToken(stepUpToken, identity);
+
+    const startResponse = await remoteControlApiFetch(state, "/codex/remote/control/client/enroll/start", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: {},
+    });
+    if (!startResponse.ok) {
+      throw Object.assign(
+        new Error(`Remote control enrollment start failed (${startResponse.status}): ${await remoteControlResponseText(startResponse)}`),
+        { statusCode: startResponse.status },
+      );
+    }
+    const start = await remoteControlJsonResponse(startResponse);
+    const clientId = start.client_id ?? start.clientId;
+    const accountUserId = start.account_user_id ?? start.accountUserId ?? identity.accountUserId;
+    const challenge = start.device_key_challenge ?? start.deviceKeyChallenge;
+    const finishUrl = new URL(remoteControlApiUrl("/codex/remote/control/client/enroll/finish"));
+    const deviceIdentity = remoteControlDeviceIdentityForKey(keyRecord);
+    assertRemoteControlEnrollmentChallenge(challenge, {
+      clientId,
+      accountUserId,
+      targetUrl: finishUrl,
+      identityHash: remoteControlDeviceIdentityHash(deviceIdentity),
+    });
+    const deviceKeyProof = signRemoteControlEnrollmentProof(
+      keyRecord,
+      challenge,
+      remoteControlEnrollmentProofPayload(challenge, clientId, accountUserId, deviceIdentity),
+    );
+    const finishResponse = await remoteControlApiFetch(state, "/codex/remote/control/client/enroll/finish", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: {
+        client_id: clientId,
+        step_up_token: stepUpToken,
+        device_identity: deviceIdentity,
+        device_key_proof: deviceKeyProof,
+      },
+    });
+    if (!finishResponse.ok) {
+      throw Object.assign(
+        new Error(`Remote control enrollment finish failed (${finishResponse.status}): ${await remoteControlResponseText(finishResponse)}`),
+        { statusCode: finishResponse.status },
+      );
+    }
+    const finish = await remoteControlJsonResponse(finishResponse);
+    record = {
+      connection_key: remoteControlConnectionKey(),
+      client_id: finish.client_id ?? clientId,
+      account_user_id: finish.account_user_id ?? accountUserId,
+      device_key_id: keyRecord.key_id ?? keyRecord.keyId,
+      clientId: finish.client_id ?? clientId,
+      accountUserId: finish.account_user_id ?? accountUserId,
+      keyId: keyRecord.key_id ?? keyRecord.keyId,
+      algorithm: keyRecord.algorithm,
+      protectionClass: keyRecord.protection_class ?? keyRecord.protectionClass,
+      publicKeySpkiDerBase64: keyRecord.public_key_spki_der_base64 ?? keyRecord.publicKeySpkiDerBase64,
+      created_at: new Date().toISOString(),
+    };
+    await saveRemoteControlEnrollmentRecord(state, record);
+    return remoteControlSessionFromTokenResponse(record, keyRecord, finish);
+  }
+
+  const clientId = record.client_id ?? record.clientId;
+  const accountUserId = record.account_user_id ?? record.accountUserId ?? identity.accountUserId;
+  const startResponse = await remoteControlApiFetch(state, "/codex/remote/control/client/refresh/start", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: { client_id: clientId },
+  });
+  if (startResponse.status === 404) {
+    await saveRemoteControlEnrollmentRecord(state, null);
+    return await remoteControlSessionFromEnrollment(state, params);
+  }
+  if (!startResponse.ok) {
+    throw Object.assign(
+      new Error(`Remote control session refresh start failed (${startResponse.status}): ${await remoteControlResponseText(startResponse)}`),
+      { statusCode: startResponse.status },
+    );
+  }
+  const start = await remoteControlJsonResponse(startResponse);
+  if ((start.client_id ?? start.clientId) !== clientId || (start.account_user_id ?? start.accountUserId ?? accountUserId) !== accountUserId) {
+    throw new Error("remote-control refresh challenge does not match local enrollment");
+  }
+  const challenge = start.device_key_challenge ?? start.deviceKeyChallenge;
+  const finishUrl = new URL(remoteControlApiUrl("/codex/remote/control/client/refresh/finish"));
+  const identityHash = remoteControlDeviceIdentityHash(remoteControlDeviceIdentityForKey(keyRecord));
+  assertRemoteControlEnrollmentChallenge(challenge, {
+    clientId,
+    accountUserId,
+    targetUrl: finishUrl,
+    requireDeviceIdentityHash: true,
+    identityHash,
+  });
+  const deviceKeyProof = signRemoteControlEnrollmentProof(keyRecord, challenge, {
+    type: "remoteControlClientEnrollment",
+    nonce: remoteControlChallengeField(challenge, "nonce"),
+    audience: remoteControlChallengeField(challenge, "audience"),
+    challengeId: remoteControlChallengeField(challenge, "challenge_id"),
+    targetOrigin: remoteControlChallengeField(challenge, "target_origin"),
+    targetPath: remoteControlChallengeField(challenge, "target_path"),
+    accountUserId,
+    clientId,
+    deviceIdentitySha256Base64url: identityHash,
+    challengeExpiresAt: remoteControlChallengeField(challenge, "challenge_expires_at"),
+  });
+  const finishResponse = await remoteControlApiFetch(state, "/codex/remote/control/client/refresh/finish", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: {
+      client_id: clientId,
+      device_key_proof: deviceKeyProof,
+    },
+  });
+  if (!finishResponse.ok) {
+    throw Object.assign(
+      new Error(`Remote control session refresh finish failed (${finishResponse.status}): ${await remoteControlResponseText(finishResponse)}`),
+      { statusCode: finishResponse.status },
+    );
+  }
+  return remoteControlSessionFromTokenResponse(record, keyRecord, await remoteControlJsonResponse(finishResponse));
+}
+
+function remoteControlSessionFromTokenResponse(record, keyRecord, body) {
+  const token = body.remote_control_token ?? body.remoteControlToken;
+  const expiresAt = body.expires_at ?? body.expiresAt;
+  const tokenExpiresAt = remoteControlTimestampSeconds(expiresAt);
+  const scopes = remoteControlScopeList(body.scopes ?? body.scope);
+  if (typeof token !== "string" || token.length === 0) {
+    throw new Error("remote-control session response did not include a token");
+  }
+  if (!scopes.includes(REMOTE_CONTROL_REQUIRED_SCOPE)) {
+    throw new Error(`remote-control session response did not include ${REMOTE_CONTROL_REQUIRED_SCOPE}`);
+  }
+  if (tokenExpiresAt == null || tokenExpiresAt <= Math.floor(Date.now() / 1000)) {
+    throw new Error("remote-control session token is expired");
+  }
+  return {
+    clientId: body.client_id ?? body.clientId ?? record.client_id ?? record.clientId,
+    accountUserId: body.account_user_id ?? body.accountUserId ?? record.account_user_id ?? record.accountUserId,
+    remoteControlToken: token,
+    expiresAt,
+    tokenExpiresAt,
+    scopes,
+    keyRecord,
+    requiresDeviceKeyProof: true,
+  };
+}
+
+async function remoteControlClientSession(state, params = {}) {
+  const existing = state.remoteControl.session;
+  if (existing?.remoteControlToken && existing.tokenExpiresAt > Math.floor(Date.now() / 1000) + 60) {
+    return existing;
+  }
+  const session = await remoteControlSessionFromEnrollment(state, params);
+  state.remoteControl.session = session;
+  state.remoteControl.last_error = null;
+  return session;
+}
+
+class RemoteControlAppServerConnection {
+  constructor(state, connection) {
+    this.state = state;
+    this.hostId = connection.hostId;
+    this.envId = connection.envId;
+    this.displayName = connection.displayName;
+    this.status = "disconnected";
+    this.error = null;
+    this.ws = null;
+    this.streamId = null;
+    this.nextSeqId = 1;
+    this.pending = new Map();
+    this.initialized = false;
+    this.initializeResult = null;
+    this.opening = null;
+    this.serverMessageAssemblies = new Map();
+  }
+
+  async ensureOpen(params = {}) {
+    if (this.ws?.open) {
+      return;
+    }
+    this.opening ??= this.openRemoteControlSocket(params).finally(() => {
+      this.opening = null;
+    });
+    await this.opening;
+  }
+
+  async openRemoteControlSocket(params = {}) {
+    this.status = "connecting";
+    const session = await remoteControlClientSession(this.state, params);
+    const websocketUrl = remoteControlWebSocketUrl();
+    const authHeaders = await remoteControlAuthHeaders(this.state);
+    const headers = {
+      ...authHeaders,
+      "x-codex-client-id": session.clientId,
+      "x-codex-protocol-version": REMOTE_CONTROL_PROTOCOL_VERSION,
+      "x-codex-client-session-token": `Bearer ${session.remoteControlToken}`,
+    };
+    const ws = new RemoteControlWebSocket(websocketUrl, headers);
+    this.ws = ws;
+    let challengeResolved = false;
+    const challengeReady = new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        challengeResolved = true;
+        reject(new Error("remote-control device-key challenge timed out"));
+      }, session.requiresDeviceKeyProof ? 10000 : 500);
+      ws.onMessage = (raw) => {
+        void (async () => {
+          try {
+            const envelope = JSON.parse(raw);
+            if (envelope?.type === "device_key_challenge") {
+              const proof = signRemoteControlWebSocketProof(
+                session.keyRecord,
+                remoteControlConnectionProofPayload(envelope, session, websocketUrl),
+              );
+              ws.sendJson(proof);
+              if (!challengeResolved) {
+                clearTimeout(timer);
+                challengeResolved = true;
+                resolve();
+              }
+              return;
+            }
+            if (!challengeResolved && session.requiresDeviceKeyProof) {
+              clearTimeout(timer);
+              challengeResolved = true;
+              reject(new Error("remote-control websocket sent data before device-key challenge"));
+              return;
+            }
+            this.handleEnvelope(envelope);
+          } catch (error) {
+            if (!challengeResolved) {
+              clearTimeout(timer);
+              challengeResolved = true;
+              reject(error);
+            } else {
+              this.rejectAll(error);
+            }
+          }
+        })();
+      };
+      ws.onClose = (error) => {
+        this.status = "disconnected";
+        this.error = error?.message ?? "remote-control websocket closed";
+        this.rejectAll(new Error(this.error));
+      };
+    });
+    await ws.connect();
+    await challengeReady;
+    this.status = "connected";
+    this.error = null;
+  }
+
+  handleEnvelope(envelope) {
+    if (envelope?.type === "server_message") {
+      this.handleServerMessage(envelope.message);
+    } else if (envelope?.type === "server_message_chunk") {
+      const reassembled = this.reassembleServerMessage(envelope);
+      if (reassembled) {
+        this.handleServerMessage(reassembled.message);
+      }
+    } else if (envelope?.type === "error") {
+      const pending = this.pending.values().next().value;
+      pending?.reject(new Error(envelope.message ?? envelope.error ?? "remote-control websocket error"));
+    }
+  }
+
+  reassembleServerMessage(envelope) {
+    const segmentId = envelope.segment_id ?? 0;
+    const segmentCount = envelope.segment_count ?? 1;
+    const messageSizeBytes = envelope.message_size_bytes;
+    if (
+      segmentCount <= 1 ||
+      segmentId < 0 ||
+      segmentId >= segmentCount ||
+      segmentCount > Math.ceil(REMOTE_CONTROL_MAX_REASSEMBLED_BYTES / REMOTE_CONTROL_SEGMENT_MESSAGE_BYTES) ||
+      messageSizeBytes <= 0 ||
+      messageSizeBytes > REMOTE_CONTROL_MAX_REASSEMBLED_BYTES ||
+      typeof envelope.message_chunk_base64 !== "string"
+    ) {
+      this.rejectAll(new Error("remote-control server message chunk is invalid"));
+      return null;
+    }
+    const key = `${envelope.env_id}:${envelope.stream_id}:${envelope.seq_id}`;
+    let assembly = this.serverMessageAssemblies.get(key);
+    if (!assembly) {
+      assembly = {
+        first: envelope,
+        segmentCount,
+        chunks: Array(segmentCount).fill(null),
+      };
+      this.serverMessageAssemblies.set(key, assembly);
+    }
+    if (
+      assembly.segmentCount !== segmentCount ||
+      assembly.first.env_id !== envelope.env_id ||
+      assembly.first.message_size_bytes !== messageSizeBytes
+    ) {
+      this.serverMessageAssemblies.delete(key);
+      this.rejectAll(new Error("remote-control server message chunk metadata changed mid-message"));
+      return null;
+    }
+    assembly.chunks[segmentId] = envelope.message_chunk_base64;
+    if (assembly.chunks.some((chunk) => chunk == null)) {
+      return null;
+    }
+    this.serverMessageAssemblies.delete(key);
+    const messageBytes = Buffer.concat(assembly.chunks.map((chunk) => Buffer.from(chunk, "base64")));
+    if (messageBytes.length !== messageSizeBytes) {
+      this.rejectAll(new Error("remote-control server message chunk size mismatch"));
+      return null;
+    }
+    let message;
+    try {
+      message = JSON.parse(messageBytes.toString("utf8"));
+    } catch (error) {
+      this.rejectAll(error);
+      return null;
+    }
+    return {
+      type: "server_message",
+      client_id: envelope.client_id,
+      seq_id: envelope.seq_id,
+      stream_id: envelope.stream_id,
+      env_id: envelope.env_id,
+      cursor: envelope.cursor,
+      message,
+    };
+  }
+
+  handleServerMessage(message) {
+    if (message?.id == null || !this.pending.has(message.id)) {
+      publishAppServerNotification(this.state, message);
+      return;
+    }
+    const pending = this.pending.get(message.id);
+    this.pending.delete(message.id);
+    if (message.error) {
+      pending.reject(new Error(message.error.message ?? "remote app-server request failed"));
+    } else {
+      pending.resolve(message.result);
+    }
+  }
+
+  async initialize() {
+    if (this.initialized) {
+      return this.initializeResult;
+    }
+    this.streamId = crypto.randomUUID();
+    const result = await this.sendRawRpc(
+      "initialize",
+      {
+        clientInfo: {
+          name: "codex-desktop-linux-web",
+          title: "Codex Desktop Linux Web",
+          version: "0.1.0",
+        },
+        capabilities: {
+          experimentalApi: true,
+        },
+      },
+      10000,
+    );
+    this.initialized = true;
+    this.initializeResult = result;
+    this.sendNotification({ method: "initialized" });
+    return result;
+  }
+
+  async request(method, params = {}, timeoutMs = 30000) {
+    await this.ensureOpen();
+    if (!this.initialized && method !== "initialize") {
+      await this.initialize();
+    }
+    return await this.sendRawRpc(method, params, timeoutMs);
+  }
+
+  async sendRawRpc(method, params = {}, timeoutMs = 30000) {
+    await this.ensureOpen();
+    const id = this.state.nextRpcId++;
+    const response = new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        this.pending.delete(id);
+        reject(new Error(`remote app-server request timed out: ${method}`));
+      }, timeoutMs);
+      this.pending.set(id, {
+        resolve(value) {
+          clearTimeout(timeout);
+          resolve(value);
+        },
+        reject(error) {
+          clearTimeout(timeout);
+          reject(error);
+        },
+      });
+    });
+    this.sendClientMessage({ jsonrpc: "2.0", id, method, params });
+    return await response;
+  }
+
+  sendNotification(message) {
+    if (this.ws?.open) {
+      this.sendClientMessage(message);
+    }
+  }
+
+  sendClientMessage(message) {
+    if (!this.streamId) {
+      this.streamId = crypto.randomUUID();
+    }
+    const envelope = {
+      type: "client_message",
+      client_id: this.state.remoteControl.session?.clientId,
+      seq_id: this.nextSeqId++,
+      stream_id: this.streamId,
+      env_id: this.envId,
+      skip_history: false,
+      message,
+    };
+    for (const segment of remoteControlSegmentEnvelope(envelope)) {
+      this.ws.sendJson(segment);
+    }
+  }
+
+  rejectAll(error) {
+    for (const pending of this.pending.values()) {
+      pending.reject(error instanceof Error ? error : new Error(String(error)));
+    }
+    this.pending.clear();
+  }
+
+  close() {
+    this.rejectAll(new Error("remote-control connection closed"));
+    this.serverMessageAssemblies.clear();
+    this.ws?.close();
+    this.ws = null;
+    this.status = "disconnected";
+  }
+}
+
 function remoteControlEnvironmentPath(envId) {
   return `/codex/remote/control/environments/${encodeURIComponent(envId)}`;
 }
@@ -1603,6 +2777,9 @@ async function refreshRemoteControlConnections(state) {
 
 async function setRemoteControlConnectionsEnabled(state, enabled) {
   const nextEnabled = Boolean(enabled);
+  if (!nextEnabled) {
+    await stopRemoteControlConnections(state);
+  }
   const existingSharedObjects = await ensureRemoteControlSharedObjects(state, { enabled: nextEnabled });
   const sharedObjects = await updateWebModeSharedObjects(state, {
     remote_control_connections_state: defaultRemoteControlConnectionsState(nextEnabled, false),
@@ -1630,6 +2807,80 @@ async function updateRemoteControlConnection(state, updater) {
 
 function connectionHostId(params = {}) {
   return params.hostId ?? params.host_id ?? params.connection?.hostId ?? params.connection?.host_id ?? null;
+}
+
+function isRemoteControlHostId(hostId) {
+  return typeof hostId === "string" && hostId.startsWith("remote-control:");
+}
+
+async function remoteControlConnectionForHostId(state, hostId) {
+  let sharedObjects = await ensureRemoteControlSharedObjects(state);
+  let connections = Array.isArray(sharedObjects.remote_control_connections) ? sharedObjects.remote_control_connections : [];
+  let connection = connections.find((candidate) => candidate?.hostId === hostId);
+  if (!connection) {
+    const refresh = await refreshRemoteControlConnections(state);
+    connections = refresh.remoteControlConnections;
+    connection = connections.find((candidate) => candidate?.hostId === hostId);
+  }
+  if (!connection) {
+    throw Object.assign(new Error(`remote-control host not found: ${hostId}`), { statusCode: 404 });
+  }
+  if (!connection.envId) {
+    throw Object.assign(new Error(`remote-control host has no environment id: ${hostId}`), { statusCode: 400 });
+  }
+  return connection;
+}
+
+async function remoteControlAppServerConnection(state, hostId, params = {}) {
+  const connection = await remoteControlConnectionForHostId(state, hostId);
+  let appServerConnection = state.remoteControl.connections.get(hostId);
+  if (!appServerConnection) {
+    appServerConnection = new RemoteControlAppServerConnection(state, connection);
+    state.remoteControl.connections.set(hostId, appServerConnection);
+  }
+  await appServerConnection.ensureOpen(params);
+  return appServerConnection;
+}
+
+async function remoteControlAppServerRequest(state, hostId, method, params = {}, timeoutMs = 30000) {
+  const connection = await remoteControlAppServerConnection(state, hostId);
+  return await connection.request(method, params, timeoutMs);
+}
+
+function appServerRpcHostId(params = {}) {
+  return connectionHostId(params);
+}
+
+function appServerRpcParams(params = {}) {
+  if (!params || typeof params !== "object" || Array.isArray(params)) {
+    return params;
+  }
+  const { hostId, host_id, connection, ...rest } = params;
+  return rest;
+}
+
+async function routeAppServerRpc(state, method, params = {}, timeoutMs = 30000) {
+  const hostId = appServerRpcHostId(params);
+  const routedParams = appServerRpcParams(params);
+  if (isRemoteControlHostId(hostId)) {
+    return await remoteControlAppServerRequest(state, hostId, method, routedParams, timeoutMs);
+  }
+  return await sendAppServerRpc(state, method, routedParams, timeoutMs);
+}
+
+function remotePathJoin(directoryPath, fileName) {
+  const base = String(directoryPath || "/");
+  const separator = base.includes("\\") && !base.includes("/") ? "\\" : "/";
+  return `${base.replace(/[\\/]+$/, "")}${separator}${fileName}`;
+}
+
+async function stopRemoteControlConnections(state) {
+  await Promise.allSettled(
+    [...state.remoteControl.connections.values()].map(async (connection) => {
+      connection.close();
+    }),
+  );
+  state.remoteControl.connections.clear();
 }
 
 function normalizeRemoteConnectionState(stateValue = "disconnected", error = null) {
@@ -1672,14 +2923,35 @@ async function setRemoteConnectionAutoConnect(state, params = {}) {
     remote_connections: remoteConnections,
     remote_control_connections: remoteControlConnections,
   });
+  let connectionState = "disconnected";
+  let connectionError = null;
+  if (isRemoteControlHostId(hostId)) {
+    if (autoConnect) {
+      try {
+        const connection = await remoteControlAppServerConnection(state, hostId, params);
+        await connection.initialize();
+        connectionState = "connected";
+      } catch (error) {
+        connectionState = "error";
+        connectionError = {
+          code: "connection-failed",
+          message: error instanceof Error ? error.message : String(error),
+        };
+        state.remoteControl.last_error = connectionError.message;
+      }
+    } else {
+      state.remoteControl.connections.get(hostId)?.close();
+      state.remoteControl.connections.delete(hostId);
+    }
+  }
   return {
     hostId,
     autoConnect,
     remoteConnections,
     remoteControlConnections,
     connections: [...remoteConnections, ...remoteControlConnections],
-    state: "disconnected",
-    error: null,
+    state: connectionState,
+    error: connectionError,
     sharedObjects: {
       remote_connections: nextSharedObjects.remote_connections ?? [],
       remote_control_connections: nextSharedObjects.remote_control_connections ?? [],
@@ -1716,22 +2988,51 @@ async function remoteWorkspaceDirectoryEntries(state, params = {}) {
   if (!hostId || hostId === "local") {
     return await localDirectoryEntries(directoryPath, { directoriesOnly: Boolean(params.directoriesOnly ?? params.directories_only) });
   }
-  throw Object.assign(
-    new Error("Remote workspace browsing in web mode needs a remote-control websocket controller."),
-    { statusCode: 501 },
-  );
+  if (!isRemoteControlHostId(hostId)) {
+    throw Object.assign(new Error(`unsupported remote host id: ${hostId}`), { statusCode: 400 });
+  }
+  const remoteDirectory = String(directoryPath || "/");
+  const metadata = await remoteControlAppServerRequest(state, hostId, "fs/getMetadata", { path: remoteDirectory });
+  if (metadata?.isDirectory === false) {
+    throw Object.assign(new Error(`remote path is not a directory: ${remoteDirectory}`), { statusCode: 400 });
+  }
+  const result = await remoteControlAppServerRequest(state, hostId, "fs/readDirectory", { path: remoteDirectory });
+  const entries = Array.isArray(result?.entries) ? result.entries : [];
+  return {
+    directoryPath: remoteDirectory,
+    entries: entries
+      .filter((entry) => !Boolean(params.directoriesOnly ?? params.directories_only) || entry?.isDirectory)
+      .map((entry) => ({
+        type: entry?.isDirectory ? "directory" : "file",
+        name: entry.fileName ?? entry.name,
+        path: remotePathJoin(remoteDirectory, entry.fileName ?? entry.name),
+        isDirectory: Boolean(entry?.isDirectory),
+        isFile: Boolean(entry?.isFile),
+      }))
+      .sort((left, right) => {
+        if (left.isDirectory !== right.isDirectory) {
+          return left.isDirectory ? -1 : 1;
+        }
+        return left.name.localeCompare(right.name);
+      }),
+  };
 }
 
 async function handleDesktopHostRequest(state, method, params = {}) {
   switch (method) {
     case "app-server-connection-state": {
       const hostId = connectionHostId(params);
-      return hostId === "local" || !hostId
-        ? normalizeRemoteConnectionState("connected")
-        : normalizeRemoteConnectionState("error", {
-            code: "connection-failed",
-            message: "Web mode can list remote-control environments, but remote host command execution needs the websocket controller.",
-          });
+      if (hostId === "local" || !hostId) {
+        return normalizeRemoteConnectionState("connected");
+      }
+      if (isRemoteControlHostId(hostId)) {
+        const connection = state.remoteControl.connections.get(hostId);
+        return normalizeRemoteConnectionState(connection?.status ?? "disconnected", connection?.error ? { code: "connection-failed", message: connection.error } : null);
+      }
+      return normalizeRemoteConnectionState("error", {
+        code: "connection-failed",
+        message: `unsupported remote host id: ${hostId}`,
+      });
     }
     case "refresh-remote-control-connections":
       return await refreshRemoteControlConnections(state);
@@ -1751,22 +3052,42 @@ async function handleDesktopHostRequest(state, method, params = {}) {
     case "stop-remote-chatgpt-login-port-forward":
       return { ok: true, stopped: false, reason: "no web-mode remote login port forward was active" };
     case "authorize-remote-control-connections": {
-      const sharedObjects = await ensureRemoteControlSharedObjects(state);
-      const nextSharedObjects = await updateWebModeSharedObjects(state, {
-        remote_control_connections_state: {
-          ...defaultRemoteControlConnectionsState(true, false),
-          ...(sharedObjects.remote_control_connections_state ?? {}),
-          available: true,
-          authRequired: true,
-          clientAuthorized: false,
-        },
-      });
-      return {
-        authorized: false,
-        status: "auth_required",
-        reason: "web mode has exposed the remote-control host contract but does not have a desktop auth enrollment token yet",
-        ...remoteControlRefreshResult(nextSharedObjects),
-      };
+      try {
+        const session = await remoteControlClientSession(state, params);
+        const sharedObjects = await ensureRemoteControlSharedObjects(state);
+        const nextSharedObjects = await updateWebModeSharedObjects(state, {
+          local_remote_control_client_id: session.clientId,
+          remote_control_connections_state: {
+            ...defaultRemoteControlConnectionsState(true, true),
+            ...(sharedObjects.remote_control_connections_state ?? {}),
+            available: true,
+            authRequired: false,
+            clientAuthorized: true,
+          },
+        });
+        return {
+          authorized: true,
+          status: "authorized",
+          ...remoteControlRefreshResult(nextSharedObjects),
+        };
+      } catch (error) {
+        const sharedObjects = await ensureRemoteControlSharedObjects(state);
+        const nextSharedObjects = await updateWebModeSharedObjects(state, {
+          remote_control_connections_state: {
+            ...defaultRemoteControlConnectionsState(true, false),
+            ...(sharedObjects.remote_control_connections_state ?? {}),
+            available: true,
+            authRequired: true,
+            clientAuthorized: false,
+          },
+        });
+        return {
+          authorized: false,
+          status: "auth_required",
+          reason: error instanceof Error ? error.message : String(error),
+          ...remoteControlRefreshResult(nextSharedObjects),
+        };
+      }
     }
     case "rename-remote-control-environment": {
       const envId = params.envId ?? params.environmentId;
@@ -2133,6 +3454,7 @@ function health(state, serverAddress = null) {
         browser_backends: browser.available_backends ?? [],
         computer_use_mode: state.computer.mode,
         chrome_native_host: state.chrome_native_host.status,
+        remote_control_controller: state.remoteControl.connections.size > 0 ? "active" : "available",
       },
     },
     app_server: appServerStatus(state),
@@ -3047,7 +4369,7 @@ function createServer(state) {
         }
         const message = await readJsonRequest(request);
         if (message?.method === "appServer.rpc") {
-          const result = await sendAppServerRpc(
+          const result = await routeAppServerRpc(
             state,
             message.params?.method,
             message.params?.params ?? {},
@@ -3097,10 +4419,21 @@ function createServer(state) {
           return;
         }
         if (message?.method === "fs.metadata") {
-          jsonResponse(response, 200, {
-            ok: true,
-            result: await localFileMetadata(message.params?.path),
-          });
+          const hostId = connectionHostId(message.params ?? {});
+          if (isRemoteControlHostId(hostId)) {
+            jsonResponse(response, 200, {
+              ok: true,
+              result: {
+                path: message.params?.path,
+                ...(await remoteControlAppServerRequest(state, hostId, "fs/getMetadata", { path: message.params?.path })),
+              },
+            });
+          } else {
+            jsonResponse(response, 200, {
+              ok: true,
+              result: await localFileMetadata(message.params?.path),
+            });
+          }
           return;
         }
         if (message?.method === "workspace.rootMetadata") {
@@ -3436,7 +4769,7 @@ async function serve(args) {
       appendServeLog(state, "shutdown_started", { reason }, exitCode == null ? "info" : "warn");
       printServeLine(`[codex-web] ${reason}; shutting down`);
       await closeHttpServer(server);
-      await Promise.all([stopBrowserSidecar(state), stopAppServer(state)]);
+      await Promise.all([stopRemoteControlConnections(state), stopBrowserSidecar(state), stopAppServer(state)]);
       await removeServeState(args);
       appendServeLog(state, "shutdown_complete", { reason });
     })()
@@ -3469,7 +4802,7 @@ async function serve(args) {
     });
   } catch (error) {
     appendServeLog(state, "listen_failed", { code: error.code, message: error.message }, "error");
-    await Promise.all([stopBrowserSidecar(state), stopAppServer(state)]);
+    await Promise.all([stopRemoteControlConnections(state), stopBrowserSidecar(state), stopAppServer(state)]);
     throw new Error(portConflictMessage(args, error));
   }
 
