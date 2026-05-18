@@ -40,6 +40,10 @@
     ["write-skill-config", "skills/config/write"],
   ]);
   const browserUseStateKey = "browser-use-origin-state";
+  const activeTurnRecoveryTimeoutMs = 90_000;
+  const activeTurnRecoveryInitialDelayMs = 0;
+  const activeTurnRecoveryPollMs = 1_000;
+  const eventStreamReconnectMaxDelayMs = 5_000;
   const defaultBrowserUseState = {
     approvalMode: "alwaysAsk",
     historyApprovalMode: "alwaysAsk",
@@ -70,6 +74,11 @@
   let health = null;
   let webState = structuredCloneSafe(fallbackState);
   let persistTimer = null;
+  const activeTurns = new Map();
+  let eventStream = null;
+  let eventStreamReconnectTimer = null;
+  let eventStreamReconnectDelayMs = 250;
+  let dictationRecognition = null;
 
   installCssPreloadErrorGuard();
   installNavigationStatePersistence();
@@ -339,6 +348,160 @@
     window.postMessage(message, window.location.origin);
   }
 
+  function emitAppServerNotification(method, params = {}) {
+    if (typeof method !== "string" || method.length === 0) {
+      return;
+    }
+    emit({
+      type: "mcp-notification",
+      hostId: localHostId,
+      method,
+      params: params ?? {},
+    });
+  }
+
+  function activeThreadIdFrom(value) {
+    if (typeof value?.threadId === "string" && value.threadId.length > 0) {
+      return value.threadId;
+    }
+    if (typeof value?.thread?.id === "string" && value.thread.id.length > 0) {
+      return value.thread.id;
+    }
+    if (typeof value?.id === "string" && value.id.length > 0) {
+      return value.id;
+    }
+    return null;
+  }
+
+  function activeTurnIdFrom(value) {
+    if (typeof value?.turnId === "string" && value.turnId.length > 0) {
+      return value.turnId;
+    }
+    if (typeof value?.turn?.id === "string" && value.turn.id.length > 0) {
+      return value.turn.id;
+    }
+    if (typeof value?.id === "string" && value.id.length > 0) {
+      return value.id;
+    }
+    return null;
+  }
+
+  function normalizeTurnStatus(status) {
+    if (typeof status === "string") {
+      return status.replaceAll("_", "").toLowerCase();
+    }
+    if (typeof status?.type === "string") {
+      return status.type.replaceAll("_", "").toLowerCase();
+    }
+    return "";
+  }
+
+  function isTerminalTurnStatus(status) {
+    return ["completed", "failed", "cancelled", "canceled", "interrupted"].includes(normalizeTurnStatus(status));
+  }
+
+  function turnListFromResult(result) {
+    const turns = result?.turns ?? result?.data ?? result?.items ?? [];
+    return Array.isArray(turns) ? turns : [];
+  }
+
+  function emitRecoveredTurn(threadId, turn) {
+    const turnId = activeTurnIdFrom(turn);
+    if (!threadId || !turnId) {
+      return;
+    }
+    emitAppServerNotification("turn/started", {
+      threadId,
+      turn: {
+        id: turnId,
+        status: turn.status ?? "inProgress",
+        durationMs: turn.durationMs ?? null,
+        error: turn.error ?? null,
+      },
+    });
+    for (const item of Array.isArray(turn.items) ? turn.items : []) {
+      if (item && typeof item === "object") {
+        emitAppServerNotification("item/completed", {
+          threadId,
+          turnId,
+          item,
+        });
+      }
+    }
+    if (isTerminalTurnStatus(turn.status)) {
+      emitAppServerNotification("turn/completed", {
+        threadId,
+        turn: {
+          id: turnId,
+          status: turn.status,
+          durationMs: turn.durationMs ?? null,
+          error: turn.error ?? null,
+        },
+      });
+      emitAppServerNotification("thread/status/changed", {
+        threadId,
+        status: { type: "idle" },
+      });
+    }
+  }
+
+  function trackActiveTurn(threadId, turnId) {
+    if (!threadId || !turnId) {
+      return;
+    }
+    const existing = activeTurns.get(threadId);
+    if (existing?.timer != null) {
+      window.clearTimeout(existing.timer);
+    }
+    activeTurns.set(threadId, {
+      threadId,
+      turnId,
+      startedAt: Date.now(),
+      timer: window.setTimeout(() => recoverActiveTurn(threadId), activeTurnRecoveryInitialDelayMs),
+    });
+  }
+
+  async function recoverActiveTurn(threadId) {
+    const tracked = activeTurns.get(threadId);
+    if (!tracked) {
+      return;
+    }
+    try {
+      const result = await requestAppServerRpc("thread/turns/list", {
+        threadId,
+        cursor: null,
+        limit: 10,
+      });
+      const turns = turnListFromResult(result);
+      const matchingTurn = turns.find((turn) => activeTurnIdFrom(turn) === tracked.turnId) ?? turns.at(-1);
+      if (matchingTurn) {
+        emitRecoveredTurn(threadId, matchingTurn);
+        if (isTerminalTurnStatus(matchingTurn.status)) {
+          activeTurns.delete(threadId);
+          return;
+        }
+      }
+    } catch (error) {
+      console.warn("[codex-web] active turn recovery failed", error);
+    }
+
+    if (Date.now() - tracked.startedAt >= activeTurnRecoveryTimeoutMs) {
+      activeTurns.delete(threadId);
+      return;
+    }
+    tracked.timer = window.setTimeout(() => recoverActiveTurn(threadId), activeTurnRecoveryPollMs);
+  }
+
+  function recoverTrackedActiveTurns() {
+    for (const threadId of activeTurns.keys()) {
+      const tracked = activeTurns.get(threadId);
+      if (tracked?.timer != null) {
+        window.clearTimeout(tracked.timer);
+      }
+      recoverActiveTurn(threadId);
+    }
+  }
+
   function successFetch(message, body, status = 200, headers = {}) {
     emit({
       type: "fetch-response",
@@ -493,6 +656,9 @@
     });
     const thread = threadResult?.thread ?? threadResult;
     const conversationId = thread?.id ?? thread?.sessionId ?? null;
+    if (conversationId) {
+      emitAppServerNotification("thread/started", { thread });
+    }
     const input = Array.isArray(normalized.input) ? normalized.input : [];
     let turnResult = null;
     if (conversationId && input.length > 0) {
@@ -506,6 +672,8 @@
         permissions: normalized.permissions,
         sandboxPolicy: normalized.sandboxPolicy,
       });
+      const turn = turnResult?.turn ?? turnResult;
+      trackActiveTurn(conversationId, activeTurnIdFrom(turn));
     }
     return {
       resultType: "success",
@@ -529,6 +697,7 @@
       threadId: conversationId,
       input: Array.isArray(turnStartParams.input) ? turnStartParams.input : [],
     });
+    trackActiveTurn(conversationId, activeTurnIdFrom(result?.turn ?? result));
     return { resultType: "success", result };
   }
 
@@ -957,6 +1126,109 @@
     }
   }
 
+  function dictationTarget() {
+    const active = document?.activeElement;
+    if (isEditableElement(active)) {
+      return active;
+    }
+    for (const selector of ['[contenteditable="true"]', "textarea", '[role="textbox"]']) {
+      const element = document?.querySelector?.(selector);
+      if (isEditableElement(element)) {
+        return element;
+      }
+    }
+    return null;
+  }
+
+  function isEditableElement(element) {
+    if (!element || typeof element !== "object") {
+      return false;
+    }
+    return Boolean(element.isContentEditable) || typeof element.value === "string" || element.getAttribute?.("role") === "textbox";
+  }
+
+  function insertDictationText(text) {
+    if (typeof text !== "string" || text.length === 0) {
+      return;
+    }
+    const target = dictationTarget();
+    if (!target) {
+      window.alert?.("Dictation is available, but no composer is focused.");
+      return;
+    }
+    target.focus?.();
+    if (typeof target.value === "string") {
+      const start = Number.isInteger(target.selectionStart) ? target.selectionStart : target.value.length;
+      const end = Number.isInteger(target.selectionEnd) ? target.selectionEnd : start;
+      target.value = `${target.value.slice(0, start)}${text}${target.value.slice(end)}`;
+      const cursor = start + text.length;
+      target.setSelectionRange?.(cursor, cursor);
+      target.dispatchEvent?.(new InputEvent("input", { bubbles: true, inputType: "insertText", data: text }));
+      return;
+    }
+    if (document?.execCommand?.("insertText", false, text)) {
+      target.dispatchEvent?.(new InputEvent("input", { bubbles: true, inputType: "insertText", data: text }));
+      return;
+    }
+    target.textContent = `${target.textContent ?? ""}${text}`;
+    target.dispatchEvent?.(new InputEvent("input", { bubbles: true, inputType: "insertText", data: text }));
+  }
+
+  function startDictation() {
+    const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!Recognition) {
+      window.alert?.("Browser dictation is not available in this browser.");
+      return { ok: false, reason: "speech-recognition-unavailable" };
+    }
+    if (dictationRecognition) {
+      dictationRecognition.stop?.();
+      dictationRecognition = null;
+      return { ok: true, stopped: true };
+    }
+    try {
+      const recognition = new Recognition();
+      dictationRecognition = recognition;
+      recognition.continuous = false;
+      recognition.interimResults = true;
+      recognition.lang = navigator.language || "en-US";
+      recognition.onresult = (event) => {
+        let finalText = "";
+        for (let index = event.resultIndex ?? 0; index < event.results.length; index += 1) {
+          const result = event.results[index];
+          if (result?.isFinal) {
+            finalText += result[0]?.transcript ?? "";
+          }
+        }
+        insertDictationText(finalText);
+      };
+      recognition.onerror = (event) => {
+        const message = event?.error ? `Dictation failed: ${event.error}` : "Dictation failed.";
+        window.alert?.(message);
+      };
+      recognition.onend = () => {
+        if (dictationRecognition === recognition) {
+          dictationRecognition = null;
+        }
+      };
+      recognition.start();
+      return { ok: true };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      window.alert?.(`Unable to start dictation: ${message}`);
+      dictationRecognition = null;
+      return { ok: false, reason: message };
+    }
+  }
+
+  function stopDictation() {
+    if (!dictationRecognition) {
+      return { ok: true, stopped: false };
+    }
+    dictationRecognition.stop?.();
+    dictationRecognition = null;
+    return { ok: true, stopped: true };
+  }
+
   async function handleMessageFromView(message) {
     if (!message || typeof message.type !== "string") {
       return;
@@ -1068,6 +1340,12 @@
         return await startConversation(message.params ?? message);
       case "thread-follower-start-turn":
         return await startFollowerTurn(message.params ?? message);
+      case "global-dictation-start":
+      case "global-dictation-in-app-start":
+        return startDictation();
+      case "global-dictation-stop":
+      case "global-dictation-in-app-stop":
+        return stopDictation();
       case "open-in-browser":
         if (typeof message.url === "string" && message.url.trim().length > 0) {
           window.open(message.url, "_blank", "noopener,noreferrer");
@@ -1099,23 +1377,45 @@
     return sessionId;
   }
 
-	  function subscribeToAppServerEvents() {
+  function scheduleEventStreamReconnect() {
+    window.clearTimeout(eventStreamReconnectTimer);
+    eventStreamReconnectTimer = window.setTimeout(() => {
+      subscribeToAppServerEvents();
+      recoverTrackedActiveTurns();
+    }, eventStreamReconnectDelayMs);
+    eventStreamReconnectDelayMs = Math.min(eventStreamReconnectDelayMs * 2, eventStreamReconnectMaxDelayMs);
+  }
+
+  function subscribeToAppServerEvents() {
     try {
+      eventStream?.close?.();
       const events = new EventSource(
         `${window.location.origin}/__codex/app-server/events?codex_web_token=${encodeURIComponent(bridgeToken)}`,
       );
+      eventStream = events;
+      events.onopen = () => {
+        eventStreamReconnectDelayMs = 250;
+      };
       events.onmessage = (event) => {
         try {
           const message = JSON.parse(event.data);
           if (message.method) {
-            emit({ type: "mcp-request", hostId: localHostId, request: message });
+            emitAppServerNotification(message.method, message.params ?? {});
           }
         } catch (error) {
           console.warn("[codex-web] invalid app-server event", error);
         }
       };
+      events.onerror = () => {
+        if (eventStream === events) {
+          eventStream = null;
+        }
+        events.close?.();
+        scheduleEventStreamReconnect();
+      };
     } catch (error) {
       console.warn("[codex-web] failed to subscribe to app-server events", error);
+      scheduleEventStreamReconnect();
     }
   }
 

@@ -1531,7 +1531,11 @@ function createServer(state) {
         });
         response.write(": connected\n\n");
         state.sseClients.add(response);
+        const heartbeat = setInterval(() => {
+          response.write(`: heartbeat ${Date.now()}\n\n`);
+        }, 15000);
         request.on("close", () => {
+          clearInterval(heartbeat);
           state.sseClients.delete(response);
         });
         return;
