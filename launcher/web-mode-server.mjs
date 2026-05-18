@@ -27,6 +27,8 @@ const TEXT_MIME_TYPES = new Map([
   [".jpg", "image/jpeg"],
   [".jpeg", "image/jpeg"],
   [".webp", "image/webp"],
+  [".gif", "image/gif"],
+  [".avif", "image/avif"],
   [".ico", "image/x-icon"],
   [".woff", "font/woff"],
   [".woff2", "font/woff2"],
@@ -35,6 +37,7 @@ const TEXT_MIME_TYPES = new Map([
 const WEB_MODE_API_PREFIXES = [
   "/accounts/",
   "/api/",
+  "/aip/",
   "/backend-api/",
   "/beacons/",
   "/checkout_pricing_config/",
@@ -252,6 +255,10 @@ function createState(args) {
     pendingRpc: new Map(),
     notifications: [],
     sseClients: new Set(),
+    appListCache: {
+      data: null,
+      fetchedAtMs: 0,
+    },
     appServer: {
       status: "not_started",
       pid: null,
@@ -1232,6 +1239,23 @@ function webModeWhamUsageResponse(rateLimitResult, accountResult = null) {
   };
 }
 
+function webModeRemoteControlClientsResponse(state) {
+  const physicalHostControl = state.computer.physical_host_control === true;
+  return {
+    status: physicalHostControl ? "degraded" : "unavailable",
+    clients: [],
+    data: [],
+    nextCursor: null,
+    reason: physicalHostControl
+      ? "remote control client discovery is not implemented by codex-desktop serve yet"
+      : "remote control clients require a real desktop control backend, but this serve runtime is browser-only",
+    runtime: {
+      computer_use_mode: state.computer.mode,
+      physical_host_control: physicalHostControl,
+    },
+  };
+}
+
 function startAppServer(state) {
   if (state.appServer.child) {
     return;
@@ -1569,6 +1593,14 @@ const WEB_MODE_FORCED_FEATURE_GATES = new Set([
   "410262010",
   // Computer Use rollout gate for desktop-shaped web mode.
   "1506311413",
+  // Remote Connections settings gate.
+  "4114442250",
+  // Realtime voice mode gate.
+  "2380644311",
+  // Voice input command gate.
+  "4100906017",
+  // Global dictation command gate.
+  "1244621283",
 ]);
 
 function forcedFeatureGateExpression(variableName) {
@@ -1656,6 +1688,241 @@ async function readJsonRequest(request) {
 function normalizedTimeoutMs(value) {
   const timeoutMs = Number(value);
   return Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : undefined;
+}
+
+async function listWebModeApps(state, { forceRefetch = false } = {}) {
+  const now = Date.now();
+  if (!forceRefetch && Array.isArray(state.appListCache.data) && now - state.appListCache.fetchedAtMs < 5 * 60 * 1000) {
+    return { data: state.appListCache.data, nextCursor: null };
+  }
+
+  const data = [];
+  let cursor = null;
+  do {
+    const result = await sendAppServerRpc(
+      state,
+      "app/list",
+      { cursor, limit: 1000, forceRefetch },
+      30000,
+    );
+    if (Array.isArray(result?.data)) {
+      data.push(...result.data);
+    }
+    cursor = result?.nextCursor ?? result?.next_cursor ?? null;
+  } while (cursor != null);
+
+  state.appListCache = { data, fetchedAtMs: now };
+  return { data, nextCursor: null };
+}
+
+async function webModeConnectorById(state, connectorId) {
+  const { data } = await listWebModeApps(state);
+  return data.find((app) => app?.id === connectorId) ?? null;
+}
+
+function webModeConnectorDetail(app) {
+  return {
+    ...app,
+    actions: Array.isArray(app.actions) ? app.actions : [],
+    link_params_schema: app.link_params_schema ?? null,
+    supported_auth:
+      Array.isArray(app.supported_auth) && app.supported_auth.length > 0 ? app.supported_auth : [{ type: "OAUTH" }],
+  };
+}
+
+function connectorFallbackInstallUrl(app, { addConnectorLink = false } = {}) {
+  const installUrl = typeof app?.installUrl === "string" && app.installUrl.trim().length > 0 ? app.installUrl : null;
+  if (!installUrl) {
+    return null;
+  }
+  try {
+    const url = new URL(installUrl);
+    const params = new URLSearchParams([
+      ["connector", app.id],
+      ["product-sku", "CODEX"],
+      ["referrer", "codex"],
+    ]);
+    if (addConnectorLink) {
+      params.set("add-connector-link", "true");
+    }
+    url.hash = `settings/Connectors?${params.toString()}`;
+    return url.toString();
+  } catch {
+    return installUrl;
+  }
+}
+
+function connectorLogoColor(input) {
+  const digest = crypto.createHash("sha256").update(input).digest();
+  const hue = digest[0] % 360;
+  return `hsl(${hue} 72% 45%)`;
+}
+
+function connectorLogoInitials(name) {
+  const words = String(name ?? "")
+    .replace(/[^a-z0-9 ]/gi, " ")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+  if (words.length === 0) {
+    return "C";
+  }
+  return words
+    .slice(0, 2)
+    .map((word) => word[0].toUpperCase())
+    .join("");
+}
+
+function connectorLogoPayload(app, theme) {
+  const initials = connectorLogoInitials(app?.name);
+  const foreground = theme === "dark" ? "#111827" : "#ffffff";
+  const background = connectorLogoColor(app?.id ?? app?.name ?? "connector");
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="${background}"/><text x="32" y="39" text-anchor="middle" font-family="Inter,Arial,sans-serif" font-size="24" font-weight="700" fill="${foreground}">${initials}</text></svg>`;
+  return {
+    body: {
+      contentType: "image/svg+xml",
+      base64: Buffer.from(svg).toString("base64"),
+    },
+  };
+}
+
+async function handleAipRequest(request, response, state, url) {
+  const pathParts = url.pathname.split("/").filter(Boolean);
+  if (pathParts[0] !== "aip" || pathParts[1] !== "connectors") {
+    return false;
+  }
+
+  if (request.method === "GET" && pathParts.length === 2) {
+    jsonResponse(response, 200, await listWebModeApps(state, { forceRefetch: url.searchParams.get("forceRefetch") === "true" }));
+    return true;
+  }
+
+  if (request.method === "POST" && pathParts[2] === "links" && (pathParts[3] === "oauth" || pathParts[3] === "noauth")) {
+    const body = await readJsonRequest(request);
+    const connectorId = body?.connector_id ?? body?.connectorId;
+    const app = typeof connectorId === "string" ? await webModeConnectorById(state, connectorId) : null;
+    if (!app) {
+      jsonResponse(response, 404, { error: "connector_not_found" });
+      return true;
+    }
+    if (pathParts[3] === "noauth") {
+      jsonResponse(response, 200, { link: { connector_id: app.id, name: app.name, owner_profile: null } });
+      return true;
+    }
+    const redirectUrl =
+      (typeof body?.post_auth_url === "string" && body.post_auth_url.trim().length > 0
+        ? body.post_auth_url
+        : connectorFallbackInstallUrl(app, { addConnectorLink: true })) ?? app.installUrl;
+    jsonResponse(response, 200, { redirect_url: redirectUrl });
+    return true;
+  }
+
+  const connectorId = pathParts[2] ? decodeURIComponent(pathParts[2]) : null;
+  if (!connectorId || pathParts.length < 3) {
+    jsonResponse(response, 404, { error: "connector_not_found" });
+    return true;
+  }
+
+  const app = await webModeConnectorById(state, connectorId);
+  if (!app) {
+    jsonResponse(response, 404, { error: "connector_not_found" });
+    return true;
+  }
+
+  if (request.method === "GET" && pathParts.length === 3) {
+    jsonResponse(response, 200, webModeConnectorDetail(app));
+    return true;
+  }
+
+  if (request.method === "GET" && pathParts[3] === "link") {
+    jsonResponse(response, 200, { link: null });
+    return true;
+  }
+
+  if (request.method === "GET" && pathParts[3] === "logo") {
+    jsonResponse(response, 200, connectorLogoPayload(app, url.searchParams.get("theme") === "dark" ? "dark" : "light"));
+    return true;
+  }
+
+  jsonResponse(response, 404, { error: "not_found" });
+  return true;
+}
+
+const LOCAL_ASSET_EXTENSIONS = new Set([".avif", ".gif", ".ico", ".jpeg", ".jpg", ".png", ".svg", ".webp"]);
+const LOCAL_ASSET_MAX_BYTES = 10 * 1024 * 1024;
+
+async function realPathIfExists(targetPath) {
+  try {
+    return await fs.realpath(targetPath);
+  } catch {
+    return null;
+  }
+}
+
+function pathWithinRoot(targetPath, rootPath) {
+  return targetPath === rootPath || targetPath.startsWith(`${rootPath}${path.sep}`);
+}
+
+async function localAssetRoots(state) {
+  const candidates = [
+    state.args.appDir,
+    state.args.codexHome,
+    state.args.profile,
+    process.env.HOME,
+    process.env.XDG_CACHE_HOME,
+    process.env.XDG_STATE_HOME,
+  ].filter((candidate) => typeof candidate === "string" && candidate.trim().length > 0);
+  const roots = [];
+  for (const candidate of candidates) {
+    const real = await realPathIfExists(candidate);
+    if (real && !roots.includes(real)) {
+      roots.push(real);
+    }
+  }
+  return roots;
+}
+
+async function serveLocalAsset(request, response, state, url) {
+  if (!authorizeBridgeRequest(request, response, state, url)) {
+    return;
+  }
+  if (request.method !== "GET") {
+    jsonResponse(response, 405, { error: "method_not_allowed" });
+    return;
+  }
+
+  const requestedPath = url.searchParams.get("path")?.replace(/[?#].*$/, "");
+  if (!requestedPath || !path.isAbsolute(requestedPath)) {
+    jsonResponse(response, 400, { error: "missing_or_invalid_path" });
+    return;
+  }
+
+  const ext = path.extname(requestedPath).toLowerCase();
+  if (!LOCAL_ASSET_EXTENSIONS.has(ext)) {
+    jsonResponse(response, 415, { error: "unsupported_asset_type" });
+    return;
+  }
+
+  const realPath = await realPathIfExists(requestedPath);
+  if (!realPath) {
+    textResponse(response, 404, "Not found\n");
+    return;
+  }
+
+  const roots = await localAssetRoots(state);
+  if (!roots.some((root) => pathWithinRoot(realPath, root))) {
+    textResponse(response, 403, "Forbidden\n");
+    return;
+  }
+
+  const stat = await fs.stat(realPath);
+  if (!stat.isFile() || stat.size > LOCAL_ASSET_MAX_BYTES) {
+    textResponse(response, 403, "Forbidden\n");
+    return;
+  }
+
+  response.writeHead(200, staticHeaders(TEXT_MIME_TYPES.get(ext) ?? "application/octet-stream"));
+  response.end(await fs.readFile(realPath));
 }
 
 async function readWebState(args) {
@@ -2306,6 +2573,29 @@ function createServer(state) {
           return;
         }
         jsonResponse(response, 200, browserStatus(state));
+        return;
+      }
+
+      if (url.pathname === "/__codex/local-file") {
+        await serveLocalAsset(request, response, state, url);
+        return;
+      }
+
+      if (url.pathname.startsWith("/aip/")) {
+        if (!authorizeBridgeRequest(request, response, state, url)) {
+          return;
+        }
+        if (await handleAipRequest(request, response, state, url)) {
+          return;
+        }
+      }
+
+      if (url.pathname === "/wham/remote/control/clients") {
+        if (request.method !== "GET") {
+          jsonResponse(response, 405, { error: "method_not_allowed" });
+          return;
+        }
+        jsonResponse(response, 200, webModeRemoteControlClientsResponse(state));
         return;
       }
 

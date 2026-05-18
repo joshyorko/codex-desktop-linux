@@ -3983,12 +3983,26 @@ test_web_mode_security_token_env_and_cdp_static_contract() {
     assert_contains "$server" '"410065390"'
     assert_contains "$server" '"410262010"'
     assert_contains "$server" '"1506311413"'
+    assert_contains "$server" '"4114442250"'
+    assert_contains "$server" '"2380644311"'
+    assert_contains "$server" '"4100906017"'
+    assert_contains "$server" '"1244621283"'
     assert_contains "$server" 'patchWebModeStatsigGateDefaults'
     assert_contains "$server" 'shouldServeSpaFallback'
     assert_contains "$server" 'WEB_MODE_API_PREFIXES'
     assert_contains "$server" 'requestPath.startsWith(prefix)'
     assert_contains "$server" '"/wham/"'
     assert_contains "$server" '"/accounts/"'
+    assert_contains "$server" '"/aip/"'
+    assert_contains "$server" '"/__codex/local-file"'
+    assert_contains "$server" 'handleAipRequest'
+    assert_contains "$server" 'authorizeBridgeRequest(request, response, state, url)'
+    assert_contains "$server" 'listWebModeApps'
+    assert_contains "$server" 'connectorLogoPayload'
+    assert_contains "$server" 'serveLocalAsset'
+    assert_contains "$server" 'LOCAL_ASSET_EXTENSIONS'
+    assert_contains "$server" 'webModeRemoteControlClientsResponse'
+    assert_contains "$server" '"/wham/remote/control/clients"'
     assert_contains "$server" '"/wham/accounts/check"'
     assert_contains "$server" '"/wham/tasks/list"'
     assert_contains "$server" '"/wham/usage"'
@@ -4043,6 +4057,8 @@ test_web_mode_security_token_env_and_cdp_static_contract() {
     assert_contains "$bootstrap" 'return { items: \[\] }'
     assert_contains "$bootstrap" 'case "get-is-conversation-archiving-for-host"'
     assert_contains "$bootstrap" 'case "hotkey-window-hotkey-state"'
+    assert_contains "$bootstrap" 'case "global-dictation-history"'
+    assert_contains "$bootstrap" 'case "global-dictation-copy-history-item"'
     assert_contains "$bootstrap" 'localHttpFetchProxyPrefixes'
     assert_contains "$bootstrap" 'shouldProxyLocalHttpFetch'
     assert_contains "$bootstrap" 'proxyLocalHttpFetch'
@@ -4052,12 +4068,17 @@ test_web_mode_security_token_env_and_cdp_static_contract() {
     assert_contains "$bootstrap" 'case "chrome-extension-installed-read"'
     assert_contains "$bootstrap" 'chromeExtension.installed'
     assert_contains "$bootstrap" 'hostFetchAppServerRpcMethods'
+    assert_contains "$bootstrap" 'appServerAssetUrlMethods'
+    assert_contains "$bootstrap" 'rewriteLocalAssetUrls'
+    assert_contains "$bootstrap" 'localAssetUrl'
     assert_contains "$bootstrap" 'case "send-cli-request-for-host"'
     assert_contains "$bootstrap" 'case "electron-request-microphone-permission"'
     assert_contains "$bootstrap" 'navigator.mediaDevices.getUserMedia'
     assert_contains "$bootstrap" 'appServer.write'
     assert_contains "$bootstrap" 'case "mcp-response"'
     assert_contains "$bootstrap" 'batch-write-config-value-for-host'
+    assert_contains "$bootstrap" 'add-marketplace'
+    assert_contains "$bootstrap" 'list-apps'
     assert_contains "$bootstrap" 'list-skills-for-host'
     assert_contains "$bootstrap" 'read-plugin-skill'
     assert_contains "$bootstrap" 'write-skill-config'
@@ -4069,6 +4090,7 @@ test_web_mode_security_token_env_and_cdp_static_contract() {
     assert_contains "$bootstrap" 'case "thread-follower-interrupt-turn-for-host"'
     assert_contains "$bootstrap" '"/wham/"'
     assert_contains "$bootstrap" '"/accounts/"'
+    assert_contains "$bootstrap" '"/aip/"'
 }
 
 test_web_mode_server_desktop_settings_contract() {
@@ -4085,6 +4107,10 @@ const required = [
   "\"410065390\"",
   "\"410262010\"",
   "\"1506311413\"",
+  "\"4114442250\"",
+  "\"2380644311\"",
+  "\"4100906017\"",
+  "\"1244621283\"",
   "patchWebModeStatsigGateDefaults",
   "patchWebModeProjectlessOutputDirectory",
   "computerUseBrowserOnlyRequested",
@@ -4128,7 +4154,17 @@ const required = [
   "WEB_MODE_API_PREFIXES",
   "\"/wham/\"",
   "\"/accounts/\"",
+  "\"/aip/\"",
   "requestPath.startsWith(prefix)",
+  "\"/__codex/local-file\"",
+  "handleAipRequest",
+  "authorizeBridgeRequest(request, response, state, url)",
+  "listWebModeApps",
+  "connectorLogoPayload",
+  "serveLocalAsset",
+  "LOCAL_ASSET_EXTENSIONS",
+  "webModeRemoteControlClientsResponse",
+  "\"/wham/remote/control/clients\"",
   "\"/wham/accounts/check\"",
   "\"/wham/tasks/list\"",
   "\"/wham/usage\"",
@@ -4204,6 +4240,16 @@ const encodedFile = Buffer.from("hello web mode", "utf8").toString("base64");
 
 for (const needle of [
   "hostFetchAppServerRpcMethods",
+  "appServerAssetUrlMethods",
+  "rewriteLocalAssetUrls",
+  "localAssetFilePath",
+  "localAssetUrl",
+  "add-marketplace",
+  "list-apps",
+  "app-connect-oauth-callback-url",
+  "realtimeVoice: true",
+  "case \"global-dictation-history\"",
+  "case \"global-dictation-copy-history-item\"",
   "case \"read-file\"",
   "case \"read-file-binary\"",
   "method: \"fs/readFile\"",
@@ -4411,9 +4457,44 @@ async function fetch(url, options = {}) {
       json: async () => ({
         ok: true,
         result: {
-          marketplaces: [],
+          marketplaces: [
+            {
+              plugins: [
+                {
+                  interface: {
+                    displayName: "Chrome",
+                    logo: "/workspace/chrome.png?cache=1#icon",
+                    composerIcon: "/workspace/chrome-composer.png",
+                  },
+                },
+              ],
+            },
+          ],
           featuredPluginIds: [],
           marketplaceLoadErrors: [],
+        },
+      }),
+    };
+  }
+  if (body?.method === "appServer.rpc" && body.params?.method === "app/list") {
+    return {
+      ok: true,
+      json: async () => ({
+        ok: true,
+        result: {
+          data: [{ id: "connector_test", name: "Test App", logoUrl: "connectors://connector_test/logo?theme=light" }],
+          nextCursor: null,
+        },
+      }),
+    };
+  }
+  if (body?.method === "appServer.rpc" && body.params?.method === "modelProvider/capabilities/read") {
+    return {
+      ok: true,
+      json: async () => ({
+        ok: true,
+        result: {
+          namespaceTools: true,
         },
       }),
     };
@@ -4571,6 +4652,7 @@ const context = vm.createContext({
   fetch,
   Symbol,
   URL,
+  URLSearchParams,
   InputEvent,
   atob: (value) => Buffer.from(value, "base64").toString("binary"),
   TextDecoder,
@@ -4594,6 +4676,16 @@ vscode.postMessage({
   type: "mcp-request",
   hostId: "local",
   request: { id: 3, method: "hotkey-window-hotkey-state", params: {} },
+});
+vscode.postMessage({
+  type: "mcp-request",
+  hostId: "local",
+  request: { id: 4, method: "global-dictation-history", params: {} },
+});
+vscode.postMessage({
+  type: "mcp-request",
+  hostId: "local",
+  request: { id: 5, method: "global-dictation-copy-history-item", params: { id: "dictation-1" } },
 });
 vscode.postMessage({
   type: "fetch",
@@ -4700,11 +4792,43 @@ vscode.postMessage({
   url: "vscode://codex/paths-exist",
   body: JSON.stringify({ params: { paths: ["/workspace/existing", "/workspace/missing"] } }),
 });
+vscode.postMessage({
+  type: "fetch",
+  hostId: "local",
+  requestId: "fetch-16",
+  url: "vscode://codex/global-dictation-history",
+  body: JSON.stringify({ params: {} }),
+});
+vscode.postMessage({
+  type: "fetch",
+  hostId: "local",
+  requestId: "fetch-17",
+  url: "vscode://codex/global-dictation-copy-history-item",
+  body: JSON.stringify({ params: { id: "dictation-1" } }),
+});
 const workerResult = await window.electronBridge.sendWorkerMessageFromView({ type: "cancel" });
 const cliResult = await window.electronBridge.sendMessageFromView({
   type: "send-cli-request-for-host",
   hostId: "local",
   method: "plugin/list",
+  params: {},
+});
+const appsResult = await window.electronBridge.sendMessageFromView({
+  type: "send-cli-request-for-host",
+  hostId: "local",
+  method: "list-apps",
+  params: {},
+});
+const capabilitiesResult = await window.electronBridge.sendMessageFromView({
+  type: "send-cli-request-for-host",
+  hostId: "local",
+  method: "modelProvider/capabilities/read",
+  params: {},
+});
+const appConnectCallback = await window.electronBridge.sendMessageFromView({
+  type: "send-cli-request-for-host",
+  hostId: "local",
+  method: "app-connect-oauth-callback-url",
   params: {},
 });
 const projectlessStart = await window.electronBridge.sendMessageFromView({
@@ -4764,8 +4888,8 @@ await window.electronBridge.sendMessageFromView({
 await new Promise((resolve) => setTimeout(resolve, 0));
 
 const responses = posted.filter((message) => message.type === "mcp-response");
-if (responses.length !== 3) {
-  throw new Error(`expected 3 fallback responses, got ${responses.length}: ${JSON.stringify(posted)}`);
+if (responses.length !== 5) {
+  throw new Error(`expected 5 fallback responses, got ${responses.length}: ${JSON.stringify(posted)}`);
 }
 if (JSON.stringify(responses[0].message.result) !== JSON.stringify({ items: [] })) {
   throw new Error(`list-automations fallback had wrong shape: ${JSON.stringify(responses[0])}`);
@@ -4776,9 +4900,15 @@ if (responses[1].message.result !== false) {
 if (JSON.stringify(responses[2].message.result) !== JSON.stringify({ configuredHotkey: null })) {
   throw new Error(`hotkey fallback had wrong shape: ${JSON.stringify(responses[2])}`);
 }
+if (JSON.stringify(responses[3].message.result) !== JSON.stringify({ items: [] })) {
+  throw new Error(`global dictation history fallback had wrong shape: ${JSON.stringify(responses[3])}`);
+}
+if (JSON.stringify(responses[4].message.result) !== JSON.stringify({ ok: true })) {
+  throw new Error(`global dictation copy fallback had wrong shape: ${JSON.stringify(responses[4])}`);
+}
 const fetchResponses = posted.filter((message) => message.type === "fetch-response");
-if (fetchResponses.length !== 15) {
-  throw new Error(`expected 15 fetch fallback/proxy responses, got ${fetchResponses.length}: ${JSON.stringify(posted)}`);
+if (fetchResponses.length !== 17) {
+  throw new Error(`expected 17 fetch fallback/proxy responses, got ${fetchResponses.length}: ${JSON.stringify(posted)}`);
 }
 const fetchByRequestId = new Map(fetchResponses.map((message) => [message.requestId, JSON.parse(message.bodyJsonString)]));
 if (JSON.stringify(fetchByRequestId.get("fetch-1")) !== JSON.stringify({ items: [] })) {
@@ -4789,6 +4919,12 @@ if (fetchByRequestId.get("fetch-2") !== false) {
 }
 if (JSON.stringify(fetchByRequestId.get("fetch-3")) !== JSON.stringify({ configuredHotkey: null })) {
   throw new Error(`fetch hotkey fallback had wrong shape: ${JSON.stringify(fetchResponses)}`);
+}
+if (JSON.stringify(fetchByRequestId.get("fetch-16")) !== JSON.stringify({ items: [] })) {
+  throw new Error(`fetch global dictation history fallback had wrong shape: ${JSON.stringify(fetchResponses)}`);
+}
+if (JSON.stringify(fetchByRequestId.get("fetch-17")) !== JSON.stringify({ ok: true })) {
+  throw new Error(`fetch global dictation copy fallback had wrong shape: ${JSON.stringify(fetchResponses)}`);
 }
 if (fetchByRequestId.get("fetch-4")?.plan_type !== "prolite" || fetchByRequestId.get("fetch-4")?.rate_limit?.primary_window?.used_percent !== 1) {
   throw new Error(`local HTTP fetch proxy had wrong shape: ${JSON.stringify(fetchResponses)}`);
@@ -4835,6 +4971,22 @@ if (workerResult?.reason !== "electron-worker-bridge-unavailable-in-web-mode") {
 if (!Array.isArray(cliResult?.marketplaces)) {
   throw new Error(`send-cli-request-for-host did not return plugin/list result: ${JSON.stringify(cliResult)}`);
 }
+if (!cliResult?.marketplaces?.[0]?.plugins?.[0]?.interface?.logo?.includes("/__codex/local-file?")) {
+  throw new Error(`plugin local asset URLs should be rewritten for browser loading: ${JSON.stringify(cliResult)}`);
+}
+const rewrittenPluginLogoUrl = new URL(cliResult.marketplaces[0].plugins[0].interface.logo);
+if (rewrittenPluginLogoUrl.searchParams.get("path") !== "/workspace/chrome.png") {
+  throw new Error(`plugin local asset URLs should strip query/hash before serving from disk: ${JSON.stringify(cliResult)}`);
+}
+if (appsResult?.data?.[0]?.id !== "connector_test") {
+  throw new Error(`list-apps did not forward to app/list: ${JSON.stringify(appsResult)}`);
+}
+if (capabilitiesResult?.realtimeVoice !== true || capabilitiesResult?.voiceInput !== true) {
+  throw new Error(`model capabilities did not advertise web voice support: ${JSON.stringify(capabilitiesResult)}`);
+}
+if (appConnectCallback?.callbackUrl !== "http://127.0.0.1:3773/oauth/callback") {
+  throw new Error(`app connect callback URL had wrong shape: ${JSON.stringify(appConnectCallback)}`);
+}
 if (
   projectlessStart?.resultType !== "success" ||
   projectlessStart?.result?.conversationId !== "thread-started" ||
@@ -4869,6 +5021,8 @@ const unexpectedAppServerCalls = fetches.filter(
     ![
       "appServer.rpc:fs/readFile",
       "appServer.rpc:plugin/list",
+      "appServer.rpc:app/list",
+      "appServer.rpc:modelProvider/capabilities/read",
       "appServer.rpc:config/batchWrite",
       "appServer.rpc:experimentalFeature/enablement/set",
       "appServer.rpc:thread/start",
@@ -4884,6 +5038,12 @@ if (fetches.filter((entry) => entry === "appServer.rpc:fs/readFile").length !== 
 }
 if (fetches.filter((entry) => entry === "appServer.rpc:plugin/list").length !== 2) {
   throw new Error(`plugin list should be forwarded by fetch and send-cli-request-for-host: ${JSON.stringify(fetches)}`);
+}
+if (fetches.filter((entry) => entry === "appServer.rpc:app/list").length !== 1) {
+  throw new Error(`list-apps should be forwarded through app/list: ${JSON.stringify(fetches)}`);
+}
+if (fetches.filter((entry) => entry === "appServer.rpc:modelProvider/capabilities/read").length !== 1) {
+  throw new Error(`model provider capabilities should be forwarded and augmented: ${JSON.stringify(fetches)}`);
 }
 if (fetches.filter((entry) => entry === "appServer.rpc:thread/start").length !== 1) {
   throw new Error(`projectless chat should start one app-server thread: ${JSON.stringify(fetches)}`);
@@ -5041,6 +5201,27 @@ JS
     assert_contains "$out" '"dispatchHostMessage": 2'
     assert_contains "$out" '"vscode://codex": 1'
     assert_contains "$out" '"Browser Use": 1'
+}
+
+test_web_mode_contract_harness_fixture() {
+    info "Checking web mode contract harness fixture"
+    local script="$REPO_DIR/scripts/web-mode-contract-harness.mjs"
+    local out="$TMP_DIR/web-mode-contract/contract-matrix.json"
+
+    assert_file_exists "$script"
+    node --check "$script"
+    node "$script" --fixture --out "$out"
+    assert_file_exists "$out"
+    assert_contains "$out" '"schema_version": 1'
+    assert_contains "$out" '"status": "pass"'
+    assert_contains "$out" '"id": "connections"'
+    assert_contains "$out" '"id": "remote-control-clients"'
+    assert_contains "$out" '"id": "mic-realtime"'
+    assert_contains "$out" '"id": "computer-use"'
+    assert_contains "$out" '"host_calls"'
+    assert_contains "$out" '"GET /wham/remote/control/clients?limit=100"'
+    assert_contains "$REPO_DIR/docs/superpowers/plans/2026-05-18-codex-desktop-serve-contract-spike.md" "Codex Desktop Serve Contract Spike"
+    assert_contains "$REPO_DIR/docs/superpowers/plans/2026-05-18-codex-desktop-serve-contract-spike.md" "Do not fake Connections"
 }
 
 test_installer_detects_electron_version_from_plist() {
@@ -10386,6 +10567,7 @@ main() {
     test_web_mode_bootstrap_desktop_fallback_contract
     test_web_mode_codex_home_policy
     test_web_mode_inventory_script_reports_host_markers
+    test_web_mode_contract_harness_fixture
     test_installer_detects_electron_version_from_plist
     test_installer_keeps_electron_fallback_for_bad_metadata
     test_port_validation_rejects_oversized_numeric_values
