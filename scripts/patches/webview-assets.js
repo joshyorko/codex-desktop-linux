@@ -151,6 +151,63 @@ function applyLinuxAppSunsetPatch(currentSource) {
   return currentSource;
 }
 
+function applySubagentNicknameMetadataPatch(currentSource) {
+  let patchedSource = currentSource;
+  const sourceShapePatchedMarker = "`subAgent`in e?e.subAgent:`subagent`in e?e.subagent:null";
+  const nicknamePatchedMarker =
+    "Zl(e.agentNickname)??Zl(e.agent_nickname)??Zl(B(e.source)?.agentNickname)";
+
+  const sourceShapeNeedle =
+    "function Mi(e){return`subAgent`in e?e.subAgent:null}function Ni(e){return typeof e==`string`?Pi():`thread_spawn`in e?{parentThreadId:j(e.thread_spawn.parent_thread_id),depth:e.thread_spawn.depth,agentNickname:e.thread_spawn.agent_nickname,agentRole:e.thread_spawn.agent_role}:Pi()}";
+  const sourceShapePatch =
+    "function Mi(e){return`subAgent`in e?e.subAgent:`subagent`in e?e.subagent:null}function Ni(e){return typeof e==`string`?Pi():`thread_spawn`in e?{parentThreadId:j(e.thread_spawn.parent_thread_id),depth:e.thread_spawn.depth,agentNickname:e.thread_spawn.agent_nickname,agentRole:e.thread_spawn.agent_role}:Pi()}";
+  if (patchedSource.includes(sourceShapePatchedMarker)) {
+    // Already patched.
+  } else if (patchedSource.includes(sourceShapeNeedle)) {
+    patchedSource = patchedSource.replace(sourceShapeNeedle, sourceShapePatch);
+  } else {
+    const sourceShapeRegex =
+      /function ([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*)\)\{return`subAgent`in \2\?\2\.subAgent:null\}function ([A-Za-z_$][\w$]*)\(/u;
+    if (sourceShapeRegex.test(patchedSource)) {
+      patchedSource = patchedSource.replace(
+        sourceShapeRegex,
+        "function $1($2){return`subAgent`in $2?$2.subAgent:`subagent`in $2?$2.subagent:null}function $3(",
+      );
+    }
+  }
+
+  const nicknameNeedle =
+    "function Xl(e){return e==null?null:Zl(e.agentNickname)??Zl(B(e.source)?.agentNickname)}";
+  const nicknamePatch =
+    "function Xl(e){return e==null?null:Zl(e.agentNickname)??Zl(e.agent_nickname)??Zl(B(e.source)?.agentNickname)}";
+  if (patchedSource.includes(nicknamePatchedMarker)) {
+    // Already patched.
+  } else if (patchedSource.includes(nicknameNeedle)) {
+    patchedSource = patchedSource.replace(nicknameNeedle, nicknamePatch);
+  } else {
+    const nicknameRegex =
+      /function ([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*)\)\{return \2==null\?null:([A-Za-z_$][\w$]*)\(\2\.agentNickname\)\?\?\3\(([A-Za-z_$][\w$]*)\(\2\.source\)\?\.agentNickname\)\}/u;
+    if (nicknameRegex.test(patchedSource)) {
+      patchedSource = patchedSource.replace(
+        nicknameRegex,
+        "function $1($2){return $2==null?null:$3($2.agentNickname)??$3($2.agent_nickname)??$3($4($2.source)?.agentNickname)}",
+      );
+    }
+  }
+
+  if (
+    patchedSource === currentSource &&
+    !(currentSource.includes(sourceShapePatchedMarker) && currentSource.includes(nicknamePatchedMarker)) &&
+    (currentSource.includes("agentNickname") ||
+      currentSource.includes("agent_nickname") ||
+      currentSource.includes("thread_spawn"))
+  ) {
+    console.warn("WARN: Could not find subagent nickname metadata needles — skipping metadata shape patch");
+  }
+
+  return patchedSource;
+}
+
 function applyBrowserAnnotationScreenshotPatch(currentSource) {
   let patchedSource = currentSource;
 
@@ -467,5 +524,6 @@ module.exports = {
   applyPersistentRateLimitFooterPatch,
   applyLinuxAppSunsetPatch,
   applyLinuxOpaqueWindowsDefaultPatch,
+  applySubagentNicknameMetadataPatch,
   patchCommentPreloadBundle,
 };

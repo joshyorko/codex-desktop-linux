@@ -45,6 +45,7 @@ const {
   applyLinuxTrayPatch,
   applyLinuxWillQuitDrainTimeoutPatch,
   applyLinuxWindowOptionsPatch,
+  applySubagentNicknameMetadataPatch,
   isComputerUseUiEnabled,
   patchMainBundleSource,
   patchExtractedApp,
@@ -123,6 +124,36 @@ test("asset patch helpers match every file when passed a global regex", () => {
   } finally {
     fs.rmSync(tempRoot, { recursive: true, force: true });
   }
+});
+
+test("subagent nickname metadata patch accepts session metadata shape", () => {
+  const source = [
+    "function j(e){return e}",
+    "function B(e){if(e==null||typeof e==`string`)return null;let t=Mi(e);return t==null?null:Ni(t)}",
+    "function Mi(e){return`subAgent`in e?e.subAgent:null}",
+    "function Ni(e){return typeof e==`string`?Pi():`thread_spawn`in e?{parentThreadId:j(e.thread_spawn.parent_thread_id),depth:e.thread_spawn.depth,agentNickname:e.thread_spawn.agent_nickname,agentRole:e.thread_spawn.agent_role}:Pi()}",
+    "function Pi(){return{parentThreadId:null,depth:null,agentNickname:null,agentRole:null}}",
+    "function Xl(e){return e==null?null:Zl(e.agentNickname)??Zl(B(e.source)?.agentNickname)}",
+    "function Zl(e){if(e==null)return null;let t=e.trim();return t.length===0?null:t}",
+  ].join("");
+  const patched = applyPatchTwice(applySubagentNicknameMetadataPatch, source);
+
+  assert.match(patched, /`subAgent`in e\?e\.subAgent:`subagent`in e\?e\.subagent:null/);
+  assert.match(patched, /Zl\(e\.agentNickname\)\?\?Zl\(e\.agent_nickname\)\?\?Zl\(B\(e\.source\)\?\.agentNickname\)/);
+
+  const sandbox = {
+    result: null,
+  };
+  vm.runInNewContext(
+    `${patched};result={top:Xl({agent_nickname:\`Ned\`}),source:Xl({source:{subagent:{thread_spawn:{parent_thread_id:\`parent\`,depth:1,agent_nickname:\`Pepper Potts\`,agent_role:\`worker\`}}}}),role:B({subagent:{thread_spawn:{parent_thread_id:\`parent\`,depth:1,agent_nickname:\`Pepper Potts\`,agent_role:\`worker\`}}}).agentRole};`,
+    sandbox,
+  );
+
+  assert.deepEqual(JSON.parse(JSON.stringify(sandbox.result)), {
+    top: "Ned",
+    source: "Pepper Potts",
+    role: "worker",
+  });
 });
 
 test("Linux target context parses distro, package, and desktop details", () => {
@@ -299,6 +330,7 @@ test("default core patch descriptors are grouped and unique", () => {
     "opaque-window-default-general-settings",
     "opaque-window-default-webview-index",
     "opaque-window-default-resolved-theme",
+    "subagent-nickname-metadata-shape",
     "linux-computer-use-ui-availability",
     "linux-computer-use-install-flow",
     "linux-app-updater-bridge",
