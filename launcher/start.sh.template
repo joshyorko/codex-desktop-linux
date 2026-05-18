@@ -218,8 +218,6 @@ codex_desktop_web_mode() {
     export CODEX_BROWSER_MODE="${CODEX_BROWSER_MODE:-container-chromium}"
     if early_truthy_env_value "${CODEX_COMPUTER_USE_BROWSER_ONLY:-}"; then
         export CODEX_COMPUTER_CONTROL_MODE="browser-only"
-    else
-        export CODEX_COMPUTER_CONTROL_MODE="${CODEX_COMPUTER_CONTROL_MODE:-desktop}"
     fi
 
     exec "$node_bin" "$SCRIPT_DIR/.codex-linux/web-mode-server.mjs" "$command_name" --app-dir "$SCRIPT_DIR" "$@"
@@ -250,6 +248,10 @@ Launches the $CODEX_LINUX_APP_DISPLAY_NAME app.
 Commands:
   serve --workspace DIR [--profile DIR] [--codex-home DIR|--isolated]
                               Run devcontainer real web mode on a loopback listener
+  serve status --workspace DIR [--profile DIR]
+                              Show devcontainer web mode PID, URL, and health
+  serve stop --workspace DIR [--profile DIR]
+                              Stop a devcontainer web mode server for that profile
   web --inspect               Print web-mode inspection JSON
   doctor [--mode devcontainer]
                               Print devcontainer web-mode diagnostics
@@ -2069,7 +2071,9 @@ if needs_cold_start; then
     monitor_bundled_marketplace_tmp_permissions
     sync_browser_use_bundled_plugin_cache
     sync_chrome_bundled_plugin_cache
-    sync_computer_use_bundled_plugin_cache
+    if ! early_truthy_env_value "${CODEX_COMPUTER_USE_BROWSER_ONLY:-}" && [ "${CODEX_COMPUTER_CONTROL_MODE:-}" != "browser-only" ]; then
+        sync_computer_use_bundled_plugin_cache
+    fi
     sync_read_aloud_bundled_plugin_cache
 fi
 resolve_browser_use_runtime_env

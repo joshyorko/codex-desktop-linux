@@ -48,7 +48,10 @@ function patchFileFirstMatch(filePath, { label, oldTexts, newText, alreadyText =
     return;
   }
 
-  if (source.includes(newText) || source.includes(alreadyText)) {
+  if (
+    (typeof newText === "string" && source.includes(newText)) ||
+    (typeof alreadyText === "string" && source.includes(alreadyText))
+  ) {
     console.log(`${path.basename(filePath)} already patched: ${label}`);
     return;
   }
@@ -63,6 +66,57 @@ function patchFileFirstMatch(filePath, { label, oldTexts, newText, alreadyText =
 
   fs.writeFileSync(filePath, source.replace(match.oldText, match.newText ?? newText), "utf8");
   console.log(`Patched ${path.basename(filePath)}: ${label}`);
+}
+
+function patchBrowserClientLinuxNativePipe(filePath) {
+  let source;
+  try {
+    source = fs.readFileSync(filePath, "utf8");
+  } catch (error) {
+    warn(`Could not read ${filePath}: ${error.message}`);
+    return;
+  }
+
+  let changed = false;
+  const importText =
+    'import codexLinuxNativePipePath from"node:path";import{createConnection as codexLinuxNativePipeCreateConnection}from"node:net";';
+  if (!source.includes("codexLinuxNativePipeCreateConnection")) {
+    source = `${importText}${source}`;
+    changed = true;
+  }
+
+  const socketDirNeedle =
+    'var Xv=t=>t==="win32"?"\\\\\\\\.\\\\pipe\\\\codex-browser-use":"/tmp/codex-browser-use";';
+  const socketDirReplacement =
+    'var Xv=t=>t==="win32"?"\\\\\\\\.\\\\pipe\\\\codex-browser-use":typeof process!="undefined"&&process.platform==="linux"&&typeof process.env?.CODEX_BROWSER_USE_SOCKET_DIR=="string"&&process.env.CODEX_BROWSER_USE_SOCKET_DIR.length>0?process.env.CODEX_BROWSER_USE_SOCKET_DIR:"/tmp/codex-browser-use";';
+  if (!source.includes("var Xv=t=>t===\"win32\"?\"\\\\\\\\.\\\\pipe\\\\codex-browser-use\":typeof process!=\"undefined\"")) {
+    if (source.includes(socketDirNeedle)) {
+      source = source.replace(socketDirNeedle, socketDirReplacement);
+      changed = true;
+    } else {
+      warn(`${path.basename(filePath)} missing patch target for Linux Browser Use socket dir`);
+    }
+  }
+
+  const pipeBridgeNeedle =
+    'function Tm(){let t=import.meta.__codexNativePipe;return t==null||typeof t.createConnection!="function"?null:t}';
+  const pipeBridgeReplacement =
+    'function codexLinuxNativePipeSocketDirectory(){return typeof process!="undefined"&&process.platform==="linux"&&typeof process.env?.CODEX_BROWSER_USE_SOCKET_DIR=="string"&&process.env.CODEX_BROWSER_USE_SOCKET_DIR.length>0?process.env.CODEX_BROWSER_USE_SOCKET_DIR:"/tmp/codex-browser-use"}function codexLinuxNativePipeBridge(){if(typeof process=="undefined"||process.platform!=="linux")return null;return{createConnection:t=>{if(typeof t!="string")throw new Error("native pipe path required");let e=codexLinuxNativePipePath.resolve(codexLinuxNativePipeSocketDirectory()),r=codexLinuxNativePipePath.resolve(t);if(r!==e&&!r.startsWith(`${e}${codexLinuxNativePipePath.sep}`))throw new Error("native pipe path escapes CODEX_BROWSER_USE_SOCKET_DIR");return codexLinuxNativePipeCreateConnection(r)}}}function Tm(){let t=import.meta.__codexNativePipe;return t!=null&&typeof t.createConnection=="function"?t:codexLinuxNativePipeBridge()}';
+  if (!source.includes("codexLinuxNativePipeBridge")) {
+    if (source.includes(pipeBridgeNeedle)) {
+      source = source.replace(pipeBridgeNeedle, pipeBridgeReplacement);
+      changed = true;
+    } else {
+      warn(`${path.basename(filePath)} missing patch target for Linux Browser Use native pipe bridge`);
+    }
+  }
+
+  if (changed) {
+    fs.writeFileSync(filePath, source, "utf8");
+    console.log(`Patched ${path.basename(filePath)}: Linux Browser Use native pipe bridge`);
+  } else {
+    console.log(`${path.basename(filePath)} already patched: Linux Browser Use native pipe bridge`);
+  }
 }
 
 const pluginDir = process.argv[2];
@@ -257,6 +311,8 @@ patchFileFirstMatch(path.join(scriptsDir, "browser-client.mjs"), {
   ],
   alreadyText: "codexLinuxChromeUserDataDirectories",
 });
+
+patchBrowserClientLinuxNativePipe(path.join(scriptsDir, "browser-client.mjs"));
 
 patchFileFirstMatch(path.join(scriptsDir, "browser-client.mjs"), {
   label: "Linux Chrome profile metadata lookup",

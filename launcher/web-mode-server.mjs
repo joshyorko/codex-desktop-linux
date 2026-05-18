@@ -4,6 +4,8 @@ import { spawn } from "node:child_process";
 import crypto from "node:crypto";
 import { constants as fsConstants, promises as fs } from "node:fs";
 import http from "node:http";
+import net from "node:net";
+import { endianness } from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
@@ -60,6 +62,8 @@ function printServeLine(message = "") {
 function usage() {
   console.error(`Usage:
   codex-desktop serve --workspace <dir> [--profile <dir>] [--codex-home <dir>|--isolated] [--bind 127.0.0.1] [--port 3773]
+  codex-desktop serve status --workspace <dir> [--profile <dir>]
+  codex-desktop serve stop --workspace <dir> [--profile <dir>]
   codex-desktop web --inspect
   codex-desktop doctor --mode devcontainer`);
 }
@@ -81,6 +85,14 @@ function parseArgs(argv) {
 
   if (argv[0] && !argv[0].startsWith("-")) {
     args.command = argv.shift();
+  }
+  if (args.command === "serve" && argv[0] && !argv[0].startsWith("-")) {
+    const subcommand = argv.shift();
+    if (subcommand === "status" || subcommand === "stop") {
+      args.command = subcommand;
+    } else {
+      throw new Error(`Unknown serve subcommand: ${subcommand}`);
+    }
   }
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -105,6 +117,8 @@ function parseArgs(argv) {
       args.onceHealthCheck = true;
     } else if (arg === "--mode") {
       args.mode = argv[++index] ?? null;
+    } else if (args.command === "serve" && (arg === "status" || arg === "stop")) {
+      args.command = arg;
     } else if (arg === "--inspect") {
       args.command = "inspect";
     } else if (arg === "--help" || arg === "-h") {
@@ -133,6 +147,7 @@ function parseArgs(argv) {
   args.identityDir = path.join(args.profile, "identity");
   args.runDir = path.join(args.profile, "run");
   args.webStatePath = path.join(args.profile, "web-state.json");
+  args.serveStatePath = path.join(args.runDir, "serve.json");
 
   return args;
 }
@@ -145,6 +160,7 @@ function jsonResponse(response, status, body) {
   response.writeHead(status, {
     "content-type": "application/json; charset=utf-8",
     "cache-control": "no-store, max-age=0",
+    "permissions-policy": "microphone=(self), camera=(self)",
   });
   response.end(`${JSON.stringify(body, null, 2)}\n`);
 }
@@ -153,8 +169,17 @@ function textResponse(response, status, body) {
   response.writeHead(status, {
     "content-type": "text/plain; charset=utf-8",
     "cache-control": "no-store, max-age=0",
+    "permissions-policy": "microphone=(self), camera=(self)",
   });
   response.end(body);
+}
+
+function staticHeaders(contentType) {
+  return {
+    "content-type": contentType,
+    "cache-control": "no-store, max-age=0",
+    "permissions-policy": "microphone=(self), camera=(self)",
+  };
 }
 
 async function exists(targetPath) {
@@ -196,15 +221,31 @@ function truthyEnv(value) {
   return /^(1|true|yes|on)$/i.test(String(value ?? ""));
 }
 
+function falseyEnv(value) {
+  return /^(0|false|no|off)$/i.test(String(value ?? ""));
+}
+
+function hasDesktopSessionEnv(env = process.env) {
+  return Boolean((env.WAYLAND_DISPLAY || env.DISPLAY) && env.DBUS_SESSION_BUS_ADDRESS && env.XDG_RUNTIME_DIR);
+}
+
 function computerUseBrowserOnlyRequested() {
-  return truthyEnv(process.env.CODEX_COMPUTER_USE_BROWSER_ONLY) || process.env.CODEX_COMPUTER_CONTROL_MODE === "browser-only";
+  if (truthyEnv(process.env.CODEX_COMPUTER_USE_BROWSER_ONLY) || process.env.CODEX_COMPUTER_CONTROL_MODE === "browser-only") {
+    return true;
+  }
+  if (process.env.CODEX_COMPUTER_CONTROL_MODE === "desktop" || falseyEnv(process.env.CODEX_COMPUTER_USE_BROWSER_ONLY)) {
+    return false;
+  }
+  return !hasDesktopSessionEnv();
 }
 
 function createState(args) {
   const token = crypto.randomBytes(24).toString("base64url");
+  const serverId = crypto.randomBytes(16).toString("hex");
   const computerUseBrowserOnly = computerUseBrowserOnlyRequested();
   return {
     args,
+    serverId,
     token,
     startedAt: new Date().toISOString(),
     nextRpcId: 1,
@@ -394,6 +435,524 @@ async function findExecutable(commandName) {
   return null;
 }
 
+async function chooseFreeLoopbackPort() {
+  return await new Promise((resolve, reject) => {
+    const server = net.createServer();
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      const port = typeof address === "object" && address != null ? address.port : null;
+      server.close((error) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+        resolve(port);
+      });
+    });
+  });
+}
+
+function configuredCdpPort() {
+  if (!process.env.CODEX_BROWSER_CDP_PORT) {
+    return null;
+  }
+  const port = Number.parseInt(process.env.CODEX_BROWSER_CDP_PORT, 10);
+  if (!Number.isInteger(port) || port <= 0 || port > 65535) {
+    throw new Error("CODEX_BROWSER_CDP_PORT must be between 1 and 65535");
+  }
+  return port;
+}
+
+function writeNativePipeFrame(message) {
+  const body = Buffer.from(JSON.stringify(message), "utf8");
+  const header = Buffer.alloc(4);
+  if (endianness() === "LE") {
+    header.writeUInt32LE(body.length, 0);
+  } else {
+    header.writeUInt32BE(body.length, 0);
+  }
+  return Buffer.concat([header, body]);
+}
+
+function readFrameLength(buffer) {
+  return endianness() === "LE" ? buffer.readUInt32LE(0) : buffer.readUInt32BE(0);
+}
+
+class NativePipeFrameDecoder {
+  chunks = [];
+  byteLength = 0;
+
+  push(chunk) {
+    if (chunk.byteLength > 0) {
+      const buffer = Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength);
+      this.chunks.push(buffer);
+      this.byteLength += buffer.byteLength;
+    }
+
+    const frames = [];
+    while (this.byteLength >= 4) {
+      const header = this.peek(4);
+      const length = readFrameLength(header);
+      const frameLength = 4 + length;
+      if (this.byteLength < frameLength) {
+        break;
+      }
+      frames.push(JSON.parse(this.consume(frameLength).subarray(4).toString("utf8")));
+    }
+    return frames;
+  }
+
+  peek(size) {
+    if (this.chunks[0]?.byteLength >= size) {
+      return this.chunks[0].subarray(0, size);
+    }
+    const buffer = Buffer.allocUnsafe(size);
+    let offset = 0;
+    for (const chunk of this.chunks) {
+      offset += chunk.copy(buffer, offset, 0, size - offset);
+      if (offset === size) {
+        break;
+      }
+    }
+    return buffer;
+  }
+
+  consume(size) {
+    const buffer = Buffer.allocUnsafe(size);
+    let offset = 0;
+    while (offset < size) {
+      const chunk = this.chunks[0];
+      if (!chunk) {
+        throw new Error("native pipe frame underflow");
+      }
+      const copied = chunk.copy(buffer, offset, 0, size - offset);
+      offset += copied;
+      this.byteLength -= copied;
+      if (copied === chunk.byteLength) {
+        this.chunks.shift();
+      } else {
+        this.chunks[0] = chunk.subarray(copied);
+      }
+    }
+    return buffer;
+  }
+}
+
+async function fetchJson(url, options = {}) {
+  const response = await fetch(url, {
+    ...options,
+    signal: options.signal ?? AbortSignal.timeout(options.timeoutMs ?? 3000),
+  });
+  if (!response.ok) {
+    throw new Error(`${url} returned HTTP ${response.status}`);
+  }
+  return await response.json();
+}
+
+function cdpUrl(endpoint, pathname) {
+  const url = new URL(pathname, endpoint.endsWith("/") ? endpoint : `${endpoint}/`);
+  return url.toString();
+}
+
+class CdpConnection {
+  constructor(backend, tabId, target) {
+    this.backend = backend;
+    this.tabId = tabId;
+    this.target = target;
+  }
+
+  nextId = 1;
+  pending = new Map();
+  targetSessions = new Map();
+  actualSessions = new Map();
+  ws = null;
+  opening = null;
+
+  async ensureOpen() {
+    if (this.ws?.readyState === WebSocket.OPEN) {
+      return;
+    }
+    if (typeof WebSocket !== "function") {
+      throw new Error("Node.js WebSocket runtime is unavailable");
+    }
+    this.opening ??= (async () => {
+      const target = await this.backend.targetForTabId(this.tabId);
+      if (!target?.webSocketDebuggerUrl) {
+        throw new Error(`CDP target ${this.tabId} has no websocket debugger URL`);
+      }
+      this.target = target;
+      const ws = new WebSocket(target.webSocketDebuggerUrl);
+      this.ws = ws;
+      await new Promise((resolve, reject) => {
+        const fail = (event) => reject(new Error(event?.message ?? "CDP websocket failed to open"));
+        ws.addEventListener("open", resolve, { once: true });
+        ws.addEventListener("error", fail, { once: true });
+      });
+      ws.addEventListener("message", (event) => this.handleMessage(event.data));
+      ws.addEventListener("close", () => this.rejectAll(new Error("CDP websocket closed")));
+    })().finally(() => {
+      this.opening = null;
+    });
+    await this.opening;
+  }
+
+  handleMessage(data) {
+    let message;
+    try {
+      message = JSON.parse(typeof data === "string" ? data : Buffer.from(data).toString("utf8"));
+    } catch {
+      return;
+    }
+
+    if (message.id != null && this.pending.has(message.id)) {
+      const pending = this.pending.get(message.id);
+      this.pending.delete(message.id);
+      clearTimeout(pending.timer);
+      if (message.error) {
+        pending.reject(new Error(message.error.message ?? "CDP request failed"));
+      } else {
+        pending.resolve(message.result ?? {});
+      }
+      return;
+    }
+
+    if (typeof message.method === "string") {
+      const source = { tabId: this.tabId };
+      if (typeof message.sessionId === "string") {
+        source.sessionId = this.actualSessions.get(message.sessionId) ?? message.sessionId;
+      }
+      this.backend.broadcast({
+        jsonrpc: "2.0",
+        method: "onCDPEvent",
+        params: {
+          source,
+          method: message.method,
+          params: message.params ?? {},
+        },
+      });
+    }
+  }
+
+  async call(method, params = {}, { sessionId = null, timeoutMs = 30000 } = {}) {
+    await this.ensureOpen();
+    const id = this.nextId++;
+    const payload = { id, method, params };
+    if (sessionId) {
+      payload.sessionId = sessionId;
+    }
+    const response = new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        reject(new Error(`CDP request timed out: ${method}`));
+      }, timeoutMs);
+      this.pending.set(id, { resolve, reject, timer });
+    });
+    this.ws.send(JSON.stringify(payload));
+    return await response;
+  }
+
+  async attachTarget(targetId) {
+    const existing = this.targetSessions.get(targetId);
+    if (existing) {
+      return existing;
+    }
+    const result = await this.call("Target.attachToTarget", { targetId, flatten: true });
+    const actualSessionId = result.sessionId;
+    if (typeof actualSessionId !== "string" || actualSessionId.length === 0) {
+      throw new Error(`Target.attachToTarget did not return a session for ${targetId}`);
+    }
+    const syntheticSessionId = `target:${targetId}`;
+    this.targetSessions.set(targetId, actualSessionId);
+    this.actualSessions.set(actualSessionId, syntheticSessionId);
+    return actualSessionId;
+  }
+
+  async detachTarget(targetId) {
+    const actualSessionId = this.targetSessions.get(targetId);
+    if (!actualSessionId) {
+      return;
+    }
+    await this.call("Target.detachFromTarget", { sessionId: actualSessionId }).catch(() => {});
+    this.targetSessions.delete(targetId);
+    this.actualSessions.delete(actualSessionId);
+  }
+
+  sessionForTarget(targetId) {
+    return this.targetSessions.get(targetId) ?? null;
+  }
+
+  sessionForSynthetic(sessionId) {
+    if (typeof sessionId !== "string" || !sessionId.startsWith("target:")) {
+      return sessionId;
+    }
+    return this.targetSessions.get(sessionId.slice("target:".length)) ?? null;
+  }
+
+  rejectAll(error) {
+    for (const pending of this.pending.values()) {
+      clearTimeout(pending.timer);
+      pending.reject(error);
+    }
+    this.pending.clear();
+  }
+
+  async close() {
+    this.rejectAll(new Error("CDP connection closed"));
+    this.ws?.close();
+    this.ws = null;
+  }
+}
+
+class CdpNativePipeBackend {
+  constructor(state) {
+    this.state = state;
+    this.endpoint = state.browser.cdp_endpoint;
+    this.socketDir = state.browser.socket_dir ?? path.join(state.args.runDir, "browser-use");
+    this.socketPath = path.join(this.socketDir, `codex-web-cdp-${process.pid}.sock`);
+  }
+
+  clients = new Set();
+  tabIdByTargetId = new Map();
+  targetByTabId = new Map();
+  connections = new Map();
+  nextTabId = 1;
+  activeTabId = null;
+  server = null;
+
+  async start() {
+    if (!this.endpoint || this.state.browser.mode === "disabled") {
+      return;
+    }
+    if (typeof WebSocket !== "function") {
+      this.state.browser.native_pipe = { status: "disabled", reason: "Node.js WebSocket runtime is unavailable" };
+      return;
+    }
+    await fs.mkdir(this.socketDir, { recursive: true, mode: 0o700 });
+    await fs.rm(this.socketPath, { force: true });
+    this.server = net.createServer((socket) => this.handleSocket(socket));
+    await new Promise((resolve, reject) => {
+      this.server.once("error", reject);
+      this.server.listen(this.socketPath, resolve);
+    });
+    await fs.chmod(this.socketPath, 0o600).catch(() => {});
+    this.state.browser.native_pipe = {
+      status: "listening",
+      backend: "cdp",
+      socket_path: this.socketPath,
+      socket_dir: this.socketDir,
+    };
+    this.state.browser.available_backends = ["cdp"];
+  }
+
+  async stop() {
+    for (const client of this.clients) {
+      client.destroy();
+    }
+    this.clients.clear();
+    await Promise.allSettled([...this.connections.values()].map((connection) => connection.close()));
+    this.connections.clear();
+    if (this.server?.listening) {
+      await new Promise((resolve) => this.server.close(resolve));
+    }
+    await fs.rm(this.socketPath, { force: true }).catch(() => {});
+  }
+
+  handleSocket(socket) {
+    const decoder = new NativePipeFrameDecoder();
+    this.clients.add(socket);
+    socket.on("data", (chunk) => {
+      let messages;
+      try {
+        messages = decoder.push(chunk);
+      } catch (error) {
+        this.send(socket, { jsonrpc: "2.0", error: { code: -32700, message: error.message } });
+        return;
+      }
+      for (const message of messages) {
+        void this.handleMessage(socket, message);
+      }
+    });
+    socket.on("close", () => this.clients.delete(socket));
+    socket.on("error", () => this.clients.delete(socket));
+  }
+
+  send(socket, message) {
+    if (!socket.destroyed) {
+      socket.write(writeNativePipeFrame(message));
+    }
+  }
+
+  broadcast(message) {
+    for (const client of this.clients) {
+      this.send(client, message);
+    }
+  }
+
+  async handleMessage(socket, message) {
+    if (typeof message?.method !== "string" || message.id == null) {
+      return;
+    }
+    try {
+      const result = await this.handleRequest(message.method, message.params ?? {});
+      this.send(socket, { jsonrpc: "2.0", id: message.id, result });
+    } catch (error) {
+      this.send(socket, {
+        jsonrpc: "2.0",
+        id: message.id,
+        error: { code: 1, message: error instanceof Error ? error.message : String(error) },
+      });
+    }
+  }
+
+  async handleRequest(method, params) {
+    switch (method) {
+      case "ping":
+        return "pong";
+      case "getInfo":
+        return {
+          type: "cdp",
+          name: "Container Chromium",
+          capabilities: {
+            browser: ["create_tab", "list_tabs", "name_session"].map((id) => ({ id })),
+            tab: [
+              "navigate_tab_url",
+              "navigate_tab_back",
+              "navigate_tab_forward",
+              "navigate_tab_reload",
+              "close_tab",
+              "tab_screenshot",
+              "playwright_evaluate",
+              "playwright_locator_click",
+              "playwright_locator_fill",
+              "dom_cua_click",
+              "dom_cua_type",
+            ].map((id) => ({ id })),
+          },
+          metadata: { cdpEndpoint: this.endpoint },
+        };
+      case "getTabs":
+        return await this.getTabs();
+      case "createTab":
+        return await this.createTab();
+      case "attach":
+        await this.connectionForTab(Number(params.tabId));
+        return {};
+      case "detach":
+        return {};
+      case "attachTarget":
+        await (await this.connectionForTab(Number(params.tabId))).attachTarget(params.targetId);
+        return {};
+      case "detachTarget":
+        await (await this.connectionForTab(Number(params.tabId))).detachTarget(params.targetId);
+        return {};
+      case "executeCdp":
+        return await this.executeCdp(params);
+      case "getUserTabs":
+      case "getUserHistory":
+        return [];
+      case "claimUserTab":
+        return { claimed: false };
+      case "finalizeTabs":
+      case "nameSession":
+      case "moveMouse":
+        return {};
+      default:
+        throw new Error(`Unsupported CDP browser backend method: ${method}`);
+    }
+  }
+
+  async cdpTargets() {
+    return (await fetchJson(cdpUrl(this.endpoint, "/json/list"), { timeoutMs: 3000 })).filter(
+      (target) => target?.type === "page",
+    );
+  }
+
+  tabForTarget(target) {
+    let tabId = this.tabIdByTargetId.get(target.id);
+    if (tabId == null) {
+      tabId = this.nextTabId++;
+      this.tabIdByTargetId.set(target.id, tabId);
+    }
+    this.targetByTabId.set(tabId, target);
+    if (this.activeTabId == null) {
+      this.activeTabId = tabId;
+    }
+    return {
+      id: tabId,
+      title: target.title ?? "",
+      url: target.url ?? "",
+      active: tabId === this.activeTabId,
+      targetId: target.id,
+    };
+  }
+
+  async getTabs() {
+    const tabs = (await this.cdpTargets()).map((target) => this.tabForTarget(target));
+    if (tabs.length === 0) {
+      return [await this.createTab()];
+    }
+    return tabs;
+  }
+
+  async createTab() {
+    const encodedUrl = encodeURIComponent("about:blank");
+    let target;
+    try {
+      target = await fetchJson(cdpUrl(this.endpoint, `/json/new?${encodedUrl}`), { method: "PUT", timeoutMs: 3000 });
+    } catch {
+      target = await fetchJson(cdpUrl(this.endpoint, `/json/new?${encodedUrl}`), { timeoutMs: 3000 });
+    }
+    const tab = this.tabForTarget(target);
+    this.activeTabId = tab.id;
+    return { ...tab, active: true };
+  }
+
+  async targetForTabId(tabId) {
+    if (!Number.isInteger(tabId) || tabId <= 0) {
+      throw new Error(`invalid tab id: ${tabId}`);
+    }
+    const existing = this.targetByTabId.get(tabId);
+    if (existing) {
+      return existing;
+    }
+    await this.getTabs();
+    const target = this.targetByTabId.get(tabId);
+    if (!target) {
+      throw new Error(`CDP tab not found: ${tabId}`);
+    }
+    return target;
+  }
+
+  async connectionForTab(tabId) {
+    await this.targetForTabId(tabId);
+    let connection = this.connections.get(tabId);
+    if (!connection) {
+      connection = new CdpConnection(this, tabId, this.targetByTabId.get(tabId));
+      this.connections.set(tabId, connection);
+    }
+    await connection.ensureOpen();
+    this.activeTabId = tabId;
+    return connection;
+  }
+
+  async executeCdp(params) {
+    const target = params.target ?? {};
+    const tabId = Number(target.tabId);
+    const connection = await this.connectionForTab(tabId);
+    let sessionId = null;
+    if (typeof target.targetId === "string" && target.targetId.length > 0) {
+      sessionId = connection.sessionForTarget(target.targetId) ?? (await connection.attachTarget(target.targetId));
+    } else if (typeof target.sessionId === "string" && target.sessionId.length > 0) {
+      sessionId = connection.sessionForSynthetic(target.sessionId);
+    }
+    return await connection.call(params.method, params.commandParams ?? {}, {
+      sessionId,
+      timeoutMs: Number.isFinite(params.timeoutMs) ? params.timeoutMs : 30000,
+    });
+  }
+}
+
 async function startBrowserSidecar(state) {
   const explicitEndpoint = process.env.CODEX_BROWSER_CDP_ENDPOINT;
   if (explicitEndpoint) {
@@ -402,8 +961,11 @@ async function startBrowserSidecar(state) {
       reason: "using explicit CODEX_BROWSER_CDP_ENDPOINT",
       profile_dir: state.args.browserProfileDir,
       cdp_endpoint: explicitEndpoint,
+      socket_dir: path.join(state.args.runDir, "browser-use"),
       pid: null,
     };
+    process.env.CODEX_BROWSER_USE_SOCKET_DIR = state.browser.socket_dir;
+    await startCdpNativePipeBackend(state);
     return;
   }
 
@@ -426,7 +988,7 @@ async function startBrowserSidecar(state) {
     return;
   }
 
-  const cdpPort = Number.parseInt(process.env.CODEX_BROWSER_CDP_PORT || "9333", 10);
+  const cdpPort = configuredCdpPort() ?? (await chooseFreeLoopbackPort());
   const userDataDir = path.join(state.args.browserProfileDir, "chromium");
   await fs.mkdir(userDataDir, { recursive: true, mode: 0o700 });
 
@@ -479,10 +1041,26 @@ async function startBrowserSidecar(state) {
     await waitForCdpEndpoint(state.browser.cdp_endpoint, 5000);
     state.browser.reason = "container-local Chromium/CDP sidecar ready";
     state.browser.cdp_ready = true;
+    await startCdpNativePipeBackend(state);
   } catch (error) {
     state.browser.mode = "disabled";
     state.browser.reason = `container Chromium/CDP sidecar failed readiness: ${error.message}`;
     state.browser.cdp_ready = false;
+  }
+}
+
+async function startCdpNativePipeBackend(state) {
+  if (!state.browser.cdp_endpoint || state.browser.mode === "disabled") {
+    return;
+  }
+  const backend = new CdpNativePipeBackend(state);
+  try {
+    await backend.start();
+    state.browser.cdpPipe = backend;
+    appendServeLog(state, "browser_native_pipe_ready", state.browser.native_pipe);
+  } catch (error) {
+    state.browser.native_pipe = { status: "error", backend: "cdp", reason: error.message };
+    appendServeLog(state, "browser_native_pipe_failed", { error: error.message }, "warn");
   }
 }
 
@@ -505,11 +1083,13 @@ async function waitForCdpEndpoint(endpoint, timeoutMs) {
 }
 
 async function stopBrowserSidecar(state) {
+  await state.browser.cdpPipe?.stop?.().catch((error) => appendServeLog(state, "browser_native_pipe_stop_failed", { error: error.message }, "warn"));
   await terminateChild(state.browser.child, "browser sidecar");
 }
 
 async function sendAppServerRpc(state, method, params = {}, timeoutMs = 30000) {
-  if (!state.appServer.child || !state.appServer.child.stdin.writable) {
+  const stdin = state.appServer.child?.stdin;
+  if (!stdin?.writable) {
     throw new Error("app-server is not running");
   }
 
@@ -532,7 +1112,23 @@ async function sendAppServerRpc(state, method, params = {}, timeoutMs = 30000) {
     });
   });
 
-  state.appServer.child.stdin.write(`${JSON.stringify(message)}\n`);
+  const rejectWrite = (error) => {
+    const pending = state.pendingRpc.get(id);
+    if (!pending) {
+      return;
+    }
+    state.pendingRpc.delete(id);
+    pending.reject(error instanceof Error ? error : new Error(String(error)));
+  };
+  try {
+    stdin.write(`${JSON.stringify(message)}\n`, (error) => {
+      if (error) {
+        rejectWrite(error);
+      }
+    });
+  } catch (error) {
+    rejectWrite(error);
+  }
   return response;
 }
 
@@ -663,6 +1259,11 @@ function startAppServer(state) {
     }
   });
   child.stderr.on("data", (chunk) => appendAppServerLog(state, chunk));
+  child.stdin.on("error", (error) => {
+    state.appServer.status = "error";
+    state.appServer.last_error = error.message;
+    appendServeLog(state, "app_server_stdin_error", { error: error.message }, "warn");
+  });
   child.on("error", (error) => {
     state.appServer.status = "error";
     state.appServer.last_error = error.message;
@@ -672,6 +1273,7 @@ function startAppServer(state) {
     state.appServer.status = "exited";
     state.appServer.pid = null;
     state.appServer.last_error = `exited code=${code} signal=${signal}`;
+    rejectPendingRpc(state, new Error(`app-server exited code=${code} signal=${signal}`));
     appendServeLog(state, "app_server_exited", { code, signal }, code === 0 ? "info" : "warn");
   });
 
@@ -774,7 +1376,7 @@ async function closeHttpServer(server) {
 }
 
 function browserStatus(state) {
-  const { child, ...status } = state.browser;
+  const { child, cdpPipe, ...status } = state.browser;
   return status;
 }
 
@@ -836,6 +1438,7 @@ function portConflictMessage(args, error) {
   }
   return [
     `port ${args.port} is already in use on ${args.bind}`,
+    `stop the previous devcontainer web server: codex-desktop serve stop --workspace ${JSON.stringify(args.workspace)} --profile ${JSON.stringify(args.profile)}`,
     `choose another port: codex-desktop serve --workspace ${JSON.stringify(args.workspace)} --port 0`,
     `or inspect the listener: ss -ltnp 'sport = :${args.port}'`,
   ].join("\n");
@@ -857,6 +1460,8 @@ function health(state, serverAddress = null) {
   return {
     package: "codex-desktop-linux",
     mode: "devcontainer-web",
+    pid: process.pid,
+    server_id: state.serverId,
     loopback_only_default: true,
     bind: args.bind,
     port: serverAddress?.port ?? args.port,
@@ -883,6 +1488,7 @@ function health(state, serverAddress = null) {
       capabilities: {
         app_server_bridge: "stdio",
         browser_sidecar: browser.mode,
+        browser_backends: browser.available_backends ?? [],
         computer_use_mode: state.computer.mode,
         chrome_native_host: state.chrome_native_host.status,
       },
@@ -947,8 +1553,7 @@ async function serveIndexWithInitialRoute(response, state, indexPath, initialRou
     }
   }
   response.writeHead(200, {
-    "content-type": "text/html; charset=utf-8",
-    "cache-control": "no-store, max-age=0",
+    ...staticHeaders("text/html; charset=utf-8"),
     "x-codex-desktop-web-mode": "1",
   });
   response.end(source);
@@ -1118,9 +1723,44 @@ async function syncBundledMarketplace(args, pluginNames) {
 
   await fs.mkdir(marketplacePluginsDir, { recursive: true, mode: 0o700 });
   await fs.mkdir(marketplaceLocalPluginsDir, { recursive: true, mode: 0o700 });
+  const allowedPlugins = new Set(pluginNames);
+  let marketplace = {
+    name: "openai-bundled",
+    interface: { displayName: "OpenAI Bundled" },
+    plugins: [],
+  };
   if (await exists(sourceMarketplace)) {
-    await fs.copyFile(sourceMarketplace, path.join(marketplacePluginsDir, "marketplace.json"));
+    marketplace = await readJsonFile(sourceMarketplace);
+    marketplace.plugins = Array.isArray(marketplace.plugins)
+      ? marketplace.plugins.filter((plugin) => allowedPlugins.has(plugin?.name))
+      : [];
   }
+
+  const marketplacePluginNames = new Set(marketplace.plugins.map((plugin) => plugin?.name).filter(Boolean));
+  for (const pluginName of pluginNames) {
+    if (marketplacePluginNames.has(pluginName)) {
+      continue;
+    }
+    const pluginJsonPath = path.join(sourceRoot, "plugins", pluginName, ".codex-plugin", "plugin.json");
+    if (!(await exists(pluginJsonPath))) {
+      continue;
+    }
+    let category = "Productivity";
+    try {
+      const manifest = await readJsonFile(pluginJsonPath);
+      category = manifest?.interface?.category || category;
+    } catch {
+      // Keep the generated marketplace usable even if a local manifest drifts.
+    }
+    marketplace.plugins.push({
+      name: pluginName,
+      source: { source: "local", path: `./plugins/${pluginName}` },
+      policy: { installation: "AVAILABLE", authentication: "ON_INSTALL" },
+      category,
+    });
+  }
+  marketplace.plugins = marketplace.plugins.filter((plugin) => allowedPlugins.has(plugin?.name));
+  await fs.writeFile(path.join(marketplacePluginsDir, "marketplace.json"), `${JSON.stringify(marketplace, null, 2)}\n`);
 
   await Promise.all(
     pluginNames.map(async (pluginName) => {
@@ -1155,6 +1795,13 @@ async function syncBundledPluginCache(args, pluginName) {
   await fs.rm(latestLink, { recursive: true, force: true });
   await fs.symlink(cachePlugin, latestLink, "dir");
   return true;
+}
+
+function bundledPluginNamesForState(state) {
+  if (state.computer.physical_host_control) {
+    return BUNDLED_PLUGIN_NAMES;
+  }
+  return BUNDLED_PLUGIN_NAMES.filter((pluginName) => pluginName !== "computer-use");
 }
 
 function chromeExtensionHostArch() {
@@ -1231,9 +1878,9 @@ async function writeChromeNativeHostManifests(args) {
   return { status: "installed", arch, host_path: hostPath, extension_id: extensionId, host_name: hostName, manifests };
 }
 
-async function syncBundledPlugins(args) {
+async function syncBundledPlugins(args, pluginNames = BUNDLED_PLUGIN_NAMES) {
   const syncedPlugins = [];
-  for (const pluginName of BUNDLED_PLUGIN_NAMES) {
+  for (const pluginName of pluginNames) {
     if (await syncBundledPluginCache(args, pluginName)) {
       syncedPlugins.push(pluginName);
     }
@@ -1500,10 +2147,7 @@ function createServer(state) {
 
       if (url.pathname === "/__codex/web-mode-bootstrap.js") {
         const source = `window.__CODEX_WEB_TOKEN__ = ${JSON.stringify(state.token)};\n${await fs.readFile(state.args.bootstrapPath, "utf8")}`;
-        response.writeHead(200, {
-          "content-type": "text/javascript; charset=utf-8",
-          "cache-control": "no-store, max-age=0",
-        });
+        response.writeHead(200, staticHeaders("text/javascript; charset=utf-8"));
         response.end(source);
         return;
       }
@@ -1642,8 +2286,7 @@ function createServer(state) {
           return;
         }
         response.writeHead(200, {
-          "content-type": "text/event-stream; charset=utf-8",
-          "cache-control": "no-store, max-age=0",
+          ...staticHeaders("text/event-stream; charset=utf-8"),
           connection: "keep-alive",
         });
         response.write(": connected\n\n");
@@ -1740,10 +2383,7 @@ function createServer(state) {
         return;
       }
 
-      response.writeHead(200, {
-        "content-type": TEXT_MIME_TYPES.get(path.extname(target).toLowerCase()) ?? "application/octet-stream",
-        "cache-control": "no-store, max-age=0",
-      });
+      response.writeHead(200, staticHeaders(TEXT_MIME_TYPES.get(path.extname(target).toLowerCase()) ?? "application/octet-stream"));
       if (path.extname(target).toLowerCase() === ".js") {
         response.end(patchWebModeAssetSource(target, await fs.readFile(target, "utf8")));
         return;
@@ -1755,12 +2395,99 @@ function createServer(state) {
   });
 }
 
+function pidAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) {
+    return false;
+  }
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function readServeState(args) {
+  try {
+    const state = JSON.parse(await fs.readFile(args.serveStatePath, "utf8"));
+    return state && typeof state === "object" ? state : null;
+  } catch (error) {
+    if (error.code === "ENOENT") {
+      return null;
+    }
+    throw error;
+  }
+}
+
+async function writeServeState(state, url, address) {
+  const body = {
+    pid: process.pid,
+    server_id: state.serverId,
+    url,
+    bind: state.args.bind,
+    port: address.port,
+    workspace: state.args.workspace,
+    profile: state.args.profile,
+    codex_home: state.args.codexHome,
+    started_at: state.startedAt,
+    health: `${url}__codex/health`,
+    logs: {
+      serve_jsonl: path.join(state.args.logsDir, "serve.jsonl"),
+      app_server: path.join(state.args.logsDir, "app-server.log"),
+      browser_use: path.join(state.args.logsDir, "browser-use.log"),
+    },
+  };
+  await fs.mkdir(path.dirname(state.args.serveStatePath), { recursive: true, mode: 0o700 });
+  await fs.writeFile(state.args.serveStatePath, `${JSON.stringify(body, null, 2)}\n`, { mode: 0o600 });
+}
+
+async function removeServeState(args) {
+  await fs.rm(args.serveStatePath, { force: true }).catch(() => {});
+}
+
+async function fetchServeHealth(url) {
+  try {
+    return await fetchJson(`${url.replace(/\/?$/, "/")}__codex/health`, { timeoutMs: 1000 });
+  } catch (error) {
+    return { error: error.message };
+  }
+}
+
+async function runningServeState(args, state) {
+  if (!state?.pid || !pidAlive(state.pid) || typeof state.url !== "string" || state.url.length === 0) {
+    return { running: false, health: null };
+  }
+  const healthBody = await fetchServeHealth(state.url);
+  const running =
+    !healthBody?.error &&
+    healthBody.package === "codex-desktop-linux" &&
+    healthBody.mode === "devcontainer-web" &&
+    healthBody.pid === state.pid &&
+    healthBody.server_id === state.server_id &&
+    healthBody.profile === state.profile &&
+    healthBody.workspace === state.workspace;
+  return { running, health: healthBody };
+}
+
 async function serve(args) {
   if (!isLoopback(args.bind) && !args.requireToken) {
     throw new Error("non-loopback bind requires --require-token");
   }
 
   await ensureProfileDirs(args);
+  const existing = await readServeState(args);
+  const existingRuntime = await runningServeState(args, existing);
+  if (existingRuntime.running) {
+    throw new Error(
+      [
+        `codex web mode is already running for this profile: ${existing.url ?? `pid ${existing.pid}`}`,
+        `stop it with: codex-desktop serve stop --workspace ${JSON.stringify(args.workspace)} --profile ${JSON.stringify(args.profile)}`,
+      ].join("\n"),
+    );
+  }
+  if (existing) {
+    await removeServeState(args);
+  }
   const state = createState(args);
   appendServeLog(state, "starting", {
     workspace: args.workspace,
@@ -1770,7 +2497,7 @@ async function serve(args) {
     port: args.port,
     isolated: args.isolated,
   });
-  const pluginSync = await syncBundledPlugins(args);
+  const pluginSync = await syncBundledPlugins(args, bundledPluginNamesForState(state));
   state.chrome_native_host = pluginSync.chrome_native_host;
   appendServeLog(state, "bundled_plugins_synced", pluginSync);
   await startBrowserSidecar(state);
@@ -1786,6 +2513,7 @@ async function serve(args) {
       printServeLine(`[codex-web] ${reason}; shutting down`);
       await closeHttpServer(server);
       await Promise.all([stopBrowserSidecar(state), stopAppServer(state)]);
+      await removeServeState(args);
       appendServeLog(state, "shutdown_complete", { reason });
     })()
       .catch((error) => {
@@ -1823,6 +2551,7 @@ async function serve(args) {
 
   const address = server.address();
   const url = `http://${args.bind}:${address.port}/`;
+  await writeServeState(state, url, address);
   appendServeLog(state, "listening", {
     url,
     health: `${url}__codex/health`,
@@ -1864,6 +2593,74 @@ async function inspect(args) {
   );
 }
 
+async function status(args) {
+  const state = await readServeState(args);
+  const runtime = await runningServeState(args, state);
+  if (!runtime.running) {
+    if (state) {
+      await removeServeState(args);
+    }
+    process.stdout.write(
+      `${JSON.stringify(
+        {
+          status: runtime.health?.error ? "stale" : "not_running",
+          profile: args.profile,
+          state_path: args.serveStatePath,
+          stale_pid: state?.pid ?? null,
+          stale_url: state?.url ?? null,
+          health_result: runtime.health,
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    return;
+  }
+
+  process.stdout.write(
+    `${JSON.stringify(
+      {
+        status: "running",
+        ...state,
+        health_result: runtime.health,
+      },
+      null,
+      2,
+    )}\n`,
+  );
+}
+
+async function waitForPidExit(pid, timeoutMs = 5000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!pidAlive(pid)) {
+      return true;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  return !pidAlive(pid);
+}
+
+async function stop(args) {
+  const state = await readServeState(args);
+  const runtime = await runningServeState(args, state);
+  if (!runtime.running) {
+    if (state) {
+      await removeServeState(args);
+    }
+    process.stdout.write(`codex web mode is not running for profile ${args.profile}\n`);
+    return;
+  }
+
+  process.kill(state.pid, "SIGTERM");
+  const stopped = await waitForPidExit(state.pid);
+  if (!stopped) {
+    throw new Error(`timed out stopping codex web mode pid ${state.pid}`);
+  }
+  await removeServeState(args);
+  process.stdout.write(`stopped codex web mode pid ${state.pid}\n`);
+}
+
 async function doctor(args) {
   const webviewExists = await exists(args.webviewDir);
   process.stdout.write(`Codex Desktop Linux doctor\n`);
@@ -1877,13 +2674,17 @@ async function doctor(args) {
   process.stdout.write(`app_server: stdio bridge; live status is available from /__codex/health while serve is running\n`);
   process.stdout.write(`Browser Use: container-chromium or playwright-cdp; live CDP status is available from /__codex/browser/status\n`);
   process.stdout.write(`Chrome native host: synced during serve startup when the bundled chrome plugin is present\n`);
-  process.stdout.write(`Computer Use: desktop by default; set CODEX_COMPUTER_CONTROL_MODE=browser-only to isolate host desktop control\n`);
+  process.stdout.write(`Computer Use: auto-detects desktop vs browser-only; set CODEX_COMPUTER_CONTROL_MODE=desktop or browser-only to override\n`);
 }
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.command === "serve") {
     await serve(args);
+  } else if (args.command === "status") {
+    await status(args);
+  } else if (args.command === "stop") {
+    await stop(args);
   } else if (args.command === "inspect") {
     await inspect(args);
   } else if (args.command === "doctor") {

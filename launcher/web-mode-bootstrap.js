@@ -1240,6 +1240,25 @@
     return { ok: true, stopped: true };
   }
 
+  async function requestMicrophonePermission() {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      return { ok: false, reason: "get-user-media-unavailable" };
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      for (const track of stream.getTracks?.() ?? []) {
+        track.stop?.();
+      }
+      return { ok: true };
+    } catch (error) {
+      return {
+        ok: false,
+        reason: error?.name ?? "microphone-permission-failed",
+        message: error instanceof Error ? error.message : String(error),
+      };
+    }
+  }
+
   async function handleMessageFromView(message) {
     if (!message || typeof message.type !== "string") {
       return;
@@ -1357,6 +1376,8 @@
       case "global-dictation-stop":
       case "global-dictation-in-app-stop":
         return stopDictation();
+      case "electron-request-microphone-permission":
+        return await requestMicrophonePermission();
       case "open-in-browser":
         if (typeof message.url === "string" && message.url.trim().length > 0) {
           window.open(message.url, "_blank", "noopener,noreferrer");

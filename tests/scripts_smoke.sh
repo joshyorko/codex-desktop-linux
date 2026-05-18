@@ -857,8 +857,8 @@ test_devcontainer_homebrew_validation_script_targets_ror_image() {
     assert_contains "$script" 'YDOTOOL_SOCKET'
     assert_contains "$script" 'codex-desktop doctor'
     assert_contains "$script" 'CODEX_DESKTOP_RUN_COMPUTER_USE_DOCTOR=0'
-    assert_contains "$script" 'mode.*desktop'
-    assert_contains "$script" 'physical_host_control.*true'
+    assert_contains "$script" 'mode.*browser-only'
+    assert_contains "$script" 'physical_host_control.*false'
     assert_contains "$script" 'CODEX_COMPUTER_CONTROL_MODE=browser-only'
     assert_contains "$script" 'mode.*browser-only'
     assert_contains "$script" 'physical_host_control.*false'
@@ -903,21 +903,20 @@ test_devcontainer_desktop_host_is_loopback_and_container_scoped() {
     assert_contains "$smoke" '--workspace'
     assert_contains "$smoke" '--profile "$profile_dir"'
     assert_contains "$smoke" 'CODEX_BROWSER_USE_BROWSER_COMMAND=chromium'
-    assert_contains "$smoke" 'CODEX_BROWSER_CDP_PORT=9334'
+    assert_contains "$smoke" 'CODEX_BROWSER_CDP_PORT="'
     assert_contains "$smoke" 'missing_or_invalid_token'
     assert_contains "$smoke" 'forbidden_origin'
     assert_contains "$smoke" 'x-codex-web-token'
     assert_contains "$smoke" '/__codex/browser/status'
     assert_contains "$smoke" 'cdp_endpoint'
-    assert_contains "$smoke" 'http://127.0.0.1:9333'
-    assert_contains "$smoke" 'http://127.0.0.1:9334'
-    assert_contains "$smoke" 'http://127.0.0.1:9334/json/version'
+    assert_contains "$smoke" 'http://127.0.0.1:'
+    assert_contains "$smoke" '/json/version'
     assert_contains "$smoke" 'CODEX_COMPUTER_CONTROL_MODE=browser-only'
-    assert_contains "$smoke" 'mode.*desktop'
-    assert_contains "$smoke" 'physical_host_control.*true'
     assert_contains "$smoke" 'mode.*browser-only'
     assert_contains "$smoke" 'physical_host_control.*false'
     assert_contains "$smoke" 'physical_host_control'
+    assert_contains "$smoke" 'native_pipe'
+    assert_contains "$smoke" 'available_backends'
     assert_contains "$smoke" 'devcontainer-smoke-marker'
     assert_contains "$smoke" 'codex-web-forbidden-ui-transport'
     assert_contains "$smoke" 'Page.captureScreenshot'
@@ -937,6 +936,8 @@ test_web_mode_security_token_env_and_cdp_static_contract() {
     assert_file_exists "$bootstrap"
     assert_contains "$server" 'crypto.randomBytes(24).toString("base64url")'
     assert_contains "$server" 'token_present: Boolean(state.token)'
+    assert_contains "$server" 'server_id: state.serverId'
+    assert_contains "$server" 'healthBody.server_id === state.server_id'
     assert_contains "$server" 'sameOriginAllowed'
     assert_contains "$server" 'forbidden_origin'
     assert_contains "$server" 'missing_or_invalid_token'
@@ -945,8 +946,18 @@ test_web_mode_security_token_env_and_cdp_static_contract() {
     assert_contains "$server" 'non-loopback bind requires --require-token'
     assert_contains "$server" 'delete env\[key\]'
     assert_contains "$server" 'computerUseBrowserOnlyRequested()'
+    assert_contains "$server" 'hasDesktopSessionEnv'
     assert_contains "$server" 'CODEX_COMPUTER_USE_BROWSER_ONLY: computerUseBrowserOnly ? "1" : "0"'
     assert_contains "$server" 'CODEX_COMPUTER_CONTROL_MODE: computerUseBrowserOnly ? "browser-only" : process.env.CODEX_COMPUTER_CONTROL_MODE || "desktop"'
+    assert_contains "$server" 'permissions-policy'
+    assert_contains "$server" 'microphone=(self)'
+    assert_contains "$server" 'bundledPluginNamesForState'
+    assert_contains "$server" 'CdpNativePipeBackend'
+    assert_contains "$server" 'codex-web-cdp-${process.pid}.sock'
+    assert_contains "$server" 'CODEX_BROWSER_USE_SOCKET_DIR'
+    assert_contains "$server" 'available_backends'
+    assert_contains "$server" 'serveStatePath'
+    assert_contains "$server" 'codex-desktop serve stop'
     assert_contains "$server" 'mode: "desktop"'
     assert_contains "$server" 'desktop_control: "enabled"'
     assert_contains "$server" 'physical_host_control: true'
@@ -956,7 +967,8 @@ test_web_mode_security_token_env_and_cdp_static_contract() {
     assert_contains "$server" 'app-server", "--listen", "stdio://"'
     assert_contains "$server" '--remote-debugging-address=127.0.0.1'
     assert_contains "$server" '--remote-debugging-port='
-    assert_contains "$server" 'CODEX_BROWSER_CDP_PORT || "9333"'
+    assert_contains "$server" 'configuredCdpPort()'
+    assert_contains "$server" 'chooseFreeLoopbackPort'
     assert_contains "$server" 'waitForCdpEndpoint'
     assert_contains "$server" '/json/version'
     assert_contains "$server" '/__codex/browser/status'
@@ -1040,6 +1052,8 @@ test_web_mode_security_token_env_and_cdp_static_contract() {
     assert_contains "$bootstrap" 'chromeExtension.installed'
     assert_contains "$bootstrap" 'hostFetchAppServerRpcMethods'
     assert_contains "$bootstrap" 'case "send-cli-request-for-host"'
+    assert_contains "$bootstrap" 'case "electron-request-microphone-permission"'
+    assert_contains "$bootstrap" 'navigator.mediaDevices.getUserMedia'
     assert_contains "$bootstrap" 'appServer.write'
     assert_contains "$bootstrap" 'case "mcp-response"'
     assert_contains "$bootstrap" 'batch-write-config-value-for-host'
@@ -1943,7 +1957,7 @@ test_web_mode_codex_home_policy() {
 
     mkdir -p "$workspace" "$profile" "$shared_home" "$custom_home" "$home_dir"
 
-    env -u CODEX_COMPUTER_CONTROL_MODE -u CODEX_COMPUTER_USE_BROWSER_ONLY CODEX_HOME="$shared_home" node "$server" inspect \
+    env -u CODEX_COMPUTER_USE_BROWSER_ONLY CODEX_COMPUTER_CONTROL_MODE=desktop CODEX_HOME="$shared_home" node "$server" inspect \
         --workspace "$workspace" \
         --profile "$profile" > "$TMP_DIR/web-mode-shared-home.json"
     assert_contains "$TMP_DIR/web-mode-shared-home.json" "\"codex_home\": \"$shared_home\""
@@ -1952,6 +1966,12 @@ test_web_mode_codex_home_policy() {
     assert_contains "$TMP_DIR/web-mode-shared-home.json" "\"mode\": \"desktop\""
     assert_contains "$TMP_DIR/web-mode-shared-home.json" "\"physical_host_control\": true"
     assert_not_contains "$TMP_DIR/web-mode-shared-home.json" "$profile/identity/codex-home"
+
+    env -u CODEX_COMPUTER_CONTROL_MODE -u CODEX_COMPUTER_USE_BROWSER_ONLY -u DISPLAY -u WAYLAND_DISPLAY -u DBUS_SESSION_BUS_ADDRESS -u XDG_RUNTIME_DIR CODEX_HOME="$shared_home" node "$server" inspect \
+        --workspace "$workspace" \
+        --profile "$profile" > "$TMP_DIR/web-mode-auto-browser-only.json"
+    assert_contains "$TMP_DIR/web-mode-auto-browser-only.json" "\"mode\": \"browser-only\""
+    assert_contains "$TMP_DIR/web-mode-auto-browser-only.json" "\"physical_host_control\": false"
 
     env -u CODEX_COMPUTER_USE_BROWSER_ONLY CODEX_COMPUTER_CONTROL_MODE=browser-only CODEX_HOME="$shared_home" node "$server" inspect \
         --workspace "$workspace" \
@@ -2451,13 +2471,16 @@ test_launcher_template_sanity() {
     assert_contains "$REPO_DIR/launcher/start.sh.template" "codex_desktop_web_mode"
     assert_contains "$REPO_DIR/launcher/start.sh.template" "codex_desktop_web_mode serve"
     assert_contains "$REPO_DIR/launcher/start.sh.template" "serve --workspace DIR"
+    assert_contains "$REPO_DIR/launcher/start.sh.template" "serve status --workspace DIR"
+    assert_contains "$REPO_DIR/launcher/start.sh.template" "serve stop --workspace DIR"
     assert_contains "$REPO_DIR/launcher/start.sh.template" "--codex-home DIR|--isolated"
     assert_contains "$REPO_DIR/launcher/start.sh.template" "CODEX_DESKTOP_WEB_MODE=1"
     assert_contains "$REPO_DIR/launcher/start.sh.template" "CODEX_BROWSER_MODE"
     assert_contains "$REPO_DIR/launcher/start.sh.template" "CODEX_COMPUTER_CONTROL_MODE"
-    assert_contains "$REPO_DIR/launcher/start.sh.template" 'CODEX_COMPUTER_CONTROL_MODE="${CODEX_COMPUTER_CONTROL_MODE:-desktop}"'
+    assert_contains "$REPO_DIR/launcher/start.sh.template" 'CODEX_COMPUTER_CONTROL_MODE="browser-only"'
     assert_contains "$REPO_DIR/launcher/start.sh.template" 'early_truthy_env_value "${CODEX_COMPUTER_USE_BROWSER_ONLY:-}"'
     assert_not_contains "$REPO_DIR/launcher/start.sh.template" 'CODEX_COMPUTER_USE_BROWSER_ONLY="${CODEX_COMPUTER_USE_BROWSER_ONLY:-1}"'
+    assert_not_contains "$REPO_DIR/launcher/start.sh.template" 'CODEX_COMPUTER_CONTROL_MODE="${CODEX_COMPUTER_CONTROL_MODE:-desktop}"'
     assert_not_contains "$REPO_DIR/launcher/start.sh.template" 'CODEX_COMPUTER_CONTROL_MODE="${CODEX_COMPUTER_CONTROL_MODE:-browser-only}"'
     assert_contains "$REPO_DIR/launcher/web-mode-server.mjs" 'codex app-server'
     assert_contains "$REPO_DIR/launcher/web-mode-server.mjs" 'app-server'
@@ -2558,7 +2581,7 @@ if "second_instance_handoff_ready" not in runtime_body:
     raise SystemExit("second-instance handoff must skip cold-start setup")
 if "clear_bundled_marketplace_tmp_cache\nmonitor_bundled_marketplace_tmp_permissions\nreconcile_runtime_state" in runtime_body:
     raise SystemExit("warm-start path must not clear bundled marketplace temp cache")
-if not re.search(r'if needs_cold_start; then\s+clear_bundled_marketplace_tmp_cache\s+# The runtime marketplace is populated asynchronously.*?monitor_bundled_marketplace_tmp_permissions\s+sync_browser_use_bundled_plugin_cache\s+sync_chrome_bundled_plugin_cache\s+sync_computer_use_bundled_plugin_cache\s+sync_read_aloud_bundled_plugin_cache\s+fi', runtime_body, re.S):
+if not re.search(r'if needs_cold_start; then\s+clear_bundled_marketplace_tmp_cache\s+# The runtime marketplace is populated asynchronously.*?monitor_bundled_marketplace_tmp_permissions\s+sync_browser_use_bundled_plugin_cache\s+sync_chrome_bundled_plugin_cache\s+.*?sync_computer_use_bundled_plugin_cache\s+.*?sync_read_aloud_bundled_plugin_cache\s+fi', runtime_body, re.S):
     raise SystemExit("bundled marketplace cleanup and plugin sync must run only on cold start")
 if 'if needs_cold_start && [ -z "${CODEX_CLI_PATH:-}" ]; then' not in runtime_body:
     raise SystemExit("second-instance handoff must skip CLI lookup")
@@ -2957,6 +2980,7 @@ JS
 JSON
     cat > "$chrome_dir/scripts/browser-client.mjs" <<'JS'
 import{resolve as GF}from"path";import{homedir as VF,platform as WF}from"os";var Tc=GF(VF(),WF()==="win32"?"AppData\\Local\\Google\\Chrome\\User Data":"Library/Application Support/Google/Chrome");import{ClassicLevel as KF}from"./node_modules/classic-level.mjs";import{resolve as Gf}from"path";import{tmpdir as YF}from"os";import{cp as ZF,mkdtemp as JF,rm as kS}from"fs/promises";import{existsSync as XF}from"fs";var IS=async(t,e)=>{let r=Gf(Tc,t,"Local Extension Settings",e);if(!XF(r))return null;let n=await JF(Gf(QF(),"codex"));await ZF(r,n,{recursive:!0}),await kS(Gf(n,"LOCK"));let o=new KF(n,{createIfMissing:!1,keyEncoding:"utf8",valueEncoding:"utf8"});try{await o.open();let i=await o.get("extensionInstanceId");if(!i)return null;let s=JSON.parse(i);return typeof s!="string"?null:s}finally{await o.close(),await kS(n,{force:!0,recursive:!0})}},QF=()=>"nodeRepl"in globalThis&&globalThis.nodeRepl?globalThis.nodeRepl.tmpDir:YF();var AS=async t=>{if(t.type!=="extension"||!t.metadata?.extensionInstanceId||!t.metadata.extensionId)return t;let e=await rO(t.metadata.extensionId,t.metadata.extensionInstanceId);return e?{...t,metadata:{...t.metadata,profileName:e.name,profileIsLastUsed:e.isLastUsed.toString(),profileOrdering:e.orderingIndex.toString()}}:t},rO=async(t,e)=>(await nO(t)).find(o=>o.instanceId===e)||null,nO=async t=>{let e=await oO();return await Promise.all(e.map(async r=>({...r,instanceId:await IS(r.id,t).catch(n=>(ee(n),null))})))},oO=async()=>{let t=tO(Tc,"Local State"),e=JSON.parse(await eO(t,"utf8"));return e.profile.profiles_order.map((r,n)=>{let o=e.profile.info_cache[r];return o?{id:r,name:o.name,isLastUsed:e.profile.last_used===r,orderingIndex:n,avatarUrl:o.avatar_icon}:null}).filter(r=>!!r)};
+var Xv=t=>t==="win32"?"\\\\.\\pipe\\codex-browser-use":"/tmp/codex-browser-use";function Tm(){let t=import.meta.__codexNativePipe;return t==null||typeof t.createConnection!="function"?null:t}
 async fetchBlocked(e){let r=await bS(e.endpoint,{method:"GET"});if(!r.ok)throw new Error(ae(`Browser Use cannot determine if ${e.displayUrl} is allowed. Please try again later or use another source.`));let n=await r.json();return TF(n)}
 JS
     cat > "$chrome_dir/scripts/check-native-host-manifest.js" <<'JS'
@@ -3075,6 +3099,8 @@ test_chrome_plugin_staging() {
     assert_contains "$chrome_dir/scripts/browser-client.mjs" '"BraveSoftware","Brave-Browser"'
     assert_contains "$chrome_dir/scripts/browser-client.mjs" '".config","chromium"'
     assert_contains "$chrome_dir/scripts/browser-client.mjs" "instanceId:await IS(o.id,t,r)"
+    assert_contains "$chrome_dir/scripts/browser-client.mjs" "codexLinuxNativePipeBridge"
+    assert_contains "$chrome_dir/scripts/browser-client.mjs" "CODEX_BROWSER_USE_SOCKET_DIR"
     assert_contains "$chrome_dir/scripts/browser-client.mjs" "codexLinuxSiteStatusAllowlistFallback"
     assert_contains "$install_dir/resources/plugins/openai-bundled/.agents/plugins/marketplace.json" '"name": "chrome"'
     assert_contains "$output_log" "Chrome plugin staged from upstream DMG"
