@@ -79,6 +79,7 @@ exec "$CONTAINER_ENGINE" run --rm \
     grep -q "\"physical_host_control\": false" /tmp/codex-web-browser-only-health.json
 
     CODEX_BROWSER_USE_BROWSER_COMMAND=chromium \
+      CODEX_BROWSER_CDP_PORT="'"$CDP_PORT"'" \
       codex-desktop serve \
       --workspace "'"$CONTAINER_WORKSPACE"'" \
       --profile "$profile_dir" \
@@ -111,9 +112,11 @@ exec "$CONTAINER_ENGINE" run --rm \
     ! grep -q "\"codex_home\": \"$profile_dir" /tmp/codex-web-health.json
     grep -q "\"mode\": \"container-chromium\"" /tmp/codex-web-health.json
     grep -q "\"cdp_ready\": true" /tmp/codex-web-health.json
-    grep -q "\"mode\": \"desktop\"" /tmp/codex-web-health.json
-    grep -q "\"physical_host_control\": true" /tmp/codex-web-health.json
-    curl --silent --fail --max-time 1 "http://127.0.0.1:9333/json/version" >/tmp/codex-browser-use-cdp-version.json
+    grep -q "\"mode\": \"browser-only\"" /tmp/codex-web-health.json
+    grep -q "\"physical_host_control\": false" /tmp/codex-web-health.json
+    grep -q "\"available_backends\": \\[" /tmp/codex-web-health.json
+    grep -q "\"cdp\"" /tmp/codex-web-health.json
+    curl --silent --fail --max-time 1 "http://127.0.0.1:'"$CDP_PORT"'/json/version" >/tmp/codex-browser-use-cdp-version.json
     ss -ltnp | grep -q "127.0.0.1:'"$SERVE_PORT"'"
     ! ss -ltnp | grep -q "0.0.0.0:'"$SERVE_PORT"'"
     ! pgrep -fa "[X]vfb|[x]11vnc|[w]ebsockify|[n]ovnc" >/tmp/codex-web-forbidden-ui-transport.log 2>/dev/null
@@ -141,8 +144,10 @@ exec "$CONTAINER_ENGINE" run --rm \
       -H "x-codex-web-token: $bridge_token" \
       "http://127.0.0.1:'"$SERVE_PORT"'/__codex/browser/status" >/tmp/codex-web-browser-status.json
     grep -q "\"mode\": \"container-chromium\"" /tmp/codex-web-browser-status.json
-    grep -q "\"cdp_endpoint\": \"http://127.0.0.1:9333\"" /tmp/codex-web-browser-status.json
+    grep -q "\"cdp_endpoint\": \"http://127.0.0.1:'"$CDP_PORT"'\"" /tmp/codex-web-browser-status.json
     grep -q "\"cdp_ready\": true" /tmp/codex-web-browser-status.json
+    grep -q "\"native_pipe\"" /tmp/codex-web-browser-status.json
+    grep -q "\"status\": \"listening\"" /tmp/codex-web-browser-status.json
 
     curl --silent --fail \
       -H "content-type: application/json" \

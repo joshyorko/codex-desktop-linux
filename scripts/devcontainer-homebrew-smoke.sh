@@ -53,8 +53,8 @@ exec "$CONTAINER_ENGINE" run --rm \
     grep -q "\"required\": true" /tmp/codex-desktop-web.json
     grep -q "\"token_present\": true" /tmp/codex-desktop-web.json
     grep -q "\"blocked_host_env\"" /tmp/codex-desktop-web.json
-    grep -q "\"mode\": \"desktop\"" /tmp/codex-desktop-web.json
-    grep -q "\"physical_host_control\": true" /tmp/codex-desktop-web.json
+    grep -q "\"mode\": \"browser-only\"" /tmp/codex-desktop-web.json
+    grep -q "\"physical_host_control\": false" /tmp/codex-desktop-web.json
 
     CODEX_DESKTOP_RUN_COMPUTER_USE_DOCTOR=0 codex-desktop doctor > /tmp/codex-desktop-doctor.log || doctor_status=$?
     grep -q "Codex Desktop Linux doctor" /tmp/codex-desktop-doctor.log
@@ -87,8 +87,8 @@ exec "$CONTAINER_ENGINE" run --rm \
     grep -q "\"auth\"" /tmp/codex-desktop-serve-health.log
     grep -q "\"required\": true" /tmp/codex-desktop-serve-health.log
     grep -q "\"token_present\": true" /tmp/codex-desktop-serve-health.log
-    grep -q "\"mode\": \"desktop\"" /tmp/codex-desktop-serve-health.log
-    grep -q "\"physical_host_control\": true" /tmp/codex-desktop-serve-health.log
+    grep -q "\"mode\": \"browser-only\"" /tmp/codex-desktop-serve-health.log
+    grep -q "\"physical_host_control\": false" /tmp/codex-desktop-serve-health.log
 
     CODEX_COMPUTER_CONTROL_MODE=browser-only \
       CODEX_BROWSER_USE_BROWSER_COMMAND=/nonexistent/chromium \
