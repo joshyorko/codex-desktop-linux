@@ -461,25 +461,36 @@
     });
   }
 
+  async function recoverConversationTurn(threadId, turnId = null) {
+    if (typeof threadId !== "string" || threadId.length === 0) {
+      return null;
+    }
+    const result = await requestAppServerRpc("thread/turns/list", {
+      threadId,
+      cursor: null,
+      limit: 10,
+    });
+    const turns = turnListFromResult(result);
+    const matchingTurn = (turnId ? turns.find((turn) => activeTurnIdFrom(turn) === turnId) : null) ?? turns.at(-1);
+    if (!matchingTurn) {
+      return null;
+    }
+    emitRecoveredTurn(threadId, matchingTurn);
+    if (isTerminalTurnStatus(matchingTurn.status)) {
+      activeTurns.delete(threadId);
+    }
+    return matchingTurn;
+  }
+
   async function recoverActiveTurn(threadId) {
     const tracked = activeTurns.get(threadId);
     if (!tracked) {
       return;
     }
     try {
-      const result = await requestAppServerRpc("thread/turns/list", {
-        threadId,
-        cursor: null,
-        limit: 10,
-      });
-      const turns = turnListFromResult(result);
-      const matchingTurn = turns.find((turn) => activeTurnIdFrom(turn) === tracked.turnId) ?? turns.at(-1);
-      if (matchingTurn) {
-        emitRecoveredTurn(threadId, matchingTurn);
-        if (isTerminalTurnStatus(matchingTurn.status)) {
-          activeTurns.delete(threadId);
-          return;
-        }
+      const matchingTurn = await recoverConversationTurn(threadId, tracked.turnId);
+      if (matchingTurn && isTerminalTurnStatus(matchingTurn.status)) {
+        return;
       }
     } catch (error) {
       console.warn("[codex-web] active turn recovery failed", error);
@@ -1353,6 +1364,10 @@
         return;
       case "browser-sidebar-command":
         return;
+      case "browser-use-turn-route-release":
+      case "computer-use-turn-route-release":
+        await ready;
+        return await recoverConversationTurn(message.conversationId, message.turnId);
       case "interrupt-conversation":
       case "thread-follower-interrupt-turn-for-host":
         return await interruptConversation(message.conversationId, message.conversationState);
