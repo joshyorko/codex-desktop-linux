@@ -154,7 +154,7 @@
   })();
 
   function refreshWorkspaceObjects() {
-    const workspace = health?.workspace || "/workspace";
+    const workspace = defaultWorkspaceRoot();
     const codexHome = health?.codex_home || "~/.codex";
     webState.sharedObjects.host_config = {
       id: localHostId,
@@ -166,6 +166,93 @@
     webState.globalState["workspace-root-options"] ??= { roots: [workspace] };
     webState.globalState["codex-home"] ??= codexHome;
     webState.globalState["home-directory"] ??= workspace;
+  }
+
+  function defaultWorkspaceRoot() {
+    return health?.workspace || "/workspace";
+  }
+
+  function coerceWorkspaceRoots(value) {
+    const roots = Array.isArray(value?.roots) ? value.roots : Array.isArray(value) ? value : [];
+    return Array.from(
+      new Set(
+        roots
+          .filter((root) => typeof root === "string")
+          .map((root) => root.trim())
+          .filter(Boolean),
+      ),
+    );
+  }
+
+  function savedWorkspaceRoots() {
+    const roots = coerceWorkspaceRoots(webState.globalState["workspace-root-options"]);
+    return roots.length > 0 ? roots : [defaultWorkspaceRoot()];
+  }
+
+  function emitWorkspaceStateUpdated(keys = [
+    "active-workspace-roots",
+    "electron-saved-workspace-roots",
+    "workspace-root-options",
+  ]) {
+    queuePersist();
+    emit({ type: "global-state-updated", keys });
+  }
+
+  function setWorkspaceRootState(roots, activeRoots = null) {
+    const nextRoots = coerceWorkspaceRoots({ roots });
+    const workspaceRoots = nextRoots.length > 0 ? nextRoots : [defaultWorkspaceRoot()];
+    const active = activeRoots == null ? coerceWorkspaceRoots(webState.globalState["active-workspace-roots"]) : coerceWorkspaceRoots({ roots: activeRoots });
+    webState.globalState["workspace-root-options"] = { roots: workspaceRoots };
+    webState.globalState["electron-saved-workspace-roots"] = { roots: workspaceRoots };
+    webState.globalState["active-workspace-roots"] = { roots: active.filter((root) => workspaceRoots.includes(root)) };
+    emitWorkspaceStateUpdated();
+    return {
+      workspaceRootOptions: webState.globalState["workspace-root-options"],
+      activeWorkspaceRoots: webState.globalState["active-workspace-roots"],
+    };
+  }
+
+  async function validateWorkspaceRoot(root) {
+    const response = await request("workspace.rootMetadata", { root });
+    const metadata = response.result ?? {};
+    if (!metadata.isDirectory) {
+      throw new Error(`${root} is not a directory`);
+    }
+    return metadata.path || root;
+  }
+
+  async function addWorkspaceRoot(root, { setActive = true } = {}) {
+    const validatedRoot = await validateWorkspaceRoot(root);
+    const roots = savedWorkspaceRoots();
+    if (!roots.includes(validatedRoot)) {
+      roots.push(validatedRoot);
+    }
+    return {
+      root: validatedRoot,
+      ...setWorkspaceRootState(roots, setActive ? [validatedRoot] : null),
+    };
+  }
+
+  async function promptForWorkspaceRoot() {
+    try {
+      const response = await request("workspace.selectDirectory", { initialRoot: defaultWorkspaceRoot() });
+      const selected = response.result ?? {};
+      if (selected.path) {
+        return selected.path;
+      }
+    } catch (error) {
+      console.warn("[codex-web] native folder picker unavailable", error);
+    }
+
+    const root = window.prompt?.("Folder path", defaultWorkspaceRoot());
+    return typeof root === "string" ? root.trim() : "";
+  }
+
+  function reportWorkspaceRootError(error) {
+    const message = error instanceof Error ? error.message : String(error);
+    window.alert?.(`Unable to use that folder: ${message}`);
+    console.warn("[codex-web] workspace root update failed", error);
+    return { ok: false, error: message };
   }
 
   function webModeHostRpcFallback(method) {
@@ -482,9 +569,9 @@
           return;
         }
         case "active-workspace-roots":
+        case "electron-saved-workspace-roots":
         case "workspace-root-options": {
-          const workspace = health?.workspace || "/workspace";
-          successFetch(message, webState.globalState[method] ?? { roots: [workspace] });
+          successFetch(message, webState.globalState[method] ?? { roots: [defaultWorkspaceRoot()] });
           return;
         }
         case "codex-home":
@@ -806,6 +893,54 @@
           value: message.value,
         });
         return;
+      }
+      case "electron-add-new-workspace-root-option": {
+        await ready;
+        const root = typeof message.root === "string" && message.root.trim().length > 0
+          ? message.root.trim()
+          : await promptForWorkspaceRoot();
+        if (!root) {
+          return { ok: false, reason: "cancelled" };
+        }
+        try {
+          return { ok: true, ...(await addWorkspaceRoot(root, { setActive: true })) };
+        } catch (error) {
+          return reportWorkspaceRootError(error);
+        }
+      }
+      case "electron-create-new-workspace-root-option": {
+        await ready;
+        try {
+          const response = await request("workspace.createProject", {
+            projectName: message.projectName,
+          });
+          const root = response.result?.path;
+          return { ok: true, ...(await addWorkspaceRoot(root, { setActive: true })) };
+        } catch (error) {
+          return reportWorkspaceRootError(error);
+        }
+      }
+      case "electron-set-active-workspace-root": {
+        await ready;
+        try {
+          return { ok: true, ...(await addWorkspaceRoot(message.root, { setActive: true })) };
+        } catch (error) {
+          return reportWorkspaceRootError(error);
+        }
+      }
+      case "electron-clear-active-workspace-root": {
+        await ready;
+        webState.globalState["active-workspace-roots"] = { roots: [] };
+        emitWorkspaceStateUpdated(["active-workspace-roots"]);
+        return { ok: true, activeWorkspaceRoots: webState.globalState["active-workspace-roots"] };
+      }
+      case "electron-update-workspace-root-options": {
+        await ready;
+        const roots = coerceWorkspaceRoots(message);
+        const activeRoots = coerceWorkspaceRoots(webState.globalState["active-workspace-roots"]).filter((root) =>
+          roots.includes(root),
+        );
+        return { ok: true, ...setWorkspaceRootState(roots, activeRoots) };
       }
       case "mcp-response":
         await writeAppServerMessage(message.message ?? message.response ?? message);
