@@ -27,6 +27,11 @@ const REMOTE_MOBILE_CHROME_BRIDGE_MARKER = "codexLinuxRemoteMobileBrowserBackend
 const REMOTE_CONTROL_LOAD_GATE_MARKER = "codexLinuxRemoteControlLoadGateEnabled";
 const REMOTE_CONTROL_LOAD_GATE_NEEDLE =
   /function ([A-Za-z_$][\w$]*)\(\)\{return ([A-Za-z_$][\w$]*)\(`1042620455`\)\}/u;
+const REMOTE_MOBILE_THREAD_RUNTIME_MARKER = "codexLinuxRemoteMobileThreadRuntimeStatus";
+const REMOTE_MOBILE_UNKNOWN_TURN_MARKER = "codexLinuxRemoteMobileHydrateUnknownTurn";
+const REMOTE_MOBILE_NOTIFICATION_QUEUE_MARKER = "codexLinuxRemoteMobileNotificationQueue";
+const REMOTE_CONTROL_ENABLEMENT_BRIDGE_MARKER = "codexLinuxRemoteControlEnablementBridge";
+const REMOTE_MOBILE_ACTIVE_STATUS_MARKER = "codexLinuxRemoteMobileActiveStatus";
 const REMOTE_CONTROL_SELECTED_TAB_NEEDLE =
   "function rr({selectedConnectionsTab:e,showControlThisMacTab:t,showRemoteControlConnectionsSection:n,showTabbedSshPage:r}){return n?e===`control-this-mac`&&!t||e===`ssh`&&!r?`access-other-devices`:e:`ssh`}";
 const REMOTE_CONTROL_SELECTED_TAB_REPLACEMENT =
@@ -564,6 +569,124 @@ function applyLinuxRemoteMobileChromeBridgePatch(source) {
   return patched;
 }
 
+function applyLinuxRemoteMobileConversationHydrationPatch(source) {
+  let patched = source;
+
+  if (!patched.includes(REMOTE_MOBILE_THREAD_RUNTIME_MARKER)) {
+    const runtimeNeedle = "e.resumeState===`needs_resume`&&(e.threadRuntimeStatus=p)";
+    const runtimeReplacement =
+      `/*${REMOTE_MOBILE_THREAD_RUNTIME_MARKER}*/(e.resumeState===\`needs_resume\`||p?.type===\`active\`||p?.type===\`idle\`)&&(e.threadRuntimeStatus=p)`;
+    if (patched.includes(runtimeNeedle)) {
+      patched = patched.replace(runtimeNeedle, runtimeReplacement);
+    } else if (patched.includes("threadRuntimeStatus") && patched.includes("resumeState")) {
+      console.warn("WARN: Could not find thread/list runtime-status needle - skipping remote mobile runtime-status patch");
+    }
+  }
+
+  const hasNotificationQueue = patched.includes(REMOTE_MOBILE_NOTIFICATION_QUEUE_MARKER);
+  const hasPersistedHydrationGuard = patched.includes("Skipping hydration for non-persisted conversation");
+  if (!hasNotificationQueue || !hasPersistedHydrationGuard) {
+    const unknownTurnNeedle =
+      "if(this.captureBrowserUseTurnRoute(r,t.id),this.captureComputerUseTurnRoute(r,t.id),!i){R.error(`Received turn/started for unknown conversation`,{safe:{conversationId:r},sensitive:{}});break}this.markConversationStreaming(r),";
+    const hydrationV1Needle =
+      `if(this.captureBrowserUseTurnRoute(r,t.id),this.captureComputerUseTurnRoute(r,t.id),!i){/*${REMOTE_MOBILE_UNKNOWN_TURN_MARKER}*/R.warning(\`Hydrating conversation for turn/started\`,{safe:{conversationId:r},sensitive:{}}),this.readThread(r,{includeTurns:!1}).then(e=>{let t=e?.thread??e;t&&(this.upsertConversationFromThread(t),this.onNotification(\`turn/started\`,n.params))}).catch(e=>R.error(\`Failed to hydrate conversation for turn/started\`,{safe:{conversationId:r},sensitive:{error:e}}));break}this.markConversationStreaming(r),`;
+    const hydrationQueuedUnsafeNeedle =
+      `if(this.captureBrowserUseTurnRoute(r,t.id),this.captureComputerUseTurnRoute(r,t.id),!i){/*${REMOTE_MOBILE_UNKNOWN_TURN_MARKER}*//*${REMOTE_MOBILE_NOTIFICATION_QUEUE_MARKER}*/let a=this.codexLinuxRemoteMobilePendingNotifications??=new Map,o=a.get(r);o||(o=[],a.set(r,o)),o.push(n),R.warning(\`Hydrating conversation for turn/started\`,{safe:{conversationId:r,queuedNotificationCount:o.length},sensitive:{}}),this.readThread(r,{includeTurns:!1}).then(e=>{let t=e?.thread??e;if(t){this.upsertConversationFromThread(t);let e=this.codexLinuxRemoteMobilePendingNotifications?.get(r)??[];this.codexLinuxRemoteMobilePendingNotifications?.delete(r);for(let t of e)this.onNotification(t.method,t.params)}}).catch(e=>{this.codexLinuxRemoteMobilePendingNotifications?.delete(r),R.error(\`Failed to hydrate conversation for turn/started\`,{safe:{conversationId:r},sensitive:{error:e}})});break}this.markConversationStreaming(r),`;
+    const unknownTurnReplacement =
+      `if(this.captureBrowserUseTurnRoute(r,t.id),this.captureComputerUseTurnRoute(r,t.id),!i){/*${REMOTE_MOBILE_UNKNOWN_TURN_MARKER}*//*${REMOTE_MOBILE_NOTIFICATION_QUEUE_MARKER}*/let a=this.codexLinuxRemoteMobilePendingNotifications??=new Map,o=a.get(r);o||(o=[],a.set(r,o)),o.push(n),R.warning(\`Hydrating conversation for turn/started\`,{safe:{conversationId:r,queuedNotificationCount:o.length},sensitive:{}}),this.readThread(r,{includeTurns:!1}).then(e=>{let t=e?.thread??e,i=this.codexLinuxRemoteMobilePendingNotifications?.get(r)??[];if(!(typeof t?.path==\`string\`&&t.path.endsWith(\`.jsonl\`))){this.codexLinuxRemoteMobilePendingNotifications?.delete(r);for(let e of i)if(e.method===\`turn/completed\`){let{turn:t}=e.params;this.browserUseTurnRouteIdsByConversationId.get(r)?.has(t.id)===!0&&this.releaseBrowserUseTurnRoute(r,t.id),this.computerUseTurnRouteIdsByConversationId.get(r)?.has(t.id)===!0&&this.releaseComputerUseTurnRoute(r,t.id)}R.warning(\`Skipping hydration for non-persisted conversation\`,{safe:{conversationId:r,path:t?.path??null,queuedNotificationCount:i.length},sensitive:{}});return}this.upsertConversationFromThread(t);this.codexLinuxRemoteMobilePendingNotifications?.delete(r);for(let e of i)this.onNotification(e.method,e.params)}).catch(e=>{this.codexLinuxRemoteMobilePendingNotifications?.delete(r),R.error(\`Failed to hydrate conversation for turn/started\`,{safe:{conversationId:r},sensitive:{error:e}})});break}this.markConversationStreaming(r),`;
+    if (patched.includes(unknownTurnNeedle)) {
+      patched = patched.replace(unknownTurnNeedle, unknownTurnReplacement);
+    } else if (patched.includes(hydrationV1Needle)) {
+      patched = patched.replace(hydrationV1Needle, unknownTurnReplacement);
+    } else if (patched.includes(hydrationQueuedUnsafeNeedle)) {
+      patched = patched.replace(hydrationQueuedUnsafeNeedle, unknownTurnReplacement);
+    } else if (patched.includes("Received turn/started for unknown conversation")) {
+      console.warn("WARN: Could not find unknown turn/started needle - skipping remote mobile hydration patch");
+    }
+  }
+
+  if (!hasNotificationQueue) {
+    const itemStartedNeedle =
+      "if(!this.conversations.get(i)){R.error(`Received item/started for unknown conversation`,{safe:{conversationId:i},sensitive:{}});break}this.markConversationStreaming(i),";
+    const itemStartedReplacement =
+      "if(!this.conversations.get(i)){let a=this.codexLinuxRemoteMobilePendingNotifications?.get(i);if(a){a.push(n),R.warning(`Queueing item/started for hydrating conversation`,{safe:{conversationId:i,queuedNotificationCount:a.length},sensitive:{}});break}R.error(`Received item/started for unknown conversation`,{safe:{conversationId:i},sensitive:{}});break}this.markConversationStreaming(i),";
+    if (patched.includes(itemStartedNeedle)) {
+      patched = patched.replace(itemStartedNeedle, itemStartedReplacement);
+    } else if (patched.includes("Received item/started for unknown conversation")) {
+      console.warn("WARN: Could not find unknown item/started needle - skipping remote mobile item queue patch");
+    }
+
+    const itemCompletedNeedle =
+      "if(!this.conversations.get(i)){R.error(`Received item/completed for unknown conversation`,{safe:{conversationId:i},sensitive:{}});break}this.updateConversationState(i,t=>{";
+    const itemCompletedReplacement =
+      "if(!this.conversations.get(i)){let a=this.codexLinuxRemoteMobilePendingNotifications?.get(i);if(a){a.push(n),R.warning(`Queueing item/completed for hydrating conversation`,{safe:{conversationId:i,queuedNotificationCount:a.length},sensitive:{}});break}R.error(`Received item/completed for unknown conversation`,{safe:{conversationId:i},sensitive:{}});break}this.updateConversationState(i,t=>{";
+    if (patched.includes(itemCompletedNeedle)) {
+      patched = patched.replace(itemCompletedNeedle, itemCompletedReplacement);
+    } else if (patched.includes("Received item/completed for unknown conversation")) {
+      console.warn("WARN: Could not find unknown item/completed needle - skipping remote mobile item queue patch");
+    }
+
+    const turnCompletedNeedle =
+      "if(!this.conversations.get(r)){this.browserUseTurnRouteIdsByConversationId.get(r)?.has(t.id)===!0&&this.releaseBrowserUseTurnRoute(r,t.id),this.computerUseTurnRouteIdsByConversationId.get(r)?.has(t.id)===!0&&this.releaseComputerUseTurnRoute(r,t.id),R.error(`Received turn/completed for unknown conversation`,{safe:{conversationId:r},sensitive:{}});break}";
+    const turnCompletedReplacement =
+      "if(!this.conversations.get(r)){let i=this.codexLinuxRemoteMobilePendingNotifications?.get(r);if(i){i.push(n),R.warning(`Queueing turn/completed for hydrating conversation`,{safe:{conversationId:r,queuedNotificationCount:i.length},sensitive:{}});break}this.browserUseTurnRouteIdsByConversationId.get(r)?.has(t.id)===!0&&this.releaseBrowserUseTurnRoute(r,t.id),this.computerUseTurnRouteIdsByConversationId.get(r)?.has(t.id)===!0&&this.releaseComputerUseTurnRoute(r,t.id),R.error(`Received turn/completed for unknown conversation`,{safe:{conversationId:r},sensitive:{}});break}";
+    if (patched.includes(turnCompletedNeedle)) {
+      patched = patched.replace(turnCompletedNeedle, turnCompletedReplacement);
+    } else if (patched.includes("Received turn/completed for unknown conversation")) {
+      console.warn("WARN: Could not find unknown turn/completed needle - skipping remote mobile turn queue patch");
+    }
+  }
+
+  return patched;
+}
+
+function applyLinuxRemoteControlEnablementBridgePatch(source) {
+  if (source.includes(REMOTE_CONTROL_ENABLEMENT_BRIDGE_MARKER)) {
+    return source;
+  }
+
+  const markerIndex = source.indexOf("[remote-connections/slingshot-gate-bridge]");
+  if (markerIndex < 0 || source.indexOf("set-remote-control-connections-enabled", markerIndex) < 0) {
+    return source;
+  }
+
+  const region = source.slice(markerIndex, markerIndex + 2_500);
+  const bridgePattern =
+    /function ([A-Za-z_$][\w$]*)\(\)\{let ([A-Za-z_$][\w$]*)=\(0,([A-Za-z_$][\w$]*)\.c\)\(3\),([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)\(\),([A-Za-z_$][\w$]*),([A-Za-z_$][\w$]*);return \2\[0\]===\4\?/u;
+  const patchedRegion = region.replace(
+    bridgePattern,
+    (_needle, functionName, cacheVar, compilerVar, enabledVar, gateVar, callbackVar, depsVar) =>
+      `function ${functionName}(){let ${cacheVar}=(0,${compilerVar}.c)(3),${enabledVar}=${gateVar}()||/*${REMOTE_CONTROL_ENABLEMENT_BRIDGE_MARKER}*/typeof navigator!=\`undefined\`&&navigator.userAgent.includes(\`Linux\`),${callbackVar},${depsVar};return ${cacheVar}[0]===${enabledVar}?`,
+  );
+
+  if (patchedRegion === region) {
+    console.warn("WARN: Could not find remote-control enablement bridge needle - skipping Linux remote-control bridge patch");
+    return source;
+  }
+
+  return source.slice(0, markerIndex) + patchedRegion + source.slice(markerIndex + region.length);
+}
+
+function applyLinuxRemoteMobileActiveStatusPatch(source) {
+  if (source.includes(REMOTE_MOBILE_ACTIVE_STATUS_MARKER)) {
+    return source;
+  }
+
+  const statusPattern =
+    /function ([A-Za-z_$][\w$]*)\(\{latestTurnStatus:([A-Za-z_$][\w$]*),resumeState:([A-Za-z_$][\w$]*),streamRole:([A-Za-z_$][\w$]*),threadRuntimeStatus:([A-Za-z_$][\w$]*)\}\)\{return \4==null\?\3===`needs_resume`\?`needs-resume`:`read-only`:\4\.role===`follower`\?`follower`:\5\?\.type===`active`\|\|\2===`inProgress`\?`active`:`inactive`\}/u;
+  if (!statusPattern.test(source)) {
+    if (source.includes("threadRuntimeStatus") && source.includes("needs-resume")) {
+      console.warn("WARN: Could not find active-status renderer needle - skipping remote mobile active-status patch");
+    }
+    return source;
+  }
+
+  return source.replace(
+    statusPattern,
+    `function $1({latestTurnStatus:$2,resumeState:$3,streamRole:$4,threadRuntimeStatus:$5}){/*${REMOTE_MOBILE_ACTIVE_STATUS_MARKER}*/return $4?.role===\`follower\`?\`follower\`:$5?.type===\`active\`||$2===\`inProgress\`?\`active\`:$4==null?$3===\`needs_resume\`?\`needs-resume\`:\`read-only\`:\`inactive\`}`,
+  );
+}
+
 module.exports = [
   {
     id: "linux-remote-control-device-key",
@@ -633,10 +756,43 @@ module.exports = [
     skipDescription: "Linux remote-connections refresh patch",
     apply: applyLinuxRemoteConnectionsRefreshPatch,
   },
+  {
+    id: "linux-remote-mobile-conversation-hydration",
+    phase: "webview-asset",
+    pattern: /^app-server-manager-signals-.*\.js$/,
+    order: 20_150,
+    ciPolicy: "optional",
+    missingDescription: "app-server manager signals bundle",
+    skipDescription: "Linux remote-mobile conversation hydration patch",
+    apply: applyLinuxRemoteMobileConversationHydrationPatch,
+  },
+  {
+    id: "linux-remote-control-enablement-bridge",
+    phase: "webview-asset",
+    pattern: /^app-main-.*\.js$/,
+    order: 20_155,
+    ciPolicy: "optional",
+    missingDescription: "app main bundle",
+    skipDescription: "Linux remote-control enablement bridge patch",
+    apply: applyLinuxRemoteControlEnablementBridgePatch,
+  },
+  {
+    id: "linux-remote-mobile-active-status",
+    phase: "webview-asset",
+    pattern: /^app-main-.*\.js$/,
+    order: 20_160,
+    ciPolicy: "optional",
+    missingDescription: "app main bundle",
+    skipDescription: "Linux remote-mobile active status patch",
+    apply: applyLinuxRemoteMobileActiveStatusPatch,
+  },
 ];
 
 module.exports.applyLinuxRemoteControlDeviceKeyPatch = applyLinuxRemoteControlDeviceKeyPatch;
 module.exports.applyLinuxRemoteMobileChromeBridgePatch = applyLinuxRemoteMobileChromeBridgePatch;
+module.exports.applyLinuxRemoteMobileConversationHydrationPatch = applyLinuxRemoteMobileConversationHydrationPatch;
+module.exports.applyLinuxRemoteControlEnablementBridgePatch = applyLinuxRemoteControlEnablementBridgePatch;
+module.exports.applyLinuxRemoteMobileActiveStatusPatch = applyLinuxRemoteMobileActiveStatusPatch;
 module.exports.applyLinuxRemoteControlPreserveConfigPatch = applyLinuxRemoteControlPreserveConfigPatch;
 module.exports.applyLinuxRemoteControlClientAccountCompatibilityPatch =
   applyLinuxRemoteControlClientAccountCompatibilityPatch;
