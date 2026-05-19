@@ -36,18 +36,7 @@ const REMOTE_CONTROL_SELECTED_TAB_NEEDLE =
   "function rr({selectedConnectionsTab:e,showControlThisMacTab:t,showRemoteControlConnectionsSection:n,showTabbedSshPage:r}){return n?e===`control-this-mac`&&!t||e===`ssh`&&!r?`access-other-devices`:e:`ssh`}";
 const REMOTE_CONTROL_SELECTED_TAB_REPLACEMENT =
   "function rr({selectedConnectionsTab:e,showControlThisMacTab:t,showRemoteControlConnectionsSection:n,showTabbedSshPage:r}){let i=typeof navigator!=`undefined`&&navigator.userAgent.includes(`Linux`);if(i){if(!n)return`ssh`;if(e===`access-other-devices`)return t?`control-this-mac`:`ssh`;if(e===`control-this-mac`&&!t)return`ssh`;if(e===`ssh`&&!r)return t?`control-this-mac`:`ssh`;return e}return n?e===`control-this-mac`&&!t||e===`ssh`&&!r?`access-other-devices`:e:`ssh`}";
-const REMOTE_CONTROL_LINUX_LABEL_REPLACEMENTS = [
-  ["Control this Mac from your phone or other device", "Control this computer from your phone or other device"],
-  ["Add device to control this Mac remotely", "Add a device to control this computer remotely"],
-  ["Devices that can control this Mac", "Devices that can control this computer"],
-  ["Allow this Mac to be discovered and controlled", "Allow this computer to be discovered and controlled"],
-  ["Control other devices from this Mac", "Control other devices from this computer"],
-  ["Authorize this Mac to control other devices signed in to your ChatGPT account", "Authorize this computer to control other devices signed in to your ChatGPT account"],
-  ["Devices you can control from this Mac", "Devices you can control from this computer"],
-  ["Control this Mac", "Control this computer"],
-  ["Keep Mac awake", "Keep computer awake"],
-  ["this Mac", "this computer"],
-  ["local Mac", "local computer"],
+const REMOTE_CONTROL_LINUX_COPY_REPLACEMENTS = [
   ["defaultMessage:`Mac`", "defaultMessage:`Linux`"],
   ["Keep this Mac awake", "Keep this Linux desktop awake"],
   ["Devices that can control this Mac", "Devices that can control this Linux desktop"],
@@ -65,6 +54,10 @@ const REMOTE_CONTROL_LINUX_LABEL_REPLACEMENTS = [
   ["Let Codex control the apps on your Mac", "Let Codex control apps on this Linux desktop"],
   ["Connect a device to this Mac", "Connect a device to this Linux desktop"],
   ["Connect your phone to this Mac", "Connect your phone to this Linux desktop"],
+  ["Add device to control this Mac remotely", "Add a device to control this Linux desktop remotely"],
+  ["Keep Mac awake", "Keep Linux desktop awake"],
+  ["this Mac", "this Linux desktop"],
+  ["local Mac", "local Linux desktop"],
 ];
 const CLIENT_ACCOUNT_COMPAT_MARKER = "codexLinuxRemoteControlAccountMatches";
 
@@ -454,11 +447,29 @@ function wrapRemoteControlTabs(source, firstKey) {
   );
 }
 
-function applyLinuxRemoteControlSettingsUxPatch(source) {
+function replaceLinuxRemoteControlCopy(source) {
   let patched = source;
-  for (const [from, to] of REMOTE_CONTROL_LINUX_LABEL_REPLACEMENTS) {
-    patched = patched.replaceAll(from, to);
+  let changed = false;
+  for (const [macCopy, linuxCopy] of REMOTE_CONTROL_LINUX_COPY_REPLACEMENTS) {
+    if (patched.includes(macCopy)) {
+      patched = patched.split(macCopy).join(linuxCopy);
+      changed = true;
+    }
   }
+  return { patched, changed };
+}
+
+function applyLinuxRemoteControlCopyPatch(source) {
+  const { patched, changed } = replaceLinuxRemoteControlCopy(source);
+  if (!changed) {
+    console.warn("WARN: Could not find remote-control Mac copy - skipping Linux remote-control copy patch");
+    return source;
+  }
+  return patched;
+}
+
+function applyLinuxRemoteControlSettingsUxPatch(source) {
+  let patched = replaceLinuxRemoteControlCopy(source).patched;
 
   if (!patched.includes(REMOTE_CONTROL_SETTINGS_UX_MARKER)) {
     const helperNeedle = "function nr(e,t){return e.displayName.localeCompare(t.displayName)}";
@@ -729,7 +740,7 @@ module.exports = [
   {
     id: "linux-remote-control-visibility",
     phase: "webview-asset",
-    pattern: /^remote-control-connections-visibility-.*\.js$/,
+    pattern: /^(?:remote-control-connections-visibility|remote-connections-settings)-.*\.js$/,
     order: 20_120,
     ciPolicy: "optional",
     missingDescription: "remote-control connections visibility bundle",
@@ -737,10 +748,20 @@ module.exports = [
     apply: applyLinuxRemoteControlVisibilityPatch,
   },
   {
+    id: "linux-remote-control-copy",
+    phase: "webview-asset",
+    pattern: /^(?:codex-mobile-setup-flow|remote-connections-settings|use-codex-mobile-connected-settings)-.*\.js$/,
+    order: 20_130,
+    ciPolicy: "optional",
+    missingDescription: "remote-control settings or mobile setup bundle",
+    skipDescription: "Linux remote-control copy patch",
+    apply: applyLinuxRemoteControlCopyPatch,
+  },
+  {
     id: "linux-remote-control-settings-ux",
     phase: "webview-asset",
     pattern: /^remote-connections-settings-.*\.js$/,
-    order: 20_130,
+    order: 20_135,
     ciPolicy: "optional",
     missingDescription: "remote connections settings bundle",
     skipDescription: "Linux remote-control settings UX patch",
@@ -801,4 +822,5 @@ module.exports.applyLinuxRemoteControlClientRevocationRecoveryPatch =
 module.exports.applyLinuxRemoteControlLoadGatePatch = applyLinuxRemoteControlLoadGatePatch;
 module.exports.applyLinuxRemoteConnectionsRefreshPatch = applyLinuxRemoteConnectionsRefreshPatch;
 module.exports.applyLinuxRemoteControlVisibilityPatch = applyLinuxRemoteControlVisibilityPatch;
+module.exports.applyLinuxRemoteControlCopyPatch = applyLinuxRemoteControlCopyPatch;
 module.exports.applyLinuxRemoteControlSettingsUxPatch = applyLinuxRemoteControlSettingsUxPatch;

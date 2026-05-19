@@ -20,6 +20,7 @@ const {
   applyLinuxRemoteControlDeviceKeyPatch,
   applyLinuxRemoteControlClientAccountCompatibilityPatch,
   applyLinuxRemoteControlClientRevocationRecoveryPatch,
+  applyLinuxRemoteControlCopyPatch,
   applyLinuxRemoteControlLoadGatePatch,
   applyLinuxRemoteControlEnablementBridgePatch,
   applyLinuxRemoteMobileActiveStatusPatch,
@@ -76,6 +77,31 @@ function syntheticRemoteConnectionVisibilityBundle() {
 
 function syntheticCurrentVisibilityBundle() {
   return "function Et({remoteControlConnectionsState:e,slingshotEnabled:t}){return t&&(e?.available??!0)}export{Et as t};";
+}
+
+function syntheticMobileConnectedSettingsBundle() {
+  return "let y={id:`codexMobile.setupDialog.connected.computerUse.description`,defaultMessage:`Let Codex control the apps on your Mac.`,description:`Description for enabling Computer Use after mobile setup`};";
+}
+
+function syntheticRemoteConnectionsSettingsCopyBundle() {
+  return [
+    syntheticCurrentVisibilityBundle(),
+    "let platformLabel={id:`settings.remoteConnections.platform.mac`,defaultMessage:`Mac`,description:`Short label for a Mac device`};",
+    "let a={id:`settings.remoteConnections.tabs.controlThisMac`,defaultMessage:`Control this Mac`,description:`Tab label for settings that let other devices control this computer`};",
+    "let b={id:`settings.remoteControlConnections.devices.title`,defaultMessage:`Devices that can control this Mac`,description:`Header title for devices that can control this Mac`};",
+    "let c={id:`settings.remoteConnections.accessOtherDevices.header.title`,defaultMessage:`Devices you can control from this Mac`,description:`Header title for the devices this computer can access`};",
+    "let d={id:`settings.remoteConnections.ssh.header.title`,defaultMessage:`SSH connections from this Mac`,description:`Header title for SSH connections from this Mac`};",
+    "let e={id:`settings.remoteControlConnections.keepAwake.title`,defaultMessage:`Keep this Mac awake`,description:`Keep awake title`};",
+  ].join("");
+}
+
+function syntheticMobileSetupFlowCopyBundle() {
+  return [
+    "let a={id:`codexMobile.setupDialog.connected.lockedComputerUse.title`,defaultMessage:`Use your Mac apps while locked`,description:`Title for enabling Locked Computer Use after mobile setup`};",
+    "let b={id:`codexMobile.setupDialog.connected.lockedComputerUse.description`,defaultMessage:`Control Mac apps from your phone`,description:`Description for enabling Locked Computer Use after mobile setup`};",
+    "let c={id:`codexMobile.setupDialog.connected.computerUse.description`,defaultMessage:`Let Codex control the apps on your Mac`,description:`Description for enabling Computer Use after mobile setup`};",
+    "let d={id:`codexMobile.setupPage.initial.heading`,defaultMessage:`Connect your phone to this Mac`,description:`Heading for Codex mobile setup`};",
+  ].join("");
 }
 
 function syntheticSettingsBundle() {
@@ -187,6 +213,7 @@ test("remote mobile control feature exposes opt-in main-bundle and webview patch
       "feature:remote-mobile-control:linux-remote-control-client-revocation-recovery",
       "feature:remote-mobile-control:linux-remote-control-load-gate",
       "feature:remote-mobile-control:linux-remote-control-visibility",
+      "feature:remote-mobile-control:linux-remote-control-copy",
       "feature:remote-mobile-control:linux-remote-control-settings-ux",
       "feature:remote-mobile-control:linux-remote-connections-refresh",
       "feature:remote-mobile-control:linux-remote-mobile-conversation-hydration",
@@ -198,6 +225,7 @@ test("remote mobile control feature exposes opt-in main-bundle and webview patch
       "main-bundle",
       "main-bundle",
       "main-bundle",
+      "webview-asset",
       "webview-asset",
       "webview-asset",
       "webview-asset",
@@ -302,6 +330,44 @@ test("Linux remote-control visibility patch handles current settings bundle shap
   assert.equal(applyLinuxRemoteControlVisibilityPatch(patched), patched);
 });
 
+test("Linux mobile setup copy does not refer to Mac-only Computer Use", () => {
+  const source = syntheticMobileConnectedSettingsBundle();
+  const patched = applyLinuxRemoteControlCopyPatch(source);
+
+  assert.notEqual(patched, source);
+  assert.doesNotMatch(patched, /apps on your Mac/);
+  assert.match(patched, /apps on this Linux desktop/);
+  assert.equal(applyLinuxRemoteControlCopyPatch(patched), patched);
+});
+
+test("Linux remote-control settings copy does not refer to this Mac", () => {
+  const source = syntheticRemoteConnectionsSettingsCopyBundle();
+  const patched = applyLinuxRemoteControlCopyPatch(source);
+
+  assert.notEqual(patched, source);
+  assert.doesNotMatch(patched, /defaultMessage:`[^`]*Mac/);
+  assert.match(patched, /Control this Linux desktop/);
+  assert.match(patched, /Devices that can control this Linux desktop/);
+  assert.match(patched, /Devices you can control from this Linux desktop/);
+  assert.match(patched, /SSH connections from this Linux desktop/);
+  assert.match(patched, /Keep this Linux desktop awake/);
+  assert.match(patched, /defaultMessage:`Linux`/);
+  assert.equal(applyLinuxRemoteControlCopyPatch(patched), patched);
+});
+
+test("Linux mobile setup flow copy does not refer to Mac-only setup", () => {
+  const source = syntheticMobileSetupFlowCopyBundle();
+  const patched = applyLinuxRemoteControlCopyPatch(source);
+
+  assert.notEqual(patched, source);
+  assert.doesNotMatch(patched, /defaultMessage:`[^`]*Mac/);
+  assert.match(patched, /Use your Linux apps while locked/);
+  assert.match(patched, /Control Linux apps from your phone/);
+  assert.match(patched, /apps on this Linux desktop/);
+  assert.match(patched, /Connect your phone to this Linux desktop/);
+  assert.equal(applyLinuxRemoteControlCopyPatch(patched), patched);
+});
+
 test("Linux remote-control settings UX patch hides unsupported outbound tab and removes Mac copy", () => {
   const source = syntheticSettingsBundle();
   const patched = applyLinuxRemoteControlSettingsUxPatch(source);
@@ -310,12 +376,12 @@ test("Linux remote-control settings UX patch hides unsupported outbound tab and 
   assert.match(patched, /codexLinuxRemoteControlSettingsTabs/);
   assert.match(patched, /e\.filter\(e=>e\.key!==`access-other-devices`\)/);
   assert.match(patched, /if\(e===`access-other-devices`\)return t\?`control-this-mac`:`ssh`/);
-  assert.match(patched, /Control this computer/);
-  assert.match(patched, /Control this computer from your phone or other device/);
-  assert.match(patched, /Add a device to control this computer remotely/);
-  assert.match(patched, /Devices that can control this computer/);
-  assert.match(patched, /Keep computer awake/);
-  assert.match(patched, /Allow this computer to be discovered and controlled/);
+  assert.match(patched, /Control this Linux desktop/);
+  assert.match(patched, /Control this Linux desktop from your phone or other device/);
+  assert.match(patched, /Add device to control this Linux desktop remotely/);
+  assert.match(patched, /Devices that can control this Linux desktop/);
+  assert.match(patched, /Keep Linux desktop awake/);
+  assert.match(patched, /Allow this Linux desktop to be discovered and controlled/);
   assert.doesNotMatch(patched, /Control this Mac/);
   assert.doesNotMatch(patched, /this Mac/);
   assert.equal(applyLinuxRemoteControlSettingsUxPatch(patched), patched);
@@ -595,7 +661,15 @@ test("remote mobile control feature participates in ASAR patching and reports", 
         );
         fs.writeFileSync(
           path.join(assetsDir, "remote-connections-settings-test.js"),
-          syntheticSettingsBundle() + syntheticSettingsRefreshBundle(),
+          syntheticSettingsBundle() + syntheticRemoteConnectionsSettingsCopyBundle() + syntheticSettingsRefreshBundle(),
+        );
+        fs.writeFileSync(
+          path.join(assetsDir, "codex-mobile-setup-flow-test.js"),
+          syntheticMobileSetupFlowCopyBundle(),
+        );
+        fs.writeFileSync(
+          path.join(assetsDir, "use-codex-mobile-connected-settings-test.js"),
+          syntheticMobileConnectedSettingsBundle(),
         );
         fs.writeFileSync(
           path.join(assetsDir, "app-server-manager-signals-test.js"),
@@ -618,8 +692,16 @@ test("remote mobile control feature participates in ASAR patching and reports", 
           path.join(assetsDir, "remote-connection-visibility-test.js"),
           "utf8",
         );
-        const patchedSettingsFile = fs.readFileSync(
+        const patchedRemoteConnectionsSettingsFile = fs.readFileSync(
           path.join(assetsDir, "remote-connections-settings-test.js"),
+          "utf8",
+        );
+        const patchedMobileSetupFlowFile = fs.readFileSync(
+          path.join(assetsDir, "codex-mobile-setup-flow-test.js"),
+          "utf8",
+        );
+        const patchedMobileConnectedSettingsFile = fs.readFileSync(
+          path.join(assetsDir, "use-codex-mobile-connected-settings-test.js"),
           "utf8",
         );
         const patchedSignalsFile = fs.readFileSync(
@@ -634,10 +716,13 @@ test("remote mobile control feature participates in ASAR patching and reports", 
         assert.match(patchedFile, /n\.kind===`local`&&process\.platform!==`linux`/);
         assert.match(patchedRemoteConnectionVisibilityFile, /codexLinuxRemoteControlLoadGateEnabled/);
         assert.match(patchedVisibilityFile, /navigator\.userAgent\.includes\(`Linux`\)/);
-        assert.match(patchedSettingsFile, /codexLinuxRemoteControlSettingsTabs/);
-        assert.match(patchedSettingsFile, /codexLinuxRemoteConnectionsRefreshNow/);
-        assert.match(patchedSettingsFile, /Qn=5e3/);
-        assert.match(patchedSettingsFile, /Control this computer/);
+        assert.match(patchedRemoteConnectionsSettingsFile, /codexLinuxRemoteControlSettingsTabs/);
+        assert.match(patchedRemoteConnectionsSettingsFile, /codexLinuxRemoteConnectionsRefreshNow/);
+        assert.match(patchedRemoteConnectionsSettingsFile, /Qn=5e3/);
+        assert.match(patchedRemoteConnectionsSettingsFile, /Control this Linux desktop/);
+        assert.match(patchedRemoteConnectionsSettingsFile, /SSH connections from this Linux desktop/);
+        assert.match(patchedMobileSetupFlowFile, /Connect your phone to this Linux desktop/);
+        assert.match(patchedMobileConnectedSettingsFile, /apps on this Linux desktop/);
         assert.match(patchedSignalsFile, /codexLinuxRemoteMobileHydrateUnknownTurn/);
         assert.match(patchedSignalsFile, /codexLinuxRemoteMobileThreadRuntimeStatus/);
         assert.match(patchedAppMainFile, /codexLinuxRemoteControlEnablementBridge/);
@@ -669,6 +754,12 @@ test("remote mobile control feature participates in ASAR patching and reports", 
         assert.ok(
           report.patches.some((patch) =>
             patch.name === "feature:remote-mobile-control:linux-remote-control-visibility" &&
+            patch.status === "applied",
+          ),
+        );
+        assert.ok(
+          report.patches.some((patch) =>
+            patch.name === "feature:remote-mobile-control:linux-remote-control-copy" &&
             patch.status === "applied",
           ),
         );

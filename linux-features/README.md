@@ -23,6 +23,23 @@ Native packages preserve the enabled feature id list in the packaged
 update-builder bundle, so `codex-update-manager` rebuilds keep the same opt-in
 features across auto-updates.
 
+You can also let the guided native setup helper discover feature manifests and
+write `features.json`:
+
+```bash
+make setup-native
+
+# non-interactive feature edits:
+CODEX_BOOTSTRAP_NONINTERACTIVE=1 \
+CODEX_LINUX_FEATURES=remote-mobile-control,read-aloud \
+CODEX_LINUX_DISABLE_FEATURES=conversation-mode \
+make setup-native
+```
+
+Disabling a feature in `features.json` only affects the next rebuild. The helper
+does not delete local device keys, Read Aloud model files, plugin caches, Python
+runtimes, or ydotool services.
+
 Each feature directory should include:
 
 - `feature.json` — metadata and entrypoints

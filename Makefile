@@ -51,7 +51,7 @@ if [ -z "$$format" ]; then \
 fi; \
 printf '%s\n' "$$format"
 
-.PHONY: help check test build-updater maybe-build-updater update rebuild rebuild-install inspect-upstream build-app build-app-fresh bootstrap-native install-native update-native rebuild-next run-app build-dev-app run-dev-app deb rpm pacman appimage package install service-enable service-status clean-dist clean-state
+.PHONY: help check test build-updater maybe-build-updater update rebuild rebuild-install inspect-upstream build-app build-app-fresh setup-native bootstrap-native install-native update-native rebuild-next run-app build-dev-app run-dev-app deb rpm pacman appimage package install service-enable service-status clean-dist clean-state
 
 help:
 	@printf '\nCodex Desktop Linux Make Targets\n\n'
@@ -64,6 +64,7 @@ help:
 	@printf '  %-18s %s\n' "make inspect-upstream" "Inspect a DMG and write rebuild reports without changing codex-app/"
 	@printf '  %-18s %s\n' "make build-app" "Run install.sh and regenerate codex-app/ (reuses cached Codex.dmg)"
 	@printf '  %-18s %s\n' "make build-app-fresh" "Remove cached Codex.dmg and regenerate codex-app/"
+	@printf '  %-18s %s\n' "make setup-native" "Guided setup summary and Linux feature config helper"
 	@printf '  %-18s %s\n' "make bootstrap-native" "Install deps, fresh-build, package, and install"
 	@printf '  %-18s %s\n' "make install-native" "Fresh-build, package, and install"
 	@printf '  %-18s %s\n' "make update-native" "Pull trusted checkout, fresh-build, package, and install"
@@ -100,6 +101,7 @@ help:
 	@printf '  %s\n' "make rebuild DMG=/tmp/Codex.dmg"
 	@printf '  %s\n' "make build-app DMG=/tmp/Codex.dmg"
 	@printf '  %s\n' "make build-app-fresh"
+	@printf '  %s\n' "make setup-native"
 	@printf '  %s\n' "make bootstrap-native"
 	@printf '  %s\n' "make install-native"
 	@printf '  %s\n' "PACKAGE_WITH_UPDATER=0 make update-native"
@@ -161,6 +163,10 @@ build-app:
 build-app-fresh:
 	@echo "[make] Regenerating codex-app from fresh DMG"
 	./install.sh --fresh "$(DMG)"
+
+setup-native:
+	@echo "[make] Running guided native setup"
+	bash scripts/bootstrap-wizard.sh
 
 bootstrap-native:
 	@echo "[make] Installing native build dependencies"

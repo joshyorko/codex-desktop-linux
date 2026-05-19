@@ -73,6 +73,41 @@ make bootstrap-native
 
 If dependencies are already installed, use `make install-native` to run only the fresh app build, package, and install steps.
 
+## Guided native setup
+
+If you want a friendlier first-run checklist before building, use the optional guided setup helper:
+
+```bash
+git clone https://github.com/ilysenko/codex-desktop-linux.git
+cd codex-desktop-linux
+make setup-native
+```
+
+`make setup-native` is intentionally separate from `make bootstrap-native`, `make install-native`, `make package`, and `make install`, which remain non-interactive for scripts and CI. The guided helper detects your distro, package manager, native package format, desktop session, GUI prompt helpers, `pkexec`, portal status, and Computer Use readiness signals such as `ydotool`, `ydotoold` / `ydotool.service`, and the ydotool socket.
+
+It also discovers optional Linux features from `linux-features/*/feature.json` and can write the git-ignored `linux-features/features.json` file for the next build. Re-running it shows the currently enabled features and installed package/updater hints, then skips changes unless you ask for them.
+
+For repeatable setup docs or automation, pass feature choices through the environment:
+
+```bash
+CODEX_LINUX_FEATURES=remote-mobile-control,read-aloud \
+CODEX_LINUX_DISABLE_FEATURES=conversation-mode \
+PACKAGE_WITH_UPDATER=0 \
+CODEX_BOOTSTRAP_NONINTERACTIVE=1 \
+make setup-native
+```
+
+Build-time feature changes only apply after rebuilding and reinstalling:
+
+```bash
+make install-native
+
+# or, for manual-update native packages:
+PACKAGE_WITH_UPDATER=0 make install-native
+```
+
+The wizard is conservative with opt-outs. Removing a feature id from `features.json` does not delete local device keys, Read Aloud model files, Python runtimes, plugin caches, or system services. It prints the relevant paths and tells you when a rebuild/reinstall, `sudo` / `pkexec`, logout/login, input-group membership, ydotoold service work, or portal package install needs explicit user action.
+
 ### AppImage local self-build
 
 For atomic desktops or systems where installing a native package is awkward, build an AppImage locally from the generated app:

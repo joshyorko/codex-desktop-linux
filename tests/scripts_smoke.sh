@@ -54,6 +54,47 @@ assert_occurrence_count() {
     [ "$actual" = "$expected" ] || fail "Expected '$pattern' to appear $expected times in $path, found $actual"
 }
 
+assert_json_enabled_equals() {
+    local path="$1"
+    local expected_json="$2"
+    node - "$path" "$expected_json" <<'NODE' || fail "Expected $path enabled list to equal $expected_json"
+const fs = require("node:fs");
+const path = process.argv[2];
+const expected = JSON.parse(process.argv[3]);
+const actual = JSON.parse(fs.readFileSync(path, "utf8")).enabled;
+if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+  console.error(`expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
+  process.exit(1);
+}
+NODE
+}
+
+make_wizard_feature_root() {
+    local features_root="$1"
+    mkdir -p \
+        "$features_root/conversation-mode" \
+        "$features_root/example-feature" \
+        "$features_root/read-aloud" \
+        "$features_root/read-aloud-mcp" \
+        "$features_root/remote-mobile-control"
+    printf '%s\n' '{"enabled":[]}' > "$features_root/features.example.json"
+    cat > "$features_root/conversation-mode/feature.json" <<'JSON'
+{"id":"conversation-mode","name":"Conversation mode","description":"Voice conversation loop."}
+JSON
+    cat > "$features_root/example-feature/feature.json" <<'JSON'
+{"id":"example-feature","title":"Example Linux Feature","description":"Developer sample."}
+JSON
+    cat > "$features_root/read-aloud/feature.json" <<'JSON'
+{"id":"read-aloud","name":"Read aloud","description":"Read assistant responses aloud."}
+JSON
+    cat > "$features_root/read-aloud-mcp/feature.json" <<'JSON'
+{"id":"read-aloud-mcp","title":"Read Aloud MCP","description":"Read Aloud MCP plugin staging."}
+JSON
+    cat > "$features_root/remote-mobile-control/feature.json" <<'JSON'
+{"id":"remote-mobile-control","title":"Experimental Remote Mobile Control","description":"Mobile host enrollment patches."}
+JSON
+}
+
 make_fake_browser_upstream_app() {
     local app_dir="$1"
     local resources_dir="$app_dir/Contents/Resources"
@@ -739,6 +780,7 @@ test_native_shortcut_targets_compose_existing_flows() {
     local install_log="$TMP_DIR/make-install-native.log"
     local bootstrap_log="$TMP_DIR/make-bootstrap-native.log"
     local update_log="$TMP_DIR/make-update-native.log"
+    local setup_log="$TMP_DIR/make-setup-native.log"
 
     make -n -C "$REPO_DIR" install-native >"$install_log"
     assert_contains "$install_log" './install.sh --fresh'
@@ -749,10 +791,246 @@ test_native_shortcut_targets_compose_existing_flows() {
     assert_contains "$bootstrap_log" 'bash scripts/install-deps.sh'
     assert_contains "$bootstrap_log" 'PATH="$HOME/.cargo/bin:$PATH"'
     assert_contains "$bootstrap_log" 'install-native'
+    assert_not_contains "$bootstrap_log" 'bootstrap-wizard.sh'
 
     make -n -C "$REPO_DIR" update-native >"$update_log"
     assert_contains "$update_log" 'git pull --ff-only'
     assert_contains "$update_log" 'install-native'
+
+    make -n -C "$REPO_DIR" setup-native >"$setup_log"
+    assert_contains "$setup_log" 'bash scripts/bootstrap-wizard.sh'
+}
+
+test_setup_native_wizard_noninteractive_feature_writer() {
+    info "Checking setup-native wizard non-interactive feature writer"
+    local workspace="$TMP_DIR/setup-native-writer"
+    local features_root="$workspace/linux-features"
+    local config="$workspace/features.json"
+    local output_log="$workspace/output.log"
+
+    make_wizard_feature_root "$features_root"
+    cat > "$config" <<'JSON'
+{"enabled":["conversation-mode"]}
+JSON
+
+    CODEX_BOOTSTRAP_NONINTERACTIVE=1 \
+    CODEX_LINUX_FEATURES_ROOT="$features_root" \
+    CODEX_LINUX_FEATURES_CONFIG="$config" \
+    CODEX_LINUX_FEATURES="remote-mobile-control,read-aloud" \
+    CODEX_LINUX_DISABLE_FEATURES="conversation-mode" \
+    PACKAGE_WITH_UPDATER=0 \
+        bash "$REPO_DIR/scripts/bootstrap-wizard.sh" >"$output_log"
+
+    assert_json_enabled_equals "$config" '["remote-mobile-control","read-aloud"]'
+    assert_contains "$output_log" "remote-mobile-control"
+    assert_contains "$output_log" "read-aloud"
+    assert_contains "$output_log" "Manual-update native package mode selected"
+    assert_contains "$output_log" "PACKAGE_WITH_UPDATER=0 make install-native"
+    assert_contains "$output_log" "Feature changes apply after rebuilding and reinstalling"
+}
+
+test_setup_native_wizard_rejects_invalid_feature_ids() {
+    info "Checking setup-native wizard invalid feature validation"
+    local workspace="$TMP_DIR/setup-native-invalid-feature"
+    local features_root="$workspace/linux-features"
+    local config="$workspace/features.json"
+    local output_log="$workspace/output.log"
+
+    make_wizard_feature_root "$features_root"
+    printf '%s\n' '{"enabled":[]}' > "$config"
+
+    if CODEX_BOOTSTRAP_NONINTERACTIVE=1 \
+        CODEX_LINUX_FEATURES_ROOT="$features_root" \
+        CODEX_LINUX_FEATURES_CONFIG="$config" \
+        CODEX_LINUX_FEATURES="missing-feature" \
+            bash "$REPO_DIR/scripts/bootstrap-wizard.sh" >"$output_log" 2>&1; then
+        fail "setup wizard should reject unknown feature ids"
+    fi
+
+    assert_contains "$output_log" "Unknown Linux feature id: missing-feature"
+    assert_json_enabled_equals "$config" '[]'
+}
+
+test_setup_native_wizard_rejects_conflicting_feature_ids() {
+    info "Checking setup-native wizard conflicting feature validation"
+    local workspace="$TMP_DIR/setup-native-conflicting-feature"
+    local features_root="$workspace/linux-features"
+    local config="$workspace/features.json"
+    local output_log="$workspace/output.log"
+
+    make_wizard_feature_root "$features_root"
+    printf '%s\n' '{"enabled":[]}' > "$config"
+
+    if CODEX_BOOTSTRAP_NONINTERACTIVE=1 \
+        CODEX_LINUX_FEATURES_ROOT="$features_root" \
+        CODEX_LINUX_FEATURES_CONFIG="$config" \
+        CODEX_LINUX_FEATURES="read-aloud" \
+        CODEX_LINUX_DISABLE_FEATURES="read-aloud" \
+            bash "$REPO_DIR/scripts/bootstrap-wizard.sh" >"$output_log" 2>&1; then
+        fail "setup wizard should reject conflicting feature ids"
+    fi
+
+    assert_contains "$output_log" "Linux feature ids cannot be both enabled and disabled: read-aloud"
+    assert_json_enabled_equals "$config" '[]'
+}
+
+test_setup_native_wizard_disable_is_non_destructive() {
+    info "Checking setup-native wizard opt-out guidance is non-destructive"
+    local workspace="$TMP_DIR/setup-native-disable-safe"
+    local features_root="$workspace/linux-features"
+    local config="$workspace/features.json"
+    local output_log="$workspace/output.log"
+    local fake_home="$workspace/home"
+    local key_file="$fake_home/.config/codex-desktop/remote-control-device-keys-v1.json"
+    local model_file="$fake_home/.local/share/codex-desktop/read-aloud/kokoro-venv/bin/python"
+    local plugin_cache="$fake_home/.codex/plugins/cache/openai-bundled/read-aloud"
+
+    make_wizard_feature_root "$features_root"
+    cat > "$config" <<'JSON'
+{"enabled":["remote-mobile-control","read-aloud","read-aloud-mcp"]}
+JSON
+    mkdir -p "$(dirname "$key_file")" "$(dirname "$model_file")" "$plugin_cache"
+    printf '%s\n' '{"deviceKeys":[]}' > "$key_file"
+    printf '%s\n' '#!/usr/bin/env python3' > "$model_file"
+    printf '%s\n' 'cache marker' > "$plugin_cache/marker"
+
+    HOME="$fake_home" \
+    XDG_CONFIG_HOME="$fake_home/.config" \
+    XDG_DATA_HOME="$fake_home/.local/share" \
+    CODEX_BOOTSTRAP_NONINTERACTIVE=1 \
+    CODEX_LINUX_FEATURES_ROOT="$features_root" \
+    CODEX_LINUX_FEATURES_CONFIG="$config" \
+    CODEX_LINUX_DISABLE_FEATURES="remote-mobile-control,read-aloud,read-aloud-mcp" \
+        bash "$REPO_DIR/scripts/bootstrap-wizard.sh" >"$output_log"
+
+    assert_json_enabled_equals "$config" '[]'
+    assert_file_exists "$key_file"
+    assert_file_exists "$model_file"
+    assert_file_exists "$plugin_cache/marker"
+    assert_contains "$output_log" "Not deleting $key_file"
+    assert_contains "$output_log" "Not removing Read Aloud model files, Python runtimes, or plugin caches"
+    assert_contains "$output_log" "$fake_home/.local/share/codex-desktop/read-aloud"
+    assert_contains "$output_log" "$plugin_cache"
+}
+
+test_setup_native_wizard_summary_keeps_existing_config() {
+    info "Checking setup-native wizard read-only summary keeps existing feature config"
+    local workspace="$TMP_DIR/setup-native-summary"
+    local features_root="$workspace/linux-features"
+    local config="$workspace/features.json"
+    local output_log="$workspace/output.log"
+
+    make_wizard_feature_root "$features_root"
+    cat > "$config" <<'JSON'
+{"enabled":["remote-mobile-control"]}
+JSON
+
+    CODEX_BOOTSTRAP_NONINTERACTIVE=1 \
+    CODEX_LINUX_FEATURES_ROOT="$features_root" \
+    CODEX_LINUX_FEATURES_CONFIG="$config" \
+        bash "$REPO_DIR/scripts/bootstrap-wizard.sh" >"$output_log"
+
+    assert_json_enabled_equals "$config" '["remote-mobile-control"]'
+    assert_contains "$output_log" "Enabled Linux features: remote-mobile-control"
+    assert_contains "$output_log" "Default native package mode includes codex-update-manager"
+    assert_contains "$output_log" "make install-native"
+}
+
+test_setup_native_wizard_uses_package_name_for_installed_state() {
+    info "Checking setup-native wizard package-name-aware installed state"
+    local workspace="$TMP_DIR/setup-native-package-name"
+    local features_root="$workspace/linux-features"
+    local config="$workspace/features.json"
+    local output_log="$workspace/output.log"
+    local bin_dir="$workspace/bin"
+    local dpkg_args="$workspace/dpkg-query.args"
+
+    make_wizard_feature_root "$features_root"
+    printf '%s\n' '{"enabled":[]}' > "$config"
+    mkdir -p "$bin_dir"
+    cat > "$bin_dir/dpkg-query" <<SCRIPT
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$dpkg_args"
+if [[ "\$*" != *codex-cua-lab* ]]; then
+    exit 1
+fi
+case "\$*" in
+    *"deb "*)
+        printf 'deb 1.2.3'
+        exit 0
+        ;;
+    *)
+        printf '1.2.3'
+        exit 0
+        ;;
+esac
+SCRIPT
+    chmod +x "$bin_dir/dpkg-query"
+
+    PATH="$bin_dir:$PATH" \
+    PACKAGE_NAME="codex-cua-lab" \
+    CODEX_BOOTSTRAP_NONINTERACTIVE=1 \
+    CODEX_LINUX_FEATURES_ROOT="$features_root" \
+    CODEX_LINUX_FEATURES_CONFIG="$config" \
+        bash "$REPO_DIR/scripts/bootstrap-wizard.sh" >"$output_log"
+
+    assert_contains "$output_log" "Installed package: deb 1.2.3"
+    assert_contains "$output_log" "ydotoold.service(system)="
+    assert_contains "$output_log" "ydotoold.service(user)="
+    assert_contains "$dpkg_args" "codex-cua-lab"
+    assert_not_contains "$dpkg_args" "codex-desktop"
+}
+
+test_setup_native_wizard_portal_summary_survives_busctl_sigpipe() {
+    info "Checking setup-native wizard portal summary avoids pipefail SIGPIPE false negatives"
+    local workspace="$TMP_DIR/setup-native-portal-sigpipe"
+    local features_root="$workspace/linux-features"
+    local config="$workspace/features.json"
+    local output_log="$workspace/output.log"
+    local bin_dir="$workspace/bin"
+
+    make_wizard_feature_root "$features_root"
+    printf '%s\n' '{"enabled":[]}' > "$config"
+    mkdir -p "$bin_dir"
+    cat > "$bin_dir/pgrep" <<'SCRIPT'
+#!/usr/bin/env bash
+exit 1
+SCRIPT
+    cat > "$bin_dir/busctl" <<'SCRIPT'
+#!/usr/bin/env bash
+if [ "${1:-}" = "--user" ] && [ "${2:-}" = "--list" ]; then
+    printf '%s\n' 'org.freedesktop.portal.Desktop 1234 xdg-desktop-portal'
+    exit 141
+fi
+exit 1
+SCRIPT
+    chmod +x "$bin_dir/pgrep" "$bin_dir/busctl"
+
+    PATH="$bin_dir:$PATH" \
+    CODEX_BOOTSTRAP_NONINTERACTIVE=1 \
+    CODEX_LINUX_FEATURES_ROOT="$features_root" \
+    CODEX_LINUX_FEATURES_CONFIG="$config" \
+        bash "$REPO_DIR/scripts/bootstrap-wizard.sh" >"$output_log" 2>&1
+
+    assert_contains "$output_log" "portal=available on session bus"
+}
+
+test_setup_native_wizard_warns_when_conversation_mode_lacks_read_aloud() {
+    info "Checking setup-native wizard warns about conversation-mode without Read Aloud"
+    local workspace="$TMP_DIR/setup-native-conversation-warning"
+    local features_root="$workspace/linux-features"
+    local config="$workspace/features.json"
+    local output_log="$workspace/output.log"
+
+    make_wizard_feature_root "$features_root"
+    printf '%s\n' '{"enabled":["conversation-mode"]}' > "$config"
+
+    CODEX_BOOTSTRAP_NONINTERACTIVE=1 \
+    CODEX_LINUX_FEATURES_ROOT="$features_root" \
+    CODEX_LINUX_FEATURES_CONFIG="$config" \
+        bash "$REPO_DIR/scripts/bootstrap-wizard.sh" >"$output_log" 2>&1
+
+    assert_contains "$output_log" "conversation-mode is enabled without read-aloud"
 }
 
 test_upstream_build_app_workflow_tracks_dmg_metadata() {
@@ -5454,6 +5732,14 @@ main() {
     test_make_build_app_uses_installer_download_flow_by_default
     test_make_build_app_fresh_uses_installer_fresh_flow
     test_native_shortcut_targets_compose_existing_flows
+    test_setup_native_wizard_noninteractive_feature_writer
+    test_setup_native_wizard_rejects_invalid_feature_ids
+    test_setup_native_wizard_rejects_conflicting_feature_ids
+    test_setup_native_wizard_disable_is_non_destructive
+    test_setup_native_wizard_summary_keeps_existing_config
+    test_setup_native_wizard_uses_package_name_for_installed_state
+    test_setup_native_wizard_portal_summary_survives_busctl_sigpipe
+    test_setup_native_wizard_warns_when_conversation_mode_lacks_read_aloud
     test_upstream_build_app_workflow_tracks_dmg_metadata
     test_update_nix_hash_workflow_maintains_clean_main
     test_main_to_self_hosted_workflow_opens_update_pr

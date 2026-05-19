@@ -67,13 +67,15 @@ test("webview runtime appends only once", () => {
   assert.match(patched, /codex-message-from-view/);
   assert.match(patched, /__codexForwardedViaBridge/);
   assert.match(patched, /Starting voice/);
-  assert.match(patched, /kokoro-explicit-v3/);
+  assert.match(patched, /kokoro-explicit-v4/);
+  assert.match(patched, /codexLinuxConversationIsSpeaking/);
+  assert.match(patched, /codexLinuxConversationStopSpeaking/);
   assert.match(patched, /speechSynthesis\?\.cancel/);
   assert.match(patched, /action:"speak",source:"button",text/);
   assert.match(patched, /codexLinuxReadAloudSetup/);
   assert.match(patched, /action:"setup",mode/);
   assert.match(patched, /9e5/);
-  assert.match(applyIndexRuntimePatch("globalThis.codexLinuxReadAloudClick=()=>{};"), /kokoro-explicit-v3/);
+  assert.match(applyIndexRuntimePatch("globalThis.codexLinuxReadAloudClick=()=>{};"), /kokoro-explicit-v4/);
   assert.doesNotMatch(patched, /SpeechSynthesisUtterance/);
   assert.doesNotMatch(patched, /browser speech/);
   assert.doesNotMatch(patched, /no-voices/);
@@ -426,6 +428,15 @@ test("assistant render patch adds an explicit read aloud button under the messag
   assert.match(patched, /\$\.Fragment/);
 });
 
+test("assistant render patch preserves the current JSX runtime alias", () => {
+  const source = "return (0,Q.jsx)(Ov,{item:n,alwaysShowActions:M,assistantCopyText:p,turnId:m,autoReviewStats:y,hookStats:b,completedThreadGoal:x,after:g,conversationId:o,cwd:u,forceCodeBlockWordWrap:V,hasArtifacts:F,onAddSelectedTextToChat:H,onFileLinkOpen:v,onFork:D,renderCodeBlocksAsWritingBlocks:V})";
+  const patched = twice(applyAssistantRenderPatch, source);
+
+  assert.match(patched, /Q\.Fragment/);
+  assert.match(patched, /\(0,Q\.jsx\)\("button"/);
+  assert.match(patched, /globalThis\.codexLinuxReadAloudClick\?\.\(n,p,o,e\.currentTarget\)/);
+});
+
 test("settings patch adds disabled-by-default toggle", () => {
   const source = 'KEYS={promptWindow:"codex-linux-prompt-window-enabled",systemTray:"codex-linux-system-tray-enabled",warmStart:"codex-linux-warm-start-enabled"};$.jsx(LinuxToggle,{settingKey:KEYS.warmStart,label:"Warm start",description:"Use the running app for launch actions instead of starting a fresh Electron instance."})';
   const patched = twice(applySettingsPatch, source);
@@ -456,7 +467,7 @@ test("general settings patch adds current upstream read aloud toggle", () => {
   assert.match(patched, /min:\.7/);
   assert.match(patched, /max:1\.4/);
   assert.match(patched, /codexLinuxReadAloudSetup/);
-  assert.match(patched, /kokoro-explicit-v3/);
+  assert.match(patched, /kokoro-explicit-v4/);
   assert.match(patched, /globalThis\.codexLinuxReadAloudSetup=setup/);
   assert.doesNotThrow(() => new Function("$", "w", "C", "N", "L", "F", "P", "J", "q", patched));
   assert.match(
@@ -582,7 +593,7 @@ test("settings asset patch upgrades older general settings bundle", () => {
     const patched = fs.readFileSync(asset, "utf8");
     assert.match(patched, /codex-linux-read-aloud-kokoro-speed/);
     assert.match(patched, /Choose folder/);
-    assert.match(patched, /kokoro-explicit-v3/);
+    assert.match(patched, /kokoro-explicit-v4/);
     assert.match(
       patched,
       /children:\[S,C,w,T,\(0,\$\.jsx\)\(codexLinuxReadAloudSettingsRow,\{\}\),D,O,k,A,j,M,N,P,L\]/,
