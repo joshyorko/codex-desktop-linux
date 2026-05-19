@@ -18,6 +18,9 @@ const {
 } = require("../../scripts/patch-linux-window-ui.js");
 const {
   applyLinuxRemoteControlDeviceKeyPatch,
+  applyLinuxRemoteControlClientAccountCompatibilityPatch,
+  applyLinuxRemoteControlClientRevocationRecoveryPatch,
+  applyLinuxRemoteControlLoadGatePatch,
   applyLinuxRemoteMobileChromeBridgePatch,
   applyLinuxRemoteControlPreserveConfigPatch,
   applyLinuxRemoteConnectionsRefreshPatch,
@@ -47,6 +50,25 @@ function syntheticCurrentMainBundle() {
     "function pz({resourcesPath:e}){let t=null,n=()=>{if(process.platform!==`darwin`)throw Error(`Remote control device keys are only available on macOS`);if(e==null)throw Error(`Remote control device keys require resourcesPath`);return t??=lz((0,i.join)(e,`native`,uz)),t};return{createDeviceKey:e=>n().createDeviceKey(e??`hardware_only`),deleteDeviceKey:e=>n().deleteDeviceKey(e),getDeviceKeyPublic:e=>n().getDeviceKeyPublic(e),signDeviceKey:async(e,t)=>{let r=mz(t);return{...await n().signDeviceKey(e,r),signedPayloadBase64:r.toString(`base64`)}}}}",
     "async function vV({codexHome:e,hostConfig:n,logger:r=t.Jr()}){if(n.kind===`local`)try{await yV(i.default.join(e??t.Rr({hostConfig:n,preferWsl:t.Kr(n)}),_V))&&r.info(`Removed remote_control from config before app-server start`)}catch(e){r.warning(`Failed to remove remote_control before app-server start`,{safe:{},sensitive:{error:e}})}}",
   ].join("");
+}
+
+function syntheticOldClientEnrollmentBundle() {
+  return [
+    "async function dd({appServerClient:e,desktopApiOptions:t,deviceKeyClient:n,globalState:r}){let i=Sd(await md({action:`check remote control authorization`,appServerClient:e,desktopApiOptions:t})).tokenAccountUserId;if(i==null)return{clientAuthorized:!1,clientId:null};let a=await Ld({deviceKeyClient:n,enrollmentKey:pd(fd(t),i),globalState:r});return{clientAuthorized:a!=null,clientId:a?.clientId??null}}",
+    "function fd(e){return[e.desktopOriginator,e.devApiBaseUrl,e.prodApiBaseUrl].join(`\\n`)}",
+    "function pd(e,t){return`${e}\\n${t}`}",
+    "async function md({action:e=`connect remote control environments`,appServerClient:t,desktopApiOptions:n,headers:r}){return Ou({action:e,appServerClient:t,desktopOriginator:n.desktopOriginator,headers:r})}",
+    "async function hd({appServerClient:e,deviceKeyClient:t,desktopApiOptions:n,enrollmentKey:r,globalState:i,headers:a,requestRemoteControlEnrollmentStepUpToken:o}){let s=Sd(a),c=s.tokenAccountUserId;if(c==null)throw Error(`Remote control enrollment requires the current ChatGPT account user id.`);let l=pd(r,c),u=await Ld({deviceKeyClient:t,enrollmentKey:l,globalState:i}),d=u,f;if(d==null){if(o==null)throw Error(`Remote control enrollment requires explicit authorization in settings.`);Qu().info(`remote_control_client_enrollment_start_request`,{...Cd({authIdentity:s,hasExistingEnrollment:!1})});let r=await jd({appServerClient:e,body:{},desktopApiOptions:n,headers:a});if(Qu().info(`remote_control_client_enrollment_start_response`,{...Cd({authIdentity:s,hasExistingEnrollment:!1,responseAccountUserId:r.account_user_id,responseClientId:r.client_id,responseChallengeId:r.device_key_challenge.challenge_id})}),r.account_user_id!==c)throw Qu().warning(`remote_control_client_enrollment_start_account_mismatch`,{...Cd({authIdentity:s,hasExistingEnrollment:!1,responseAccountUserId:r.account_user_id,responseClientId:r.client_id,responseChallengeId:r.device_key_challenge.challenge_id})}),Error(`Remote control enrollment start does not match current account.`);d=await Vd({accountUserId:c,clientId:r.client_id,deviceKeyClient:t});try{if(Qu().info(`remote_control_client_enrollment_key_created`,{safe:{algorithm:d.algorithm,protectionClass:d.protectionClass},sensitive:{accountUserId:d.accountUserId,clientId:d.clientId,keyId:d.keyId}}),o==null)throw Error(`Remote control enrollment requires a step-up authorization flow.`);Qu().info(`remote_control_client_enrollment_step_up_requested`,{...Cd({authIdentity:s,hasExistingEnrollment:!1,responseAccountUserId:r.account_user_id,responseChallengeId:r.device_key_challenge.challenge_id,responseClientId:r.client_id})});let u=await o(),p=Td({accountUserId:c,stepUpToken:u}),m=Cd({authIdentity:s,hasExistingEnrollment:!1,responseAccountUserId:r.account_user_id,responseChallengeId:r.device_key_challenge.challenge_id,responseClientId:r.client_id});Qu().info(`remote_control_client_enrollment_step_up_validated`,{safe:{...m.safe,stepUpTokenScopes:p.scopes},sensitive:{...m.sensitive,stepUpIssuedAt:p.issuedAt,stepUpPasswordAuthTime:p.passwordAuthTime,stepUpTokenAccountUserId:p.accountUserId}}),f=await Md({appServerClient:e,body:{client_id:d.clientId,step_up_token:u,device_identity:Ud(d),device_key_proof:await Gd({challenge:r.device_key_challenge,deviceKeyClient:t,desktopApiOptions:n,enrollment:d,expectedPath:`/codex/remote/control/client/enroll/finish`,requireDeviceIdentityHash:!1})},desktopApiOptions:n,headers:a}),Qu().info(`remote_control_client_enrollment_finish_response`,{...wd(f)}),_d(f,d),Rd(i,l,d)}catch(e){throw await Hd({deviceKeyClient:t,enrollment:d}),e}}else{Qu().info(`remote_control_client_refresh_start_request`,{...Cd({authIdentity:s,existingEnrollment:u,hasExistingEnrollment:!0})});let c;try{c=await Nd({appServerClient:e,body:{client_id:d.clientId},desktopApiOptions:n,headers:a})}catch(s){if(!Bd(s))throw s;return await Hd({deviceKeyClient:t,enrollment:d}),zd(i,l),hd({appServerClient:e,deviceKeyClient:t,desktopApiOptions:n,enrollmentKey:r,globalState:i,headers:a,requestRemoteControlEnrollmentStepUpToken:o})}if(Qu().info(`remote_control_client_refresh_start_response`,{...Cd({authIdentity:s,existingEnrollment:u,hasExistingEnrollment:!0,responseAccountUserId:c.account_user_id,responseClientId:c.client_id,responseChallengeId:c.device_key_challenge.challenge_id})}),c.client_id!==d.clientId||c.account_user_id!==d.accountUserId)throw Error(`Remote control refresh challenge does not match local enrollment.`);f=await Pd({appServerClient:e,body:{client_id:d.clientId,device_key_proof:await Gd({challenge:c.device_key_challenge,deviceKeyClient:t,desktopApiOptions:n,enrollment:d,expectedPath:`/codex/remote/control/client/refresh/finish`,requireDeviceIdentityHash:!0})},desktopApiOptions:n,headers:a})}let p=_d(f,d);return{clientId:f.client_id,headers:{\"x-codex-client-session-token\":`Bearer ${f.remote_control_token}`},tokenExpiresAt:p.tokenExpiresAt,scopes:p.scopes,requiresDeviceKeyProof:!0}}",
+    "function Td({accountUserId:e,stepUpToken:t}){let n=Od(t);Dd({payload:n});let r=od.parse(n),i=r[`https://api.openai.com/auth`],a=i.chatgpt_account_user_id??i.account_user_id,o=Ed(r);if(a!==e)throw Error(`Remote control enrollment step-up token does not match current account.`);if(Math.floor(Date.now()/1e3)-r.iat>id)throw Error(`Remote control enrollment step-up token is not fresh.`);if(Date.now()-r.pwd_auth_time>id*1e3)throw Error(`Remote control enrollment step-up token does not have fresh password auth.`);if(o.length!==1||o[0]!==rd)throw Error(`Remote control enrollment step-up token is missing required authorization.`);return{accountUserId:a??null,issuedAt:r.iat,passwordAuthTime:r.pwd_auth_time,scopes:o}}",
+  ].join("");
+}
+
+function syntheticRecoverableErrorPredicateBundle() {
+  return "function Bd(e){return e instanceof Error?e.message.startsWith(`Remote control request failed (404):`)||e.message===`Remote control request failed (401): Remote-control client enrollment is incomplete`||e.message===`Remote control request failed (403): Remote-control client key material missing`:!1}";
+}
+
+function syntheticRemoteConnectionVisibilityBundle() {
+  return "function d(){return true}function f(){return c(`1042620455`)}function p(){return []}export{d as n,f as r,p as t};";
 }
 
 function syntheticCurrentVisibilityBundle() {
@@ -138,6 +160,9 @@ test("remote mobile control feature exposes opt-in main-bundle and webview patch
     assert.deepEqual(descriptors.map((descriptor) => descriptor.id), [
       "feature:remote-mobile-control:linux-remote-control-device-key",
       "feature:remote-mobile-control:linux-remote-control-preserve-config",
+      "feature:remote-mobile-control:linux-remote-control-client-account-compatibility",
+      "feature:remote-mobile-control:linux-remote-control-client-revocation-recovery",
+      "feature:remote-mobile-control:linux-remote-control-load-gate",
       "feature:remote-mobile-control:linux-remote-control-visibility",
       "feature:remote-mobile-control:linux-remote-control-settings-ux",
       "feature:remote-mobile-control:linux-remote-connections-refresh",
@@ -145,6 +170,9 @@ test("remote mobile control feature exposes opt-in main-bundle and webview patch
     assert.deepEqual(descriptors.map((descriptor) => descriptor.phase), [
       "main-bundle",
       "main-bundle",
+      "main-bundle",
+      "main-bundle",
+      "webview-asset",
       "webview-asset",
       "webview-asset",
       "webview-asset",
@@ -177,6 +205,52 @@ test("Linux remote-control device-key patch handles current minified aliases", (
   assert.match(patched, /process\.platform===`linux`\)return codexLinuxRemoteControlDeviceKeyClient\(\)/);
   assert.match(patched, /n\.kind===`local`&&process\.platform!==`linux`/);
   assert.equal(applyLinuxRemoteControlPreserveConfigPatch(applyLinuxRemoteControlDeviceKeyPatch(patched)), patched);
+});
+
+test("Linux remote-control client enrollment accepts account-scoped and base user ids", () => {
+  const source = syntheticOldClientEnrollmentBundle();
+  const patched = applyLinuxRemoteControlClientAccountCompatibilityPatch(source);
+
+  assert.notEqual(patched, source);
+  assert.match(patched, /codexLinuxRemoteControlAccountMatches/);
+  assert.match(patched, /codexLinuxRemoteControlLoadEnrollment/);
+  assert.doesNotMatch(patched, /account_user_id!==c/);
+  assert.match(patched, /accountUserId:r\.account_user_id/);
+  assert.match(patched, /l=pd\(codexLinuxRemoteControlEnrollmentKey,d\.accountUserId\)/);
+  assert.match(
+    patched,
+    /Td\(\{accountId:codexLinuxRemoteControlCurrentAccountId,accountUserId:d\.accountUserId,stepUpToken:u\}\)/,
+  );
+  assert.match(patched, /clientId:a\?\.enrollment\.clientId\?\?null/);
+  assert.equal(applyLinuxRemoteControlClientAccountCompatibilityPatch(patched), patched);
+});
+
+test("Linux remote-control client revocation triggers local cleanup and re-enrollment", () => {
+  const source = syntheticRecoverableErrorPredicateBundle();
+  const patched = applyLinuxRemoteControlClientRevocationRecoveryPatch(source);
+
+  assert.notEqual(patched, source);
+  assert.match(patched, /Remote-control client key material missing`\|\|e\.message===`Remote-control client has been revoked/);
+  assert.match(patched, /Remote-control client has been revoked/);
+  assert.equal(applyLinuxRemoteControlClientRevocationRecoveryPatch(patched), patched);
+});
+
+test("Linux remote-control client recovery handles bare missing key material errors", () => {
+  const source = syntheticRecoverableErrorPredicateBundle();
+  const patched = applyLinuxRemoteControlClientRevocationRecoveryPatch(source);
+
+  assert.match(patched, /e\.message===`Remote-control client key material missing`/);
+});
+
+test("Linux remote-control load gate enables remote-control environment loading", () => {
+  const source = syntheticRemoteConnectionVisibilityBundle();
+  const patched = applyLinuxRemoteControlLoadGatePatch(source);
+
+  assert.notEqual(patched, source);
+  assert.match(patched, /codexLinuxRemoteControlLoadGateEnabled/);
+  assert.match(patched, /navigator\.userAgent\.includes\(`Linux`\)/);
+  assert.match(patched, /return codexLinuxRemoteControlLoadGateEnabled\(\)\|\|c\(`1042620455`\)/);
+  assert.equal(applyLinuxRemoteControlLoadGatePatch(patched), patched);
 });
 
 test("Linux remote-control visibility patch allows Linux when upstream marks availability false", () => {
@@ -374,6 +448,10 @@ test("remote mobile control feature participates in ASAR patching and reports", 
         fs.mkdirSync(assetsDir, { recursive: true });
         fs.writeFileSync(path.join(buildDir, "main.js"), source);
         fs.writeFileSync(
+          path.join(assetsDir, "remote-connection-visibility-test.js"),
+          syntheticRemoteConnectionVisibilityBundle(),
+        );
+        fs.writeFileSync(
           path.join(assetsDir, "remote-control-connections-visibility-test.js"),
           syntheticVisibilityBundle(),
         );
@@ -390,12 +468,17 @@ test("remote mobile control feature participates in ASAR patching and reports", 
           path.join(assetsDir, "remote-control-connections-visibility-test.js"),
           "utf8",
         );
+        const patchedRemoteConnectionVisibilityFile = fs.readFileSync(
+          path.join(assetsDir, "remote-connection-visibility-test.js"),
+          "utf8",
+        );
         const patchedSettingsFile = fs.readFileSync(
           path.join(assetsDir, "remote-connections-settings-test.js"),
           "utf8",
         );
         assert.match(patchedFile, /codexLinuxRemoteControlDeviceKeyClient/);
         assert.match(patchedFile, /n\.kind===`local`&&process\.platform!==`linux`/);
+        assert.match(patchedRemoteConnectionVisibilityFile, /codexLinuxRemoteControlLoadGateEnabled/);
         assert.match(patchedVisibilityFile, /navigator\.userAgent\.includes\(`Linux`\)/);
         assert.match(patchedSettingsFile, /codexLinuxRemoteControlSettingsTabs/);
         assert.match(patchedSettingsFile, /codexLinuxRemoteConnectionsRefreshNow/);
@@ -417,6 +500,12 @@ test("remote mobile control feature participates in ASAR patching and reports", 
           report.patches.some((patch) =>
             patch.name === "feature:remote-mobile-control:linux-remote-control-preserve-config" &&
             patch.status === "already-applied",
+          ),
+        );
+        assert.ok(
+          report.patches.some((patch) =>
+            patch.name === "feature:remote-mobile-control:linux-remote-control-load-gate" &&
+            patch.status === "applied",
           ),
         );
         assert.ok(
