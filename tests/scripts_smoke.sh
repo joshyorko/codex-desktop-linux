@@ -54,20 +54,20 @@ assert_occurrence_count() {
     [ "$actual" = "$expected" ] || fail "Expected '$pattern' to appear $expected times in $path, found $actual"
 }
 
-make_fake_browser_use_upstream_app() {
+make_fake_browser_upstream_app() {
     local app_dir="$1"
     local resources_dir="$app_dir/Contents/Resources"
     mkdir -p \
         "$resources_dir/plugins/openai-bundled/.agents/plugins" \
-        "$resources_dir/plugins/openai-bundled/plugins/browser-use/.codex-plugin" \
-        "$resources_dir/plugins/openai-bundled/plugins/browser-use/scripts"
+        "$resources_dir/plugins/openai-bundled/plugins/browser/.codex-plugin" \
+        "$resources_dir/plugins/openai-bundled/plugins/browser/scripts"
     cat > "$resources_dir/plugins/openai-bundled/.agents/plugins/marketplace.json" <<'JSON'
-{"plugins":[{"name":"browser-use","source":{"source":"local","path":"./plugins/browser-use"},"policy":{"installation":"AVAILABLE"}}]}
+{"plugins":[{"name":"browser","source":{"source":"local","path":"./plugins/browser"},"policy":{"installation":"AVAILABLE","authentication":"ON_INSTALL"},"category":"Engineering"}]}
 JSON
-    cat > "$resources_dir/plugins/openai-bundled/plugins/browser-use/.codex-plugin/plugin.json" <<'JSON'
-{"name":"browser-use","version":"0.1.0-alpha1"}
+    cat > "$resources_dir/plugins/openai-bundled/plugins/browser/.codex-plugin/plugin.json" <<'JSON'
+{"name":"browser","version":"0.1.0-alpha2","interface":{"category":"Engineering"}}
 JSON
-    cat > "$resources_dir/plugins/openai-bundled/plugins/browser-use/scripts/browser-client.mjs" <<'JS'
+    cat > "$resources_dir/plugins/openai-bundled/plugins/browser/scripts/browser-client.mjs" <<'JS'
 class Uf{async fetchBlocked(e){let r=await bS(e.endpoint,{method:"GET"});if(!r.ok)throw new Error(ae(`Browser Use cannot determine if ${e.displayUrl} is allowed. Please try again later or use another source.`));let n=await r.json();return TF(n)}}export function setupAtlasRuntime() {}
 JS
 }
@@ -3151,6 +3151,8 @@ PY
     assert_contains "$REPO_DIR/launcher/start.sh.template" "resolve_update_manager_path"
     assert_contains "$REPO_DIR/launcher/start.sh.template" "run_update_manager"
     assert_contains "$REPO_DIR/launcher/start.sh.template" "sync_browser_use_bundled_plugin_cache"
+    assert_contains "$REPO_DIR/launcher/start.sh.template" 'source_plugin="$SCRIPT_DIR/resources/plugins/openai-bundled/plugins/browser"'
+    assert_contains "$REPO_DIR/launcher/start.sh.template" 'marketplace_plugin_link="$marketplace_root/plugins/$plugin_dir_name"'
     assert_contains "$REPO_DIR/launcher/start.sh.template" "sync_chrome_bundled_plugin_cache"
     assert_contains "$REPO_DIR/launcher/start.sh.template" "sync_read_aloud_bundled_plugin_cache"
     assert_contains "$REPO_DIR/launcher/start.sh.template" "make_tree_owner_writable"
@@ -3275,7 +3277,7 @@ test_browser_use_node_repl_fallback_runtime() {
     local true_bin
 
     mkdir -p "$workspace" "$install_dir/resources" "$archive_root/codex-primary-runtime/dependencies/bin"
-    make_fake_browser_use_upstream_app "$app_dir"
+    make_fake_browser_upstream_app "$app_dir"
 
     # Simulate the current upstream DMG shape: node_repl exists, but it is not a Linux ELF.
     printf '\xfe\xed\xfa\xcf' > "$app_dir/Contents/Resources/node_repl"
@@ -3316,12 +3318,50 @@ test_browser_use_node_repl_fallback_runtime() {
     ) >"$output_log" 2>&1
 
     assert_file_exists "$install_dir/resources/node_repl"
-    assert_file_exists "$install_dir/resources/plugins/openai-bundled/plugins/browser-use/scripts/browser-client.mjs"
+    assert_file_exists "$install_dir/resources/plugins/openai-bundled/plugins/browser/scripts/browser-client.mjs"
     cmp -s "$true_bin" "$install_dir/resources/node_repl" || fail "Expected fallback node_repl to come from the runtime archive"
-    assert_contains "$install_dir/resources/plugins/openai-bundled/plugins/browser-use/scripts/browser-client.mjs" "codexLinuxSiteStatusAllowlistFallback"
+    assert_contains "$install_dir/resources/plugins/openai-bundled/plugins/browser/scripts/browser-client.mjs" "codexLinuxSiteStatusAllowlistFallback"
     assert_contains "$output_log" "Browser Use node_repl runtime is not a Linux executable for x86_64; skipping"
     assert_not_contains "$output_log" "WARN.*Browser Use node_repl runtime is not a Linux executable"
     assert_contains "$output_log" "Downloading Browser Use node_repl fallback runtime"
+}
+
+test_browser_plugin_renamed_upstream_staging() {
+    info "Checking Browser plugin staging from renamed upstream resources"
+    local workspace="$TMP_DIR/browser-plugin-renamed"
+    local app_dir="$workspace/Codex.app"
+    local install_dir="$workspace/install"
+    local output_log="$workspace/output.log"
+    local browser_dir="$install_dir/resources/plugins/openai-bundled/plugins/browser"
+    local marketplace="$install_dir/resources/plugins/openai-bundled/.agents/plugins/marketplace.json"
+
+    mkdir -p "$workspace" "$install_dir/resources"
+    make_fake_browser_upstream_app "$app_dir"
+
+    (
+        SCRIPT_DIR="$REPO_DIR"
+        INSTALL_DIR="$install_dir"
+        WORK_DIR="$workspace/work"
+        ARCH="x86_64"
+        ICON_SOURCE="$workspace/missing-icon.png"
+        CODEX_APP_ID="codex-desktop"
+        mkdir -p "$WORK_DIR"
+        warn() { echo "[WARN] $*" >&2; }
+        info() { echo "[INFO] $*" >&2; }
+        # shellcheck disable=SC1091
+        source "$REPO_DIR/scripts/lib/bundled-plugins.sh"
+        stage_linux_computer_use_plugin() { return 1; }
+        install_browser_use_node_repl_resource() { return 0; }
+        install_bundled_plugin_resources "$app_dir"
+    ) >"$output_log" 2>&1
+
+    assert_file_exists "$browser_dir/scripts/browser-client.mjs"
+    assert_contains "$browser_dir/.codex-plugin/plugin.json" '"name":"browser"'
+    assert_contains "$browser_dir/scripts/browser-client.mjs" "codexLinuxSiteStatusAllowlistFallback"
+    assert_contains "$marketplace" '"name": "browser"'
+    assert_contains "$marketplace" '"path": "./plugins/browser"'
+    assert_contains "$output_log" "Browser plugin staged from upstream DMG"
+    assert_not_contains "$output_log" "Browser bundled plugin resources not present"
 }
 
 test_browser_use_node_repl_glibc_pidfd_patch_static() {
@@ -3543,7 +3583,7 @@ test_chrome_marketplace_fallback_synthesis() {
     # Upstream marketplace.json lists no chrome entry — exercises the
     # synthesized-fallback path in write_bundled_plugins_marketplace.
     cat > "$app_dir/Contents/Resources/plugins/openai-bundled/.agents/plugins/marketplace.json" <<'JSON'
-{"plugins":[{"name":"browser-use","source":{"source":"local","path":"./plugins/browser-use"},"policy":{"installation":"AVAILABLE"}}]}
+{"plugins":[{"name":"browser","source":{"source":"local","path":"./plugins/browser"},"policy":{"installation":"AVAILABLE"}}]}
 JSON
 
     # Distinctive name + category prove the synthesized entry actually
@@ -5436,6 +5476,7 @@ main() {
     test_native_module_rebuild_accepts_prebuilt_source
     test_bundled_plugin_builders_accept_prebuilt_binaries
     test_browser_use_node_repl_fallback_runtime
+    test_browser_plugin_renamed_upstream_staging
     test_browser_use_node_repl_glibc_pidfd_patch_static
     test_browser_use_node_repl_ldd_output_compatibility
     test_chrome_plugin_staging
