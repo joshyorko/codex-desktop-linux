@@ -550,6 +550,16 @@ test("Linux remote mobile conversation hydration patch handles stale refresh and
   assert.equal(applyLinuxRemoteMobileConversationHydrationPatch(patched), patched);
 });
 
+test("Linux remote mobile conversation hydration patch retries transient thread reads", () => {
+  const source = syntheticAppServerManagerSignalsBundle();
+  const patched = applyLinuxRemoteMobileConversationHydrationPatch(source);
+
+  assert.match(patched, /Retrying hydration for turn\/started/);
+  assert.match(patched, /if\(a<12\)/);
+  assert.match(patched, /setTimeout\(\(\)=>s\(a\+1\),250\)/);
+  assert.match(patched, /Failed to hydrate conversation for turn\/started/);
+});
+
 test("Linux remote mobile conversation hydration patch upgrades unsafe queued hydration", () => {
   const source = syntheticAppServerManagerSignalsBundle();
   const patched = applyLinuxRemoteMobileConversationHydrationPatch(source);
