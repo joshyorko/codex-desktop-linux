@@ -220,7 +220,7 @@ Environment:
   CODEX_LINUX_RENDERING_MODE=auto|default|wslg
                               Auto-detect WSLg, keep generic Linux defaults, or force the WSLg profile
   CODEX_ELECTRON_DISABLE_GPU_COMPOSITING=0|1
-                              Override the launcher's default --disable-gpu-compositing decision
+                              Set to 1 to add --disable-gpu-compositing for flicker workarounds
   CODEX_FORCE_RENDERER_ACCESSIBILITY=auto|0|1
                               Override --force-renderer-accessibility; auto skips it under WSLg
   CODEX_MULTI_LAUNCH=1        Treat normal launches like --new-instance
@@ -1774,7 +1774,7 @@ should_disable_gpu_compositing() {
         echo "Invalid CODEX_ELECTRON_DISABLE_GPU_COMPOSITING='${CODEX_ELECTRON_DISABLE_GPU_COMPOSITING:-}'; using rendering profile default" >&2
     fi
 
-    [ "$ELECTRON_RENDERING_MODE" != "wslg" ]
+    return 1
 }
 
 should_force_renderer_accessibility() {
