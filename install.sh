@@ -63,7 +63,9 @@ SCRIPT
     cp "$SCRIPT_DIR/launcher/webview-server.py" "$INSTALL_DIR/.codex-linux/webview-server.py"
     cp "$SCRIPT_DIR/launcher/web-mode-server.mjs" "$INSTALL_DIR/.codex-linux/web-mode-server.mjs"
     cp "$SCRIPT_DIR/launcher/web-mode-bootstrap.js" "$INSTALL_DIR/.codex-linux/web-mode-bootstrap.js"
+    cp "$SCRIPT_DIR/launcher/remote-control-hosts.mjs" "$INSTALL_DIR/.codex-linux/remote-control-hosts.mjs"
     chmod +x "$INSTALL_DIR/.codex-linux/web-mode-server.mjs"
+    chmod +x "$INSTALL_DIR/.codex-linux/remote-control-hosts.mjs"
     if [ -f "$ICON_SOURCE" ]; then
         cp "$ICON_SOURCE" "$INSTALL_DIR/.codex-linux/$CODEX_APP_ID.png"
     else
