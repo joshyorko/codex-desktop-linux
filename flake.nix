@@ -609,5 +609,15 @@ PY
           ];
         };
       }
-    );
+    ) // {
+      homeManagerModules = rec {
+        default = import ./nix/home-manager-module.nix { inherit self; };
+        codex-desktop-linux = default;
+      };
+
+      nixosModules = rec {
+        default = import ./nix/nixos-module.nix { inherit self; };
+        codex-desktop-linux = default;
+      };
+    };
 }

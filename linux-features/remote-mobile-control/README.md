@@ -51,7 +51,7 @@ What it changes:
 - Stages `.codex-linux/cold-start.d/remote-mobile-control`, a feature-owned
   cold-start hook that provisions the upstream managed standalone daemon runtime
   when it is missing, then starts the managed app-server daemon with
-  `app-server daemon start --enable remote_control`.
+  `remote-control start`.
 
 Remote mobile daemon requirement:
 
@@ -75,7 +75,31 @@ runner. When the system `timeout` command is available, the installer/start path
 is capped by
 `CODEX_REMOTE_CONTROL_DAEMON_AUTOSTART_TIMEOUT_SECONDS` (default `30`), so
 Desktop cold start is not blocked by network, GitHub, or installer stalls.
-Hook output is written to the launcher cache as `remote-mobile-control.log`.
+When `timeout` is unavailable, the hook continues the installer/start path in a
+background subprocess. Hook output is written to the launcher log.
+
+On NixOS, prefer the flake's Home Manager module instead of the launcher hook:
+
+```nix
+{
+  imports = [
+    inputs.codex-desktop-linux.homeManagerModules.default
+  ];
+
+  programs.codexDesktopLinux = {
+    enable = true;
+    computerUseUi.enable = true;
+    remoteMobileControl.enable = true;
+    remoteControl.enable = true;
+  };
+}
+```
+
+The module installs the remote-mobile package variant and manages
+`codex-remote-control.service` as a user systemd unit running
+`codex app-server --remote-control --listen unix://`. It also sets
+`CODEX_REMOTE_CONTROL_DAEMON_AUTOSTART_DISABLED=1` so the launcher does not
+start a second mutable standalone daemon.
 
 This is compatible with immutable Linux systems such as Bluefin / Universal
 Blue because the managed daemon runtime is user-scoped state under

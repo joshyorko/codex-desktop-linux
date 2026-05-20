@@ -38,7 +38,16 @@ make setup-native
 
 Disabling a feature in `features.json` only affects the next rebuild. The helper
 does not delete local device keys, Read Aloud model files, plugin caches, Python
-runtimes, or ydotool services.
+runtimes, or ydotool services. Feature-owned cleanup is a separate interactive
+action:
+
+```bash
+CODEX_BOOTSTRAP_CLEANUP_FEATURES=remote-mobile-control,read-aloud make setup-native
+```
+
+The helper lists exact paths and deletes only paths confirmed with
+`DELETE <exact path>`. Add `CODEX_BOOTSTRAP_DRY_RUN=1` to preview cleanup
+targets without deleting them.
 
 Each feature directory should include:
 

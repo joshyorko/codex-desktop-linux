@@ -25,6 +25,7 @@ const REMOTE_CONTROL_SETTINGS_UX_MARKER = "codexLinuxRemoteControlSettingsTabs";
 const REMOTE_CONNECTIONS_REFRESH_MARKER = "codexLinuxRemoteConnectionsRefreshNow";
 const REMOTE_MOBILE_CHROME_BRIDGE_MARKER = "codexLinuxRemoteMobileBrowserBackends";
 const REMOTE_CONTROL_LOAD_GATE_MARKER = "codexLinuxRemoteControlLoadGateEnabled";
+const REMOTE_CONTROL_FEATURE_SYNC_MARKER = "codexLinuxRemoteControlFeatureSyncEnabled";
 const REMOTE_CONTROL_LOAD_GATE_NEEDLE =
   /function ([A-Za-z_$][\w$]*)\(\)\{return ([A-Za-z_$][\w$]*)\(`1042620455`\)\}/u;
 const REMOTE_MOBILE_THREAD_RUNTIME_MARKER = "codexLinuxRemoteMobileThreadRuntimeStatus";
@@ -451,6 +452,40 @@ function applyLinuxRemoteControlLoadGatePatch(source) {
   );
 }
 
+function applyLinuxRemoteControlFeatureSyncPatch(source) {
+  if (source.includes(REMOTE_CONTROL_FEATURE_SYNC_MARKER)) {
+    return source;
+  }
+
+  const defaultFeaturesMarker = "statsig_default_enable_features";
+  const syncMethodMarker = "set-experimental-feature-enablement-for-host";
+  if (!source.includes(defaultFeaturesMarker) || !source.includes(syncMethodMarker)) {
+    return source;
+  }
+
+  const featureArrayRegex =
+    /var ([A-Za-z_$][\w$]*)=\[([^\]]*?)\];function ([A-Za-z_$][\w$]*)\(\)\{let [\s\S]{0,2400}?statsig_default_enable_features[\s\S]{0,2400}?set-experimental-feature-enablement-for-host/u;
+  const featureArrayMatch = source.match(featureArrayRegex);
+  if (featureArrayMatch == null) {
+    console.warn("WARN: Could not find app-server feature sync list - skipping Linux remote-control feature sync patch");
+    return source;
+  }
+
+  const [, arrayVar, featureArrayItems] = featureArrayMatch;
+  const entries = featureArrayItems.split(",").filter((entry) => entry.trim().length > 0);
+  if (entries.some((entry) => entry.trim() === "`remote_control`")) {
+    return source.replace(
+      `var ${arrayVar}=[${featureArrayItems}];`,
+      `var ${arrayVar}=[${featureArrayItems}];function ${REMOTE_CONTROL_FEATURE_SYNC_MARKER}(){return!0}`,
+    );
+  }
+
+  const patchedFeatureArrayItems = [...entries, "`remote_control`"].join(",");
+  const featureArrayNeedle = `var ${arrayVar}=[${featureArrayItems}];`;
+  const featureArrayPatch = `var ${arrayVar}=[${patchedFeatureArrayItems}];function ${REMOTE_CONTROL_FEATURE_SYNC_MARKER}(){return!0}`;
+  return replaceOnce(source, featureArrayNeedle, featureArrayPatch) ?? source;
+}
+
 function applyLinuxRemoteControlVisibilityPatch(source) {
   if (
     source.includes(REMOTE_CONTROL_VISIBILITY_REPLACEMENT) ||
@@ -827,6 +862,16 @@ module.exports = [
     apply: applyLinuxRemoteControlLoadGatePatch,
   },
   {
+    id: "linux-remote-control-feature-sync",
+    phase: "webview-asset",
+    pattern: /^(?:app-main|index)-.*\.js$/,
+    order: 20_119,
+    ciPolicy: "optional",
+    missingDescription: "webview app main bundle",
+    skipDescription: "Linux remote-control feature sync patch",
+    apply: applyLinuxRemoteControlFeatureSyncPatch,
+  },
+  {
     id: "linux-remote-control-visibility",
     phase: "webview-asset",
     pattern: /^(?:remote-control-connections-visibility|remote-connections-settings)-.*\.js$/,
@@ -922,6 +967,7 @@ module.exports.applyLinuxRemoteControlClientRevokeSetupResetPatch =
   applyLinuxRemoteControlClientRevokeSetupResetPatch;
 module.exports.applyLinuxRemoteControlLoadGatePatch = applyLinuxRemoteControlLoadGatePatch;
 module.exports.applyLinuxRemoteConnectionsRefreshPatch = applyLinuxRemoteConnectionsRefreshPatch;
+module.exports.applyLinuxRemoteControlFeatureSyncPatch = applyLinuxRemoteControlFeatureSyncPatch;
 module.exports.applyLinuxRemoteControlVisibilityPatch = applyLinuxRemoteControlVisibilityPatch;
 module.exports.applyLinuxRemoteControlCopyPatch = applyLinuxRemoteControlCopyPatch;
 module.exports.applyLinuxRemoteControlSettingsUxPatch = applyLinuxRemoteControlSettingsUxPatch;

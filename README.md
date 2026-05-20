@@ -83,9 +83,9 @@ cd codex-desktop-linux
 make setup-native
 ```
 
-`make setup-native` is intentionally separate from `make bootstrap-native`, `make install-native`, `make package`, and `make install`, which remain non-interactive for scripts and CI. The guided helper detects your distro, package manager, native package format, desktop session, GUI prompt helpers, `pkexec`, portal status, and Computer Use readiness signals such as `ydotool`, `ydotoold` / `ydotool.service`, and the ydotool socket.
+`make setup-native` is intentionally separate from `make bootstrap-native`, `make install-native`, `make package`, and `make install`, which remain non-interactive for scripts and CI. The guided helper detects your distro, package manager, native package format, desktop session, GUI prompt helpers, `pkexec`, portal status, and Computer Use readiness signals such as `ydotool`, `ydotoold` / `ydotool.service`, the ydotool socket, `/dev/uinput`, input-group membership, desktop window backend hints, and portal package hints. It also reports Read Aloud Kokoro paths, plugin cache paths, settings paths, and doctor commands when available.
 
-It also discovers optional Linux features from `linux-features/*/feature.json` and can write the git-ignored `linux-features/features.json` file for the next build. Re-running it shows the currently enabled features and installed package/updater hints, then skips changes unless you ask for them.
+It also discovers optional Linux features from `linux-features/*/feature.json` and can write the git-ignored `linux-features/features.json` file for the next build. Re-running it shows the currently enabled features and installed package/updater hints, then skips changes unless you ask for them. Non-interactive setup edits feature config and prints or runs explicitly requested next steps; it does not implicitly run build/package/install.
 
 For repeatable setup docs or automation, pass feature choices through the environment:
 
@@ -94,6 +94,26 @@ CODEX_LINUX_FEATURES=remote-mobile-control,read-aloud \
 CODEX_LINUX_DISABLE_FEATURES=conversation-mode \
 PACKAGE_WITH_UPDATER=0 \
 CODEX_BOOTSTRAP_NONINTERACTIVE=1 \
+make setup-native
+```
+
+To have the wizard orchestrate the existing native install commands, opt in explicitly:
+
+```bash
+# Preview without changing the system:
+CODEX_BOOTSTRAP_DRY_RUN=1 \
+CODEX_BOOTSTRAP_INSTALL_DEPS=1 \
+CODEX_BOOTSTRAP_INSTALL_NATIVE=1 \
+make setup-native
+
+# Run dependency bootstrap and then build/package/install:
+CODEX_BOOTSTRAP_INSTALL_DEPS=1 \
+CODEX_BOOTSTRAP_INSTALL_NATIVE=1 \
+make setup-native
+
+# Build a manual-update native package instead:
+PACKAGE_WITH_UPDATER=0 \
+CODEX_BOOTSTRAP_INSTALL_NATIVE=1 \
 make setup-native
 ```
 
@@ -106,7 +126,7 @@ make install-native
 PACKAGE_WITH_UPDATER=0 make install-native
 ```
 
-The wizard is conservative with opt-outs. Removing a feature id from `features.json` does not delete local device keys, Read Aloud model files, Python runtimes, plugin caches, or system services. It prints the relevant paths and tells you when a rebuild/reinstall, `sudo` / `pkexec`, logout/login, input-group membership, ydotoold service work, or portal package install needs explicit user action.
+The wizard is conservative with opt-outs. Removing a feature id from `features.json` does not delete local device keys, Read Aloud model files, Python runtimes, plugin caches, or system services. Cleanup is a separate interactive path through `CODEX_BOOTSTRAP_CLEANUP_FEATURES=remote-mobile-control,read-aloud make setup-native`; each deletion requires typing `DELETE <exact path>`, and `CODEX_BOOTSTRAP_DRY_RUN=1` prints the cleanup targets without deleting them. It prints the relevant paths and tells you when a rebuild/reinstall, `sudo` / `pkexec`, logout/login, input-group membership, ydotoold service work, or portal package install needs explicit user action.
 
 ### AppImage local self-build
 
@@ -146,11 +166,30 @@ Feature-specific Nix outputs are additive. To enable both the Computer Use UI an
 nix run github:ilysenko/codex-desktop-linux#computer-use-ui-remote-mobile-control
 ```
 
-Because flakes do not include the git-ignored `linux-features/features.json` opt-in file, Nix exposes feature-specific app variants for optional integrations. To build and run Codex Desktop with the experimental mobile remote-control feature enabled:
+For a declarative NixOS/Home Manager install with the mobile remote-control
+app-server managed by systemd instead of the Desktop launcher, import the flake
+module:
 
-```bash
-nix run github:ilysenko/codex-desktop-linux#remote-mobile-control
+```nix
+{
+  imports = [
+    inputs.codex-desktop-linux.homeManagerModules.default
+  ];
+
+  programs.codexDesktopLinux = {
+    enable = true;
+    computerUseUi.enable = true;
+    remoteMobileControl.enable = true;
+    remoteControl.enable = true;
+  };
+}
 ```
+
+This installs the selected Codex Desktop package variant and starts a user
+`codex-remote-control.service` with
+`codex app-server --remote-control --listen unix://`. A
+`nixosModules.default` export is also available for system-level configurations
+that prefer a global user unit.
 
 `nix develop github:ilysenko/codex-desktop-linux` enters a dev shell with the required tooling.
 

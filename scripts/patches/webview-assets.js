@@ -155,10 +155,10 @@ function applyLinuxAppServerFeatureEnablementPatch(currentSource) {
   const supportedFeatures = new Set([
     "apps",
     "memories",
+    "mentions_v2",
     "plugins",
     "remote_control",
     "tool_call_mcp_elicitation",
-    "tool_search",
     "tool_suggest",
   ]);
   const defaultFeaturesMarker = "statsig_default_enable_features";

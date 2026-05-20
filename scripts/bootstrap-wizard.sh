@@ -26,15 +26,21 @@ Usage: scripts/bootstrap-wizard.sh [--help]
 
 Environment:
   CODEX_BOOTSTRAP_NONINTERACTIVE=1     never prompt
+  CODEX_BOOTSTRAP_DRY_RUN=1            preview install/cleanup actions without changing them
+  CODEX_BOOTSTRAP_INSTALL_DEPS=1       run bash scripts/install-deps.sh after checks
+  CODEX_BOOTSTRAP_INSTALL_NATIVE=1     run make install-native after checks
+  CODEX_BOOTSTRAP_CLEANUP_FEATURES=a,b cleanup feature-owned data with confirmation
   CODEX_LINUX_FEATURES=a,b             enable build-time Linux features
   CODEX_LINUX_DISABLE_FEATURES=a,b     disable build-time Linux features
   CODEX_LINUX_FEATURES_ROOT=/path      override linux-features root
   CODEX_LINUX_FEATURES_CONFIG=/path    override features.json path
+  PACKAGE_NAME=codex-cua-lab           check side-by-side installed package state
   PACKAGE_WITH_UPDATER=0               choose manual-update package mode
 
 The wizard is conservative: it does not install packages, start services, stop
-ydotoold, or delete feature-owned user data. It prepares feature config and
-prints the exact rebuild/reinstall command to run next.
+ydotoold, or delete feature-owned user data unless the user explicitly asks and
+confirms exact paths. It prepares feature config and prints the exact
+rebuild/reinstall command to run next.
 EOF
 }
 
@@ -59,6 +65,49 @@ truthy() {
             return 1
             ;;
     esac
+}
+
+falsy() {
+    case "${1:-}" in
+        0|false|False|FALSE|no|No|NO|off|Off|OFF)
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+noninteractive_mode() {
+    truthy "${CODEX_BOOTSTRAP_NONINTERACTIVE:-0}" || ! [ -t 0 ]
+}
+
+dry_run_enabled() {
+    truthy "${CODEX_BOOTSTRAP_DRY_RUN:-0}"
+}
+
+prompt_read() {
+    local __var="$1"
+    local prompt="$2"
+    if read -r -p "$prompt" "$__var"; then
+        return 0
+    fi
+    printf -v "$__var" ''
+    echo
+    return 1
+}
+
+env_flag_enabled() {
+    local name="$1"
+    local value="${!name:-}"
+    [ -n "${!name+x}" ] || return 1
+    if truthy "$value"; then
+        return 0
+    fi
+    if falsy "$value"; then
+        return 1
+    fi
+    error "$name must be 1 or 0"
 }
 
 package_with_updater_enabled() {
@@ -235,6 +284,263 @@ portal_summary() {
         printf 'running'
     else
         printf 'not detected'
+    fi
+}
+
+install_command_for_packages() {
+    local packages="$1"
+    case "$(detect_package_manager)" in
+        apt)
+            printf 'sudo apt install %s' "$packages"
+            ;;
+        dnf5)
+            printf 'sudo dnf5 install %s' "$packages"
+            ;;
+        dnf)
+            printf 'sudo dnf install %s' "$packages"
+            ;;
+        pacman)
+            printf 'sudo pacman -S %s' "$packages"
+            ;;
+        zypper)
+            printf 'sudo zypper install %s' "$packages"
+            ;;
+        *)
+            printf 'Use your distro package manager to install: %s' "$packages"
+            ;;
+    esac
+}
+
+computer_use_portal_packages() {
+    local desktop="${XDG_CURRENT_DESKTOP:-} ${DESKTOP_SESSION:-}"
+    desktop="${desktop,,}"
+    if [[ "$desktop" == *kde* || "$desktop" == *plasma* ]]; then
+        printf 'xdg-desktop-portal xdg-desktop-portal-kde'
+    elif [[ "$desktop" == *hyprland* || "$desktop" == *sway* || "$desktop" == *wlroots* ]]; then
+        printf 'xdg-desktop-portal xdg-desktop-portal-wlr'
+    elif [[ "$desktop" == *gnome* ]]; then
+        printf 'xdg-desktop-portal xdg-desktop-portal-gnome'
+    else
+        printf 'xdg-desktop-portal'
+    fi
+}
+
+computer_use_ydotool_packages() {
+    case "$(detect_package_manager)" in
+        apt)
+            printf 'ydotool ydotoold'
+            ;;
+        *)
+            printf 'ydotool'
+            ;;
+    esac
+}
+
+uinput_summary() {
+    local uinput_path="${CODEX_BOOTSTRAP_UINPUT_PATH:-/dev/uinput}"
+    if [ ! -e "$uinput_path" ]; then
+        printf 'missing'
+        return
+    fi
+
+    local access="no read/write access"
+    if [ -r "$uinput_path" ] && [ -w "$uinput_path" ]; then
+        access="read/write access"
+    elif [ -r "$uinput_path" ]; then
+        access="read-only access"
+    elif [ -w "$uinput_path" ]; then
+        access="write-only access"
+    fi
+
+    local stat_output=""
+    if command -v stat >/dev/null 2>&1 && command -v timeout >/dev/null 2>&1; then
+        stat_output="$(timeout 1 stat -c '%A %U:%G' "$uinput_path" 2>/dev/null || true)"
+    fi
+    printf '%s%s' "$access" "${stat_output:+ ($stat_output)}"
+}
+
+input_group_summary() {
+    if id -nG 2>/dev/null | tr ' ' '\n' | grep -qx 'input'; then
+        printf 'yes'
+    else
+        printf 'no'
+    fi
+}
+
+window_backend_hint() {
+    local desktop="${XDG_CURRENT_DESKTOP:-} ${DESKTOP_SESSION:-} ${XDG_SESSION_DESKTOP:-}"
+    desktop="${desktop,,}"
+    if [[ "$desktop" == *hyprland* ]]; then
+        printf 'Hyprland -> hyprctl backend'
+    elif [[ "$desktop" == *sway* ]]; then
+        printf 'Sway -> not explicitly supported by the current i3 backend; verify with Computer Use doctor after install'
+    elif [[ "$desktop" == *i3* ]]; then
+        printf 'i3 -> i3 IPC backend'
+    elif [[ "$desktop" == *cosmic* ]]; then
+        printf 'COSMIC -> bundled COSMIC helper backend'
+    elif [[ "$desktop" == *kde* || "$desktop" == *plasma* ]]; then
+        printf 'KDE/Plasma -> KWin scripting backend'
+    elif [[ "$desktop" == *gnome* ]]; then
+        printf 'GNOME -> Shell Introspect plus optional bundled extension for exact activation'
+    else
+        printf 'unknown desktop -> screenshots, AT-SPI, and global ydotool may still work'
+    fi
+}
+
+computer_use_doctor_path() {
+    local candidate
+    for candidate in \
+        "$REPO_DIR/codex-app/resources/plugins/openai-bundled/plugins/computer-use/bin/codex-computer-use-linux" \
+        "/opt/$PACKAGE_NAME/resources/plugins/openai-bundled/plugins/computer-use/bin/codex-computer-use-linux" \
+        "$(command -v codex-computer-use-linux 2>/dev/null || true)"; do
+        [ -n "$candidate" ] || continue
+        if [ -x "$candidate" ]; then
+            printf '%s\n' "$candidate"
+            return
+        fi
+    done
+    return 1
+}
+
+settings_file_path() {
+    if [ -n "${CODEX_LINUX_SETTINGS_FILE:-}" ]; then
+        printf '%s\n' "$CODEX_LINUX_SETTINGS_FILE"
+    else
+        local config_home="${XDG_CONFIG_HOME:-$HOME/.config}"
+        local app_id="${CODEX_LINUX_APP_ID:-${CODEX_APP_ID:-codex-desktop}}"
+        case "$app_id" in
+            */*|*[!A-Za-z0-9._-]*|"."|".."|"")
+                app_id="codex-desktop"
+                ;;
+        esac
+        printf '%s\n' "$config_home/$app_id/settings.json"
+    fi
+}
+
+json_setting_value() {
+    local key="$1"
+    local settings_path
+    settings_path="$(settings_file_path)"
+    [ -r "$settings_path" ] || return 1
+    command -v python3 >/dev/null 2>&1 || return 1
+    python3 - "$settings_path" "$key" <<'PY' 2>/dev/null || true
+import json
+import sys
+
+try:
+    with open(sys.argv[1], "r", encoding="utf-8") as fh:
+        data = json.load(fh)
+except Exception:
+    sys.exit(0)
+value = data.get(sys.argv[2])
+if isinstance(value, str) and value.strip():
+    print(value)
+PY
+}
+
+read_aloud_python_path() {
+    local value="${CODEX_LINUX_READ_ALOUD_KOKORO_PYTHON:-}"
+    if [ -z "$value" ]; then
+        value="$(json_setting_value "codex-linux-read-aloud-kokoro-python")"
+    fi
+    if [ -z "$value" ]; then
+        value="${XDG_DATA_HOME:-$HOME/.local/share}/codex-desktop/read-aloud/kokoro-venv/bin/python"
+    fi
+    printf '%s\n' "$value"
+}
+
+read_aloud_model_path() {
+    local value="${CODEX_LINUX_READ_ALOUD_KOKORO_MODEL:-}"
+    if [ -z "$value" ]; then
+        value="$(json_setting_value "codex-linux-read-aloud-kokoro-model")"
+    fi
+    if [ -z "$value" ]; then
+        value="${XDG_DATA_HOME:-$HOME/.local/share}/kokoro/kokoro-v1.0.onnx"
+    fi
+    printf '%s\n' "$value"
+}
+
+read_aloud_voices_path() {
+    local value="${CODEX_LINUX_READ_ALOUD_KOKORO_VOICES:-}"
+    if [ -z "$value" ]; then
+        value="$(json_setting_value "codex-linux-read-aloud-kokoro-voices")"
+    fi
+    if [ -z "$value" ]; then
+        value="${XDG_DATA_HOME:-$HOME/.local/share}/kokoro/voices-v1.0.bin"
+    fi
+    printf '%s\n' "$value"
+}
+
+path_summary() {
+    local path="$1"
+    if [ -d "$path" ]; then
+        printf 'directory'
+    elif [ -x "$path" ]; then
+        printf 'executable'
+    elif [ -f "$path" ]; then
+        printf 'file'
+    elif [ -e "$path" ]; then
+        printf 'exists'
+    else
+        printf 'missing'
+    fi
+}
+
+read_aloud_doctor_path() {
+    local candidate
+    for candidate in \
+        "$REPO_DIR/codex-app/resources/plugins/openai-bundled/plugins/read-aloud/bin/codex-read-aloud-linux" \
+        "/opt/$PACKAGE_NAME/resources/plugins/openai-bundled/plugins/read-aloud/bin/codex-read-aloud-linux" \
+        "$(command -v codex-read-aloud-linux 2>/dev/null || true)"; do
+        [ -n "$candidate" ] || continue
+        if [ -x "$candidate" ]; then
+            printf '%s\n' "$candidate"
+            return
+        fi
+    done
+    return 1
+}
+
+print_read_aloud_details() {
+    local python_path model_path voices_path doctor plugin_cache settings_path
+    python_path="$(read_aloud_python_path)"
+    model_path="$(read_aloud_model_path)"
+    voices_path="$(read_aloud_voices_path)"
+    doctor="$(read_aloud_doctor_path 2>/dev/null || true)"
+    plugin_cache="$HOME/.codex/plugins/cache/openai-bundled/read-aloud"
+    settings_path="$(settings_file_path)"
+
+    info "Read Aloud readiness:"
+    info "  Settings file: $settings_path ($(path_summary "$settings_path"))"
+    info "  Kokoro python: $python_path ($(path_summary "$python_path"))"
+    info "  Kokoro model: $model_path ($(path_summary "$model_path"))"
+    info "  Kokoro voices: $voices_path ($(path_summary "$voices_path"))"
+    info "  Read Aloud plugin cache: $plugin_cache ($(path_summary "$plugin_cache"))"
+    if [ -n "$doctor" ]; then
+        info "  Read Aloud doctor command: $doctor doctor"
+    else
+        info "  Read Aloud doctor command: enable read-aloud-mcp and rebuild/install, then run codex-read-aloud-linux doctor from the staged plugin."
+    fi
+    info "  Setup hint: use the Read Aloud settings download flow or linux-features/read-aloud/install-kokoro-runtime.sh; custom paths stay in settings/env."
+}
+
+print_computer_use_details() {
+    local doctor=""
+    doctor="$(computer_use_doctor_path 2>/dev/null || true)"
+
+    info "Computer Use details:"
+    info "  uinput=$(uinput_summary)"
+    info "  current user in input group=$(input_group_summary)"
+    info "  Window backend hint: $(window_backend_hint)"
+    info "  Suggested ydotool command: $(install_command_for_packages "$(computer_use_ydotool_packages)")"
+    info "  Suggested portal package: $(install_command_for_packages "$(computer_use_portal_packages)")"
+    info "  Suggested ydotool service command: sudo systemctl enable --now ydotoold.service"
+    info "  If your distro ships ydotool.service instead, use sudo systemctl enable --now ydotool.service."
+    info "  Do not stop or disable ydotoold from this wizard; other apps may use it."
+    if [ -n "$doctor" ]; then
+        info "  Computer Use doctor command: $doctor doctor"
+    else
+        info "  Computer Use doctor command: build/install first, then run codex-computer-use-linux doctor from the staged plugin."
     fi
 }
 
@@ -469,11 +775,134 @@ print_safe_disable_guidance() {
         list_includes_id "$disable_raw" "conversation-mode"; then
         local data_home="${XDG_DATA_HOME:-$HOME/.local/share}"
         local read_aloud_data="$data_home/codex-desktop/read-aloud"
+        local read_aloud_model
+        local read_aloud_voices
         local read_aloud_cache="$HOME/.codex/plugins/cache/openai-bundled/read-aloud"
+        read_aloud_model="$(read_aloud_model_path)"
+        read_aloud_voices="$(read_aloud_voices_path)"
         info "Read Aloud opt-out: Not removing Read Aloud model files, Python runtimes, or plugin caches."
         info "Cleanup is separate and should list exact paths first, such as:"
         info "  $read_aloud_data"
+        info "  $read_aloud_model"
+        info "  $read_aloud_voices"
         info "  $read_aloud_cache"
+    fi
+}
+
+validate_cleanup_feature_ids() {
+    local raw="$1"
+    local item
+    raw="${raw//,/ }"
+    for item in $raw; do
+        case "$item" in
+            remote-mobile-control|read-aloud|read-aloud-mcp|conversation-mode)
+                ;;
+            "")
+                ;;
+            *)
+                error "Unsupported cleanup feature id: $item"
+                ;;
+        esac
+    done
+}
+
+cleanup_path_is_safe() {
+    local path="$1"
+    local config_home="${XDG_CONFIG_HOME:-$HOME/.config}"
+    local data_home="${XDG_DATA_HOME:-$HOME/.local/share}"
+    case "$path" in
+        ""|"/"|"$HOME"|"$HOME/"|"$config_home"|"$config_home/"|"$data_home"|"$data_home/"|"$HOME/.codex"|"$HOME/.codex/")
+            return 1
+            ;;
+    esac
+    case "$path" in
+        "$config_home"/codex-desktop/*|"$data_home"/codex-desktop/read-aloud|"$data_home"/codex-desktop/read-aloud/*|"$data_home"/kokoro/kokoro-v1.0.onnx|"$data_home"/kokoro/voices-v1.0.bin|"$HOME"/.codex/plugins/cache/openai-bundled/read-aloud|"$HOME"/.codex/plugins/cache/openai-bundled/read-aloud/*)
+            return 0
+            ;;
+    esac
+    return 1
+}
+
+confirm_and_delete_path() {
+    local path="$1"
+    if [ ! -e "$path" ]; then
+        info "Cleanup path missing, nothing to delete: $path"
+        return
+    fi
+    if ! cleanup_path_is_safe "$path"; then
+        warn "Refusing cleanup path outside the known feature-owned locations: $path"
+        return
+    fi
+
+    if dry_run_enabled; then
+        info "Would delete: $path"
+        return
+    fi
+
+    local answer
+    prompt_read answer "[setup] Type DELETE $path to delete, or press Enter to skip: " || true
+    if [ "$answer" = "DELETE $path" ]; then
+        rm -rf -- "$path"
+        info "Deleted $path"
+    else
+        info "Skipped $path"
+    fi
+}
+
+run_feature_cleanup() {
+    local cleanup_raw="${CODEX_BOOTSTRAP_CLEANUP_FEATURES:-}"
+    if [ -z "$cleanup_raw" ]; then
+        if noninteractive_mode; then
+            return
+        fi
+        local wants_cleanup=""
+        prompt_read wants_cleanup "[setup] Clean up feature-owned local data now? [y/N]: " || true
+        case "$wants_cleanup" in
+            y|Y|yes|Yes|YES)
+                prompt_read cleanup_raw "[setup] Cleanup feature ids (comma-separated): " || true
+                ;;
+            *)
+                return
+                ;;
+        esac
+    fi
+
+    [ -n "$cleanup_raw" ] || return
+    validate_cleanup_feature_ids "$cleanup_raw"
+
+    if noninteractive_mode && ! dry_run_enabled; then
+        error "Cleanup requires an interactive terminal and exact path confirmation."
+    fi
+
+    info "Feature cleanup is separate from disabling features for the next rebuild."
+    if dry_run_enabled; then
+        info "Dry-run cleanup: matching paths will be printed and not deleted."
+    else
+        info "Only paths confirmed with the exact DELETE line will be removed."
+    fi
+
+    if list_includes_id "$cleanup_raw" "remote-mobile-control"; then
+        local config_home="${XDG_CONFIG_HOME:-$HOME/.config}"
+        local key_file="$config_home/codex-desktop/remote-control-device-keys-v1.json"
+        info "Remote mobile control cleanup: revoke paired devices in Codex Settings/Connections or ChatGPT before deleting local keys."
+        confirm_and_delete_path "$key_file"
+    fi
+
+    if list_includes_id "$cleanup_raw" "read-aloud" ||
+        list_includes_id "$cleanup_raw" "read-aloud-mcp" ||
+        list_includes_id "$cleanup_raw" "conversation-mode"; then
+        local data_home="${XDG_DATA_HOME:-$HOME/.local/share}"
+        local read_aloud_data="$data_home/codex-desktop/read-aloud"
+        local read_aloud_model
+        local read_aloud_voices
+        local read_aloud_cache="$HOME/.codex/plugins/cache/openai-bundled/read-aloud"
+        read_aloud_model="$(read_aloud_model_path)"
+        read_aloud_voices="$(read_aloud_voices_path)"
+        info "Read Aloud cleanup: model files, Python runtimes, and plugin caches are not removed unless their exact paths are confirmed."
+        confirm_and_delete_path "$read_aloud_model"
+        confirm_and_delete_path "$read_aloud_voices"
+        confirm_and_delete_path "$read_aloud_data"
+        confirm_and_delete_path "$read_aloud_cache"
     fi
 }
 
@@ -489,6 +918,85 @@ print_package_mode_guidance() {
     info "AppImage builds never include codex-update-manager. Nix feature choices stay declarative in flake outputs, not linux-features/features.json."
 }
 
+run_repo_command() {
+    local display="$1"
+    shift
+    if dry_run_enabled; then
+        info "Would run: $display"
+    else
+        info "Running: $display"
+        (cd "$REPO_DIR" && "$@")
+    fi
+}
+
+run_install_deps_step() {
+    run_repo_command "bash scripts/install-deps.sh" bash "$REPO_DIR/scripts/install-deps.sh"
+}
+
+run_install_native_step() {
+    if package_with_updater_enabled; then
+        if dry_run_enabled; then
+            info 'Would run: PATH="$HOME/.cargo/bin:$PATH" make install-native'
+        else
+            info 'Running: PATH="$HOME/.cargo/bin:$PATH" make install-native'
+            (cd "$REPO_DIR" && PATH="$HOME/.cargo/bin:$PATH" make install-native)
+        fi
+    else
+        if dry_run_enabled; then
+            info 'Would run: PATH="$HOME/.cargo/bin:$PATH" PACKAGE_WITH_UPDATER=0 make install-native'
+        else
+            info 'Running: PATH="$HOME/.cargo/bin:$PATH" PACKAGE_WITH_UPDATER=0 make install-native'
+            (cd "$REPO_DIR" && PATH="$HOME/.cargo/bin:$PATH" PACKAGE_WITH_UPDATER=0 make install-native)
+        fi
+    fi
+}
+
+maybe_run_install_steps() {
+    local ran_or_planned=0
+    local run_deps=0
+    local run_install=0
+
+    if env_flag_enabled CODEX_BOOTSTRAP_INSTALL_DEPS; then
+        run_deps=1
+    fi
+    if env_flag_enabled CODEX_BOOTSTRAP_INSTALL_NATIVE; then
+        run_install=1
+    fi
+
+    if ! noninteractive_mode; then
+        local answer
+        if [ -z "${CODEX_BOOTSTRAP_INSTALL_DEPS+x}" ]; then
+            prompt_read answer "[setup] Run host dependency bootstrap now (bash scripts/install-deps.sh)? [y/N]: " || true
+            case "$answer" in
+                y|Y|yes|Yes|YES)
+                    run_deps=1
+                    ;;
+            esac
+        fi
+        if [ -z "${CODEX_BOOTSTRAP_INSTALL_NATIVE+x}" ]; then
+            prompt_read answer "[setup] Run native build/package/install now? [y/N]: " || true
+            case "$answer" in
+                y|Y|yes|Yes|YES)
+                    run_install=1
+                    ;;
+            esac
+        fi
+    fi
+
+    if [ "$run_deps" = "1" ]; then
+        run_install_deps_step
+        ran_or_planned=1
+    fi
+    if [ "$run_install" = "1" ]; then
+        run_install_native_step
+        ran_or_planned=1
+    fi
+
+    if [ "$ran_or_planned" = "1" ] && dry_run_enabled; then
+        info "Dry-run mode: no dependency install or native package install command was executed."
+    fi
+}
+
 prompt_for_feature_changes() {
     local enable_raw="${CODEX_LINUX_FEATURES:-}"
     local disable_raw="${CODEX_LINUX_DISABLE_FEATURES:-}"
@@ -501,8 +1009,8 @@ prompt_for_feature_changes() {
 
     run_feature_config_python "" "" "0"
     echo
-    read -r -p "[setup] Enable feature ids for the next build (comma-separated, blank keeps current): " enable_raw
-    read -r -p "[setup] Disable feature ids for the next build (comma-separated, blank disables none): " disable_raw
+    prompt_read enable_raw "[setup] Enable feature ids for the next build (comma-separated, blank keeps current): " || true
+    prompt_read disable_raw "[setup] Disable feature ids for the next build (comma-separated, blank disables none): " || true
     if [ -n "$enable_raw$disable_raw" ]; then
         run_feature_config_python "$enable_raw" "$disable_raw" "1"
         print_safe_disable_guidance "$disable_raw"
@@ -512,14 +1020,14 @@ prompt_for_feature_changes() {
 
     local answer
     if package_with_updater_enabled; then
-        read -r -p "[setup] Keep codex-update-manager in the next native package? [Y/n]: " answer
+        prompt_read answer "[setup] Keep codex-update-manager in the next native package? [Y/n]: " || true
         case "$answer" in
             n|N|no|No|NO)
                 PACKAGE_WITH_UPDATER=0
                 ;;
         esac
     else
-        read -r -p "[setup] Keep manual-update package mode for the next native build? [Y/n]: " answer
+        prompt_read answer "[setup] Keep manual-update package mode for the next native build? [Y/n]: " || true
         case "$answer" in
             n|N|no|No|NO)
                 PACKAGE_WITH_UPDATER=1
@@ -531,8 +1039,16 @@ prompt_for_feature_changes() {
 main() {
     print_system_summary
     prompt_for_feature_changes
+    print_computer_use_details
+    print_read_aloud_details
+    run_feature_cleanup
     print_package_mode_guidance
-    info "No system services, groups, key files, model files, plugin caches, or package installs were changed."
+    maybe_run_install_steps
+    if dry_run_enabled; then
+        info "Dry-run completed."
+    else
+        info "Feature cleanup did not change services, groups, key files, model files, or plugin caches unless explicitly confirmed above."
+    fi
     info "If Computer Use needs ydotoold, input group membership, a portal backend, or logout/login, run those steps explicitly after reviewing the commands."
 }
 

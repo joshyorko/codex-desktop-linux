@@ -11,7 +11,7 @@ truthy_env_value() {
 install_remote_mobile_control_runtime() {
     local codex_home="$1"
     local private_bin="$codex_home/packages/standalone/.bin"
-    local system_path="/usr/bin:/bin:/usr/sbin:/sbin"
+    local system_path="/run/current-system/sw/bin:/usr/bin:/bin:/usr/sbin:/sbin"
     local installer_path="$private_bin:$system_path"
     local setsid_path=""
     local fetch_cmd=""
@@ -62,6 +62,11 @@ remote_mobile_control_main() {
         echo "Remote mobile control daemon autostart disabled by CODEX_REMOTE_CONTROL_DAEMON_AUTOSTART_DISABLED"
         return 0
     fi
+    if command -v systemctl >/dev/null 2>&1 &&
+        systemctl --user is-active --quiet codex-remote-control.service 2>/dev/null; then
+        echo "Remote mobile control daemon autostart skipped; codex-remote-control.service is already active"
+        return 0
+    fi
 
     local codex_home="${CODEX_HOME:-$HOME/.codex}"
     local standalone_codex="${CODEX_REMOTE_CONTROL_CODEX_PATH:-$codex_home/packages/standalone/current/codex}"
@@ -86,7 +91,7 @@ remote_mobile_control_main() {
         fi
     fi
 
-    if "$standalone_codex" app-server daemon start --enable remote_control; then
+    if "$standalone_codex" remote-control start; then
         echo "Remote mobile control daemon is ready via $standalone_codex"
     else
         echo "Remote mobile control daemon start failed via $standalone_codex; Android remote hosts may remain disconnected."
@@ -99,7 +104,8 @@ run_with_timeout() {
         timeout "$timeout_seconds" "$0" --run-main || \
             echo "Remote mobile control hook timed out or failed after ${timeout_seconds}s"
     else
-        remote_mobile_control_main
+        echo "Remote mobile control hook running without timeout; continuing best-effort in the background"
+        remote_mobile_control_main &
     fi
 }
 
