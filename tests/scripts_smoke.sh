@@ -1726,7 +1726,8 @@ const required = [
   "src=\"./assets/",
   "src=\"/assets/",
   "serveIndexWithInitialRoute",
-  "basename.startsWith(\"src-\")",
+  "path.extname(basename)",
+  "patchWebModeStatsigGateDefaults(patched)",
   "WEB_MODE_API_PREFIXES",
   "\"/wham/\"",
   "\"/accounts/\"",
@@ -1769,6 +1770,9 @@ const statsigNeedle = "t(!1,{onMount:(t,n)=>{let r=n.get(i);return r!=null&&t(r.
 const statsigReplacement = "t(${forcedGate},{onMount:(t,n)=>{let r=n.get(i);return r!=null&&t(${forcedGate}||r.checkGate(e)),n.set(a,t=>t.includes(e)?t:[...t,e])";
 if (!source.includes(statsigNeedle) || !source.includes(statsigReplacement)) {
   throw new Error("web-mode statsig patch must set an initial forced gate value and preserve it after checkGate");
+}
+if (source.includes("basename.startsWith(\"src-\")")) {
+  throw new Error("web-mode statsig patch must not depend on brittle src-* asset names");
 }
 
 const projectlessNeedle = "if(m===`projectless`&&h==null)throw Error(`Projectless conversations require an output directory`);";

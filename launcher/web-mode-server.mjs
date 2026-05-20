@@ -3565,16 +3565,18 @@ function patchWebModeProjectlessOutputDirectory(source) {
 
 function patchWebModeAssetSource(target, source) {
   const basename = path.basename(target);
-  if (basename.startsWith("electron-menu-shortcuts-")) {
-    return source.replaceAll("t?.bindings.filter", "t?.bindings?.filter");
+  const extension = path.extname(basename);
+  let patched = source;
+  if (extension === ".js" || extension === ".mjs") {
+    patched = patchWebModeStatsigGateDefaults(patched);
   }
-  if (basename.startsWith("src-")) {
-    return patchWebModeStatsigGateDefaults(source);
+  if (basename.startsWith("electron-menu-shortcuts-")) {
+    patched = patched.replaceAll("t?.bindings.filter", "t?.bindings?.filter");
   }
   if (basename.startsWith("reply-")) {
-    return patchWebModeProjectlessOutputDirectory(source);
+    patched = patchWebModeProjectlessOutputDirectory(patched);
   }
-  return source;
+  return patched;
 }
 
 function shouldServeSpaFallback(requestPath) {
