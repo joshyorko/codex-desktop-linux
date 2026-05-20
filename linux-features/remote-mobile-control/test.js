@@ -587,6 +587,44 @@ test("Linux remote-control enablement bridge loads remote-control clients on Lin
   assert.equal(calls[0].params.enabled, true);
 });
 
+test("Linux remote-control enablement bridge auto-connects local remote-control hosts", async () => {
+  const source = syntheticAppMainEnablementBridgeBundle();
+  const patched = applyLinuxRemoteControlEnablementBridgePatch(source);
+
+  const calls = [];
+  const context = {
+    DF: "[remote-connections/slingshot-gate-bridge]",
+    navigator: { userAgent: "X11; Linux x86_64" },
+    Promise,
+    q: { warning() {} },
+    Q: {
+      useEffect(callback) {
+        callback();
+      },
+    },
+    sc: () => false,
+    Z: { c: () => [] },
+    $o: (method, { params }) => {
+      calls.push({ method, params });
+      if (method === "set-remote-control-connections-enabled") {
+        return Promise.resolve({
+          remoteControlConnections: [{ hostId: "remote-control:env_1" }],
+        });
+      }
+      return Promise.resolve({});
+    },
+  };
+  vm.runInNewContext(`${patched};OF();`, context);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].method, "set-remote-control-connections-enabled");
+  assert.equal(calls[0].params.enabled, true);
+  assert.equal(calls[1].method, "set-remote-connection-auto-connect");
+  assert.equal(calls[1].params.hostId, "remote-control:env_1");
+  assert.equal(calls[1].params.autoConnect, true);
+});
+
 test("patched Linux device-key provider can create, sign with, and delete a key", async () => {
   const configHome = fs.mkdtempSync(path.join(os.tmpdir(), "codex-remote-mobile-key-store-"));
   try {

@@ -31,6 +31,7 @@ const REMOTE_MOBILE_THREAD_RUNTIME_MARKER = "codexLinuxRemoteMobileThreadRuntime
 const REMOTE_MOBILE_UNKNOWN_TURN_MARKER = "codexLinuxRemoteMobileHydrateUnknownTurn";
 const REMOTE_MOBILE_NOTIFICATION_QUEUE_MARKER = "codexLinuxRemoteMobileNotificationQueue";
 const REMOTE_CONTROL_ENABLEMENT_BRIDGE_MARKER = "codexLinuxRemoteControlEnablementBridge";
+const REMOTE_CONTROL_AUTO_CONNECT_MARKER = "codexLinuxRemoteControlAutoConnect";
 const REMOTE_MOBILE_ACTIVE_STATUS_MARKER = "codexLinuxRemoteMobileActiveStatus";
 const REMOTE_CONTROL_SELECTED_TAB_NEEDLE =
   "function rr({selectedConnectionsTab:e,showControlThisMacTab:t,showRemoteControlConnectionsSection:n,showTabbedSshPage:r}){return n?e===`control-this-mac`&&!t||e===`ssh`&&!r?`access-other-devices`:e:`ssh`}";
@@ -652,30 +653,50 @@ function applyLinuxRemoteMobileConversationHydrationPatch(source) {
 }
 
 function applyLinuxRemoteControlEnablementBridgePatch(source) {
-  if (source.includes(REMOTE_CONTROL_ENABLEMENT_BRIDGE_MARKER)) {
-    return source;
-  }
-
   const markerIndex = source.indexOf("[remote-connections/slingshot-gate-bridge]");
   if (markerIndex < 0 || source.indexOf("set-remote-control-connections-enabled", markerIndex) < 0) {
     return source;
   }
 
-  const region = source.slice(markerIndex, markerIndex + 2_500);
-  const bridgePattern =
-    /function ([A-Za-z_$][\w$]*)\(\)\{let ([A-Za-z_$][\w$]*)=\(0,([A-Za-z_$][\w$]*)\.c\)\(3\),([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)\(\),([A-Za-z_$][\w$]*),([A-Za-z_$][\w$]*);return \2\[0\]===\4\?/u;
-  const patchedRegion = region.replace(
-    bridgePattern,
-    (_needle, functionName, cacheVar, compilerVar, enabledVar, gateVar, callbackVar, depsVar) =>
-      `function ${functionName}(){let ${cacheVar}=(0,${compilerVar}.c)(3),${enabledVar}=${gateVar}()||/*${REMOTE_CONTROL_ENABLEMENT_BRIDGE_MARKER}*/typeof navigator!=\`undefined\`&&navigator.userAgent.includes(\`Linux\`),${callbackVar},${depsVar};return ${cacheVar}[0]===${enabledVar}?`,
-  );
+  let patched = source;
+  let region = patched.slice(markerIndex, markerIndex + 4_500);
 
-  if (patchedRegion === region) {
-    console.warn("WARN: Could not find remote-control enablement bridge needle - skipping Linux remote-control bridge patch");
-    return source;
+  if (!patched.includes(REMOTE_CONTROL_ENABLEMENT_BRIDGE_MARKER)) {
+    const bridgePattern =
+      /function ([A-Za-z_$][\w$]*)\(\)\{let ([A-Za-z_$][\w$]*)=\(0,([A-Za-z_$][\w$]*)\.c\)\(3\),([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)\(\),([A-Za-z_$][\w$]*),([A-Za-z_$][\w$]*);return \2\[0\]===\4\?/u;
+    const patchedRegion = region.replace(
+      bridgePattern,
+      (_needle, functionName, cacheVar, compilerVar, enabledVar, gateVar, callbackVar, depsVar) =>
+        `function ${functionName}(){let ${cacheVar}=(0,${compilerVar}.c)(3),${enabledVar}=${gateVar}()||/*${REMOTE_CONTROL_ENABLEMENT_BRIDGE_MARKER}*/typeof navigator!=\`undefined\`&&navigator.userAgent.includes(\`Linux\`),${callbackVar},${depsVar};return ${cacheVar}[0]===${enabledVar}?`,
+    );
+
+    if (patchedRegion === region) {
+      console.warn("WARN: Could not find remote-control enablement bridge needle - skipping Linux remote-control bridge patch");
+      return source;
+    }
+
+    patched = patched.slice(0, markerIndex) + patchedRegion + patched.slice(markerIndex + region.length);
+    region = patched.slice(markerIndex, markerIndex + 4_500);
   }
 
-  return source.slice(0, markerIndex) + patchedRegion + source.slice(markerIndex + region.length);
+  if (patched.includes(REMOTE_CONTROL_AUTO_CONNECT_MARKER)) {
+    return patched;
+  }
+
+  const autoConnectPattern =
+    /([A-Za-z_$][\w$]*)\(`set-remote-control-connections-enabled`,\{params:\{enabled:([A-Za-z_$][\w$]*)\}\}\)\.catch\(([A-Za-z_$][\w$]*)=>\{([A-Za-z_$][\w$]*)\.warning\(`\$\{([A-Za-z_$][\w$]*)\} sync_failed`,\{safe:\{enabled:\2\},sensitive:\{error:\3\}\}\)\}\)/u;
+  const autoConnectRegion = region.replace(
+    autoConnectPattern,
+    (_needle, desktopHostRequestFn, enabledVar, errorVar, loggerVar, logPrefixVar) =>
+      `${desktopHostRequestFn}(\`set-remote-control-connections-enabled\`,{params:{enabled:${enabledVar}}}).then(async e=>{if(${enabledVar}&&typeof navigator!=\`undefined\`&&navigator.userAgent.includes(\`Linux\`)){let t=e?.remoteControlConnections??e?.sharedObjects?.remote_control_connections??e?.connections??[];if(t.length===0)try{let e=await ${desktopHostRequestFn}(\`refresh-remote-control-connections\`,{params:{}});t=e?.remoteControlConnections??e?.sharedObjects?.remote_control_connections??e?.connections??[]}catch(e){${loggerVar}.warning(\`\${${logPrefixVar}} auto_connect_refresh_failed\`,{safe:{},sensitive:{error:e}})}await Promise.all([...new Set(t.map(e=>e?.hostId).filter(e=>typeof e==\`string\`&&e.startsWith(\`remote-control:\`)))].map(e=>${desktopHostRequestFn}(\`set-remote-connection-auto-connect\`,{params:{hostId:e,autoConnect:!0}})))}}/*${REMOTE_CONTROL_AUTO_CONNECT_MARKER}*/).catch(${errorVar}=>{${loggerVar}.warning(\`\${${logPrefixVar}} sync_failed\`,{safe:{enabled:${enabledVar}},sensitive:{error:${errorVar}}})})`,
+  );
+
+  if (autoConnectRegion === region) {
+    console.warn("WARN: Could not find remote-control auto-connect needle - skipping Linux remote-control auto-connect patch");
+    return patched;
+  }
+
+  return patched.slice(0, markerIndex) + autoConnectRegion + patched.slice(markerIndex + region.length);
 }
 
 function applyLinuxRemoteMobileActiveStatusPatch(source) {
