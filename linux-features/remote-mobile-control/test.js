@@ -27,6 +27,7 @@ const {
   applyLinuxRemoteControlLoadGatePatch,
   applyLinuxRemoteControlEnablementBridgePatch,
   applyLinuxRemoteMobileActiveStatusPatch,
+  applyLinuxRemoteMobileAppServerProxyPatch,
   applyLinuxRemoteMobileChromeBridgePatch,
   applyLinuxRemoteMobileConversationHydrationPatch,
   applyLinuxRemoteConnectionsRefreshPatch,
@@ -55,6 +56,13 @@ function syntheticCurrentMainBundle() {
     "var lz=(0,b.createRequire)(__filename),uz=`remote-control-device-key.node`,dz=`codex-device-key-sign-payload/v1`;",
     "function pz({resourcesPath:e}){let t=null,n=()=>{if(process.platform!==`darwin`)throw Error(`Remote control device keys are only available on macOS`);if(e==null)throw Error(`Remote control device keys require resourcesPath`);return t??=lz((0,i.join)(e,`native`,uz)),t};return{createDeviceKey:e=>n().createDeviceKey(e??`hardware_only`),deleteDeviceKey:e=>n().deleteDeviceKey(e),getDeviceKeyPublic:e=>n().getDeviceKeyPublic(e),signDeviceKey:async(e,t)=>{let r=mz(t);return{...await n().signDeviceKey(e,r),signedPayloadBase64:r.toString(`base64`)}}}}",
     "async function vV({codexHome:e,hostConfig:n,logger:r=t.Jr()}){if(n.kind===`local`)try{await yV(i.default.join(e??t.Rr({hostConfig:n,preferWsl:t.Kr(n)}),_V))&&r.info(`Removed remote_control from config before app-server start`)}catch(e){r.warning(`Failed to remove remote_control before app-server start`,{safe:{},sensitive:{error:e}})}}",
+  ].join("");
+}
+
+function syntheticAppServerLaunchBundle() {
+  return [
+    "function Pd(e){let t=e.hostConfig.codex_cli_command;if(t&&t.length>0){let[e,...n]=t;return!e||e.trim().length===0?null:{executablePath:e,args:n}}let n=Kd();if(n!=null)return{executablePath:n,args:[`app-server`,`--analytics-default-enabled`]};let r=Nd(e.repoRoot,{resourcesPath:e.resourcesPath});return r?{executablePath:r.executablePath,args:[`app-server`,`--analytics-default-enabled`],binDirectory:r.binDirectory}:null}",
+    "function Fd(e){let t=e.hostConfig.codex_cli_command;if(t&&t.length>0){let[e,...n]=t;if(!e||e.trim().length===0)return null;let r;if(Zd(e)&&(0,s.existsSync)(e)){let t=Wd(e);t&&(r=(0,i.dirname)(t))}return{executablePath:e,args:n,binDirectory:r}}let n=Kd();if(n!=null)return{executablePath:n,args:[`app-server`,`--analytics-default-enabled`]};let r=Ud(e.repoRoot,{resourcesPath:e.resourcesPath,windowsCodexHome:e.windowsCodexHome});return r?{executablePath:r.executablePath,args:[`app-server`,`--analytics-default-enabled`],binDirectory:r.binDirectory}:null}",
   ].join("");
 }
 
@@ -236,6 +244,7 @@ test("remote mobile control feature exposes opt-in main-bundle and webview patch
       "feature:remote-mobile-control:linux-remote-control-preserve-config",
       "feature:remote-mobile-control:linux-remote-control-client-account-compatibility",
       "feature:remote-mobile-control:linux-remote-control-client-revocation-recovery",
+      "feature:remote-mobile-control:linux-remote-mobile-app-server-proxy",
       "feature:remote-mobile-control:linux-remote-control-load-gate",
       "feature:remote-mobile-control:linux-remote-control-feature-sync",
       "feature:remote-mobile-control:linux-remote-control-visibility",
@@ -252,6 +261,7 @@ test("remote mobile control feature exposes opt-in main-bundle and webview patch
       "main-bundle",
       "main-bundle",
       "main-bundle",
+      "extracted-app",
       "webview-asset",
       "webview-asset",
       "webview-asset",
@@ -326,6 +336,18 @@ test("Linux remote-control client recovery handles bare missing key material err
   const patched = applyLinuxRemoteControlClientRevocationRecoveryPatch(source);
 
   assert.match(patched, /e\.message===`Remote-control client key material missing`/);
+});
+
+test("Linux remote mobile app-server launch uses the managed daemon proxy", () => {
+  const source = syntheticAppServerLaunchBundle();
+  const patched = applyLinuxRemoteMobileAppServerProxyPatch(source);
+
+  assert.notEqual(patched, source);
+  assert.match(patched, /codexLinuxRemoteMobileAppServerArgs/);
+  assert.match(patched, /process\.platform===`linux`\?\[`app-server`,`proxy`\]:\[`app-server`,`--analytics-default-enabled`\]/);
+  assert.doesNotMatch(patched, /args:\[`app-server`,`--analytics-default-enabled`\]/);
+  assert.match(patched, /args:codexLinuxRemoteMobileAppServerArgs\(\)/);
+  assert.equal(applyLinuxRemoteMobileAppServerProxyPatch(patched), patched);
 });
 
 test("Linux remote-control client revoke clears setup completion after last client is removed", () => {
@@ -821,6 +843,7 @@ test("remote mobile control feature participates in ASAR patching and reports", 
         fs.mkdirSync(buildDir, { recursive: true });
         fs.mkdirSync(assetsDir, { recursive: true });
         fs.writeFileSync(path.join(buildDir, "main.js"), source);
+        fs.writeFileSync(path.join(buildDir, "workspace-root-drop-handler-test.js"), syntheticAppServerLaunchBundle());
         fs.writeFileSync(
           path.join(assetsDir, "remote-connection-visibility-test.js"),
           syntheticRemoteConnectionVisibilityBundle(),
@@ -859,6 +882,10 @@ test("remote mobile control feature participates in ASAR patching and reports", 
         patchExtractedApp(tempApp, { report });
 
         const patchedFile = fs.readFileSync(path.join(buildDir, "main.js"), "utf8");
+        const patchedAppServerLaunchFile = fs.readFileSync(
+          path.join(buildDir, "workspace-root-drop-handler-test.js"),
+          "utf8",
+        );
         const patchedVisibilityFile = fs.readFileSync(
           path.join(assetsDir, "remote-control-connections-visibility-test.js"),
           "utf8",
@@ -889,6 +916,8 @@ test("remote mobile control feature participates in ASAR patching and reports", 
         );
         assert.match(patchedFile, /codexLinuxRemoteControlDeviceKeyClient/);
         assert.match(patchedFile, /n\.kind===`local`&&process\.platform!==`linux`/);
+        assert.match(patchedAppServerLaunchFile, /codexLinuxRemoteMobileAppServerArgs/);
+        assert.match(patchedAppServerLaunchFile, /args:codexLinuxRemoteMobileAppServerArgs\(\)/);
         assert.match(patchedRemoteConnectionVisibilityFile, /codexLinuxRemoteControlLoadGateEnabled/);
         assert.match(patchedAppMainFile, /`remote_control`/);
         assert.match(patchedVisibilityFile, /navigator\.userAgent\.includes\(`Linux`\)/);
@@ -920,6 +949,12 @@ test("remote mobile control feature participates in ASAR patching and reports", 
           report.patches.some((patch) =>
             patch.name === "feature:remote-mobile-control:linux-remote-control-preserve-config" &&
             patch.status === "already-applied",
+          ),
+        );
+        assert.ok(
+          report.patches.some((patch) =>
+            patch.name === "feature:remote-mobile-control:linux-remote-mobile-app-server-proxy" &&
+            patch.status === "applied",
           ),
         );
         assert.ok(
