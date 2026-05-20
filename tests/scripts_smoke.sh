@@ -1977,6 +1977,7 @@ PY
     [[ "$output" == *"electron=<--use-gl=angle>"* ]] || fail "launcher must pass Electron args after -- without the separator: $output"
     [[ "$output" != *"electron=<--><--use-gl=angle>"* ]] || fail "launcher must not pass the -- separator to Electron: $output"
     [[ "$output" == *"<--ozone-platform=x11>"* ]] || fail "launcher --x11 must still set the Electron ozone platform: $output"
+    [[ "$output" == *"comp=0"* && "$output" != *"<--disable-gpu-compositing>"* ]] || fail "default Linux profile must keep GPU compositing enabled: $output"
     [[ "$output" == *"renderer_accessibility=1"* && "$output" == *"<--force-renderer-accessibility>"* ]] || fail "default Linux profile must still force renderer accessibility: $output"
 
     output="$(env -i PATH="$PATH" HOME="$HOME" CODEX_LINUX_RENDERING_MODE=default "$launcher_probe" probe -- --ozone-platform=x11)"
@@ -1984,7 +1985,7 @@ PY
     [[ "$output" != *"<--ozone-platform-hint=auto>"* ]] || fail "launcher must not add ozone hint when pass-through supplies an ozone platform: $output"
 
     output="$(env -i PATH="$PATH" HOME="$HOME" CODEX_LINUX_RENDERING_MODE=wslg "$launcher_probe" probe)"
-    [[ "$output" == *"mode=wslg"* && "$output" == *"comp=0"* && "$output" == *"gl_added=1"* ]] || fail "forced WSLg profile must disable GPU compositing default and add ANGLE: $output"
+    [[ "$output" == *"mode=wslg"* && "$output" == *"comp=0"* && "$output" == *"gl_added=1"* ]] || fail "forced WSLg profile must keep GPU compositing enabled and add ANGLE: $output"
     [[ "$output" == *"<--ozone-platform=x11>"* && "$output" == *"electron=<--use-gl=angle>"* ]] || fail "forced WSLg profile must use X11 and ANGLE by default: $output"
     [[ "$output" != *"<--disable-gpu-compositing>"* ]] || fail "forced WSLg profile must not add disable-gpu-compositing by default: $output"
     [[ "$output" == *"renderer_accessibility=0"* && "$output" != *"<--force-renderer-accessibility>"* ]] || fail "forced WSLg profile must skip renderer accessibility by default: $output"
@@ -2005,6 +2006,9 @@ PY
 
     output="$(env -i PATH="$PATH" HOME="$HOME" CODEX_LINUX_RENDERING_MODE=wslg CODEX_ELECTRON_DISABLE_GPU_COMPOSITING=1 "$launcher_probe" probe)"
     [[ "$output" == *"comp=1"* && "$output" == *"<--disable-gpu-compositing>"* ]] || fail "CODEX_ELECTRON_DISABLE_GPU_COMPOSITING=1 must force the compositor flag: $output"
+
+    output="$(env -i PATH="$PATH" HOME="$HOME" CODEX_LINUX_RENDERING_MODE=default CODEX_ELECTRON_DISABLE_GPU_COMPOSITING=1 "$launcher_probe" probe)"
+    [[ "$output" == *"comp=1"* && "$output" == *"<--disable-gpu-compositing>"* ]] || fail "CODEX_ELECTRON_DISABLE_GPU_COMPOSITING=1 must force the compositor flag under default Linux: $output"
 
     output="$(env -i PATH="$PATH" HOME="$HOME" CODEX_LINUX_RENDERING_MODE=default CODEX_ELECTRON_DISABLE_GPU_COMPOSITING=0 "$launcher_probe" probe)"
     [[ "$output" == *"comp=0"* && "$output" != *"<--disable-gpu-compositing>"* ]] || fail "CODEX_ELECTRON_DISABLE_GPU_COMPOSITING=0 must suppress the compositor flag: $output"
