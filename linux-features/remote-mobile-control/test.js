@@ -675,7 +675,20 @@ test("Linux remote-control enablement bridge loads remote-control clients on Lin
   assert.equal(calls[0].params.enabled, true);
 });
 
-test("Linux remote-control enablement bridge disables stale remote-control auto-connect", async () => {
+test("Linux remote-control enablement bridge migrates old auto-connect cleanup patch", () => {
+  const source = syntheticAppMainEnablementBridgeBundle().replace(
+    "$o(`set-remote-control-connections-enabled`,{params:{enabled:t}}).catch(e=>{q.warning(`${DF} sync_failed`,{safe:{enabled:t},sensitive:{error:e}})})",
+    "$o(`set-remote-control-connections-enabled`,{params:{enabled:t}}).then(async e=>{if(t&&typeof navigator!=`undefined`&&navigator.userAgent.includes(`Linux`)){await Promise.resolve(e)}}/*codexLinuxRemoteControlAutoConnectCleanup*/).catch(e=>{q.warning(`${DF} sync_failed`,{safe:{enabled:t},sensitive:{error:e}})})",
+  );
+
+  const patched = applyLinuxRemoteControlEnablementBridgePatch(source);
+
+  assert.match(patched, /codexLinuxRemoteControlSelfAutoConnect/);
+  assert.match(patched, /electron-local-remote-control-installation-id/);
+  assert.doesNotMatch(patched, /codexLinuxRemoteControlAutoConnectCleanup/);
+});
+
+test("Linux remote-control enablement bridge auto-connects only this Desktop host", async () => {
   const source = syntheticAppMainEnablementBridgeBundle();
   const patched = applyLinuxRemoteControlEnablementBridgePatch(source);
 
@@ -696,8 +709,14 @@ test("Linux remote-control enablement bridge disables stale remote-control auto-
       calls.push({ method, params });
       if (method === "set-remote-control-connections-enabled") {
         return Promise.resolve({
-          remoteControlConnections: [{ hostId: "remote-control:env_1" }],
+          remoteControlConnections: [
+            { hostId: "remote-control:env_local", installationId: "install_local" },
+            { hostId: "remote-control:env_stale", installationId: "install_stale" },
+          ],
         });
+      }
+      if (method === "get-global-state") {
+        return Promise.resolve({ value: "install_local" });
       }
       return Promise.resolve({});
     },
@@ -705,12 +724,17 @@ test("Linux remote-control enablement bridge disables stale remote-control auto-
   vm.runInNewContext(`${patched};OF();`, context);
   await new Promise((resolve) => setImmediate(resolve));
 
-  assert.equal(calls.length, 2);
+  assert.equal(calls.length, 4);
   assert.equal(calls[0].method, "set-remote-control-connections-enabled");
   assert.equal(calls[0].params.enabled, true);
-  assert.equal(calls[1].method, "set-remote-connection-auto-connect");
-  assert.equal(calls[1].params.hostId, "remote-control:env_1");
-  assert.equal(calls[1].params.autoConnect, false);
+  assert.equal(calls[1].method, "get-global-state");
+  assert.equal(calls[1].params.key, "electron-local-remote-control-installation-id");
+  assert.equal(calls[2].method, "set-remote-connection-auto-connect");
+  assert.equal(calls[2].params.hostId, "remote-control:env_local");
+  assert.equal(calls[2].params.autoConnect, true);
+  assert.equal(calls[3].method, "set-remote-connection-auto-connect");
+  assert.equal(calls[3].params.hostId, "remote-control:env_stale");
+  assert.equal(calls[3].params.autoConnect, false);
 });
 
 test("patched Linux device-key provider can create, sign with, and delete a key", async () => {
