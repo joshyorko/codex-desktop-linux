@@ -33,6 +33,7 @@ const REMOTE_MOBILE_NOTIFICATION_QUEUE_MARKER = "codexLinuxRemoteMobileNotificat
 const REMOTE_CONTROL_ENABLEMENT_BRIDGE_MARKER = "codexLinuxRemoteControlEnablementBridge";
 const REMOTE_CONTROL_AUTO_CONNECT_CLEANUP_MARKER = "codexLinuxRemoteControlAutoConnectCleanup";
 const REMOTE_MOBILE_ACTIVE_STATUS_MARKER = "codexLinuxRemoteMobileActiveStatus";
+const REMOTE_CONTROL_REVOKE_SETUP_RESET_MARKER = "codexLinuxRemoteControlResetMobileSetupAfterRevoke";
 const REMOTE_CONTROL_SELECTED_TAB_NEEDLE =
   "function rr({selectedConnectionsTab:e,showControlThisMacTab:t,showRemoteControlConnectionsSection:n,showTabbedSshPage:r}){return n?e===`control-this-mac`&&!t||e===`ssh`&&!r?`access-other-devices`:e:`ssh`}";
 const REMOTE_CONTROL_SELECTED_TAB_REPLACEMENT =
@@ -376,6 +377,51 @@ function applyLinuxRemoteControlClientRevocationRecoveryPatch(source) {
   return source.replace(
     recoverableErrorNeedle,
     "e.message===`Remote control request failed (403): Remote-control client key material missing`||e.message===`Remote-control client key material missing`||e.message===`Remote-control client has been revoked`:!1",
+  );
+}
+
+function applyLinuxRemoteControlClientRevokeSetupResetPatch(source) {
+  if (source.includes(REMOTE_CONTROL_REVOKE_SETUP_RESET_MARKER)) {
+    return source;
+  }
+  if (!source.includes("remote-control-client-revoke-success")) {
+    return source;
+  }
+
+  const setGlobalStateMatch = source.match(
+    /mutationFn:[A-Za-z_$][\w$]*=>([A-Za-z_$][\w$]*)\([A-Za-z_$][\w$]*,[A-Za-z_$][\w$]*\.ADDED_REMOTE_CONTROL_ENV_IDS,/u,
+  );
+  if (setGlobalStateMatch == null) {
+    console.warn("WARN: Could not find global-state setter alias - skipping remote-control revoke setup reset patch");
+    return source;
+  }
+
+  const setGlobalStateFn = setGlobalStateMatch[1];
+  const helperNeedle = source.match(/var [A-Za-z_$][\w$]*=`remote-control-client-revoke-success`/u)?.[0] ?? null;
+  if (helperNeedle == null) {
+    console.warn("WARN: Could not find remote-control revoke toast marker - skipping setup reset helper insertion");
+    return source;
+  }
+
+  const helper = [
+    `function ${REMOTE_CONTROL_REVOKE_SETUP_RESET_MARKER}(e,t,n){`,
+    "let r=e?.filter(e=>e.client_id!==t);",
+    `return r?.length===0&&${setGlobalStateFn}(n,\`codex-mobile-has-connected-device\`,!1),r`,
+    "}",
+  ].join("");
+
+  const patched = source.replace(helperNeedle, `${helper}${helperNeedle}`);
+  const successPattern =
+    /([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*),\{eventName:`codex_remote_control_client_revoke_result`,metadata:\{result:`succeeded`\}\}\),([A-Za-z_$][\w$]*)\.setData\(([A-Za-z_$][\w$]*)=>\4\?\.filter\(\4=>\4\.client_id!==([A-Za-z_$][\w$]*)\)\)/u;
+  if (!successPattern.test(patched)) {
+    console.warn("WARN: Could not find remote-control revoke success cache update - skipping setup reset patch");
+    return source;
+  }
+
+  return patched.replace(
+    successPattern,
+    (_needle, trackFn, queryClientVar, querySnapshotVar, dataVar, clientIdVar) =>
+      `${trackFn}(${queryClientVar},{eventName:\`codex_remote_control_client_revoke_result\`,metadata:{result:\`succeeded\`}}),${querySnapshotVar}.setData(${dataVar}=>${REMOTE_CONTROL_REVOKE_SETUP_RESET_MARKER}(${dataVar},${clientIdVar},${queryClientVar}))`,
   );
 }
 
@@ -789,6 +835,16 @@ module.exports = [
     apply: applyLinuxRemoteControlSettingsUxPatch,
   },
   {
+    id: "linux-remote-control-client-revoke-setup-reset",
+    phase: "webview-asset",
+    pattern: /^remote-connections-settings-.*\.js$/,
+    order: 20_138,
+    ciPolicy: "optional",
+    missingDescription: "remote connections settings bundle",
+    skipDescription: "Linux remote-control client revoke setup reset patch",
+    apply: applyLinuxRemoteControlClientRevokeSetupResetPatch,
+  },
+  {
     id: "linux-remote-connections-refresh",
     phase: "webview-asset",
     pattern: /^remote-connections-settings-.*\.js$/,
@@ -840,6 +896,8 @@ module.exports.applyLinuxRemoteControlClientAccountCompatibilityPatch =
   applyLinuxRemoteControlClientAccountCompatibilityPatch;
 module.exports.applyLinuxRemoteControlClientRevocationRecoveryPatch =
   applyLinuxRemoteControlClientRevocationRecoveryPatch;
+module.exports.applyLinuxRemoteControlClientRevokeSetupResetPatch =
+  applyLinuxRemoteControlClientRevokeSetupResetPatch;
 module.exports.applyLinuxRemoteControlLoadGatePatch = applyLinuxRemoteControlLoadGatePatch;
 module.exports.applyLinuxRemoteConnectionsRefreshPatch = applyLinuxRemoteConnectionsRefreshPatch;
 module.exports.applyLinuxRemoteControlVisibilityPatch = applyLinuxRemoteControlVisibilityPatch;

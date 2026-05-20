@@ -19,6 +19,7 @@ const {
 const {
   applyLinuxRemoteControlDeviceKeyPatch,
   applyLinuxRemoteControlClientAccountCompatibilityPatch,
+  applyLinuxRemoteControlClientRevokeSetupResetPatch,
   applyLinuxRemoteControlClientRevocationRecoveryPatch,
   applyLinuxRemoteControlCopyPatch,
   applyLinuxRemoteControlLoadGatePatch,
@@ -124,6 +125,20 @@ function syntheticSettingsRefreshBundle() {
   ].join("");
 }
 
+function syntheticRevokeSetupResetBundle() {
+  return [
+    "function b(e,t){e.events.push(t)}",
+    "let J={},t={ADDED_REMOTE_CONTROL_ENV_IDS:`added-remote-control-env-ids`},e={},ye=[];",
+    "function ie(e,t,n){e.globalState[t]=n}",
+    "function ee(e){return e}",
+    "var vt=`remote-control-client-revoke-success`,yt=`remote-control-client-revoke-error`;",
+    "function Ct(){let i={events:[],globalState:{\"codex-mobile-has-connected-device\":!0},get(){return{success(){}}},query:{snapshot(){return{data:[],setData(e){this.data=e(this.data)},invalidate(){this.invalidated=!0}}}}},v=i.query.snapshot(tt),y;",
+    "y=(e,t)=>{let{clientId:n}=t;b(i,{eventName:`codex_remote_control_client_revoke_result`,metadata:{result:`succeeded`}}),v.setData(e=>e?.filter(e=>e.client_id!==n)),v.invalidate(),i.get(J).success(`Revoked device access`,{id:vt})};",
+    "return{handler:y,query:v,store:i}}",
+    "var Ue=ee({mutationFn:n=>ie(e,t.ADDED_REMOTE_CONTROL_ENV_IDS,[...ye,...n])}),tt={};",
+  ].join("");
+}
+
 function syntheticChromeBrowserClientBundle() {
   return [
     "var tE=\"x-codex-browser-use-available-backends\",X6=[\"chrome\",\"iab\",\"cdp\"];",
@@ -215,6 +230,7 @@ test("remote mobile control feature exposes opt-in main-bundle and webview patch
       "feature:remote-mobile-control:linux-remote-control-visibility",
       "feature:remote-mobile-control:linux-remote-control-copy",
       "feature:remote-mobile-control:linux-remote-control-settings-ux",
+      "feature:remote-mobile-control:linux-remote-control-client-revoke-setup-reset",
       "feature:remote-mobile-control:linux-remote-connections-refresh",
       "feature:remote-mobile-control:linux-remote-mobile-conversation-hydration",
       "feature:remote-mobile-control:linux-remote-control-enablement-bridge",
@@ -225,6 +241,7 @@ test("remote mobile control feature exposes opt-in main-bundle and webview patch
       "main-bundle",
       "main-bundle",
       "main-bundle",
+      "webview-asset",
       "webview-asset",
       "webview-asset",
       "webview-asset",
@@ -297,6 +314,40 @@ test("Linux remote-control client recovery handles bare missing key material err
   const patched = applyLinuxRemoteControlClientRevocationRecoveryPatch(source);
 
   assert.match(patched, /e\.message===`Remote-control client key material missing`/);
+});
+
+test("Linux remote-control client revoke clears setup completion after last client is removed", () => {
+  const source = syntheticRevokeSetupResetBundle();
+  const patched = applyLinuxRemoteControlClientRevokeSetupResetPatch(source);
+
+  assert.notEqual(patched, source);
+  assert.match(patched, /codexLinuxRemoteControlResetMobileSetupAfterRevoke/);
+  assert.match(patched, /codex-mobile-has-connected-device/);
+  assert.equal(applyLinuxRemoteControlClientRevokeSetupResetPatch(patched), patched);
+
+  const context = { module: { exports: {} } };
+  vm.runInNewContext(`${patched};module.exports=Ct();`, context);
+  const { handler, query, store } = context.module.exports;
+  query.data = [{ client_id: "phone_1" }];
+
+  handler(null, { clientId: "phone_1" });
+
+  assert.deepEqual(query.data, []);
+  assert.equal(store.globalState["codex-mobile-has-connected-device"], false);
+  assert.equal(query.invalidated, true);
+});
+
+test("Linux remote-control client revoke keeps setup completion while other clients remain", () => {
+  const patched = applyLinuxRemoteControlClientRevokeSetupResetPatch(syntheticRevokeSetupResetBundle());
+  const context = { module: { exports: {} } };
+  vm.runInNewContext(`${patched};module.exports=Ct();`, context);
+  const { handler, query, store } = context.module.exports;
+  query.data = [{ client_id: "phone_1" }, { client_id: "tablet_1" }];
+
+  handler(null, { clientId: "phone_1" });
+
+  assert.deepEqual(query.data, [{ client_id: "tablet_1" }]);
+  assert.equal(store.globalState["codex-mobile-has-connected-device"], true);
 });
 
 test("Linux remote-control load gate enables remote-control environment loading", () => {
@@ -699,7 +750,10 @@ test("remote mobile control feature participates in ASAR patching and reports", 
         );
         fs.writeFileSync(
           path.join(assetsDir, "remote-connections-settings-test.js"),
-          syntheticSettingsBundle() + syntheticRemoteConnectionsSettingsCopyBundle() + syntheticSettingsRefreshBundle(),
+          syntheticSettingsBundle() +
+            syntheticRemoteConnectionsSettingsCopyBundle() +
+            syntheticSettingsRefreshBundle() +
+            syntheticRevokeSetupResetBundle(),
         );
         fs.writeFileSync(
           path.join(assetsDir, "codex-mobile-setup-flow-test.js"),
@@ -755,6 +809,7 @@ test("remote mobile control feature participates in ASAR patching and reports", 
         assert.match(patchedRemoteConnectionVisibilityFile, /codexLinuxRemoteControlLoadGateEnabled/);
         assert.match(patchedVisibilityFile, /navigator\.userAgent\.includes\(`Linux`\)/);
         assert.match(patchedRemoteConnectionsSettingsFile, /codexLinuxRemoteControlSettingsTabs/);
+        assert.match(patchedRemoteConnectionsSettingsFile, /codexLinuxRemoteControlResetMobileSetupAfterRevoke/);
         assert.match(patchedRemoteConnectionsSettingsFile, /codexLinuxRemoteConnectionsRefreshNow/);
         assert.match(patchedRemoteConnectionsSettingsFile, /Qn=5e3/);
         assert.match(patchedRemoteConnectionsSettingsFile, /Control this Linux desktop/);
@@ -804,6 +859,12 @@ test("remote mobile control feature participates in ASAR patching and reports", 
         assert.ok(
           report.patches.some((patch) =>
             patch.name === "feature:remote-mobile-control:linux-remote-control-settings-ux" &&
+            patch.status === "applied",
+          ),
+        );
+        assert.ok(
+          report.patches.some((patch) =>
+            patch.name === "feature:remote-mobile-control:linux-remote-control-client-revoke-setup-reset" &&
             patch.status === "applied",
           ),
         );
