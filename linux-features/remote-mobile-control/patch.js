@@ -31,7 +31,7 @@ const REMOTE_MOBILE_THREAD_RUNTIME_MARKER = "codexLinuxRemoteMobileThreadRuntime
 const REMOTE_MOBILE_UNKNOWN_TURN_MARKER = "codexLinuxRemoteMobileHydrateUnknownTurn";
 const REMOTE_MOBILE_NOTIFICATION_QUEUE_MARKER = "codexLinuxRemoteMobileNotificationQueue";
 const REMOTE_CONTROL_ENABLEMENT_BRIDGE_MARKER = "codexLinuxRemoteControlEnablementBridge";
-const REMOTE_CONTROL_AUTO_CONNECT_MARKER = "codexLinuxRemoteControlAutoConnect";
+const REMOTE_CONTROL_AUTO_CONNECT_CLEANUP_MARKER = "codexLinuxRemoteControlAutoConnectCleanup";
 const REMOTE_MOBILE_ACTIVE_STATUS_MARKER = "codexLinuxRemoteMobileActiveStatus";
 const REMOTE_CONTROL_SELECTED_TAB_NEEDLE =
   "function rr({selectedConnectionsTab:e,showControlThisMacTab:t,showRemoteControlConnectionsSection:n,showTabbedSshPage:r}){return n?e===`control-this-mac`&&!t||e===`ssh`&&!r?`access-other-devices`:e:`ssh`}";
@@ -679,24 +679,24 @@ function applyLinuxRemoteControlEnablementBridgePatch(source) {
     region = patched.slice(markerIndex, markerIndex + 4_500);
   }
 
-  if (patched.includes(REMOTE_CONTROL_AUTO_CONNECT_MARKER)) {
+  if (patched.includes(REMOTE_CONTROL_AUTO_CONNECT_CLEANUP_MARKER)) {
     return patched;
   }
 
-  const autoConnectPattern =
+  const autoConnectCleanupPattern =
     /([A-Za-z_$][\w$]*)\(`set-remote-control-connections-enabled`,\{params:\{enabled:([A-Za-z_$][\w$]*)\}\}\)\.catch\(([A-Za-z_$][\w$]*)=>\{([A-Za-z_$][\w$]*)\.warning\(`\$\{([A-Za-z_$][\w$]*)\} sync_failed`,\{safe:\{enabled:\2\},sensitive:\{error:\3\}\}\)\}\)/u;
-  const autoConnectRegion = region.replace(
-    autoConnectPattern,
+  const autoConnectCleanupRegion = region.replace(
+    autoConnectCleanupPattern,
     (_needle, desktopHostRequestFn, enabledVar, errorVar, loggerVar, logPrefixVar) =>
-      `${desktopHostRequestFn}(\`set-remote-control-connections-enabled\`,{params:{enabled:${enabledVar}}}).then(async e=>{if(${enabledVar}&&typeof navigator!=\`undefined\`&&navigator.userAgent.includes(\`Linux\`)){let t=e?.remoteControlConnections??e?.sharedObjects?.remote_control_connections??e?.connections??[];if(t.length===0)try{let e=await ${desktopHostRequestFn}(\`refresh-remote-control-connections\`,{params:{}});t=e?.remoteControlConnections??e?.sharedObjects?.remote_control_connections??e?.connections??[]}catch(e){${loggerVar}.warning(\`\${${logPrefixVar}} auto_connect_refresh_failed\`,{safe:{},sensitive:{error:e}})}await Promise.all([...new Set(t.map(e=>e?.hostId).filter(e=>typeof e==\`string\`&&e.startsWith(\`remote-control:\`)))].map(e=>${desktopHostRequestFn}(\`set-remote-connection-auto-connect\`,{params:{hostId:e,autoConnect:!0}})))}}/*${REMOTE_CONTROL_AUTO_CONNECT_MARKER}*/).catch(${errorVar}=>{${loggerVar}.warning(\`\${${logPrefixVar}} sync_failed\`,{safe:{enabled:${enabledVar}},sensitive:{error:${errorVar}}})})`,
+      `${desktopHostRequestFn}(\`set-remote-control-connections-enabled\`,{params:{enabled:${enabledVar}}}).then(async e=>{if(${enabledVar}&&typeof navigator!=\`undefined\`&&navigator.userAgent.includes(\`Linux\`)){let t=e?.remoteControlConnections??e?.sharedObjects?.remote_control_connections??e?.connections??[];if(t.length===0)try{let e=await ${desktopHostRequestFn}(\`refresh-remote-control-connections\`,{params:{}});t=e?.remoteControlConnections??e?.sharedObjects?.remote_control_connections??e?.connections??[]}catch(e){${loggerVar}.warning(\`\${${logPrefixVar}} auto_connect_cleanup_refresh_failed\`,{safe:{},sensitive:{error:e}})}await Promise.all([...new Set(t.map(e=>e?.hostId).filter(e=>typeof e==\`string\`&&e.startsWith(\`remote-control:\`)))].map(e=>${desktopHostRequestFn}(\`set-remote-connection-auto-connect\`,{params:{hostId:e,autoConnect:!1}}).catch(e=>{${loggerVar}.warning(\`\${${logPrefixVar}} auto_connect_cleanup_failed\`,{safe:{hostId:e},sensitive:{error:e}})})))}}/*${REMOTE_CONTROL_AUTO_CONNECT_CLEANUP_MARKER}*/).catch(${errorVar}=>{${loggerVar}.warning(\`\${${logPrefixVar}} sync_failed\`,{safe:{enabled:${enabledVar}},sensitive:{error:${errorVar}}})})`,
   );
 
-  if (autoConnectRegion === region) {
-    console.warn("WARN: Could not find remote-control auto-connect needle - skipping Linux remote-control auto-connect patch");
+  if (autoConnectCleanupRegion === region) {
+    console.warn("WARN: Could not find remote-control auto-connect cleanup needle - skipping Linux remote-control cleanup patch");
     return patched;
   }
 
-  return patched.slice(0, markerIndex) + autoConnectRegion + patched.slice(markerIndex + region.length);
+  return patched.slice(0, markerIndex) + autoConnectCleanupRegion + patched.slice(markerIndex + region.length);
 }
 
 function applyLinuxRemoteMobileActiveStatusPatch(source) {

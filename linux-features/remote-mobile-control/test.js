@@ -587,7 +587,7 @@ test("Linux remote-control enablement bridge loads remote-control clients on Lin
   assert.equal(calls[0].params.enabled, true);
 });
 
-test("Linux remote-control enablement bridge auto-connects local remote-control hosts", async () => {
+test("Linux remote-control enablement bridge disables stale remote-control auto-connect", async () => {
   const source = syntheticAppMainEnablementBridgeBundle();
   const patched = applyLinuxRemoteControlEnablementBridgePatch(source);
 
@@ -622,7 +622,7 @@ test("Linux remote-control enablement bridge auto-connects local remote-control 
   assert.equal(calls[0].params.enabled, true);
   assert.equal(calls[1].method, "set-remote-connection-auto-connect");
   assert.equal(calls[1].params.hostId, "remote-control:env_1");
-  assert.equal(calls[1].params.autoConnect, true);
+  assert.equal(calls[1].params.autoConnect, false);
 });
 
 test("patched Linux device-key provider can create, sign with, and delete a key", async () => {
