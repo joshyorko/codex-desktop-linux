@@ -5,9 +5,12 @@ client="$INSTALL_DIR/resources/plugins/openai-bundled/plugins/chrome/scripts/bro
 patch_module="$SCRIPT_DIR/linux-features/remote-mobile-control/patch.js"
 feature_marker_dir="$INSTALL_DIR/.codex-linux"
 feature_marker="$feature_marker_dir/remote-mobile-control-enabled"
+cold_start_hook_dir="$feature_marker_dir/cold-start.d"
+cold_start_hook="$cold_start_hook_dir/remote-mobile-control"
 
-mkdir -p "$feature_marker_dir"
+mkdir -p "$feature_marker_dir" "$cold_start_hook_dir"
 printf '%s\n' "remote-mobile-control" > "$feature_marker"
+install -m 0755 "$SCRIPT_DIR/linux-features/remote-mobile-control/cold-start-hook.sh" "$cold_start_hook"
 
 if [ ! -f "$client" ]; then
     echo "WARN: Chrome browser-client.mjs not found; skipping remote-mobile Chrome bridge patch" >&2
@@ -19,6 +22,11 @@ const fs = require("node:fs");
 
 const [clientPath, patchModulePath] = process.argv.slice(2);
 const { applyLinuxRemoteMobileChromeBridgePatch } = require(patchModulePath);
+
+if (typeof applyLinuxRemoteMobileChromeBridgePatch !== "function") {
+  console.error("WARN: Remote mobile Chrome bridge patch export not found; skipping");
+  process.exit(0);
+}
 
 const source = fs.readFileSync(clientPath, "utf8");
 const patched = applyLinuxRemoteMobileChromeBridgePatch(source);

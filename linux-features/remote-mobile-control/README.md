@@ -48,10 +48,10 @@ What it changes:
   startup.
 - Updates remote-control settings and Codex mobile setup copy so the Linux flow
   is not described as Mac-only.
-- Stages `.codex-linux/remote-mobile-control-enabled`, which tells the Linux
-  launcher to provision the upstream managed standalone daemon runtime when it
-  is missing, then start the managed app-server daemon with
-  `app-server daemon start --enable remote_control` on cold start.
+- Stages `.codex-linux/cold-start.d/remote-mobile-control`, a feature-owned
+  cold-start hook that provisions the upstream managed standalone daemon runtime
+  when it is missing, then starts the managed app-server daemon with
+  `app-server daemon start --enable remote_control`.
 
 Remote mobile daemon requirement:
 
@@ -64,11 +64,18 @@ managed standalone daemon runtime at:
 ~/.codex/packages/standalone/current/codex
 ```
 
-If that binary is missing, the launcher runs the upstream standalone installer
-with `CODEX_INSTALL_DIR` pointed at a private bin directory under
-`~/.codex/packages/standalone/.bin`. That satisfies the managed daemon layout
-without changing `CODEX_CLI_PATH`, creating `~/.local/bin/codex`, or adding
-PATH blocks to your shell profile.
+If that binary is missing, the feature's cold-start hook runs the upstream
+standalone installer with `CODEX_INSTALL_DIR` pointed at a private bin directory
+under `~/.codex/packages/standalone/.bin`. That satisfies the managed daemon
+layout without changing `CODEX_CLI_PATH`, creating `~/.local/bin/codex`, or
+adding PATH blocks to your shell profile.
+
+The hook is launched best-effort in the background by the generic launcher hook
+runner. When the system `timeout` command is available, the installer/start path
+is capped by
+`CODEX_REMOTE_CONTROL_DAEMON_AUTOSTART_TIMEOUT_SECONDS` (default `30`), so
+Desktop cold start is not blocked by network, GitHub, or installer stalls.
+Hook output is written to the launcher cache as `remote-mobile-control.log`.
 
 This is compatible with immutable Linux systems such as Bluefin / Universal
 Blue because the managed daemon runtime is user-scoped state under
