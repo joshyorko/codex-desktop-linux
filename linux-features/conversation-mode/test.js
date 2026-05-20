@@ -105,6 +105,7 @@ const conversationGlobals = [
   "codexLinuxConversationStopSpeaking",
   "codexLinuxConversationSync",
   "codexLinuxConversationToggle",
+  "codexLinuxConversationToggleMute",
   "codexLinuxConversationVersion",
 ];
 
@@ -130,6 +131,8 @@ function withConversationRuntime(fn, options = {}) {
   const timers = [];
   const fakeWindow = {
     AudioContext: options.AudioContext,
+    innerHeight: options.innerHeight ?? 900,
+    innerWidth: options.innerWidth ?? 1600,
     webkitAudioContext: options.webkitAudioContext,
     addEventListener(type, callback) {
       if (type === "message") {
@@ -246,9 +249,26 @@ function createFakeDocument() {
   const nodes = new Map();
   const bodyClassList = createFakeClassList();
   const rootClassList = createFakeClassList();
+  const rootStyleValues = new Map();
+  const rootStyle = {
+    getPropertyValue(name) {
+      return rootStyleValues.get(name) ?? "";
+    },
+    removeProperty(name) {
+      const value = rootStyleValues.get(name) ?? "";
+      rootStyleValues.delete(name);
+      return value;
+    },
+    setProperty(name, value) {
+      rootStyleValues.set(name, value);
+    },
+  };
   const composerClassList = createFakeClassList();
   const composerSurface = {
     classList: composerClassList,
+    getBoundingClientRect() {
+      return { right: 1200, top: 760 };
+    },
   };
   const composerAnchor = {
     parentElement: composerSurface,
@@ -311,7 +331,7 @@ function createFakeDocument() {
     body,
     bodyClassList,
     head,
-    documentElement: { classList: rootClassList },
+    documentElement: { classList: rootClassList, clientHeight: 900, clientWidth: 1600, style: rootStyle },
     getElementById(id) {
       return nodes.get(id) ?? null;
     },
@@ -320,6 +340,7 @@ function createFakeDocument() {
     },
     createElement,
     composerClassList,
+    rootStyle,
   };
 }
 
@@ -351,12 +372,19 @@ test("conversation mode exposes optional patch descriptors when enabled", () => 
 test("main bundle patch allows conversation mode to use Read Aloud", () => {
   const patched = twice(applyReadAloudMainBundlePatch, mainBundleSource);
   assert.match(patched, /e\.source===`button`\|\|e\.source===`conversation`/);
-  assert.match(patched, /codexLinuxReadAloudSpeak\(e\.text\)/);
+  assert.match(patched, /codexLinuxReadAloudSpeak\(e\.text,\{requireEnabled:e\.source!==`conversation`\}\)/);
+});
+
+test("main bundle patch upgrades older conversation speech gates", () => {
+  const alreadyAllowed =
+    "function codexLinuxReadAloudHandle(e={}){return e.action===`config`?codexLinuxReadAloudConfig():e.action===`setup`?codexLinuxReadAloudSetup(e):e.action===`stop`?codexLinuxReadAloudStop():e.action===`speak`&&(e.source===`button`||e.source===`conversation`)?codexLinuxReadAloudSpeak(e.text):codexLinuxReadAloudReport({spoken:!1,reason:`not-explicit`})}var h={handlers:{\"linux-read-aloud\":async(e)=>codexLinuxReadAloudHandle(e),\"native-desktop-apps\":async()=>({apps:[]})}};";
+  const patched = twice(applyReadAloudMainBundlePatch, alreadyAllowed);
+  assert.match(patched, /codexLinuxReadAloudSpeak\(e\.text,\{requireEnabled:e\.source!==`conversation`\}\)/);
 });
 
 test("composer runtime appends one browser-side conversation controller", () => {
   const patched = twice(applyComposerRuntimePatch, "console.log(`composer`);");
-  assert.match(patched, /conversation-mode-v17/);
+  assert.match(patched, /conversation-mode-v19/);
   assert.match(patched, /activeConversationId/);
   assert.match(patched, /seenAssistantKeys/);
   assert.match(patched, /assistantKey/);
@@ -371,8 +399,11 @@ test("composer runtime appends one browser-side conversation controller", () => 
   assert.match(patched, /epoch/);
   assert.match(patched, /speechCooldownUntil/);
   assert.match(patched, /interruptPendingEpoch/);
+  assert.match(patched, /interruptSerial/);
+  assert.match(patched, /cancelInterruptMonitor/);
   assert.match(patched, /clearTimeout\(n\.timer\)/);
   assert.match(patched, /codexLinuxConversationToggle/);
+  assert.match(patched, /codexLinuxConversationToggleMute/);
   assert.match(patched, /codexLinuxConversationSync/);
   assert.match(patched, /codexLinuxConversationIsActive/);
   assert.match(patched, /codexLinuxConversationStop/);
@@ -383,7 +414,11 @@ test("composer runtime appends one browser-side conversation controller", () => 
   assert.match(patched, /codex-linux-conversation-composer-aura::after/);
   assert.match(patched, /codex-linux-conversation-aura/);
   assert.match(patched, /codex-linux-conversation-stop/);
+  assert.match(patched, /codex-linux-conversation-mute/);
+  assert.match(patched, /codex-linux-conversation-muted/);
   assert.match(patched, /Stop conversation mode/);
+  assert.match(patched, /Mute microphone/);
+  assert.match(patched, /Unmute microphone/);
   assert.match(patched, /codexLinuxConversationEndpoint/);
   assert.match(patched, /codexLinuxConversationAssistant/);
   assert.match(patched, /codexLinuxConversationShouldSendTranscript/);
@@ -535,10 +570,127 @@ test("conversation runtime shows an active aura and explicit stop control", () =
     assert.equal(globalThis.codexLinuxConversationIsActive("thread-a"), false);
     assert.equal(fakeDocument.bodyClassList.contains("codex-linux-conversation-active"), false);
     assert.equal(fakeDocument.composerClassList.contains("codex-linux-conversation-composer-aura"), false);
+    assert.equal(fakeDocument.rootStyle.getPropertyValue("--codex-linux-conversation-control-right"), "");
     assert.equal(stopButton.hidden, true);
     assert.ok(fetchBodies(events).some((body) => body.action === "stop"));
     assert.deepEqual(stopActions, ["discard"]);
   }, { document: fakeDocument });
+});
+
+test("conversation runtime anchors controls near the composer on wide screens", () => {
+  const fakeDocument = createFakeDocument();
+  withConversationRuntime(() => {
+    assert.equal(
+      globalThis.codexLinuxConversationToggle({
+        conversationId: "thread-a",
+        isResponseInProgress: false,
+        startDictation() {},
+        stopDictation() {},
+        onStop() {},
+      }),
+      true,
+    );
+
+    assert.equal(fakeDocument.rootStyle.getPropertyValue("--codex-linux-conversation-control-right"), "352px");
+    assert.equal(fakeDocument.rootStyle.getPropertyValue("--codex-linux-conversation-stop-bottom"), "148px");
+    assert.equal(fakeDocument.rootStyle.getPropertyValue("--codex-linux-conversation-mute-bottom"), "194px");
+  }, { document: fakeDocument, innerHeight: 900, innerWidth: 1600 });
+});
+
+test("conversation runtime can mute the user microphone without exiting", () => {
+  const fakeDocument = createFakeDocument();
+  withConversationRuntime(({ timers }) => {
+    let startCount = 0;
+    const stopActions = [];
+    const controls = {
+      conversationId: "thread-a",
+      isResponseInProgress: false,
+      startDictation() {
+        startCount++;
+      },
+      stopDictation(action) {
+        stopActions.push(action);
+      },
+      onStop() {},
+    };
+
+    assert.equal(globalThis.codexLinuxConversationToggle(controls), true);
+    runTimer(timers, (timer) => timer.delay === 0, "initial listening restart");
+    assert.equal(startCount, 1);
+
+    const muteButton = fakeDocument.getElementById("codex-linux-conversation-mute");
+    assert.ok(muteButton);
+    assert.equal(muteButton.hidden, false);
+    assert.equal(muteButton.title, "Mute microphone");
+    assert.equal(muteButton["aria-pressed"], "false");
+
+    muteButton.listeners.click({
+      preventDefault() {},
+      stopPropagation() {},
+    });
+
+    assert.equal(globalThis.codexLinuxConversationIsActive("thread-a"), true);
+    assert.equal(fakeDocument.bodyClassList.contains("codex-linux-conversation-active"), true);
+    assert.equal(fakeDocument.bodyClassList.contains("codex-linux-conversation-muted"), true);
+    assert.equal(muteButton.title, "Unmute microphone");
+    assert.equal(muteButton["aria-pressed"], "true");
+    assert.deepEqual(stopActions, ["discard"]);
+    assert.equal(globalThis.codexLinuxConversationShouldSendTranscript("This muted audio should be ignored.", "send"), false);
+
+    globalThis.codexLinuxConversationSync("thread-a", { ...controls, isResponseInProgress: false });
+    assert.equal(startCount, 1);
+
+    assert.equal(globalThis.codexLinuxConversationToggleMute(), true);
+    assert.equal(fakeDocument.bodyClassList.contains("codex-linux-conversation-muted"), false);
+    assert.equal(muteButton.title, "Mute microphone");
+    assert.equal(muteButton["aria-pressed"], "false");
+    runTimer(timers, (timer) => timer.delay === 0, "unmuted listening restart");
+    assert.equal(startCount, 2);
+  }, { document: fakeDocument });
+});
+
+test("conversation runtime unmutes into immediate listening after speech cooldown", () => {
+  const fakeDocument = createFakeDocument();
+  const originalNow = Date.now;
+  try {
+    Date.now = () => 1_000_000;
+    withConversationRuntime(({ events, timers }) => {
+      let startCount = 0;
+      const controls = {
+        conversationId: "thread-a",
+        isResponseInProgress: false,
+        startDictation() {
+          startCount++;
+        },
+        stopDictation() {},
+        onStop() {},
+      };
+
+      assert.equal(globalThis.codexLinuxConversationToggle(controls), true);
+      runTimer(timers, (timer) => timer.delay === 0, "initial listening restart");
+      assert.equal(startCount, 1);
+
+      assert.equal(globalThis.codexLinuxConversationShouldSendTranscript("Please answer once.", "send"), true);
+      const spoken = "Short answer creates cooldown.";
+      globalThis.codexLinuxConversationAssistant({ completed: true }, spoken, "thread-a", "turn-one", false);
+      assert.deepEqual(
+        fetchBodies(events)
+          .filter((body) => body.action === "speak")
+          .map((body) => body.text),
+        [spoken],
+      );
+      runTimer(timers, (timer) => timer.delay > 2200 && timer.delay < 4000, "speech completion");
+
+      assert.equal(globalThis.codexLinuxConversationToggleMute(true), true);
+      assert.equal(globalThis.codexLinuxConversationToggleMute(false), true);
+      assert.equal(fakeDocument.bodyClassList.contains("codex-linux-conversation-muted"), false);
+
+      runTimer(timers, (timer) => timer.delay === 0, "unmuted listening restart");
+      assert.equal(startCount, 2);
+    }, { document: fakeDocument });
+  } finally {
+    Date.now = originalNow;
+  }
 });
 
 test("conversation runtime ignores completed assistant messages seen before the active stream", () => {
@@ -1264,6 +1416,80 @@ test("conversation runtime opens one pending interrupt monitor stream", () => {
   }, { AudioContext: FakeAudioContext, navigator });
 });
 
+test("conversation runtime invalidates pending interrupt monitors across mute toggles", () => {
+  let getUserMediaCalls = 0;
+  const pendingResolvers = [];
+  let stoppedTracks = 0;
+  const stream = {
+    getTracks() {
+      return [
+        {
+          stop() {
+            stoppedTracks++;
+          },
+        },
+      ];
+    },
+  };
+  const navigator = {
+    userAgent: "Codex Desktop Linux",
+    mediaDevices: {
+      getUserMedia() {
+        getUserMediaCalls++;
+        return {
+          then(resolve) {
+            pendingResolvers.push(resolve);
+            return {
+              catch() {},
+            };
+          },
+        };
+      },
+    },
+  };
+  class FakeAudioContext {
+    createMediaStreamSource() {
+      return {
+        connect() {},
+        disconnect() {},
+      };
+    }
+    createAnalyser() {
+      return {
+        fftSize: 0,
+        getFloatTimeDomainData(data) {
+          data.fill(0);
+        },
+      };
+    }
+    close() {}
+  }
+
+  withConversationRuntime(() => {
+    const controls = {
+      conversationId: "thread-a",
+      isResponseInProgress: false,
+      startDictation() {},
+      stopDictation() {},
+      onStop() {},
+    };
+
+    assert.equal(globalThis.codexLinuxConversationToggle(controls), true);
+    assert.equal(globalThis.codexLinuxConversationShouldSendTranscript("Start a monitor-protected response.", "send"), true);
+    assert.equal(globalThis.codexLinuxConversationSync("thread-a", { ...controls, isResponseInProgress: true }), true);
+    assert.equal(getUserMediaCalls, 1);
+
+    assert.equal(globalThis.codexLinuxConversationToggleMute(true), true);
+    assert.equal(globalThis.codexLinuxConversationToggleMute(false), true);
+    assert.equal(getUserMediaCalls, 2);
+
+    pendingResolvers[0](stream);
+    assert.equal(stoppedTracks, 1);
+    pendingResolvers[1](stream);
+    assert.equal(stoppedTracks, 1);
+  }, { AudioContext: FakeAudioContext, navigator });
+});
+
 test("conversation endpoint fails closed when the audio graph cannot start", () => {
   let stoppedTracks = 0;
   const stream = {
@@ -1407,7 +1633,7 @@ test("conversation mode patches matching app assets and records report entries",
         );
         assert.match(
           fs.readFileSync(path.join(buildDir, "main.js"), "utf8"),
-          /e\.source===`button`\|\|e\.source===`conversation`/,
+          /codexLinuxReadAloudSpeak\(e\.text,\{requireEnabled:e\.source!==`conversation`\}\)/,
         );
         assert.match(
           fs.readFileSync(path.join(assetsDir, "annotation-comment-editor-card-test.js"), "utf8"),

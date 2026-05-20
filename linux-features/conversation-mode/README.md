@@ -61,8 +61,9 @@ conversation mode speaks through the local Kokoro Read Aloud handler.
   chat. Pending dictation is discarded on explicit exit so a partial transcript
   does not get inserted into the composer and hide the voice control behind the
   send arrow.
-- Adds a lightweight active-state aura around the composer/input surface and a
-  dedicated stop button while conversation mode is active.
+- Adds a lightweight active-state aura around the composer/input surface plus
+  stop and microphone mute controls anchored near the composer while
+  conversation mode is active.
 - Leaves typing available; typed turns still work normally while the feature is
   enabled.
 

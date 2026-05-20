@@ -34,7 +34,8 @@ test("main bundle patch adds a Linux read aloud handler", () => {
   ].join("");
   const patched = twice(applyMainBundlePatch, source);
   assert.match(patched, /"linux-read-aloud":async/);
-  assert.match(patched, /function codexLinuxReadAloudSpeak/);
+  assert.match(patched, /function codexLinuxReadAloudSpeak\(input,options=\{\}\)/);
+  assert.match(patched, /options\?\.requireEnabled!==!1/);
   assert.match(patched, /function codexLinuxReadAloudConfig/);
   assert.match(patched, /function codexLinuxReadAloudSetup/);
   assert.match(patched, /function codexLinuxReadAloudNativeFallbackEnabled/);
@@ -447,6 +448,63 @@ test("main handler enables native fallback by default but allows explicit disabl
 
     assert.equal(defaultConfig.nativeFallback, true);
     assert.equal(disabledConfig.nativeFallback, false);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("main handler keeps button speech opt-in while allowing explicit callers to use the backend", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-read-aloud-main-"));
+  try {
+    const source = [
+      "let e=require(`node:child_process`),f=require(`node:fs`),p=require(`node:path`),o=require(`node:os`);",
+      "var h={handlers:{\"set-vs-context\":async()=>{},\"native-desktop-apps\":async()=>({apps:[]})}};",
+    ].join("");
+    const patched = twice(applyMainBundlePatch, source);
+    const spawned = [];
+    const requireStub = (name) => {
+      if (name === "node:child_process") {
+        return {
+          spawnSync: (command, args) => ({
+            status: command === "which" && args?.[0] === "spd-say" ? 0 : 1,
+          }),
+          spawn: (command, args, options) => {
+            spawned.push({ command, args, options });
+            return {
+              on: () => {},
+              unref: () => {},
+            };
+          },
+        };
+      }
+      if (name === "node:fs") return fs;
+      if (name === "node:path") return path;
+      if (name === "node:os") return { homedir: () => root };
+      return require(name);
+    };
+    const processStub = {
+      platform: "linux",
+      env: { HOME: root },
+      resourcesPath: path.join(root, "resources"),
+    };
+
+    const buttonResult = await new Function(
+      "require",
+      "process",
+      `${patched};return codexLinuxReadAloudHandle({action:"speak",source:"button",text:"hello"});`,
+    )(requireStub, processStub);
+    assert.equal(buttonResult.spoken, false);
+    assert.equal(buttonResult.reason, "disabled");
+    assert.equal(spawned.length, 0);
+
+    const explicitResult = await new Function(
+      "require",
+      "process",
+      `${patched};return codexLinuxReadAloudSpeak("hello",{requireEnabled:false});`,
+    )(requireStub, processStub);
+    assert.equal(explicitResult.spoken, true);
+    assert.equal(explicitResult.engine, "spd-say");
+    assert.ok(spawned.some((entry) => entry.command === "spd-say" && entry.args.includes("--")));
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
