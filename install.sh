@@ -227,7 +227,9 @@ SCRIPT
     cp "$SCRIPT_DIR/launcher/webview-server.py" "$INSTALL_DIR/.codex-linux/webview-server.py"
     cp "$SCRIPT_DIR/launcher/web-mode-server.mjs" "$INSTALL_DIR/.codex-linux/web-mode-server.mjs"
     cp "$SCRIPT_DIR/launcher/web-mode-bootstrap.js" "$INSTALL_DIR/.codex-linux/web-mode-bootstrap.js"
+    cp "$SCRIPT_DIR/launcher/remote-control-hosts.mjs" "$INSTALL_DIR/.codex-linux/remote-control-hosts.mjs"
     chmod +x "$INSTALL_DIR/.codex-linux/web-mode-server.mjs"
+    chmod +x "$INSTALL_DIR/.codex-linux/remote-control-hosts.mjs"
     local linux_icon_source="$LINUX_ICON_SOURCE"
     [ -f "$linux_icon_source" ] || linux_icon_source="$ICON_SOURCE"
     if [ -f "$linux_icon_source" ]; then

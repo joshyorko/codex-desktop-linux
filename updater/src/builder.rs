@@ -16,7 +16,7 @@ use tracing::info;
 
 const UPDATE_BUILDER_MANIFEST: &str = ".codex-linux/update-builder-manifest.txt";
 
-const REQUIRED_BUNDLE_FILES: [(&str, &str); 22] = [
+const REQUIRED_BUNDLE_FILES: [(&str, &str); 23] = [
     ("Cargo.toml", "Cargo.toml"),
     ("Cargo.lock", "Cargo.lock"),
     ("computer-use-linux", "computer-use-linux"),
@@ -41,6 +41,10 @@ const REQUIRED_BUNDLE_FILES: [(&str, &str); 22] = [
     (
         "launcher/web-mode-bootstrap.js",
         "launcher/web-mode-bootstrap.js",
+    ),
+    (
+        "launcher/remote-control-hosts.mjs",
+        "launcher/remote-control-hosts.mjs",
     ),
     ("scripts/build-deb.sh", "scripts/build-deb.sh"),
     (
@@ -745,6 +749,10 @@ touch "${DIST_DIR_OVERRIDE}/codex-desktop-${VER}-1-x86_64.pkg.tar.zst"
             bundle_root.join("launcher/web-mode-bootstrap.js"),
             b"console.log('fake web mode bootstrap');\n",
         )?;
+        fs::write(
+            bundle_root.join("launcher/remote-control-hosts.mjs"),
+            b"console.log('fake remote control hosts');\n",
+        )?;
         fs::write(bundle_root.join("assets/codex.png"), b"png")?;
         fs::write(bundle_root.join("assets/codex-linux.png"), b"linux png")?;
         fs::write(
@@ -922,6 +930,10 @@ fi
             .exists());
         assert!(artifacts
             .workspace_dir
+            .join("builder/launcher/remote-control-hosts.mjs")
+            .exists());
+        assert!(artifacts
+            .workspace_dir
             .join("builder/scripts/lib/node-runtime.sh")
             .exists());
         assert_fresh_patch_bundle(&artifacts.workspace_dir.join("builder"));
@@ -975,6 +987,10 @@ fi
             source_root.join("launcher/web-mode-bootstrap.js"),
             b"console.log('fake web mode bootstrap');\n",
         )?;
+        fs::write(
+            source_root.join("launcher/remote-control-hosts.mjs"),
+            b"console.log('fake remote control hosts');\n",
+        )?;
         fs::write(source_root.join("scripts/build-deb.sh"), b"#!/bin/bash\n")?;
         fs::write(
             source_root.join("scripts/validate-upstream-dmg.js"),
@@ -1016,6 +1032,9 @@ fi
             .exists());
         assert!(destination_root
             .join("launcher/web-mode-bootstrap.js")
+            .exists());
+        assert!(destination_root
+            .join("launcher/remote-control-hosts.mjs")
             .exists());
         assert!(destination_root
             .join("scripts/patches/registry.js")

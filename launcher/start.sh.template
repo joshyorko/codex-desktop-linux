@@ -284,7 +284,24 @@ codex_desktop_web_mode() {
     exec "$node_bin" "$SCRIPT_DIR/.codex-linux/web-mode-server.mjs" "$command_name" --app-dir "$SCRIPT_DIR" "$@"
 }
 
+codex_desktop_remote_control_hosts() {
+    local node_bin
+    node_bin="$(codex_desktop_node_bin)" || {
+        echo "Node.js is required for codex-desktop remote-control hosts. Expected managed runtime at $MANAGED_NODE_BIN_DIR/node or node on PATH." >&2
+        exit 127
+    }
+
+    exec "$node_bin" "$SCRIPT_DIR/.codex-linux/remote-control-hosts.mjs" "$@"
+}
+
 case "${LAUNCHER_ARGS[0]:-}" in
+    remote-control)
+        case "${LAUNCHER_ARGS[1]:-}" in
+            hosts|host|environments|envs)
+                codex_desktop_remote_control_hosts "${LAUNCHER_ARGS[@]:2}"
+                ;;
+        esac
+        ;;
     serve)
         codex_desktop_web_mode serve "${LAUNCHER_ARGS[@]:1}"
         ;;
@@ -316,6 +333,7 @@ Commands:
   web --inspect               Print web-mode inspection JSON
   doctor [--mode devcontainer]
                               Print devcontainer web-mode diagnostics
+  remote-control hosts        Open an interactive host picker for removing stale remote-control hosts
 
 Options:
   -h, --help                  Show this help message and exit
