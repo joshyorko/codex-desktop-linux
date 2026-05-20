@@ -261,19 +261,10 @@ impl ReadAloudLinux {
                 return Ok(BackendCommand {
                     name: "spd-say".to_string(),
                     command: "spd-say".to_string(),
-                    args: vec![
-                        "-r".to_string(),
-                        env_trimmed("CODEX_LINUX_READ_ALOUD_RATE").unwrap_or_else(|| "-10".to_string()),
-                        "-t".to_string(),
-                        env_trimmed("CODEX_LINUX_READ_ALOUD_VOICE_TYPE")
-                            .unwrap_or_else(|| "female1".to_string()),
-                        "-l".to_string(),
-                        "en".to_string(),
-                        "--".to_string(),
-                    ],
+                    args: spd_say_args(),
                     envs: Vec::new(),
                     stdin: false,
-                    note: "Using native spd-say fallback because CODEX_LINUX_READ_ALOUD_NATIVE_FALLBACK=1.".to_string(),
+                    note: "Using native spd-say fallback.".to_string(),
                 });
             }
             if command_exists("espeak-ng") {
@@ -282,14 +273,16 @@ impl ReadAloudLinux {
                     command: "espeak-ng".to_string(),
                     args: vec![
                         "-v".to_string(),
-                        env_trimmed("CODEX_LINUX_READ_ALOUD_VOICE").unwrap_or_else(|| "en-us".to_string()),
+                        env_trimmed("CODEX_LINUX_READ_ALOUD_VOICE")
+                            .unwrap_or_else(|| "en-us".to_string()),
                         "-s".to_string(),
-                        env_trimmed("CODEX_LINUX_READ_ALOUD_ESPEAK_RATE").unwrap_or_else(|| "165".to_string()),
+                        env_trimmed("CODEX_LINUX_READ_ALOUD_ESPEAK_RATE")
+                            .unwrap_or_else(|| "165".to_string()),
                         "--".to_string(),
                     ],
                     envs: Vec::new(),
                     stdin: false,
-                    note: "Using native espeak-ng fallback because CODEX_LINUX_READ_ALOUD_NATIVE_FALLBACK=1.".to_string(),
+                    note: "Using native espeak-ng fallback.".to_string(),
                 });
             }
         }
@@ -774,10 +767,29 @@ fn env_trimmed(name: &str) -> Option<String> {
         .and_then(|value| non_empty(&value).map(str::to_string))
 }
 
+fn spd_say_args() -> Vec<String> {
+    let mut args = vec![
+        "-r".to_string(),
+        env_trimmed("CODEX_LINUX_READ_ALOUD_RATE").unwrap_or_else(|| "-10".to_string()),
+    ];
+    if let Some(voice_type) = env_trimmed("CODEX_LINUX_READ_ALOUD_VOICE_TYPE") {
+        args.push("-t".to_string());
+        args.push(voice_type);
+    }
+    if let Some(voice) = env_trimmed("CODEX_LINUX_READ_ALOUD_VOICE") {
+        args.push("-y".to_string());
+        args.push(voice);
+    }
+    args.extend(["-l".to_string(), "en".to_string(), "--".to_string()]);
+    args
+}
+
 fn native_fallback_enabled() -> bool {
     env::var("CODEX_LINUX_READ_ALOUD_NATIVE_FALLBACK")
-        .map(|value| value == "1")
-        .unwrap_or(false)
+        .ok()
+        .and_then(|value| non_empty(&value).map(|value| value.to_ascii_lowercase()))
+        .map(|value| !matches!(value.as_str(), "0" | "false" | "off" | "no"))
+        .unwrap_or(true)
 }
 
 fn audio_session_envs() -> Vec<(String, String)> {
@@ -898,6 +910,65 @@ mod tests {
 
         assert!(audio_session_envs().is_empty());
         restore_env("XDG_RUNTIME_DIR", previous_runtime_dir);
+    }
+
+    #[test]
+    fn native_fallback_defaults_to_enabled() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let previous = env::var_os("CODEX_LINUX_READ_ALOUD_NATIVE_FALLBACK");
+        env::remove_var("CODEX_LINUX_READ_ALOUD_NATIVE_FALLBACK");
+
+        assert!(native_fallback_enabled());
+        restore_env("CODEX_LINUX_READ_ALOUD_NATIVE_FALLBACK", previous);
+    }
+
+    #[test]
+    fn native_fallback_can_be_disabled_explicitly() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let previous = env::var_os("CODEX_LINUX_READ_ALOUD_NATIVE_FALLBACK");
+
+        for value in ["0", "false", "off", "no"] {
+            env::set_var("CODEX_LINUX_READ_ALOUD_NATIVE_FALLBACK", value);
+            assert!(
+                !native_fallback_enabled(),
+                "{value} should disable fallback"
+            );
+        }
+        env::set_var("CODEX_LINUX_READ_ALOUD_NATIVE_FALLBACK", "1");
+        assert!(native_fallback_enabled());
+        restore_env("CODEX_LINUX_READ_ALOUD_NATIVE_FALLBACK", previous);
+    }
+
+    #[test]
+    fn spd_say_args_do_not_force_voice_type_by_default() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let previous_type = env::var_os("CODEX_LINUX_READ_ALOUD_VOICE_TYPE");
+        let previous_voice = env::var_os("CODEX_LINUX_READ_ALOUD_VOICE");
+        env::remove_var("CODEX_LINUX_READ_ALOUD_VOICE_TYPE");
+        env::remove_var("CODEX_LINUX_READ_ALOUD_VOICE");
+
+        let args = spd_say_args();
+
+        assert!(!args
+            .windows(2)
+            .any(|pair| pair[0] == "-t" && pair[1] == "female1"));
+        assert!(!args.iter().any(|arg| arg == "-t"));
+        restore_env("CODEX_LINUX_READ_ALOUD_VOICE_TYPE", previous_type);
+        restore_env("CODEX_LINUX_READ_ALOUD_VOICE", previous_voice);
+    }
+
+    #[test]
+    fn spd_say_args_honor_explicit_voice_type() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let previous_type = env::var_os("CODEX_LINUX_READ_ALOUD_VOICE_TYPE");
+        env::set_var("CODEX_LINUX_READ_ALOUD_VOICE_TYPE", "male1");
+
+        let args = spd_say_args();
+
+        assert!(args
+            .windows(2)
+            .any(|pair| pair[0] == "-t" && pair[1] == "male1"));
+        restore_env("CODEX_LINUX_READ_ALOUD_VOICE_TYPE", previous_type);
     }
 
     fn restore_env(name: &str, value: Option<std::ffi::OsString>) {

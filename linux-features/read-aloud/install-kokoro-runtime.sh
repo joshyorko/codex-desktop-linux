@@ -33,14 +33,16 @@ download_file() {
     rm -f "$tmp"
 
     if command -v curl >/dev/null 2>&1; then
-        curl --fail --location --show-error --output "$tmp" "$url"
+        curl --fail --location --show-error --user-agent "codex-desktop-read-aloud" --output "$tmp" "$url"
     elif command -v wget >/dev/null 2>&1; then
-        wget --output-document "$tmp" "$url"
+        wget --user-agent="codex-desktop-read-aloud" --output-document "$tmp" "$url"
     else
         "$python_bin" - "$url" "$tmp" <<'PY'
 import sys
 import urllib.request
-urllib.request.urlretrieve(sys.argv[1], sys.argv[2])
+request = urllib.request.Request(sys.argv[1], headers={"User-Agent": "codex-desktop-read-aloud"})
+with urllib.request.urlopen(request) as response, open(sys.argv[2], "wb") as output:
+    output.write(response.read())
 PY
     fi
 

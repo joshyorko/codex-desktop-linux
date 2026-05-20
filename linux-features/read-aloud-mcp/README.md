@@ -6,7 +6,7 @@ This feature stages a separate `read-aloud` Codex plugin with a native Rust MCP
 server. It does not enable microphone input or conversation mode. The first MCP
 surface is intentionally small:
 
-- `doctor` reports whether Kokoro, a custom command, or explicit native fallback
+- `doctor` reports whether Kokoro, a custom command, or native fallback
   is available.
 - `read_aloud` speaks text only when the user or agent explicitly asks for it.
 - `stop` interrupts playback started by the MCP server.
@@ -63,10 +63,12 @@ The MCP server reads the same overrides as the UI feature:
 - `CODEX_LINUX_READ_ALOUD_KOKORO_VOICE`
 - `CODEX_LINUX_READ_ALOUD_KOKORO_SPEED`
 - `CODEX_LINUX_READ_ALOUD_KOKORO_LANG`
-- `CODEX_LINUX_READ_ALOUD_NATIVE_FALLBACK=1`
+- `CODEX_LINUX_READ_ALOUD_NATIVE_FALLBACK=0`
 
-Native `spd-say` / `espeak-ng` fallback stays disabled unless explicitly
-requested because the voice quality is usually worse than Kokoro.
+Native `spd-say` / `espeak-ng` fallback is available by default after this
+opt-in MCP plugin is enabled, but Kokoro remains preferred. Set
+`CODEX_LINUX_READ_ALOUD_NATIVE_FALLBACK=0` to disable the machine voice
+fallback.
 
 ## Validate
 

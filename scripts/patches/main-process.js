@@ -218,6 +218,35 @@ function applyLinuxSetIconPatch(currentSource, iconAsset) {
   return currentSource;
 }
 
+function applyLinuxReadyToShowWindowStatePatch(currentSource) {
+  const alreadyPatchedRegex =
+    /[A-Za-z_$][\w$]*&&[A-Za-z_$][\w$]*\.once\(`ready-to-show`,\(\)=>\{[A-Za-z_$][\w$]*\.isDestroyed\(\)\|\|[A-Za-z_$][\w$]*\.maximize\(\)\}\)/;
+  if (alreadyPatchedRegex.test(currentSource)) {
+    return currentSource;
+  }
+
+  const readyToShowMaximizeRegex =
+    /([A-Za-z_$][\w$]*)\.once\(`ready-to-show`,\(\)=>\{\1\.isDestroyed\(\)\|\|\1\.maximize\(\)\}\)/g;
+  let patchedAny = false;
+  const patchedSource = currentSource.replace(readyToShowMaximizeRegex, (_match, windowVar, offset, source) => {
+    const prefix = source.slice(Math.max(0, offset - 120), offset);
+    const maximizedStateMatch = prefix.match(/([A-Za-z_$][\w$]*)&&process\.platform===`linux`&&[A-Za-z_$][\w$]*\.setIcon\(/);
+    const maximizedStateVar = maximizedStateMatch?.[1] ?? "false";
+    patchedAny = true;
+    return `${maximizedStateVar}&&${windowVar}.once(\`ready-to-show\`,()=>{${windowVar}.isDestroyed()||${windowVar}.maximize()})`;
+  });
+
+  if (patchedAny) {
+    return patchedSource;
+  }
+
+  if (currentSource.includes("ready-to-show") && currentSource.includes(".maximize()")) {
+    console.warn("WARN: Could not find ready-to-show maximize hook — skipping Linux window-state patch");
+  }
+
+  return currentSource;
+}
+
 function applyLinuxOpaqueBackgroundPatch(currentSource) {
   if (
     currentSource.includes("===`linux`&&!OM(") ||
@@ -960,6 +989,7 @@ module.exports = {
   applyLinuxMenuPatch,
   applyLinuxOpaqueBackgroundPatch,
   applyLinuxQuitGuardPatch,
+  applyLinuxReadyToShowWindowStatePatch,
   applyLinuxRemoteControlConfigPreservationPatch,
   applyLinuxSetIconPatch,
   applyLinuxSingleInstancePatch,

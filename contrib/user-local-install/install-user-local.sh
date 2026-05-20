@@ -5,6 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 FILES_DIR="${SCRIPT_DIR}/files"
 SCRIPT_REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 SOURCE_REPO_ROOT="${CODEX_USER_LOCAL_SOURCE_REPO_DIR:-$SCRIPT_REPO_ROOT}"
+DESKTOP_ENTRY_DOCTOR="${SOURCE_REPO_ROOT}/packaging/linux/codex-desktop-entry-doctor.sh"
 OPT_ROOT="${HOME}/.local/opt/codex-desktop-linux"
 OPT_BIN_DIR="${OPT_ROOT}/bin"
 OPT_LIB_DIR="${OPT_ROOT}/lib/codex-desktop-linux"
@@ -18,6 +19,9 @@ STATE_DIR="${XDG_STATE_HOME:-${HOME}/.local/state}/codex-desktop-linux"
 FROM_UPDATE=0
 ENABLE_TIMER=0
 USER_LOCAL_OZONE_PLATFORM_SETTING=""
+
+# shellcheck disable=SC1090
+. "$DESKTOP_ENTRY_DOCTOR"
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -109,7 +113,10 @@ set -euo pipefail
 exec "${HOME}/.local/opt/codex-desktop-linux/bin/codex-desktop-version" "$@"
 EOF
 
-    sed "s|@HOME@|${HOME}|g" "${FILES_DIR}/.local/share/applications/codex-desktop.desktop" > "${HOME}/.local/share/applications/codex-desktop.desktop"
+    codex_desktop_write_user_local_entry \
+        "${FILES_DIR}/.local/share/applications/codex-desktop.desktop" \
+        "${HOME}/.local/share/applications/codex-desktop.desktop" \
+        "${HOME}"
 
     copy_file "${FILES_DIR}/.config/systemd/user/codex-desktop-update.service" "${systemd_user_dir}/codex-desktop-update.service"
     copy_file "${FILES_DIR}/.config/systemd/user/codex-desktop-update.timer" "${systemd_user_dir}/codex-desktop-update.timer"
@@ -143,10 +150,6 @@ if command -v systemctl >/dev/null 2>&1; then
     if [ "$ENABLE_TIMER" -eq 1 ]; then
         systemctl --user enable --now codex-desktop-update.timer >/dev/null 2>&1 || true
     fi
-fi
-
-if command -v update-desktop-database >/dev/null 2>&1; then
-    update-desktop-database "${HOME}/.local/share/applications" >/dev/null 2>&1 || true
 fi
 
 if [ "$FROM_UPDATE" -eq 0 ] && [ -x "${HOME}/.local/bin/codex-desktop-update" ]; then

@@ -179,6 +179,9 @@ SCRIPT
 
     assert_file_exists "$dist_dir/codex-desktop_2026.03.24.120000+deadbeef_amd64.deb"
     assert_file_exists "$pkg_root/DEBIAN/prerm"
+    assert_contains "$pkg_root/usr/share/applications/codex-desktop.desktop" "Name=New Window"
+    assert_contains "$pkg_root/usr/share/applications/codex-desktop.desktop" "Name=Check for Updates"
+    assert_contains "$pkg_root/usr/share/applications/codex-desktop.desktop" "Name=Install Ready Update"
     assert_file_exists "$pkg_root/DEBIAN/postrm"
     assert_file_exists "$pkg_root/opt/codex-desktop/update-builder/scripts/lib/package-common.sh"
     assert_file_exists "$pkg_root/opt/codex-desktop/update-builder/scripts/lib/patch-chrome-plugin.js"
@@ -208,6 +211,8 @@ SCRIPT
     assert_file_exists "$pkg_root/opt/codex-desktop/update-builder/plugins/openai-bundled/plugins/computer-use/.mcp.json"
     assert_file_exists "$pkg_root/opt/codex-desktop/update-builder/plugins/openai-bundled/plugins/read-aloud/.mcp.json"
     assert_file_exists "$pkg_root/opt/codex-desktop/.codex-linux/codex-packaged-runtime.sh"
+    assert_file_exists "$pkg_root/opt/codex-desktop/.codex-linux/codex-desktop-entry-doctor.sh"
+    assert_file_exists "$pkg_root/opt/codex-desktop/update-builder/packaging/linux/codex-desktop-entry-doctor.sh"
     assert_file_exists "$pkg_root/opt/codex-desktop/resources/node-runtime/bin/node"
 }
 
@@ -309,8 +314,8 @@ SCRIPT
     assert_contains "$pkg_root/usr/share/applications/codex-cua-lab.desktop" "CHROME_DESKTOP=codex-cua-lab.desktop"
     assert_contains "$pkg_root/usr/share/applications/codex-cua-lab.desktop" "/usr/bin/codex-cua-lab %u"
     assert_contains "$pkg_root/usr/share/applications/codex-cua-lab.desktop" "MimeType=x-scheme-handler/codex;x-scheme-handler/codex-browser-sidebar;"
-    assert_contains "$pkg_root/usr/share/applications/codex-cua-lab.desktop" "StartupWMClass=Codex"
-    assert_contains "$pkg_root/usr/share/applications/codex-cua-lab.desktop" "X-GNOME-WMClass=Codex"
+    assert_contains "$pkg_root/usr/share/applications/codex-cua-lab.desktop" "StartupWMClass=codex-cua-lab"
+    assert_contains "$pkg_root/usr/share/applications/codex-cua-lab.desktop" "X-GNOME-WMClass=codex-cua-lab"
     assert_contains "$pkg_root/opt/codex-cua-lab/.codex-linux/codex-packaged-runtime.sh" 'CHROME_DESKTOP="codex-cua-lab.desktop"'
 }
 
@@ -370,12 +375,16 @@ SCRIPT
     assert_not_contains "$pkg_root/DEBIAN/control" "polkit"
     assert_not_contains "$pkg_root/DEBIAN/control" "Local auto-updates"
     assert_contains "$pkg_root/DEBIAN/control" "without codex-update-manager"
-    assert_not_contains "$pkg_root/usr/share/applications/codex-desktop.desktop" "Actions=CheckForUpdates"
+    assert_contains "$pkg_root/usr/share/applications/codex-desktop.desktop" "Actions=new-window;"
+    assert_contains "$pkg_root/usr/share/applications/codex-desktop.desktop" "Desktop Action new-window"
+    assert_contains "$pkg_root/usr/share/applications/codex-desktop.desktop" "CODEX_MULTI_LAUNCH=1 /usr/bin/codex-desktop --new-instance"
     assert_not_contains "$pkg_root/usr/share/applications/codex-desktop.desktop" "Desktop Action CheckForUpdates"
+    assert_not_contains "$pkg_root/usr/share/applications/codex-desktop.desktop" "InstallReadyUpdate"
     assert_not_contains "$pkg_root/usr/share/applications/codex-desktop.desktop" "codex-update-manager"
     assert_not_contains "$pkg_root/opt/codex-desktop/.codex-linux/codex-packaged-runtime.sh" "systemctl"
     assert_not_contains "$pkg_root/opt/codex-desktop/.codex-linux/codex-packaged-runtime.sh" "codex-update-manager"
     assert_contains "$pkg_root/opt/codex-desktop/.codex-linux/codex-packaged-runtime.sh" 'CHROME_DESKTOP="codex-desktop.desktop"'
+    assert_contains "$pkg_root/opt/codex-desktop/.codex-linux/codex-desktop-entry-doctor.sh" "codex_desktop_repair_system_package_shadow_entries"
     assert_contains "$pkg_root/opt/codex-desktop/.codex-linux/codex-no-updater-transition-cleanup.sh" "codex_no_updater_cleanup_update_manager_service"
     assert_contains "$pkg_root/opt/codex-desktop/.codex-linux/codex-no-updater-transition-cleanup.sh" "stop \"\$SERVICE_NAME\""
     assert_contains "$pkg_root/opt/codex-desktop/.codex-linux/codex-no-updater-transition-cleanup.sh" "disable \"\$SERVICE_NAME\""
@@ -383,6 +392,7 @@ SCRIPT
     assert_contains "$pkg_root/opt/codex-desktop/.codex-linux/codex-no-updater-transition-cleanup.sh" "codex_no_updater_cleanup_user_enablement_links"
     assert_contains "$pkg_root/opt/codex-desktop/.codex-linux/codex-no-updater-transition-cleanup.sh" "default.target.wants"
     assert_contains "$pkg_root/DEBIAN/postinst" "codex_no_updater_cleanup_update_manager_service"
+    assert_contains "$pkg_root/DEBIAN/postinst" "codex_desktop_repair_system_package_shadow_entries"
     assert_contains "$pkg_root/DEBIAN/prerm" "codex_no_updater_cleanup_update_manager_service"
     assert_not_contains "$pkg_root/DEBIAN/postinst" "update-builder"
     assert_not_contains "$pkg_root/DEBIAN/prerm" "update-builder"
@@ -652,6 +662,8 @@ SCRIPT
     assert_contains "$capture_dir/AppDir/codex-desktop.desktop" "Exec=AppRun %u"
     assert_contains "$capture_dir/AppDir/codex-desktop.desktop" "Icon=codex-desktop"
     assert_contains "$capture_dir/AppDir/codex-desktop.desktop" "X-AppImage-Version=2026.03.24.120000+appimage"
+    assert_contains "$capture_dir/AppDir/codex-desktop.desktop" "Actions=new-window;"
+    assert_contains "$capture_dir/AppDir/codex-desktop.desktop" "[Desktop Action new-window]"
     assert_not_contains "$capture_dir/AppDir/codex-desktop.desktop" "codex-update-manager"
     assert_contains "$capture_dir/AppDir/opt/codex-desktop/.codex-linux/codex-packaged-runtime.sh" 'CHROME_DESKTOP="codex-desktop.desktop"'
     assert_not_contains "$capture_dir/AppDir/opt/codex-desktop/.codex-linux/codex-packaged-runtime.sh" "/usr/share/applications"
@@ -3481,13 +3493,18 @@ PY
     assert_contains "$REPO_DIR/packaging/linux/codex-desktop.desktop" "BAMF_DESKTOP_FILE_HINT"
     assert_contains "$REPO_DIR/packaging/linux/codex-desktop.desktop" "/usr/bin/codex-desktop %u"
     assert_contains "$REPO_DIR/packaging/linux/codex-desktop.desktop" "MimeType=x-scheme-handler/codex;x-scheme-handler/codex-browser-sidebar;"
-    assert_contains "$REPO_DIR/packaging/linux/codex-desktop.desktop" "StartupWMClass=Codex"
-    assert_contains "$REPO_DIR/packaging/linux/codex-desktop.desktop" "X-GNOME-WMClass=Codex"
-    assert_contains "$REPO_DIR/packaging/linux/codex-desktop.desktop" "Actions=CheckForUpdates;InstallReadyUpdate;"
+    assert_contains "$REPO_DIR/packaging/linux/codex-desktop.desktop" "StartupWMClass=codex-desktop"
+    assert_contains "$REPO_DIR/packaging/linux/codex-desktop.desktop" "X-GNOME-WMClass=codex-desktop"
+    assert_contains "$REPO_DIR/packaging/linux/codex-desktop.desktop" "Actions=new-window;CheckForUpdates;InstallReadyUpdate;"
+    assert_contains "$REPO_DIR/packaging/linux/codex-desktop.desktop" "[Desktop Action new-window]"
+    assert_contains "$REPO_DIR/packaging/linux/codex-desktop.desktop" "CODEX_MULTI_LAUNCH=1 /usr/bin/codex-desktop --new-instance"
     assert_contains "$REPO_DIR/packaging/linux/codex-desktop.desktop" "codex-update-manager check-now"
     assert_contains "$REPO_DIR/packaging/linux/codex-desktop.desktop" "codex-update-manager install-ready"
+    assert_contains "$REPO_DIR/contrib/user-local-install/files/.local/share/applications/codex-desktop.desktop" "BAMF_DESKTOP_FILE_HINT=@HOME@/.local/share/applications/codex-desktop.desktop"
     assert_contains "$REPO_DIR/contrib/user-local-install/files/.local/share/applications/codex-desktop.desktop" "@HOME@/.local/bin/codex-desktop %U"
     assert_contains "$REPO_DIR/contrib/user-local-install/files/.local/share/applications/codex-desktop.desktop" "MimeType=x-scheme-handler/codex;x-scheme-handler/codex-browser-sidebar;"
+    assert_contains "$REPO_DIR/contrib/user-local-install/files/.local/share/applications/codex-desktop.desktop" "Actions=new-window;"
+    assert_contains "$REPO_DIR/contrib/user-local-install/files/.local/share/applications/codex-desktop.desktop" "CODEX_MULTI_LAUNCH=1 @HOME@/.local/bin/codex-desktop --new-instance"
     assert_contains "$REPO_DIR/contrib/user-local-install/files/.local/bin/codex-desktop" "CODEX_USER_LOCAL_OZONE_PLATFORM"
     assert_contains "$REPO_DIR/contrib/user-local-install/files/.local/bin/codex-desktop" 'exec "${APP_DIR}/start.sh" --x11 "$@"'
     assert_contains "$REPO_DIR/contrib/user-local-install/files/.local/bin/codex-desktop" 'exec "${APP_DIR}/start.sh" --wayland "$@"'
@@ -5385,6 +5402,67 @@ EOF
     )
 }
 
+test_desktop_entry_doctor_repairs_only_legacy_generated_entries() {
+    info "Checking desktop-entry doctor only backs up legacy generated entries"
+    local workspace="$TMP_DIR/desktop-entry-doctor"
+    local desktop_dir="$workspace/applications"
+    local template="$REPO_DIR/contrib/user-local-install/files/.local/share/applications/codex-desktop.desktop"
+    local stale_entry="$desktop_dir/stale.desktop"
+    local current_entry="$desktop_dir/current.desktop"
+    local custom_entry="$desktop_dir/custom.desktop"
+
+    mkdir -p "$desktop_dir"
+
+    cat > "$stale_entry" <<'EOF'
+[Desktop Entry]
+Type=Application
+Name=Codex Desktop
+Exec=/home/tester/.local/bin/codex-desktop %U
+TryExec=/home/tester/.local/bin/codex-desktop
+Terminal=false
+Icon=codex-desktop
+Actions=NewInstance;
+
+[Desktop Action NewInstance]
+Name=Open New Instance
+Exec=env CODEX_MULTI_LAUNCH=1 /home/tester/.local/bin/codex-desktop --new-instance
+EOF
+
+    cat > "$custom_entry" <<'EOF'
+[Desktop Entry]
+Type=Application
+Name=My Custom App
+Exec=/usr/bin/custom-app
+Icon=custom-app
+EOF
+
+    (
+        # shellcheck disable=SC1091
+        . "$REPO_DIR/packaging/linux/codex-desktop-entry-doctor.sh"
+        codex_desktop_write_user_local_entry "$template" "$current_entry" "/home/tester"
+        codex_desktop_repair_shadow_entry "$stale_entry"
+        if codex_desktop_repair_shadow_entry "$current_entry"; then
+            exit 1
+        fi
+        if codex_desktop_repair_shadow_entry "$custom_entry"; then
+            exit 1
+        fi
+        if codex_desktop_repair_shadow_entry "$stale_entry"; then
+            exit 1
+        fi
+    )
+
+    assert_file_not_exists "$stale_entry"
+    assert_file_exists "$stale_entry.bak"
+    assert_contains "$stale_entry.bak" "Actions=NewInstance;"
+    assert_file_exists "$current_entry"
+    assert_contains "$current_entry" "Actions=new-window;"
+    assert_contains "$current_entry" "x-scheme-handler/codex-browser-sidebar"
+    assert_file_exists "$custom_entry"
+    assert_not_contains "$custom_entry" "codex-browser-sidebar"
+    assert_file_not_exists "$stale_entry.bak.1"
+}
+
 test_user_local_install_from_update_defers_record_only_metadata() {
     info "Checking user-local helper refresh does not record metadata before update success"
     local workspace="$TMP_DIR/user-local-from-update-record-only"
@@ -5788,6 +5866,7 @@ main() {
     test_user_local_prepare_build_repo_ignores_stale_recorded_default_branch
     test_user_local_prepare_build_repo_ignores_stale_source_origin_head
     test_user_local_prepare_build_repo_handles_relative_origin_url
+    test_desktop_entry_doctor_repairs_only_legacy_generated_entries
     test_user_local_install_from_update_defers_record_only_metadata
     test_user_local_install_preserves_persisted_x11_preference_on_refresh
     test_user_local_prepare_build_repo_updates_existing_single_branch_fetch_refspec

@@ -123,12 +123,14 @@ cleaned response text to stdin:
 CODEX_LINUX_READ_ALOUD_COMMAND="/path/to/tts-stdin-command" codex-desktop
 ```
 
-System TTS fallbacks are disabled by default because `spd-say` and `espeak-ng`
-are widely available but usually unpleasant. Enable them explicitly only when
-that tradeoff is acceptable:
+When Kokoro is not ready, Read Aloud can fall back to system TTS through
+`spd-say` or `espeak-ng`. This fallback is enabled by default only after the
+user has opted into the Read Aloud feature/runtime; Kokoro remains the preferred
+backend when it is available. Disable the native fallback if the machine voice
+is not acceptable:
 
 ```bash
-CODEX_LINUX_READ_ALOUD_NATIVE_FALLBACK=1 codex-desktop
+CODEX_LINUX_READ_ALOUD_NATIVE_FALLBACK=0 codex-desktop
 ```
 
 The handler never invokes a shell for response text.

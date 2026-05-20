@@ -38,6 +38,7 @@ const {
   applyLinuxAppSunsetPatch,
   applyLinuxOpaqueBackgroundPatch,
   applyLinuxOpaqueWindowsDefaultPatch,
+  applyLinuxReadyToShowWindowStatePatch,
   applyLinuxSetIconPatch,
   applyLinuxRemoteControlConfigPreservationPatch,
   applyLinuxSingleInstancePatch,
@@ -300,6 +301,7 @@ test("default core patch descriptors are grouped and unique", () => {
   const ids = descriptors.map((descriptor) => descriptor.id);
   const expectedIds = [
     "linux-quit-guard",
+    "linux-ready-to-show-window-state",
     "linux-explicit-quit-prompt-bypass",
     "linux-explicit-quit-drain-timeout",
     "linux-explicit-tray-quit",
@@ -1264,6 +1266,9 @@ test("adds Linux launch actions through current setSecondInstanceArgsHandler bun
 
   assert.match(launchPatched, /codexLinuxGetSetting=e=>process\.platform!==`linux`\|\|j\.globalState\.get\(e\)!==!1/);
   assert.match(launchPatched, /codexLinuxStartLaunchActionSocket=\(\)=>/);
+  assert.match(launchPatched, /codexLinuxDefaultLaunchActionSocket=\(\)=>/);
+  assert.match(launchPatched, /process\.env\.CODEX_DESKTOP_LAUNCH_ACTION_SOCKET\?\.trim\(\)\|\|codexLinuxDefaultLaunchActionSocket\(\)/);
+  assert.match(launchPatched, /process\.env\.CODEX_LINUX_INSTANCE_ID\?\.trim\(\)/);
   assert.match(launchPatched, /f\.default\.createServer/);
   assert.match(launchPatched, /o\.mkdirSync\(i\.default\.dirname\(e\)/);
   assert.match(launchPatched, /R\.desktopNotificationManager\.dismissByNavigationPath\(e\)/);
@@ -1300,11 +1305,31 @@ test("adds Linux launch actions when captured window identifiers contain dollar 
   assert.match(patched, /codexLinuxHandleLaunchActionArgs=async e=>\(typeof codexLinuxIsQuitInProgress===`function`&&codexLinuxIsQuitInProgress\(\)\)\?!0:/);
   assert.match(patched, /codexLinuxHandleLaunchActionArgsFallback=\(e,t\)=>\{if\(typeof codexLinuxIsQuitInProgress===`function`&&codexLinuxIsQuitInProgress\(\)\)return;/);
   assert.match(patched, /codexLinuxStartLaunchActionSocket=\(\)=>/);
+  assert.match(patched, /codexLinuxDefaultLaunchActionSocket=\(\)=>/);
   assert.match(patched, /codexLinuxPrewarmHotkeyWindow=\(\)=>/);
   assert.match(patched, /e\.includes\(`--new-chat`\)/);
   assert.match(patched, /e\.includes\(`--quick-chat`\)/);
   assert.match(patched, /e\.includes\(`--prompt-chat`\)/);
   assert.match(patched, /e\.includes\(`--hotkey-window`\)/);
+});
+
+test("gates ready-to-show maximize behind restored maximized state", () => {
+  const source = [
+    "let E=x?.isMaximized===!0,D={once(){},isDestroyed(){return false},maximize(){},setIcon(){}};",
+    "E&&process.platform===`linux`&&D.setIcon(process.resourcesPath+`/../content/webview/assets/app-test.png`),",
+    "D.once(`ready-to-show`,()=>{D.isDestroyed()||D.maximize()});",
+  ].join("");
+
+  const patched = applyPatchTwice(applyLinuxReadyToShowWindowStatePatch, source);
+
+  assert.match(
+    patched,
+    /E&&D\.once\(`ready-to-show`,\(\)=>\{D\.isDestroyed\(\)\|\|D\.maximize\(\)\}\);/,
+  );
+  assert.doesNotMatch(
+    patched,
+    /(^|[^&])D\.once\(`ready-to-show`,\(\)=>\{D\.isDestroyed\(\)\|\|D\.maximize\(\)\}\);/,
+  );
 });
 
 test("skips the launch-action patch without throwing when upstream startup architecture changes", () => {

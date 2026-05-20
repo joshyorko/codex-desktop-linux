@@ -85,6 +85,12 @@ const dictationSource =
 const composerControlSource =
   "function mz(e){let {voiceControls:z}=e;let Be=ze,Ve=F===`empty-message`&&!A&&(ue.isAvailable&&ue.phase!==`active`||J),He=si(fc,`composer.startVoiceMode`),Ue;Ue=()=>{if(ue.phase===`starting`||ue.phase===`active`){ue.stopRealtime();return}if(ue.isAvailable){ue.phase===`inactive`&&ue.startRealtime(`composer_button_existing_thread`);return}ce()};let e=G.formatMessage({id:`composer.realtime.start.aria`,defaultMessage:`Start realtime voice`,description:`Aria label for the button that starts realtime voice mode in the composer`});let n=G.formatMessage({id:`composer.realtime.start.tooltip`,defaultMessage:`Start realtime voice`,description:`Tooltip for the button that starts realtime voice mode in the composer`});}";
 
+const currentComposerControlSource =
+  "function hz(e){let{conversationId:v,isResponseInProgress:A,onStop:P,submitBlockReason:F,voiceControls:z}=e,{canRetryDictation:K,dictationShortcutLabel:q,isDictating:J,isDictationSupported:ee,isNewRealtimeConversationAvailable:te,isRealtimeSubmitStarting:ne,isTranscribing:re,startDictation:se,startNewRealtimeConversation:ce,stopDictation:le,threadRealtime:ue}=z;let Be=ze,Ve=F===`empty-message`&&!A&&(ue.isAvailable&&ue.phase!==`active`||te),He=oi(fc,`composer.startVoiceMode`),Ue;Ue=()=>{if(ue.phase===`starting`||ue.phase===`active`){ue.stopRealtime();return}if(ue.isAvailable){ue.phase===`inactive`&&ue.startRealtime(`composer_button_existing_thread`);return}ce()};}";
+
+const halfPatchedCurrentComposerControlSource =
+  "function hz(e){let{conversationId:v,isResponseInProgress:A,onStop:P,submitBlockReason:F,voiceControls:z}=e,{canRetryDictation:K,dictationShortcutLabel:q,isDictating:J,isDictationSupported:ee,isNewRealtimeConversationAvailable:te,isRealtimeSubmitStarting:ne,isTranscribing:re,startDictation:se,startNewRealtimeConversation:ce,stopDictation:le,threadRealtime:ue}=z;let Be=ze,Ve=F===`empty-message`&&!A&&(ue.isAvailable&&ue.phase!==`active`||te),He=oi(fc,`composer.startVoiceMode`),Ue;Ue=()=>{if(globalThis.codexLinuxConversationToggle?.({conversationId:v,startDictation:se,stopDictation:le,onStop:P,isDictating:te,isTranscribing:re,isResponseInProgress:A,isDictationSupported:q}))return;if(ue.phase===`starting`||ue.phase===`active`){ue.stopRealtime();return}if(ue.isAvailable){ue.phase===`inactive`&&ue.startRealtime(`composer_button_existing_thread`);return}ce()};}";
+
 const assistantRenderSource =
   "return (0,$.jsx)(Ov,{item:n,alwaysShowActions:M,assistantCopyText:p,turnId:m,after:g,conversationId:o,cwd:u,renderCodeBlocksAsWritingBlocks:V})";
 
@@ -1323,6 +1329,7 @@ test("composer control patch repurposes the voice button for conversation mode f
   const patched = twice(applyComposerControlPatch, composerControlSource);
   assert.match(patched, /codexLinuxConversationAvailable/);
   assert.match(patched, /codexLinuxConversationSync\?\.\(v,\{isResponseInProgress:A/);
+  assert.match(patched, /isDictating:J/);
   assert.match(patched, /codexLinuxConversationActive=globalThis\.codexLinuxConversationIsActive/);
   assert.match(patched, /Ve=codexLinuxConversationActive\|\|F===`empty-message`/);
   assert.match(patched, /codexLinuxConversationToggle/);
@@ -1332,6 +1339,30 @@ test("composer control patch repurposes the voice button for conversation mode f
   assert.match(patched, /onStop:P/);
   assert.match(patched, /Start conversation mode/);
   assert.match(patched, /ue\.startRealtime/);
+});
+
+test("composer control patch follows the current composer voiceControls shape", () => {
+  const patched = twice(applyComposerControlPatch, currentComposerControlSource);
+  assert.match(
+    patched,
+    /codexLinuxConversationSync\?\.\(v,\{isResponseInProgress:A,isDictating:J,isTranscribing:re,startDictation:se,stopDictation:le,onStop:P\}\)/,
+  );
+  assert.match(
+    patched,
+    /codexLinuxConversationToggle\?\.\(\{conversationId:v,startDictation:se,stopDictation:le,onStop:P,isDictating:J,isTranscribing:re,isResponseInProgress:A,isDictationSupported:ee\}\)/,
+  );
+  assert.match(patched, /He=oi\(fc,`composer\.startVoiceMode`\)/);
+  assert.match(patched, /\|\|ue\.isAvailable&&ue\.phase!==`active`\|\|te/);
+  assert.doesNotMatch(patched, /isDictating:te/);
+  assert.doesNotMatch(patched, /isDictationSupported:q/);
+});
+
+test("composer control patch repairs bundles where only the click handler was patched", () => {
+  const patched = twice(applyComposerControlPatch, halfPatchedCurrentComposerControlSource);
+  assert.match(patched, /codexLinuxConversationSync\?\.\(v,\{isResponseInProgress:A,isDictating:J/);
+  assert.match(patched, /isDictationSupported:ee/);
+  assert.doesNotMatch(patched, /isDictating:te/);
+  assert.doesNotMatch(patched, /isDictationSupported:q/);
 });
 
 test("composer patch ignores adjacent composer chunks", () => {

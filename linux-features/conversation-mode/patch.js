@@ -89,31 +89,88 @@ function applyComposerRuntimePatch(source) {
   return `${source}\n${conversationRuntimeSource()}`;
 }
 
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function voiceControlVar(source, name, fallback) {
+  const match = source.match(/\{([^{}]*startDictation:[^{}]*stopDictation:[^{}]*threadRealtime:[^{}]*)\}=z/);
+  if (!match) {
+    return fallback;
+  }
+  return match[1].match(new RegExp(`${name}:([A-Za-z_$][\\w$]*)`))?.[1] ?? fallback;
+}
+
+function composerVoiceVars(source) {
+  return {
+    isDictating: voiceControlVar(source, "isDictating", "J"),
+    isDictationSupported: voiceControlVar(source, "isDictationSupported", "q"),
+    isTranscribing: voiceControlVar(source, "isTranscribing", "re"),
+    isNewRealtimeConversationAvailable: voiceControlVar(source, "isNewRealtimeConversationAvailable", "J"),
+    startDictation: voiceControlVar(source, "startDictation", "se"),
+    startNewRealtimeConversation: voiceControlVar(source, "startNewRealtimeConversation", "ce"),
+    stopDictation: voiceControlVar(source, "stopDictation", "le"),
+    threadRealtime: voiceControlVar(source, "threadRealtime", "ue"),
+  };
+}
+
+function composerSyncPayload(vars) {
+  return [
+    "isResponseInProgress:A",
+    `isDictating:${vars.isDictating}`,
+    `isTranscribing:${vars.isTranscribing}`,
+    `startDictation:${vars.startDictation}`,
+    `stopDictation:${vars.stopDictation}`,
+    "onStop:P",
+  ].join(",");
+}
+
+function composerTogglePayload(vars) {
+  return [
+    "conversationId:v",
+    `startDictation:${vars.startDictation}`,
+    `stopDictation:${vars.stopDictation}`,
+    "onStop:P",
+    `isDictating:${vars.isDictating}`,
+    `isTranscribing:${vars.isTranscribing}`,
+    "isResponseInProgress:A",
+    `isDictationSupported:${vars.isDictationSupported}`,
+  ].join(",");
+}
+
 function applyComposerControlPatch(source) {
   let patched = source;
-  const visibleNeedle =
-    "let Be=ze,Ve=F===`empty-message`&&!A&&(ue.isAvailable&&ue.phase!==`active`||J),He=si(fc,`composer.startVoiceMode`)";
-  if (patched.includes(visibleNeedle)) {
+  const vars = composerVoiceVars(patched);
+  const visiblePattern =
+    /let Be=ze,Ve=F===`empty-message`&&!A&&\((?:globalThis\.codexLinuxConversationAvailable\?\.\(\)\|\|)?([A-Za-z_$][\w$]*)\.isAvailable&&\1\.phase!==`active`\|\|([A-Za-z_$][\w$]*)\),He=([A-Za-z_$][\w$]*)\(fc,`composer\.startVoiceMode`\)/;
+  const visibleMatch = patched.match(visiblePattern);
+  if (visibleMatch && !patched.includes("codexLinuxConversationSync?.(v")) {
+    const threadRealtime = visibleMatch[1];
+    const realtimeAvailable = visibleMatch[2] || vars.isNewRealtimeConversationAvailable;
+    const shortcutFn = visibleMatch[3];
     patched = patched.replace(
-      visibleNeedle,
-      "let Be=ze;globalThis.codexLinuxConversationSync?.(v,{isResponseInProgress:A,isDictating:te,isTranscribing:re,startDictation:se,stopDictation:le,onStop:P});let codexLinuxConversationActive=globalThis.codexLinuxConversationIsActive?.(v)===!0,Ve=codexLinuxConversationActive||F===`empty-message`&&!A&&((v&&globalThis.codexLinuxConversationAvailable?.())||ue.isAvailable&&ue.phase!==`active`||J),He=si(fc,`composer.startVoiceMode`)",
+      visiblePattern,
+      `let Be=ze;globalThis.codexLinuxConversationSync?.(v,{${composerSyncPayload(vars)}});let codexLinuxConversationActive=globalThis.codexLinuxConversationIsActive?.(v)===!0,Ve=codexLinuxConversationActive||F===\`empty-message\`&&!A&&((v&&globalThis.codexLinuxConversationAvailable?.())||${threadRealtime}.isAvailable&&${threadRealtime}.phase!==\`active\`||${realtimeAvailable}),He=${shortcutFn}(fc,\`composer.startVoiceMode\`)`,
     );
-  } else if (patched.includes("codexLinuxConversationAvailable") && !patched.includes("codexLinuxConversationSync?.(v")) {
-    patched = patched.replace(
-      "let Be=ze,Ve=F===`empty-message`&&!A&&(globalThis.codexLinuxConversationAvailable?.()||ue.isAvailable&&ue.phase!==`active`||J),He=si(fc,`composer.startVoiceMode`)",
-      "let Be=ze;globalThis.codexLinuxConversationSync?.(v,{isResponseInProgress:A,isDictating:te,isTranscribing:re,startDictation:se,stopDictation:le,onStop:P});let codexLinuxConversationActive=globalThis.codexLinuxConversationIsActive?.(v)===!0,Ve=codexLinuxConversationActive||F===`empty-message`&&!A&&((v&&globalThis.codexLinuxConversationAvailable?.())||ue.isAvailable&&ue.phase!==`active`||J),He=si(fc,`composer.startVoiceMode`)",
-    );
-  } else if (!patched.includes("codexLinuxConversationAvailable")) {
+  } else if (!patched.includes("codexLinuxConversationSync?.(v")) {
     warn("Could not find composer voice button visibility gate", "conversation mode composer control patch");
   }
 
-  const clickNeedle =
-    "Ue=()=>{if(ue.phase===`starting`||ue.phase===`active`){ue.stopRealtime();return}if(ue.isAvailable){ue.phase===`inactive`&&ue.startRealtime(`composer_button_existing_thread`);return}ce()}";
-  if (patched.includes(clickNeedle)) {
+  const threadRealtime = escapeRegExp(vars.threadRealtime);
+  const startNewRealtimeConversation = escapeRegExp(vars.startNewRealtimeConversation);
+  const clickPattern = new RegExp(
+    `([A-Za-z_$][\\w$]*)=\\(\\)=>\\{if\\(${threadRealtime}\\.phase===\`starting\`\\|\\|${threadRealtime}\\.phase===\`active\`\\)\\{${threadRealtime}\\.stopRealtime\\(\\);return\\}if\\(${threadRealtime}\\.isAvailable\\)\\{${threadRealtime}\\.phase===\`inactive\`&&${threadRealtime}\\.startRealtime\\(\`composer_button_existing_thread\`\\);return\\}${startNewRealtimeConversation}\\(\\)\\}`,
+  );
+  const togglePattern =
+    /codexLinuxConversationToggle\?\.\(\{conversationId:v,startDictation:[A-Za-z_$][\w$]*,stopDictation:[A-Za-z_$][\w$]*,onStop:P,isDictating:[A-Za-z_$][\w$]*,isTranscribing:[A-Za-z_$][\w$]*,isResponseInProgress:A,isDictationSupported:[A-Za-z_$][\w$]*\}\)/;
+  const toggleCall = `codexLinuxConversationToggle?.({${composerTogglePayload(vars)}})`;
+  if (clickPattern.test(patched)) {
     patched = patched.replace(
-      clickNeedle,
-      "Ue=()=>{if(globalThis.codexLinuxConversationToggle?.({conversationId:v,startDictation:se,stopDictation:le,onStop:P,isDictating:te,isTranscribing:re,isResponseInProgress:A,isDictationSupported:q}))return;if(ue.phase===`starting`||ue.phase===`active`){ue.stopRealtime();return}if(ue.isAvailable){ue.phase===`inactive`&&ue.startRealtime(`composer_button_existing_thread`);return}ce()}",
+      clickPattern,
+      `$1=()=>{if(globalThis.${toggleCall})return;if(${vars.threadRealtime}.phase===\`starting\`||${vars.threadRealtime}.phase===\`active\`){${vars.threadRealtime}.stopRealtime();return}if(${vars.threadRealtime}.isAvailable){${vars.threadRealtime}.phase===\`inactive\`&&${vars.threadRealtime}.startRealtime(\`composer_button_existing_thread\`);return}${vars.startNewRealtimeConversation}()}`,
     );
+  } else if (togglePattern.test(patched)) {
+    patched = patched.replace(togglePattern, toggleCall);
   } else if (!patched.includes("codexLinuxConversationToggle")) {
     warn("Could not find composer voice button click handler", "conversation mode composer control patch");
   }

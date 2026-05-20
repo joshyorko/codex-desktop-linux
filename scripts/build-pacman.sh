@@ -92,6 +92,7 @@ main() {
 		"$PKGBUILD_TEMPLATE" >"$build_root/PKGBUILD"
 	if package_with_updater_enabled; then
 		sed -e "s|/opt/codex-desktop|/opt/$PACKAGE_NAME|g" \
+			-e "s|codex_desktop_repair_system_package_shadow_entries codex-desktop|codex_desktop_repair_system_package_shadow_entries $PACKAGE_NAME|g" \
 			"$INSTALL_HOOKS" >"$build_root/${PACKAGE_NAME}.install"
 	else
 		write_no_updater_pacman_install_hooks "$build_root/${PACKAGE_NAME}.install"

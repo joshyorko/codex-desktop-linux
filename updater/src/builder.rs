@@ -99,6 +99,14 @@ pub async fn build_update(
             .arg(dmg_path)
             .env("CODEX_INSTALL_DIR", &workspace.app_dir)
             .env(
+                "CODEX_PATCH_REPORT_JSON",
+                workspace.reports_dir.join("patch-report.json"),
+            )
+            .env(
+                "CODEX_REBUILD_REPORT_JSON",
+                workspace.reports_dir.join("rebuild-report.json"),
+            )
+            .env(
                 "CODEX_MANAGED_NODE_SOURCE",
                 config.builder_bundle_root.join("node-runtime"),
             )
@@ -155,6 +163,7 @@ struct BuilderWorkspace {
     bundle_dir: PathBuf,
     dist_dir: PathBuf,
     app_dir: PathBuf,
+    reports_dir: PathBuf,
     install_log: PathBuf,
     build_log: PathBuf,
 }
@@ -166,6 +175,7 @@ impl BuilderWorkspace {
         let dist_dir = workspace_dir.join("dist");
         let app_dir = workspace_dir.join("codex-app");
         let logs_dir = workspace_dir.join("logs");
+        let reports_dir = workspace_dir.join("reports");
         let install_log = logs_dir.join("install.log");
         let build_log = logs_dir.join("build-package.log");
 
@@ -176,12 +186,15 @@ impl BuilderWorkspace {
 
         fs::create_dir_all(&logs_dir)
             .with_context(|| format!("Failed to create {}", logs_dir.display()))?;
+        fs::create_dir_all(&reports_dir)
+            .with_context(|| format!("Failed to create {}", reports_dir.display()))?;
 
         Ok(Self {
             workspace_dir,
             bundle_dir,
             dist_dir,
             app_dir,
+            reports_dir,
             install_log,
             build_log,
         })
@@ -615,6 +628,14 @@ set -euo pipefail
 mkdir -p "${CODEX_INSTALL_DIR}"
 echo launcher > "${CODEX_INSTALL_DIR}/start.sh"
 chmod +x "${CODEX_INSTALL_DIR}/start.sh"
+if [ -n "${CODEX_PATCH_REPORT_JSON:-}" ]; then
+  mkdir -p "$(dirname "$CODEX_PATCH_REPORT_JSON")"
+  printf '{"patches":[]}\n' > "${CODEX_PATCH_REPORT_JSON}"
+fi
+if [ -n "${CODEX_REBUILD_REPORT_JSON:-}" ]; then
+  mkdir -p "$(dirname "$CODEX_REBUILD_REPORT_JSON")"
+  printf '{"appDir":"%s"}\n' "${CODEX_INSTALL_DIR}" > "${CODEX_REBUILD_REPORT_JSON}"
+fi
 "#,
         )?;
         #[cfg(unix)]
@@ -721,6 +742,14 @@ chmod +x "${CODEX_INSTALL_DIR}/start.sh"
         assert!(artifacts
             .workspace_dir
             .join("builder/linux-features/features.example.json")
+            .exists());
+        assert!(artifacts
+            .workspace_dir
+            .join("reports/patch-report.json")
+            .exists());
+        assert!(artifacts
+            .workspace_dir
+            .join("reports/rebuild-report.json")
             .exists());
         assert!(
             is_native_package_file(&artifacts.package_path),

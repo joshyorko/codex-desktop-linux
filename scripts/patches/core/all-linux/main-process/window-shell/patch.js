@@ -4,6 +4,7 @@ const {
   applyLinuxWindowOptionsPatch,
   applyLinuxMenuPatch,
   applyLinuxSetIconPatch,
+  applyLinuxReadyToShowWindowStatePatch,
   applyLinuxOpaqueBackgroundPatch,
   applyLinuxFileManagerPatch,
   applyLinuxCodeEditorOpenTargetPatch,
@@ -34,6 +35,13 @@ module.exports = [
     order: 70,
     ciPolicy: "optional",
     apply: (source, context) => applyLinuxSetIconPatch(source, context.iconAsset),
+  },
+  {
+    id: "linux-ready-to-show-window-state",
+    phase: "main-bundle",
+    order: 75,
+    ciPolicy: "optional",
+    apply: applyLinuxReadyToShowWindowStatePatch,
   },
   {
     id: "linux-opaque-background",
