@@ -48,6 +48,47 @@ What it changes:
   startup.
 - Updates remote-control settings and Codex mobile setup copy so the Linux flow
   is not described as Mac-only.
+- Stages `.codex-linux/remote-mobile-control-enabled`, which tells the Linux
+  launcher to provision the upstream managed standalone daemon runtime when it
+  is missing, then start the managed app-server daemon with
+  `app-server daemon start --enable remote_control` on cold start.
+
+Remote mobile daemon requirement:
+
+The interactive Codex CLI and the remote-control daemon are separate concerns.
+You can keep using a Homebrew-installed `codex` for normal terminal and Desktop
+app-server usage, but Android remote control currently expects the upstream
+managed standalone daemon runtime at:
+
+```bash
+~/.codex/packages/standalone/current/codex
+```
+
+If that binary is missing, the launcher runs the upstream standalone installer
+with `CODEX_INSTALL_DIR` pointed at a private bin directory under
+`~/.codex/packages/standalone/.bin`. That satisfies the managed daemon layout
+without changing `CODEX_CLI_PATH`, creating `~/.local/bin/codex`, or adding
+PATH blocks to your shell profile.
+
+This is compatible with immutable Linux systems such as Bluefin / Universal
+Blue because the managed daemon runtime is user-scoped state under
+`~/.codex/packages/standalone`. It does not require `dnf`, `rpm-ostree`, host
+package layering, or base-OS mutation. The private `.bin` directory is only a
+launcher-owned target for the installer symlink; it is not prepended to the
+user's persistent shell `PATH`.
+
+Set `CODEX_REMOTE_CONTROL_RUNTIME_AUTO_INSTALL_DISABLED=1` to disable that
+runtime provisioning and only use an already-installed standalone runtime.
+
+To force a specific daemon binary without affecting the interactive CLI, set:
+
+```bash
+CODEX_REMOTE_CONTROL_CODEX_PATH=/path/to/standalone/codex
+```
+
+To keep Desktop using Homebrew while the daemon uses standalone, set
+`CODEX_CLI_PATH` to the Brew binary and leave
+`CODEX_REMOTE_CONTROL_CODEX_PATH` unset or pointed at the standalone binary.
 
 KDE Plasma smoke check:
 

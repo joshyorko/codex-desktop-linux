@@ -3213,6 +3213,8 @@ test_launcher_template_sanity() {
     assert_contains "$REPO_DIR/launcher/start.sh.template" 'launcher-$CODEX_LINUX_INSTANCE_ID.log'
     assert_contains "$REPO_DIR/launcher/start.sh.template" "ADOPTED_WEBVIEW_PID"
     assert_contains "$REPO_DIR/launcher/start.sh.template" "Reusing webview server pid="
+    assert_contains "$REPO_DIR/launcher/start.sh.template" "ensure_remote_mobile_control_daemon"
+    assert_contains "$REPO_DIR/linux-features/remote-mobile-control/stage.sh" "remote-mobile-control-enabled"
     python3 - "$REPO_DIR/launcher/start.sh.template" <<'PY'
 import re
 import sys
@@ -3221,6 +3223,7 @@ source = open(sys.argv[1], encoding="utf-8").read()
 detect_body = source.split("detect_warm_start() {", 1)[1].split("send_warm_start_launch_action() {", 1)[0]
 launch_body = source.split("launch_electron() {", 1)[1].split("load_packaged_runtime_helper", 1)[0]
 runtime_body = source.split("trap cleanup_launcher EXIT", 1)[1].split("launch_electron", 1)[0]
+remote_daemon_body = source.split("ensure_remote_mobile_control_daemon() {", 1)[1].split("run_cli_preflight() {", 1)[0]
 stop_body = source.split("stop_owned_webview_server() {", 1)[1].split("owned_webview_server_pid() {", 1)[0]
 stale_body = source.split("pid_is_stale_webview_server() {", 1)[1].split("stop_owned_webview_server() {", 1)[0]
 multi_body = source.split("configure_multi_launch_instance() {", 1)[1].split('WEBVIEW_ORIGIN="http://127.0.0.1:$CODEX_LINUX_WEBVIEW_PORT"', 1)[0]
@@ -3269,8 +3272,8 @@ if "second_instance_handoff_ready" not in runtime_body:
     raise SystemExit("second-instance handoff must skip cold-start setup")
 if "clear_bundled_marketplace_tmp_cache\nmonitor_bundled_marketplace_tmp_permissions\nreconcile_runtime_state" in runtime_body:
     raise SystemExit("warm-start path must not clear bundled marketplace temp cache")
-if not re.search(r'if needs_cold_start; then\s+clear_bundled_marketplace_tmp_cache\s+# The runtime marketplace is populated asynchronously.*?monitor_bundled_marketplace_tmp_permissions\s+sync_browser_use_bundled_plugin_cache\s+sync_chrome_bundled_plugin_cache\s+.*?sync_computer_use_bundled_plugin_cache\s+.*?sync_read_aloud_bundled_plugin_cache\s+fi', runtime_body, re.S):
-    raise SystemExit("bundled marketplace cleanup and plugin sync must run only on cold start")
+if not re.search(r'if needs_cold_start; then\s+clear_bundled_marketplace_tmp_cache\s+# The runtime marketplace is populated asynchronously.*?monitor_bundled_marketplace_tmp_permissions\s+sync_browser_use_bundled_plugin_cache\s+sync_chrome_bundled_plugin_cache\s+.*?sync_computer_use_bundled_plugin_cache\s+.*?sync_read_aloud_bundled_plugin_cache\s+ensure_remote_mobile_control_daemon\s+fi', runtime_body, re.S):
+    raise SystemExit("bundled marketplace cleanup, plugin sync, and remote mobile daemon startup must run only on cold start")
 if 'if needs_cold_start && [ -z "${CODEX_CLI_PATH:-}" ]; then' not in runtime_body:
     raise SystemExit("second-instance handoff must skip CLI lookup")
 if 'if needs_cold_start && [ -z "$CODEX_CLI_PATH" ]; then' not in runtime_body:
@@ -3279,6 +3282,24 @@ if '"$HOME/.bun/bin/codex"' not in source:
     raise SystemExit("CLI lookup must include bun global install path")
 if "if needs_cold_start;" not in runtime_body:
     raise SystemExit("second-instance handoff must skip CLI preflight")
+if 'ensure_remote_mobile_control_daemon' not in runtime_body:
+    raise SystemExit("cold start must ensure the remote mobile daemon before Electron launches")
+if 'CODEX_REMOTE_CONTROL_CODEX_PATH' not in remote_daemon_body:
+    raise SystemExit("remote mobile daemon must use a separate standalone CLI path")
+if 'CODEX_CLI_PATH=' in remote_daemon_body or 'export CODEX_CLI_PATH' in remote_daemon_body:
+    raise SystemExit("remote mobile daemon startup must not overwrite the user's interactive CODEX_CLI_PATH")
+if 'CODEX_INSTALL_DIR' not in remote_daemon_body or '.bin' not in remote_daemon_body:
+    raise SystemExit("remote mobile daemon provisioning must install into a private standalone bin dir")
+if 'PATH="$installer_path"' not in remote_daemon_body or 'system_path="/usr/bin:/bin:/usr/sbin:/sbin"' not in remote_daemon_body:
+    raise SystemExit("remote mobile daemon provisioning must run with a sanitized system PATH")
+if 'setsid' not in remote_daemon_body:
+    raise SystemExit("remote mobile daemon provisioning must suppress installer TTY prompts")
+if ':$PATH' in remote_daemon_body:
+    raise SystemExit("remote mobile daemon provisioning must not expose the user's PATH to the installer")
+if '$HOME/.local/bin/codex' in remote_daemon_body:
+    raise SystemExit("remote mobile daemon provisioning must not install the visible ~/.local/bin/codex command")
+if 'app-server daemon start --enable remote_control' not in remote_daemon_body:
+    raise SystemExit("remote mobile daemon startup must enable remote_control on the managed daemon")
 if "running_app_is_active" not in stop_body or "Preserving webview server" not in stop_body:
     raise SystemExit("stop_owned_webview_server must not stop the live app webview server")
 if "stale_webview_server_pid" not in source or "stop_stale_webview_server" not in source:
