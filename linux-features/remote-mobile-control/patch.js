@@ -39,8 +39,6 @@ const REMOTE_CONTROL_AUTO_CONNECT_CLEANUP_MARKER = "codexLinuxRemoteControlAutoC
 const REMOTE_CONTROL_SELF_AUTO_CONNECT_MARKER = "codexLinuxRemoteControlSelfAutoConnect";
 const REMOTE_MOBILE_ACTIVE_STATUS_MARKER = "codexLinuxRemoteMobileActiveStatus";
 const REMOTE_CONTROL_REVOKE_SETUP_RESET_MARKER = "codexLinuxRemoteControlResetMobileSetupAfterRevoke";
-const REMOTE_MOBILE_APP_SERVER_PROXY_MARKER = "codexLinuxRemoteMobileAppServerArgs";
-const REMOTE_MOBILE_APP_SERVER_ARGS_NEEDLE = "args:[`app-server`,`--analytics-default-enabled`]";
 const REMOTE_CONTROL_SELECTED_TAB_NEEDLE =
   "function rr({selectedConnectionsTab:e,showControlThisMacTab:t,showRemoteControlConnectionsSection:n,showTabbedSshPage:r}){return n?e===`control-this-mac`&&!t||e===`ssh`&&!r?`access-other-devices`:e:`ssh`}";
 const REMOTE_CONTROL_SELECTED_TAB_REPLACEMENT =
@@ -385,56 +383,6 @@ function applyLinuxRemoteControlClientRevocationRecoveryPatch(source) {
     recoverableErrorNeedle,
     "e.message===`Remote control request failed (403): Remote-control client key material missing`||e.message===`Remote-control client key material missing`||e.message===`Remote-control client has been revoked`:!1",
   );
-}
-
-function applyLinuxRemoteMobileAppServerProxyPatch(source) {
-  if (source.includes(REMOTE_MOBILE_APP_SERVER_PROXY_MARKER)) {
-    return source;
-  }
-  if (!source.includes(REMOTE_MOBILE_APP_SERVER_ARGS_NEEDLE)) {
-    return source;
-  }
-
-  const helper =
-    "function codexLinuxRemoteMobileAppServerArgs(){return process.platform===`linux`?[`app-server`,`proxy`]:[`app-server`,`--analytics-default-enabled`]}";
-  return `${helper}${source.split(REMOTE_MOBILE_APP_SERVER_ARGS_NEEDLE).join("args:codexLinuxRemoteMobileAppServerArgs()")}`;
-}
-
-function applyLinuxRemoteMobileAppServerProxyExtractedAppPatch(extractedDir) {
-  const buildDir = path.join(extractedDir, ".vite", "build");
-  if (!fs.existsSync(buildDir)) {
-    const reason = `missing build directory ${buildDir}`;
-    console.warn(`WARN: Could not find app-server launch bundle - skipping remote mobile app-server proxy patch`);
-    return { matched: 0, changed: 0, reason };
-  }
-
-  const candidates = fs
-    .readdirSync(buildDir)
-    .filter((name) => /\.m?js$/u.test(name))
-    .sort();
-
-  let matched = 0;
-  let changed = 0;
-  for (const candidate of candidates) {
-    const filePath = path.join(buildDir, candidate);
-    const source = fs.readFileSync(filePath, "utf8");
-    if (!source.includes(REMOTE_MOBILE_APP_SERVER_ARGS_NEEDLE) && !source.includes(REMOTE_MOBILE_APP_SERVER_PROXY_MARKER)) {
-      continue;
-    }
-    matched += 1;
-    const patched = applyLinuxRemoteMobileAppServerProxyPatch(source);
-    if (patched !== source) {
-      fs.writeFileSync(filePath, patched, "utf8");
-      changed += 1;
-    }
-  }
-
-  if (matched === 0) {
-    const reason = "no default app-server launch args found";
-    console.warn("WARN: Could not find default app-server launch args - skipping remote mobile app-server proxy patch");
-    return { matched, changed, reason };
-  }
-  return { matched, changed };
 }
 
 function applyLinuxRemoteControlClientRevokeSetupResetPatch(source) {
@@ -940,13 +888,6 @@ module.exports = [
     apply: applyLinuxRemoteControlClientRevocationRecoveryPatch,
   },
   {
-    id: "linux-remote-mobile-app-server-proxy",
-    phase: "extracted-app",
-    order: 20_117,
-    ciPolicy: "optional",
-    apply: applyLinuxRemoteMobileAppServerProxyExtractedAppPatch,
-  },
-  {
     id: "linux-remote-control-load-gate",
     phase: "webview-asset",
     pattern: /^remote-connection-visibility-.*\.js$/,
@@ -1049,7 +990,6 @@ module.exports = [
 ];
 
 module.exports.applyLinuxRemoteControlDeviceKeyPatch = applyLinuxRemoteControlDeviceKeyPatch;
-module.exports.applyLinuxRemoteMobileAppServerProxyPatch = applyLinuxRemoteMobileAppServerProxyPatch;
 module.exports.applyLinuxRemoteMobileChromeBridgePatch = applyLinuxRemoteMobileChromeBridgePatch;
 module.exports.applyLinuxRemoteMobileConversationHydrationPatch = applyLinuxRemoteMobileConversationHydrationPatch;
 module.exports.applyLinuxRemoteControlEnablementBridgePatch = applyLinuxRemoteControlEnablementBridgePatch;
