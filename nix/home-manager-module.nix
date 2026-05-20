@@ -168,6 +168,10 @@ in
       CODEX_REMOTE_CONTROL_DAEMON_AUTOSTART_DISABLED = "1";
     };
 
+    systemd.user.sessionVariables = lib.mkIf (remoteCfg.enable && remoteCfg.disableLauncherAutostart) {
+      CODEX_REMOTE_CONTROL_DAEMON_AUTOSTART_DISABLED = "1";
+    };
+
     systemd.user.services.codex-remote-control = lib.mkIf remoteCfg.enable {
       Unit = {
         Description = "Codex remote-control app-server";
