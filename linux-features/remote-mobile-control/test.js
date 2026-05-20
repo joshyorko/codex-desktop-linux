@@ -522,10 +522,14 @@ test("Linux remote-connections refresh patch shortens polling and refreshes on r
   assert.match(patched, /Qn=5e3/);
   assert.doesNotMatch(patched, /Qn=15e3/);
   assert.match(patched, /codexLinuxRemoteConnectionsRefreshNow/);
+  assert.match(patched, /codexLinuxRemoteConnectionsRefreshTimer=null/);
+  assert.match(patched, /codexLinuxRemoteConnectionsRefreshLast=0/);
+  assert.match(patched, /e-codexLinuxRemoteConnectionsRefreshLast<1e3/);
   assert.match(patched, /document\.addEventListener\(`visibilitychange`,codexLinuxRemoteConnectionsRefreshNow\)/);
   assert.match(patched, /window\.addEventListener\(`focus`,codexLinuxRemoteConnectionsRefreshNow\)/);
   assert.match(patched, /window\.addEventListener\(`online`,codexLinuxRemoteConnectionsRefreshNow\)/);
   assert.match(patched, /window\.addEventListener\(`resume`,codexLinuxRemoteConnectionsRefreshNow\)/);
+  assert.match(patched, /window\.clearTimeout\(codexLinuxRemoteConnectionsRefreshTimer\)/);
   assert.match(patched, /document\.removeEventListener\(`visibilitychange`,codexLinuxRemoteConnectionsRefreshNow\)/);
   assert.match(patched, /window\.removeEventListener\(`resume`,codexLinuxRemoteConnectionsRefreshNow\)/);
   assert.equal(applyLinuxRemoteConnectionsRefreshPatch(patched), patched);
