@@ -2,7 +2,7 @@
 "use strict";
 
 const assert = require("node:assert/strict");
-const { spawnSync } = require("node:child_process");
+const { spawn, spawnSync } = require("node:child_process");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
@@ -372,6 +372,87 @@ test("remote mobile cold-start hook preserves user codex symlinks outside the st
     assert.equal(result.status, 0, result.stderr || result.stdout);
     assert.equal(fs.readlinkSync(userCodex), userManagedCodex);
   } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("remote mobile cold-start hook prefers CODEX_CLI_PATH for the daemon runtime", () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "codex-remote-mobile-cold-start-"));
+  try {
+    const home = path.join(tempRoot, "home");
+    const codexHome = path.join(tempRoot, "codex-home");
+    const brewCodex = path.join(tempRoot, "brew", "bin", "codex");
+    const callsLog = path.join(tempRoot, "calls.log");
+
+    fs.mkdirSync(path.dirname(brewCodex), { recursive: true });
+    fs.mkdirSync(home, { recursive: true });
+    fs.writeFileSync(
+      brewCodex,
+      `#!/usr/bin/env sh\nprintf '%s\\n' "$*" >> ${JSON.stringify(callsLog)}\nexit 0\n`,
+    );
+    fs.chmodSync(brewCodex, 0o755);
+
+    const result = runColdStartHook({
+      CODEX_CLI_PATH: brewCodex,
+      CODEX_HOME: codexHome,
+      CODEX_REMOTE_CONTROL_RUNTIME_AUTO_INSTALL_DISABLED: "1",
+      HOME: home,
+    });
+
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    assert.equal(fs.readFileSync(callsLog, "utf8"), "remote-control start\n");
+    assert.match(result.stdout, /Remote mobile control daemon is ready via .*brew.*codex/);
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("remote mobile cold-start hook stops stale standalone daemon before starting CODEX_CLI_PATH", () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "codex-remote-mobile-cold-start-"));
+  let staleProcess;
+  try {
+    const home = path.join(tempRoot, "home");
+    const codexHome = path.join(tempRoot, "codex-home");
+    const daemonDir = path.join(codexHome, "app-server-daemon");
+    const standaloneCodex = path.join(codexHome, "packages", "standalone", "current", "codex");
+    const brewCodex = path.join(tempRoot, "brew", "bin", "codex");
+    const callsLog = path.join(tempRoot, "calls.log");
+
+    fs.mkdirSync(path.dirname(standaloneCodex), { recursive: true });
+    fs.mkdirSync(path.dirname(brewCodex), { recursive: true });
+    fs.mkdirSync(daemonDir, { recursive: true });
+    fs.mkdirSync(home, { recursive: true });
+    fs.writeFileSync(standaloneCodex, "#!/usr/bin/env bash\nsleep 60\n");
+    fs.chmodSync(standaloneCodex, 0o755);
+    fs.writeFileSync(
+      brewCodex,
+      `#!/usr/bin/env sh\nprintf '%s\\n' "$*" >> ${JSON.stringify(callsLog)}\nexit 0\n`,
+    );
+    fs.chmodSync(brewCodex, 0o755);
+    staleProcess = spawn(standaloneCodex, [], { stdio: "ignore" });
+    fs.writeFileSync(
+      path.join(daemonDir, "app-server.pid"),
+      JSON.stringify({ pid: staleProcess.pid, processStartTime: "fixture" }),
+    );
+
+    const result = runColdStartHook({
+      CODEX_CLI_PATH: brewCodex,
+      CODEX_HOME: codexHome,
+      CODEX_REMOTE_CONTROL_RUNTIME_AUTO_INSTALL_DISABLED: "1",
+      HOME: home,
+    });
+
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    assert.equal(fs.readFileSync(callsLog, "utf8"), "remote-control stop\nremote-control start\n");
+    assert.match(result.stdout, /Stopping stale remote mobile control standalone daemon/);
+  } finally {
+    if (staleProcess?.pid) {
+      try {
+        process.kill(staleProcess.pid, "SIGTERM");
+      } catch {
+        // Process may already have exited.
+      }
+    }
     fs.rmSync(tempRoot, { recursive: true, force: true });
   }
 });

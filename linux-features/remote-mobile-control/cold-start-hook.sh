@@ -81,6 +81,39 @@ install_remote_mobile_control_runtime() {
     fi
 }
 
+resolve_remote_mobile_control_codex() {
+    local codex_home="$1"
+
+    if [ -n "${CODEX_REMOTE_CONTROL_CODEX_PATH:-}" ]; then
+        printf '%s\n' "$CODEX_REMOTE_CONTROL_CODEX_PATH"
+        return 0
+    fi
+
+    if [ -n "${CODEX_CLI_PATH:-}" ] && [ -x "$CODEX_CLI_PATH" ]; then
+        printf '%s\n' "$CODEX_CLI_PATH"
+        return 0
+    fi
+
+    if command -v codex >/dev/null 2>&1; then
+        command -v codex
+        return 0
+    fi
+
+    printf '%s\n' "$codex_home/packages/standalone/current/codex"
+}
+
+path_inside_dir() {
+    local candidate="$1"
+    local dir="$2"
+
+    [ -n "$candidate" ] || return 1
+    [ -n "$dir" ] || return 1
+    case "$candidate" in
+        "$dir"|"$dir"/*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
 remote_mobile_control_daemon_pid() {
     local pid_file="$1"
 
@@ -108,6 +141,57 @@ cleanup_stale_remote_mobile_daemon_state() {
     done
 }
 
+remote_mobile_process_mentions_path() {
+    local pid="$1"
+    local needle="$2"
+    local cmdline=""
+
+    [ -n "$pid" ] || return 1
+    [ -n "$needle" ] || return 1
+    [ -r "/proc/$pid/cmdline" ] || return 1
+    cmdline="$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null || true)"
+    case "$cmdline" in
+        *"$needle"*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+stop_stale_standalone_remote_mobile_daemon() {
+    local codex_home="$1"
+    local daemon_codex="$2"
+    local standalone_root="$3"
+    local standalone_codex="$4"
+    local daemon_pid=""
+    local daemon_codex_resolved=""
+    local daemon_exe=""
+    local stop_codex=""
+
+    daemon_codex_resolved="$(readlink -f "$daemon_codex" 2>/dev/null || true)"
+    [ -n "$daemon_codex_resolved" ] || daemon_codex_resolved="$daemon_codex"
+    if path_inside_dir "$daemon_codex_resolved" "$standalone_root"; then
+        return 0
+    fi
+
+    daemon_pid="$(remote_mobile_control_daemon_pid "$codex_home/app-server-daemon/app-server.pid" || true)"
+    [ -n "$daemon_pid" ] || return 0
+    kill -0 "$daemon_pid" 2>/dev/null || return 0
+
+    daemon_exe="$(readlink -f "/proc/$daemon_pid/exe" 2>/dev/null || true)"
+    if ! path_inside_dir "$daemon_exe" "$standalone_root" &&
+        ! remote_mobile_process_mentions_path "$daemon_pid" "$standalone_root"; then
+        return 0
+    fi
+
+    echo "Stopping stale remote mobile control standalone daemon pid=$daemon_pid before switching to $daemon_codex"
+    if [ -x "$standalone_codex" ]; then
+        stop_codex="$standalone_codex"
+    else
+        stop_codex="$daemon_codex"
+    fi
+    "$stop_codex" remote-control stop || \
+        echo "Remote mobile control could not stop stale standalone daemon pid=$daemon_pid; continuing best-effort"
+}
+
 desktop_app_server_remote_control_enabled() {
     local app_dir="${CODEX_LINUX_APP_DIR:-}"
     local marker=""
@@ -123,6 +207,12 @@ desktop_app_server_remote_control_enabled() {
 
 remote_mobile_control_main() {
     local codex_home="${CODEX_HOME:-$HOME/.codex}"
+    local standalone_codex="$codex_home/packages/standalone/current/codex"
+    local standalone_root
+    local daemon_codex
+
+    standalone_root="$(readlink -f "$codex_home/packages/standalone" 2>/dev/null || true)"
+    [ -n "$standalone_root" ] || standalone_root="$codex_home/packages/standalone"
 
     cleanup_remote_mobile_control_interactive_symlink "$codex_home"
 
@@ -137,15 +227,21 @@ remote_mobile_control_main() {
     fi
     if desktop_app_server_remote_control_enabled; then
         cleanup_stale_remote_mobile_daemon_state "$codex_home"
+        daemon_codex="$(resolve_remote_mobile_control_codex "$codex_home")"
+        stop_stale_standalone_remote_mobile_daemon "$codex_home" "$daemon_codex" "$standalone_root" "$standalone_codex"
         echo "Remote mobile control daemon autostart skipped; Desktop app-server launches with remote-control enabled"
         return 0
     fi
 
-    local standalone_codex="${CODEX_REMOTE_CONTROL_CODEX_PATH:-$codex_home/packages/standalone/current/codex}"
+    daemon_codex="$(resolve_remote_mobile_control_codex "$codex_home")"
 
-    if [ ! -x "$standalone_codex" ]; then
+    if [ ! -x "$daemon_codex" ]; then
         if [ -n "${CODEX_REMOTE_CONTROL_CODEX_PATH:-}" ]; then
             echo "Remote mobile control daemon runtime override is not executable: $CODEX_REMOTE_CONTROL_CODEX_PATH"
+            return 0
+        fi
+        if [ "$daemon_codex" != "$standalone_codex" ]; then
+            echo "Remote mobile control daemon runtime is not executable: $daemon_codex"
             return 0
         fi
         if truthy_env_value "${CODEX_REMOTE_CONTROL_RUNTIME_AUTO_INSTALL_DISABLED:-}"; then
@@ -157,16 +253,18 @@ remote_mobile_control_main() {
             echo "Brew or another CLI can remain the interactive Codex CLI; remote mobile control uses CODEX_REMOTE_CONTROL_CODEX_PATH separately."
             return 0
         fi
-        if [ ! -x "$standalone_codex" ]; then
-            echo "Remote mobile control standalone runtime installer completed but $standalone_codex is still missing"
+        if [ ! -x "$daemon_codex" ]; then
+            echo "Remote mobile control standalone runtime installer completed but $daemon_codex is still missing"
             return 0
         fi
     fi
 
-    if "$standalone_codex" remote-control start; then
-        echo "Remote mobile control daemon is ready via $standalone_codex"
+    stop_stale_standalone_remote_mobile_daemon "$codex_home" "$daemon_codex" "$standalone_root" "$standalone_codex"
+
+    if "$daemon_codex" remote-control start; then
+        echo "Remote mobile control daemon is ready via $daemon_codex"
     else
-        echo "Remote mobile control daemon start failed via $standalone_codex; Android remote hosts may remain disconnected."
+        echo "Remote mobile control daemon start failed via $daemon_codex; Android remote hosts may remain disconnected."
     fi
 }
 
