@@ -293,6 +293,52 @@ test("remote mobile cold-start hook preserves user codex symlinks outside the st
   }
 });
 
+test("remote mobile cold-start hook skips daemon when Desktop app-server owns remote-control", () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "codex-remote-mobile-cold-start-"));
+  try {
+    const home = path.join(tempRoot, "home");
+    const codexHome = path.join(tempRoot, "codex-home");
+    const appDir = path.join(tempRoot, "package", "share", "codex-desktop", "app");
+    const patchReport = path.join(tempRoot, "package", "share", "codex-desktop", "patch-report.json");
+    const brewCodex = path.join(tempRoot, "brew", "bin", "codex");
+    const callsLog = path.join(tempRoot, "calls.log");
+
+    fs.mkdirSync(path.dirname(brewCodex), { recursive: true });
+    fs.mkdirSync(home, { recursive: true });
+    fs.mkdirSync(appDir, { recursive: true });
+    fs.writeFileSync(
+      patchReport,
+      JSON.stringify({
+        patches: [
+          {
+            name: "feature:remote-mobile-control:linux-remote-mobile-app-server-remote-control",
+            status: "applied",
+          },
+        ],
+      }),
+    );
+    fs.writeFileSync(
+      brewCodex,
+      `#!/usr/bin/env sh\nprintf '%s\\n' "$*" >> ${JSON.stringify(callsLog)}\nexit 0\n`,
+    );
+    fs.chmodSync(brewCodex, 0o755);
+
+    const result = runColdStartHook({
+      CODEX_CLI_PATH: brewCodex,
+      CODEX_HOME: codexHome,
+      CODEX_LINUX_APP_DIR: appDir,
+      CODEX_REMOTE_CONTROL_RUNTIME_AUTO_INSTALL_DISABLED: "1",
+      HOME: home,
+    });
+
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    assert.equal(fs.existsSync(callsLog), false);
+    assert.match(result.stdout, /Desktop app-server launches with remote-control enabled/);
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
 test("remote mobile cold-start hook prefers CODEX_CLI_PATH for the daemon runtime", () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "codex-remote-mobile-cold-start-"));
   try {

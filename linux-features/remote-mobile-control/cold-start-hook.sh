@@ -136,6 +136,40 @@ remote_mobile_process_mentions_path() {
     esac
 }
 
+desktop_app_server_remote_control_enabled() {
+    local app_dir="${CODEX_LINUX_APP_DIR:-}"
+    local patch_report=""
+
+    if truthy_env_value "${CODEX_REMOTE_CONTROL_FORCE_COLD_START_DAEMON:-}"; then
+        return 1
+    fi
+
+    [ -n "$app_dir" ] || return 1
+    patch_report="$app_dir/../patch-report.json"
+    [ -f "$patch_report" ] || return 1
+
+    awk '
+        /"name"[[:space:]]*:[[:space:]]*"feature:remote-mobile-control:linux-remote-mobile-app-server-remote-control"/ {
+            in_patch = 1
+            if ($0 ~ /"status"[[:space:]]*:[[:space:]]*"applied"/) {
+                found = 1
+                exit
+            }
+            next
+        }
+        in_patch && /"status"[[:space:]]*:[[:space:]]*"applied"/ {
+            found = 1
+            exit
+        }
+        in_patch && /^[[:space:]]*}/ {
+            in_patch = 0
+        }
+        END {
+            exit found ? 0 : 1
+        }
+    ' "$patch_report"
+}
+
 stop_stale_standalone_remote_mobile_daemon() {
     local codex_home="$1"
     local daemon_codex="$2"
@@ -184,6 +218,10 @@ remote_mobile_control_main() {
     if command -v systemctl >/dev/null 2>&1 &&
         systemctl --user is-active --quiet codex-remote-control.service 2>/dev/null; then
         echo "Remote mobile control daemon autostart skipped; codex-remote-control.service is already active"
+        return 0
+    fi
+    if desktop_app_server_remote_control_enabled; then
+        echo "Remote mobile control daemon autostart skipped; Desktop app-server launches with remote-control enabled"
         return 0
     fi
 
