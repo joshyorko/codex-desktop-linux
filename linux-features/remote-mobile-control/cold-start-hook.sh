@@ -8,6 +8,30 @@ truthy_env_value() {
     esac
 }
 
+cleanup_remote_mobile_control_interactive_symlink() {
+    local codex_home="$1"
+    local home_dir="${HOME:-}"
+    local user_codex=""
+    local resolved_user_codex=""
+    local standalone_root=""
+
+    [ -n "$home_dir" ] || return 0
+    user_codex="$home_dir/.local/bin/codex"
+    [ -L "$user_codex" ] || return 0
+    resolved_user_codex="$(readlink -f "$user_codex" 2>/dev/null || true)"
+    [ -n "$resolved_user_codex" ] || return 0
+    standalone_root="$(readlink -f "$codex_home/packages/standalone" 2>/dev/null || true)"
+    [ -n "$standalone_root" ] || standalone_root="$codex_home/packages/standalone"
+
+    case "$resolved_user_codex" in
+        "$standalone_root"/*)
+            if rm -f "$user_codex"; then
+                echo "Removed remote mobile control standalone symlink from interactive PATH: $user_codex -> $resolved_user_codex"
+            fi
+            ;;
+    esac
+}
+
 install_remote_mobile_control_runtime() {
     local codex_home="$1"
     local private_bin="$codex_home/packages/standalone/.bin"
@@ -58,6 +82,10 @@ install_remote_mobile_control_runtime() {
 }
 
 remote_mobile_control_main() {
+    local codex_home="${CODEX_HOME:-$HOME/.codex}"
+
+    cleanup_remote_mobile_control_interactive_symlink "$codex_home"
+
     if truthy_env_value "${CODEX_REMOTE_CONTROL_DAEMON_AUTOSTART_DISABLED:-}"; then
         echo "Remote mobile control daemon autostart disabled by CODEX_REMOTE_CONTROL_DAEMON_AUTOSTART_DISABLED"
         return 0
@@ -68,7 +96,6 @@ remote_mobile_control_main() {
         return 0
     fi
 
-    local codex_home="${CODEX_HOME:-$HOME/.codex}"
     local standalone_codex="${CODEX_REMOTE_CONTROL_CODEX_PATH:-$codex_home/packages/standalone/current/codex}"
 
     if [ ! -x "$standalone_codex" ]; then

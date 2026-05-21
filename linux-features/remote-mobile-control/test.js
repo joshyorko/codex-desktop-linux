@@ -2,6 +2,7 @@
 "use strict";
 
 const assert = require("node:assert/strict");
+const { spawnSync } = require("node:child_process");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
@@ -229,6 +230,68 @@ function captureWarnings(fn) {
     console.warn = originalWarn;
   }
 }
+
+function runColdStartHook(env) {
+  return spawnSync("bash", [path.join(__dirname, "cold-start-hook.sh"), "--run-main"], {
+    env: { ...process.env, ...env },
+    encoding: "utf8",
+  });
+}
+
+test("remote mobile cold-start hook removes leaked standalone codex symlink from interactive PATH", () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "codex-remote-mobile-cold-start-"));
+  try {
+    const home = path.join(tempRoot, "home");
+    const codexHome = path.join(tempRoot, "codex-home");
+    const standaloneCodex = path.join(codexHome, "packages", "standalone", "current", "codex");
+    const userCodex = path.join(home, ".local", "bin", "codex");
+
+    fs.mkdirSync(path.dirname(standaloneCodex), { recursive: true });
+    fs.mkdirSync(path.dirname(userCodex), { recursive: true });
+    fs.writeFileSync(standaloneCodex, "#!/usr/bin/env sh\nexit 0\n");
+    fs.chmodSync(standaloneCodex, 0o755);
+    fs.symlinkSync(standaloneCodex, userCodex);
+
+    const result = runColdStartHook({
+      CODEX_HOME: codexHome,
+      CODEX_REMOTE_CONTROL_DAEMON_AUTOSTART_DISABLED: "1",
+      HOME: home,
+    });
+
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    assert.equal(fs.existsSync(userCodex), false);
+    assert.match(result.stdout, /Removed remote mobile control standalone symlink from interactive PATH/);
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("remote mobile cold-start hook preserves user codex symlinks outside the standalone runtime", () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "codex-remote-mobile-cold-start-"));
+  try {
+    const home = path.join(tempRoot, "home");
+    const codexHome = path.join(tempRoot, "codex-home");
+    const userManagedCodex = path.join(tempRoot, "brew", "bin", "codex");
+    const userCodex = path.join(home, ".local", "bin", "codex");
+
+    fs.mkdirSync(path.dirname(userManagedCodex), { recursive: true });
+    fs.mkdirSync(path.dirname(userCodex), { recursive: true });
+    fs.writeFileSync(userManagedCodex, "#!/usr/bin/env sh\nexit 0\n");
+    fs.chmodSync(userManagedCodex, 0o755);
+    fs.symlinkSync(userManagedCodex, userCodex);
+
+    const result = runColdStartHook({
+      CODEX_HOME: codexHome,
+      CODEX_REMOTE_CONTROL_DAEMON_AUTOSTART_DISABLED: "1",
+      HOME: home,
+    });
+
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    assert.equal(fs.readlinkSync(userCodex), userManagedCodex);
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
 
 test("remote mobile control feature stays disabled until listed in features.json", () => {
   withTempFeatureRoot([], (root) => {

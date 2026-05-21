@@ -70,6 +70,11 @@ under `~/.codex/packages/standalone/.bin`. That satisfies the managed daemon
 layout without changing `CODEX_CLI_PATH`, creating `~/.local/bin/codex`, or
 adding PATH blocks to your shell profile.
 
+For older or interrupted installs that leaked the standalone runtime into the
+interactive shell, the cold-start hook also removes `~/.local/bin/codex` when
+that symlink resolves inside `~/.codex/packages/standalone`. User-managed
+`codex` binaries or symlinks outside that standalone runtime are left alone.
+
 The hook is launched best-effort in the background by the generic launcher hook
 runner. When the system `timeout` command is available, the installer/start path
 is capped by
