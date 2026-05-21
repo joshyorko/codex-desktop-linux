@@ -16,8 +16,10 @@ Add the feature to `linux-features/features.json`:
 }
 ```
 
-Then rebuild/package the app. The installed app remains silent unless the user
-also enables the runtime opt-in:
+Then rebuild/package the app. The installed app remains silent until the user
+explicitly clicks a message's speech icon, uses conversation mode, or calls the
+Read Aloud MCP tool. For older builds, or to force-enable direct runtime calls,
+set the runtime opt-in:
 
 ```bash
 mkdir -p ~/.config/codex-desktop
@@ -30,10 +32,8 @@ or:
 CODEX_LINUX_READ_ALOUD_ENABLED=1 codex-desktop
 ```
 
-The generated General settings page also gets a disabled-by-default
-`Read aloud responses` toggle near the top of the page when the feature is
-enabled at build time. After the toggle is enabled, the row offers two explicit
-setup actions for machines where the default Kokoro paths are not ready:
+The generated Read Aloud settings page also gets setup controls for machines
+where the default Kokoro paths are not ready:
 
 - `Choose folder` stores a folder that already contains `kokoro-v1.0.onnx` and
   `voices-v1.0.bin`.

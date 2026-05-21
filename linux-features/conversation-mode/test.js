@@ -79,6 +79,9 @@ function captureWarns(fn) {
 const mainBundleSource =
   "function codexLinuxReadAloudHandle(e={}){return e.action===`config`?codexLinuxReadAloudConfig():e.action===`setup`?codexLinuxReadAloudSetup(e):e.action===`stop`?codexLinuxReadAloudStop():e.action===`speak`&&e.source===`button`?codexLinuxReadAloudSpeak(e.text):codexLinuxReadAloudReport({spoken:!1,reason:`not-explicit`})}var h={handlers:{\"linux-read-aloud\":async(e)=>codexLinuxReadAloudHandle(e),\"native-desktop-apps\":async()=>({apps:[]})}};";
 
+const explicitButtonMainBundleSource =
+  "function codexLinuxReadAloudHandle(e={}){return e.action===`config`?codexLinuxReadAloudConfig():e.action===`setup`?codexLinuxReadAloudSetup(e):e.action===`stop`?codexLinuxReadAloudStop():e.action===`speak`&&e.source===`button`?codexLinuxReadAloudSpeak(e.text,{requireEnabled:!1}):codexLinuxReadAloudReport({spoken:!1,reason:`not-explicit`})}var h={handlers:{\"linux-read-aloud\":async(e)=>codexLinuxReadAloudHandle(e),\"native-desktop-apps\":async()=>({apps:[]})}};";
+
 const dictationSource =
   "function Ht(){let {recordingDurationMs:T,waveformCanvasRef:E,startWaveformCapture:D,stopWaveformCapture:O,resetWaveformDisplay:k}=Ve(),m={current:null},_={current:null},v={current:[]},y={current:null},C={current:null};let j=async({action:e,handlers:n})=>{let i=`hello`;i.length>0&&(h.getInstance().dispatchMessage(`global-dictation-record-history-item`,{text:i}),e===`send`?n.onTranscriptSend(i):n.onTranscriptInsert(i))};let M=async()=>{let e=y.current??`insert`;y.current=null;let r=m.current,i=v.current;v.current=[],r&&(r.ondataavailable=null,r.onstop=null),m.current=null,O();};let P=z(e=>{y.current=e;let t=m.current;if(!t){M();return}if(t.state===`inactive`){M();return}t.stop()});return{startDictation:z(async()=>{let e=await navigator.mediaDevices.getUserMedia({audio:{channelCount:1}});let t=new MediaRecorder(e);m.current=t,v.current=[],t.ondataavailable=e=>{e.data.size>0&&v.current.push(e.data)},t.onstop=()=>{M()},t.start(),l(!0)}),stopDictation:P}}function Kt(){let p={current:null};let x=e=>{!d||p.current!==e.sessionId||(p.current=null,o(`insert`))}}";
 
@@ -372,14 +375,20 @@ test("conversation mode exposes optional patch descriptors when enabled", () => 
 test("main bundle patch allows conversation mode to use Read Aloud", () => {
   const patched = twice(applyReadAloudMainBundlePatch, mainBundleSource);
   assert.match(patched, /e\.source===`button`\|\|e\.source===`conversation`/);
-  assert.match(patched, /codexLinuxReadAloudSpeak\(e\.text,\{requireEnabled:e\.source!==`conversation`\}\)/);
+  assert.match(patched, /codexLinuxReadAloudSpeak\(e\.text,\{requireEnabled:!1\}\)/);
+});
+
+test("main bundle patch preserves explicit button speech while adding conversation mode", () => {
+  const patched = twice(applyReadAloudMainBundlePatch, explicitButtonMainBundleSource);
+  assert.match(patched, /e\.source===`button`\|\|e\.source===`conversation`/);
+  assert.match(patched, /codexLinuxReadAloudSpeak\(e\.text,\{requireEnabled:!1\}\)/);
 });
 
 test("main bundle patch upgrades older conversation speech gates", () => {
   const alreadyAllowed =
     "function codexLinuxReadAloudHandle(e={}){return e.action===`config`?codexLinuxReadAloudConfig():e.action===`setup`?codexLinuxReadAloudSetup(e):e.action===`stop`?codexLinuxReadAloudStop():e.action===`speak`&&(e.source===`button`||e.source===`conversation`)?codexLinuxReadAloudSpeak(e.text):codexLinuxReadAloudReport({spoken:!1,reason:`not-explicit`})}var h={handlers:{\"linux-read-aloud\":async(e)=>codexLinuxReadAloudHandle(e),\"native-desktop-apps\":async()=>({apps:[]})}};";
   const patched = twice(applyReadAloudMainBundlePatch, alreadyAllowed);
-  assert.match(patched, /codexLinuxReadAloudSpeak\(e\.text,\{requireEnabled:e\.source!==`conversation`\}\)/);
+  assert.match(patched, /codexLinuxReadAloudSpeak\(e\.text,\{requireEnabled:!1\}\)/);
 });
 
 test("composer runtime appends one browser-side conversation controller", () => {
@@ -1056,6 +1065,99 @@ test("conversation runtime reads each completed assistant turn in a multi-turn r
   });
 });
 
+test("conversation runtime does not jump back to an older completed message while a newer live turn is pending", () => {
+  withConversationRuntime(({ events, timers }) => {
+    assert.equal(
+      globalThis.codexLinuxConversationToggle({
+        conversationId: "thread-a",
+        isResponseInProgress: false,
+        startDictation() {},
+        stopDictation() {},
+        onStop() {},
+      }),
+      true,
+    );
+    assert.equal(globalThis.codexLinuxConversationShouldSendTranscript("Run an answer with a tool gap.", "send"), true);
+    assert.equal(
+      globalThis.codexLinuxConversationSync("thread-a", {
+        isResponseInProgress: true,
+        startDictation() {},
+        stopDictation() {},
+        onStop() {},
+      }),
+      true,
+    );
+
+    const first = "First completed assistant section.";
+    const secondPartial = "Second assistant section is now being written";
+    const secondFinal = `${secondPartial} and it should be the next spoken text.`;
+    const old = "Older previous assistant message should never jump back into speech.";
+
+    globalThis.codexLinuxConversationAssistant({ completed: true }, first, "thread-a", "turn-one", false);
+    globalThis.codexLinuxConversationAssistant({ completed: false }, secondPartial, "thread-a", "turn-two", true);
+    globalThis.codexLinuxConversationAssistant({ completed: true }, old, "thread-a", "old-turn", false);
+    globalThis.codexLinuxConversationAssistant({ completed: true }, secondFinal, "thread-a", "turn-two", false);
+
+    assert.deepEqual(
+      fetchBodies(events)
+        .filter((body) => body.action === "speak")
+        .map((body) => body.text),
+      [first],
+    );
+
+    runTimer(timers, (timer) => timer.delay === 2900, "first speech timer");
+    assert.deepEqual(
+      fetchBodies(events)
+        .filter((body) => body.action === "speak")
+        .map((body) => body.text),
+      [first, secondFinal],
+    );
+  });
+});
+
+test("conversation runtime replaces a deferred old completed message when the next live turn appears", () => {
+  withConversationRuntime(({ events, timers }) => {
+    assert.equal(
+      globalThis.codexLinuxConversationToggle({
+        conversationId: "thread-a",
+        isResponseInProgress: false,
+        startDictation() {},
+        stopDictation() {},
+        onStop() {},
+      }),
+      true,
+    );
+    assert.equal(globalThis.codexLinuxConversationShouldSendTranscript("Run an answer across a tool gap.", "send"), true);
+    assert.equal(
+      globalThis.codexLinuxConversationSync("thread-a", {
+        isResponseInProgress: true,
+        startDictation() {},
+        stopDictation() {},
+        onStop() {},
+      }),
+      true,
+    );
+
+    const first = "First completed assistant section.";
+    const old = "Older completed assistant message re-rendered during the tool gap.";
+    const nextPartial = "Next assistant section starts streaming after the tool gap";
+    const nextFinal = `${nextPartial} and should replace the deferred old message.`;
+
+    globalThis.codexLinuxConversationAssistant({ completed: true }, first, "thread-a", "turn-one", false);
+    globalThis.codexLinuxConversationAssistant({ completed: true }, old, "thread-a", "old-turn", false);
+    globalThis.codexLinuxConversationAssistant({ completed: false }, nextPartial, "thread-a", "turn-two", true);
+    globalThis.codexLinuxConversationAssistant({ completed: true }, nextFinal, "thread-a", "turn-two", false);
+
+    runTimer(timers, (timer) => timer.delay === 2900, "first speech timer");
+    assert.deepEqual(
+      fetchBodies(events)
+        .filter((body) => body.action === "speak")
+        .map((body) => body.text),
+      [first, nextFinal],
+    );
+  });
+});
+
 test("conversation runtime speaks only the new suffix when the same assistant turn grows", () => {
   withConversationRuntime(({ events, timers }) => {
     assert.equal(
@@ -1136,6 +1238,45 @@ test("conversation runtime does not duplicate a queued suffix on same-text reren
         .filter((body) => body.action === "speak")
         .map((body) => body.text),
       [first, "Extra words arrive later."],
+    );
+  });
+});
+
+test("conversation runtime does not reread the same completed message after speech finishes", () => {
+  withConversationRuntime(({ events, timers }) => {
+    assert.equal(
+      globalThis.codexLinuxConversationToggle({
+        conversationId: "thread-a",
+        isResponseInProgress: false,
+        startDictation() {},
+        stopDictation() {},
+        onStop() {},
+      }),
+      true,
+    );
+    assert.equal(globalThis.codexLinuxConversationShouldSendTranscript("Run one final answer.", "send"), true);
+    assert.equal(
+      globalThis.codexLinuxConversationSync("thread-a", {
+        isResponseInProgress: true,
+        startDictation() {},
+        stopDictation() {},
+        onStop() {},
+      }),
+      true,
+    );
+
+    const final = "This completed assistant message should be read exactly once.";
+    globalThis.codexLinuxConversationAssistant({ completed: true }, final, "thread-a", "turn-one", false);
+    runTimer(timers, (timer) => timer.delay > 3000, "completed answer speech timer");
+
+    globalThis.codexLinuxConversationAssistant({ completed: true }, final, "thread-a", "turn-one", false);
+    globalThis.codexLinuxConversationAssistant({ completed: true }, final, "thread-a", "rerendered-turn-key", false);
+
+    assert.deepEqual(
+      fetchBodies(events)
+        .filter((body) => body.action === "speak")
+        .map((body) => body.text),
+      [final],
     );
   });
 });
@@ -1563,8 +1704,25 @@ test("composer control patch repurposes the voice button for conversation mode f
   assert.match(patched, /startDictation:se/);
   assert.match(patched, /stopDictation:le/);
   assert.match(patched, /onStop:P/);
-  assert.match(patched, /Start conversation mode/);
+  assert.equal(
+    patched.match(/defaultMessage:codexLinuxConversationActive\?`Stop conversation mode`:`Start conversation mode`/g)?.length,
+    2,
+  );
+  assert.doesNotMatch(patched, /defaultMessage:`Start conversation mode`/);
   assert.match(patched, /ue\.startRealtime/);
+});
+
+test("composer control patch repairs stale static conversation button hints", () => {
+  const once = applyComposerControlPatch(composerControlSource);
+  const stale = once.replace(
+    /defaultMessage:codexLinuxConversationActive\?`Stop conversation mode`:`Start conversation mode`/g,
+    "defaultMessage:`Start conversation mode`",
+  );
+  const patched = twice(applyComposerControlPatch, stale);
+  assert.equal(
+    patched.match(/defaultMessage:codexLinuxConversationActive\?`Stop conversation mode`:`Start conversation mode`/g)?.length,
+    2,
+  );
 });
 
 test("composer control patch follows the current composer voiceControls shape", () => {
@@ -1633,7 +1791,7 @@ test("conversation mode patches matching app assets and records report entries",
         );
         assert.match(
           fs.readFileSync(path.join(buildDir, "main.js"), "utf8"),
-          /codexLinuxReadAloudSpeak\(e\.text,\{requireEnabled:e\.source!==`conversation`\}\)/,
+          /codexLinuxReadAloudSpeak\(e\.text,\{requireEnabled:!1\}\)/,
         );
         assert.match(
           fs.readFileSync(path.join(assetsDir, "annotation-comment-editor-card-test.js"), "utf8"),

@@ -1153,6 +1153,7 @@ test_setup_native_wizard_read_aloud_paths_match_runtime_defaults() {
     XDG_CONFIG_HOME="$fake_home/.config" \
     XDG_DATA_HOME="$fake_home/.local/share" \
     CODEX_LINUX_APP_ID="codex-cua-lab" \
+    CODEX_LINUX_SETTINGS_FILE= \
     CODEX_APP_ID="codex-desktop" \
     CODEX_BOOTSTRAP_NONINTERACTIVE=1 \
     CODEX_LINUX_FEATURES_ROOT="$features_root" \
@@ -1332,42 +1333,12 @@ test_setup_native_wizard_cleanup_deletes_only_confirmed_paths() {
     assert_contains "$output_log" "Skipped $plugin_cache"
 }
 
-test_upstream_build_app_workflow_tracks_dmg_metadata() {
-    info "Checking upstream build-app workflow metadata and cache behavior"
-    local workflow="$REPO_DIR/.github/workflows/upstream-build-app.yml"
+test_codex_desktop_publish_workflows_stay_disabled() {
+    info "Checking Codex Desktop publish workflows stay disabled"
 
-    assert_file_exists "$workflow"
-    assert_contains "$workflow" 'name: Upstream Build App'
-    assert_contains "$workflow" 'UPSTREAM_DMG_URL: https://persistent.oaistatic.com/codex-app-prod/Codex.dmg'
-    assert_contains "$workflow" 'actions/cache@v4'
-    assert_contains "$workflow" 'path: /tmp/codex-upstream-ci/Codex.dmg'
-    assert_contains "$workflow" 'Last-Modified'
-    assert_contains "$workflow" 'sha256sum'
-    assert_contains "$workflow" 'CODEX_PATCH_REPORT_JSON="$GITHUB_WORKSPACE/patch-report.json"'
-    assert_contains "$workflow" 'node scripts/ci/validate-patch-report.js patch-report.json --profile upstream-build'
-    assert_contains "$workflow" 'make build-app DMG=/tmp/codex-upstream-ci/Codex.dmg'
-    assert_contains "$workflow" 'DMG Last-Modified'
-    assert_contains "$workflow" 'DMG SHA-256'
-    assert_contains "$workflow" "cron: '13 .*/2"
-    assert_contains "$workflow" 'HOMEBREW_TOOLS_REPOSITORY: joshyorko/homebrew-tools'
-    assert_contains "$workflow" 'HOMEBREW_TOOLS_DISPATCH_TOKEN'
-    assert_contains "$workflow" 'codex-desktop-linux-ready'
-    assert_contains "$workflow" '"package_id": "codex-desktop-linux"'
-    assert_contains "$workflow" '"conversion_sha"'
-    assert_contains "$workflow" '"dmg_sha256"'
-    assert_contains "$workflow" '"source_run_url"'
-    assert_contains "$workflow" 'api.github.com/repos/${HOMEBREW_TOOLS_REPOSITORY}/dispatches'
-}
-
-test_update_nix_hash_workflow_maintains_clean_main() {
-    info "Checking Nix hash refresh workflow targets clean main"
-    local workflow="$REPO_DIR/.github/workflows/update-codex-hash.yml"
-
-    assert_file_exists "$workflow"
-    assert_contains "$workflow" 'name: Update Nix upstream hashes'
-    assert_contains "$workflow" 'ref: main'
-    assert_contains "$workflow" 'git push origin main'
-    assert_contains "$workflow" 'actions/checkout@v6'
+    assert_file_not_exists "$REPO_DIR/.github/workflows/upstream-build-app.yml"
+    assert_file_not_exists "$REPO_DIR/.github/workflows/update-codex-hash.yml"
+    assert_file_not_exists "$REPO_DIR/.github/workflows/cachix.yml"
 }
 
 test_main_to_self_hosted_workflow_opens_update_pr() {
@@ -3537,6 +3508,7 @@ source = open(sys.argv[1], encoding="utf-8").read()
 detect_body = source.split("detect_warm_start() {", 1)[1].split("send_warm_start_launch_action() {", 1)[0]
 launch_body = source.split("launch_electron() {", 1)[1].split("load_packaged_runtime_helper", 1)[0]
 runtime_body = source.split("trap cleanup_launcher EXIT", 1)[1].split("launch_electron", 1)[0]
+webview_probe_body = source.split("webview_port_is_open() {", 1)[1].split("wait_for_webview_server() {", 1)[0]
 cold_start_hooks_body = source.split("run_cold_start_hooks() {", 1)[1].split("run_cli_preflight() {", 1)[0]
 stop_body = source.split("stop_owned_webview_server() {", 1)[1].split("owned_webview_server_pid() {", 1)[0]
 stale_body = source.split("pid_is_stale_webview_server() {", 1)[1].split("stop_owned_webview_server() {", 1)[0]
@@ -3552,6 +3524,10 @@ if 'unset CODEX_LINUX_MULTI_LAUNCH' not in source.split('parse_launcher_args() {
     raise SystemExit("launcher must clear inherited internal multi-launch markers before parsing args")
 if '$((CODEX_LINUX_WEBVIEW_PORT + 4))' not in source:
     raise SystemExit("multi-launch default range must cap the default at five ports")
+if '( trap - EXIT\n      exec 3<>/dev/tcp/127.0.0.1/"$CODEX_LINUX_WEBVIEW_PORT" )' not in webview_probe_body:
+    raise SystemExit("webview port probe must not inherit the launcher EXIT cleanup trap")
+if '( trap - EXIT\n      sleep 0.2' not in webview_probe_body:
+    raise SystemExit("webview port probe watchdog must not inherit the launcher EXIT cleanup trap")
 if 'CODEX_LINUX_INSTANCE_ID="port-$CODEX_LINUX_WEBVIEW_PORT"' not in multi_body:
     raise SystemExit("multi-launch must derive a stable instance id from the allocated port")
 if 'CODEX_LINUX_MULTI_LAUNCH=1' not in multi_body:
@@ -3576,17 +3552,30 @@ if not re.search(r'if ! linux_setting_enabled "codex-linux-warm-start-enabled" 1
     raise SystemExit("detect_warm_start must not fail when warm start is disabled")
 if "preserving liveness marker for second-instance handoff" not in detect_body:
     raise SystemExit("detect_warm_start must preserve the live app liveness marker")
+if launch_body.count("unset ELECTRON_RUN_AS_NODE") != 2:
+    raise SystemExit("launch_electron must clear ELECTRON_RUN_AS_NODE before both Electron launch paths")
 if 'pid_matches_executable "$RUNNING_APP_PID" "$SCRIPT_DIR/electron"' not in launch_body:
     raise SystemExit("launch_electron must not overwrite APP_PID_FILE for second-instance handoff")
 if 'echo "$ELECTRON_PID" > "$APP_PID_FILE"' not in launch_body:
     raise SystemExit("launch_electron must still write APP_PID_FILE for normal cold launches")
+electron_launch = '"$SCRIPT_DIR/electron" "${ELECTRON_LAUNCH_ARGS[@]}" "${ELECTRON_ARGS[@]}"'
+warm_log = 'echo "Electron warm-start handoff:'
+normal_log = 'echo "Electron launch mode:'
+warm_log_pos = launch_body.index(warm_log)
+warm_unset_pos = launch_body.index("unset ELECTRON_RUN_AS_NODE", warm_log_pos)
+warm_launch_pos = launch_body.index(electron_launch, warm_unset_pos)
+normal_log_pos = launch_body.index(normal_log)
+normal_unset_pos = launch_body.index("unset ELECTRON_RUN_AS_NODE", normal_log_pos)
+normal_launch_pos = launch_body.index(electron_launch + " &", normal_unset_pos)
+if not (warm_log_pos < warm_unset_pos < warm_launch_pos < normal_log_pos < normal_unset_pos < normal_launch_pos):
+    raise SystemExit("launch_electron must clear ELECTRON_RUN_AS_NODE immediately before each Electron launch")
 if "using_second_instance_handoff" not in source or "needs_cold_start" not in source:
     raise SystemExit("launcher must have an explicit second-instance handoff mode")
 if "second_instance_handoff_ready" not in runtime_body:
     raise SystemExit("second-instance handoff must skip cold-start setup")
 if "clear_bundled_marketplace_tmp_cache\nmonitor_bundled_marketplace_tmp_permissions\nreconcile_runtime_state" in runtime_body:
     raise SystemExit("warm-start path must not clear bundled marketplace temp cache")
-if not re.search(r'if needs_cold_start; then\s+clear_bundled_marketplace_tmp_cache\s+# The runtime marketplace is populated asynchronously.*?monitor_bundled_marketplace_tmp_permissions\s+sync_browser_use_bundled_plugin_cache\s+sync_chrome_bundled_plugin_cache\s+sync_computer_use_bundled_plugin_cache\s+sync_read_aloud_bundled_plugin_cache\s+run_cold_start_hooks\s+fi', runtime_body, re.S):
+if not re.search(r'if needs_cold_start; then\s+clear_bundled_marketplace_tmp_cache\s+# The runtime marketplace is populated asynchronously.*?monitor_bundled_marketplace_tmp_permissions\s+sync_browser_use_bundled_plugin_cache\s+sync_chrome_bundled_plugin_cache\s+(?:if ! early_truthy_env_value .*?sync_computer_use_bundled_plugin_cache\s+fi\s+)?sync_read_aloud_bundled_plugin_cache\s+run_cold_start_hooks\s+fi', runtime_body, re.S):
     raise SystemExit("bundled marketplace cleanup, plugin sync, and cold-start hooks must run only on cold start")
 if 'if needs_cold_start && [ -z "${CODEX_CLI_PATH:-}" ]; then' not in runtime_body:
     raise SystemExit("second-instance handoff must skip CLI lookup")
@@ -3693,6 +3682,7 @@ PY
     [[ "$output" == *"electron=<--use-gl=angle>"* ]] || fail "launcher must pass Electron args after -- without the separator: $output"
     [[ "$output" != *"electron=<--><--use-gl=angle>"* ]] || fail "launcher must not pass the -- separator to Electron: $output"
     [[ "$output" == *"<--ozone-platform=x11>"* ]] || fail "launcher --x11 must still set the Electron ozone platform: $output"
+    [[ "$output" == *"comp=0"* && "$output" != *"<--disable-gpu-compositing>"* ]] || fail "default Linux profile must keep GPU compositing enabled: $output"
     [[ "$output" == *"renderer_accessibility=1"* && "$output" == *"<--force-renderer-accessibility>"* ]] || fail "default Linux profile must still force renderer accessibility: $output"
 
     output="$(env -i PATH="$PATH" HOME="$HOME" CODEX_LINUX_RENDERING_MODE=default "$launcher_probe" probe -- --ozone-platform=x11)"
@@ -3700,7 +3690,7 @@ PY
     [[ "$output" != *"<--ozone-platform-hint=auto>"* ]] || fail "launcher must not add ozone hint when pass-through supplies an ozone platform: $output"
 
     output="$(env -i PATH="$PATH" HOME="$HOME" CODEX_LINUX_RENDERING_MODE=wslg "$launcher_probe" probe)"
-    [[ "$output" == *"mode=wslg"* && "$output" == *"comp=0"* && "$output" == *"gl_added=1"* ]] || fail "forced WSLg profile must disable GPU compositing default and add ANGLE: $output"
+    [[ "$output" == *"mode=wslg"* && "$output" == *"comp=0"* && "$output" == *"gl_added=1"* ]] || fail "forced WSLg profile must keep GPU compositing enabled and add ANGLE: $output"
     [[ "$output" == *"<--ozone-platform=x11>"* && "$output" == *"electron=<--use-gl=angle>"* ]] || fail "forced WSLg profile must use X11 and ANGLE by default: $output"
     [[ "$output" != *"<--disable-gpu-compositing>"* ]] || fail "forced WSLg profile must not add disable-gpu-compositing by default: $output"
     [[ "$output" == *"renderer_accessibility=0"* && "$output" != *"<--force-renderer-accessibility>"* ]] || fail "forced WSLg profile must skip renderer accessibility by default: $output"
@@ -3721,6 +3711,9 @@ PY
 
     output="$(env -i PATH="$PATH" HOME="$HOME" CODEX_LINUX_RENDERING_MODE=wslg CODEX_ELECTRON_DISABLE_GPU_COMPOSITING=1 "$launcher_probe" probe)"
     [[ "$output" == *"comp=1"* && "$output" == *"<--disable-gpu-compositing>"* ]] || fail "CODEX_ELECTRON_DISABLE_GPU_COMPOSITING=1 must force the compositor flag: $output"
+
+    output="$(env -i PATH="$PATH" HOME="$HOME" CODEX_LINUX_RENDERING_MODE=default CODEX_ELECTRON_DISABLE_GPU_COMPOSITING=1 "$launcher_probe" probe)"
+    [[ "$output" == *"comp=1"* && "$output" == *"<--disable-gpu-compositing>"* ]] || fail "CODEX_ELECTRON_DISABLE_GPU_COMPOSITING=1 must force the compositor flag under default Linux: $output"
 
     output="$(env -i PATH="$PATH" HOME="$HOME" CODEX_LINUX_RENDERING_MODE=default CODEX_ELECTRON_DISABLE_GPU_COMPOSITING=0 "$launcher_probe" probe)"
     [[ "$output" == *"comp=0"* && "$output" != *"<--disable-gpu-compositing>"* ]] || fail "CODEX_ELECTRON_DISABLE_GPU_COMPOSITING=0 must suppress the compositor flag: $output"
@@ -6152,8 +6145,7 @@ main() {
     test_setup_native_wizard_dry_run_cleanup_allows_noninteractive_preview
     test_setup_native_wizard_dry_run_cleanup_does_not_delete_confirmed_paths
     test_setup_native_wizard_cleanup_deletes_only_confirmed_paths
-    test_upstream_build_app_workflow_tracks_dmg_metadata
-    test_update_nix_hash_workflow_maintains_clean_main
+    test_codex_desktop_publish_workflows_stay_disabled
     test_main_to_self_hosted_workflow_opens_update_pr
     test_devcontainer_homebrew_cask_is_local_tap_installable
     test_devcontainer_homebrew_validation_script_targets_ror_image

@@ -295,7 +295,7 @@ Environment:
   CODEX_LINUX_RENDERING_MODE=auto|default|wslg
                               Auto-detect WSLg, keep generic Linux defaults, or force the WSLg profile
   CODEX_ELECTRON_DISABLE_GPU_COMPOSITING=0|1
-                              Override the launcher's default --disable-gpu-compositing decision
+                              Set to 1 to add --disable-gpu-compositing for flicker workarounds
   CODEX_FORCE_RENDERER_ACCESSIBILITY=auto|0|1
                               Override --force-renderer-accessibility; auto skips it under WSLg
   CODEX_MULTI_LAUNCH=1        Treat normal launches like --new-instance
@@ -1400,14 +1400,16 @@ webview_port_is_open() {
     # distros (Ubuntu 26+) its cold start is ~105 ms, which would dominate
     # the 200 ms cap it would enforce.
     local probe_pid kill_pid rc=1 self_pid=$$
-    ( exec 3<>/dev/tcp/127.0.0.1/"$CODEX_LINUX_WEBVIEW_PORT" ) 2>/dev/null &
+    ( trap - EXIT
+      exec 3<>/dev/tcp/127.0.0.1/"$CODEX_LINUX_WEBVIEW_PORT" ) 2>/dev/null &
     probe_pid=$!
     # Watchdog: before SIGKILL, verify /proc/<probe>/stat still reports us as
     # the parent. Guards against PID reuse: if the probe has already exited
     # and the kernel has recycled that PID to an unrelated process between
     # the wait below and the watchdog firing, its ppid will not match
     # $self_pid and the SIGKILL is suppressed.
-    ( sleep 0.2
+    ( trap - EXIT
+      sleep 0.2
       [ -r "/proc/$probe_pid/stat" ] || exit 0
       # /proc/<pid>/stat: "<pid> (comm) <state> <ppid> ..." — comm can contain
       # spaces/parens, so strip up to the last ") " before splitting fields.
@@ -1865,7 +1867,7 @@ should_disable_gpu_compositing() {
         echo "Invalid CODEX_ELECTRON_DISABLE_GPU_COMPOSITING='${CODEX_ELECTRON_DISABLE_GPU_COMPOSITING:-}'; using rendering profile default" >&2
     fi
 
-    [ "$ELECTRON_RENDERING_MODE" != "wslg" ]
+    return 1
 }
 
 should_force_renderer_accessibility() {
@@ -2058,11 +2060,13 @@ launch_electron() {
 
     if [ "$WARM_START" -eq 1 ]; then
         echo "Electron warm-start handoff: pid=$RUNNING_APP_PID rendering_mode=$ELECTRON_RENDERING_MODE wslg_detected=$ELECTRON_WSLG_DETECTED ozone_platform=${ELECTRON_OZONE_PLATFORM:-default} ozone_hint=${ELECTRON_OZONE_HINT:-none} gpu_enabled=$ELECTRON_GPU_ENABLED gpu_disable_arg=$ELECTRON_GPU_DISABLE_SWITCH_IN_ARGS gpu_compositing_disabled=$ELECTRON_GPU_COMPOSITING_DISABLED gl_switch_added=$ELECTRON_GL_SWITCH_ADDED renderer_accessibility_forced=$ELECTRON_RENDERER_ACCESSIBILITY_FORCED"
+        unset ELECTRON_RUN_AS_NODE
         "$SCRIPT_DIR/electron" "${ELECTRON_LAUNCH_ARGS[@]}" "${ELECTRON_ARGS[@]}"
         return $?
     fi
 
     echo "Electron launch mode: rendering_mode=$ELECTRON_RENDERING_MODE wslg_detected=$ELECTRON_WSLG_DETECTED ozone_platform=${ELECTRON_OZONE_PLATFORM:-default} ozone_hint=${ELECTRON_OZONE_HINT:-none} gpu_enabled=$ELECTRON_GPU_ENABLED gpu_disable_arg=$ELECTRON_GPU_DISABLE_SWITCH_IN_ARGS gpu_compositing_disabled=$ELECTRON_GPU_COMPOSITING_DISABLED gl_switch_added=$ELECTRON_GL_SWITCH_ADDED renderer_accessibility_forced=$ELECTRON_RENDERER_ACCESSIBILITY_FORCED"
+    unset ELECTRON_RUN_AS_NODE
     "$SCRIPT_DIR/electron" "${ELECTRON_LAUNCH_ARGS[@]}" "${ELECTRON_ARGS[@]}" &
     ELECTRON_PID=$!
     if [ -n "${RUNNING_APP_PID:-}" ] && pid_matches_executable "$RUNNING_APP_PID" "$SCRIPT_DIR/electron"; then

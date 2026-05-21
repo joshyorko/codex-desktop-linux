@@ -11,14 +11,27 @@ function applyReadAloudMainBundlePatch(source) {
   if (!source.includes(`"${HANDLER_NAME}":async`)) {
     return source;
   }
-  if (source.includes("requireEnabled:e.source!==`conversation`")) {
+  if (
+    source.includes("e.source===`conversation`") &&
+    source.includes("codexLinuxReadAloudSpeak(e.text,{requireEnabled:!1})")
+  ) {
     return source;
   }
+  const explicitButton =
+    "e.action===`speak`&&e.source===`button`?codexLinuxReadAloudSpeak(e.text,{requireEnabled:!1})";
   const buttonOnly = "e.action===`speak`&&e.source===`button`?codexLinuxReadAloudSpeak(e.text)";
   const oldConversation = "e.action===`speak`&&(e.source===`button`||e.source===`conversation`)?codexLinuxReadAloudSpeak(e.text)";
-  const withConversation = "e.action===`speak`&&(e.source===`button`||e.source===`conversation`)?codexLinuxReadAloudSpeak(e.text,{requireEnabled:e.source!==`conversation`})";
+  const oldConversationGate =
+    "e.action===`speak`&&(e.source===`button`||e.source===`conversation`)?codexLinuxReadAloudSpeak(e.text,{requireEnabled:e.source!==`conversation`})";
+  const withConversation = "e.action===`speak`&&(e.source===`button`||e.source===`conversation`)?codexLinuxReadAloudSpeak(e.text,{requireEnabled:!1})";
+  if (source.includes(oldConversationGate)) {
+    return source.replace(oldConversationGate, withConversation);
+  }
   if (source.includes(oldConversation)) {
     return source.replace(oldConversation, withConversation);
+  }
+  if (source.includes(explicitButton)) {
+    return source.replace(explicitButton, withConversation);
   }
   if (source.includes(buttonOnly)) {
     return source.replace(buttonOnly, withConversation);
@@ -66,7 +79,7 @@ function conversationRuntimeSource() {
     `function startInterruptMonitor(){if(!state.active||state.muted||state.listening||state.interruptCleanup||state.interruptPendingEpoch||!navigator.mediaDevices?.getUserMedia)return;let monitorEpoch=state.epoch,monitorSerial=state.interruptSerial;state.interruptPendingEpoch=monitorEpoch;navigator.mediaDevices.getUserMedia(micConstraints()).then(stream=>{state.interruptPendingEpoch===monitorEpoch&&state.interruptSerial===monitorSerial&&(state.interruptPendingEpoch=0);if(monitorEpoch!==state.epoch||monitorSerial!==state.interruptSerial||!state.active||state.muted||state.listening||state.interruptCleanup){stopTracks(stream);return}let cleanup=makeMonitor(stream,()=>{stopTracks(stream);state.interruptCleanup=null;state.awaitingUserTranscript=true;state.allowAssistant=false;stopSpeech(!0);state.controls?.onStop?.();startListeningSoon(0,!0)});if(!cleanup)return;state.interruptCleanup=()=>{cleanup();stopTracks(stream)}}).catch(()=>{state.interruptPendingEpoch===monitorEpoch&&state.interruptSerial===monitorSerial&&(state.interruptPendingEpoch=0)})}`,
     `function stopInterruptMonitor(){state.interruptCleanup?.();state.interruptCleanup=null}`,
     `function rememberSpoken(text){let normalized=normalizeSent(text);if(!normalized)return;state.spokenEchoText=(state.spokenEchoText+" "+normalized).trim().slice(-2400);state.spokenEchoAt=Date.now()}`,
-    `function speakNext(epoch=state.epoch){if(epoch!==state.epoch||!state.active||state.speaking)return;let text=state.queue.shift();if(!text){state.speaking=false;state.speechCooldownUntil=Date.now()+1200;if(isResponseInProgress())startInterruptMonitor();else stopInterruptMonitor();return}state.speaking=true;rememberSpoken(text);post({action:"speak",source:"conversation",text},8000).catch(()=>{});startInterruptMonitor();state.speechTimer=setTimeout(()=>{if(epoch!==state.epoch)return;state.speaking=false;speakNext(epoch)},estimateMs(text)+700)}`,
+    `function speakNext(epoch=state.epoch){if(epoch!==state.epoch||!state.active||state.speaking)return;let text=state.queue.shift();if(!text&&state.assistantText&&!state.assistantFinalSpoken&&isResponseInProgress())text=takeAssistantTextToSpeak();if(!text){state.speaking=false;state.speechCooldownUntil=Date.now()+1200;if(isResponseInProgress())startInterruptMonitor();else stopInterruptMonitor();return}state.speaking=true;rememberSpoken(text);post({action:"speak",source:"conversation",text},8000).catch(()=>{});startInterruptMonitor();state.speechTimer=setTimeout(()=>{if(epoch!==state.epoch)return;state.speaking=false;speakNext(epoch)},estimateMs(text)+700)}`,
     `function enqueue(text){text=clean(text);if(!text)return;state.queue.push(text);speakNext()}`,
     `function isResponseInProgress(){return state.controls?.isResponseInProgress===!0}`,
     `function assistantSentAtMs(item){let value=Number(item?.sentAtMs??item?.createdAtMs??item?.timestampMs??0);return Number.isFinite(value)&&value>0?value:0}`,
@@ -77,11 +90,12 @@ function conversationRuntimeSource() {
     `function trimKnownSpoken(text){let remaining=text,known=[];state.assistantSpokenText&&known.push(state.assistantSpokenText);for(let spoken of state.spokenAssistantTexts)known.push(spoken);for(let spoken of known){spoken=clean(spoken);if(!spoken)continue;if(remaining.startsWith(spoken))remaining=remaining.slice(spoken.length).trim();else if(spoken.startsWith(remaining))return""}return remaining}`,
     `function rememberAssistantText(text){text=clean(text);if(!text)return;for(let known of state.spokenAssistantTexts)if(known===text||known.startsWith(text))return;state.spokenAssistantTexts=state.spokenAssistantTexts.filter(known=>!text.startsWith(known));state.spokenAssistantTexts.push(text);if(state.spokenAssistantTexts.length>16)state.spokenAssistantTexts.shift();for(let key of state.assistantKeys)key&&state.spokenAssistant.set(key,text);while(state.spokenAssistant.size>120)state.spokenAssistant.delete(state.spokenAssistant.keys().next().value)}`,
     `function assistantTextToSpeak(){return trimKnownSpoken(state.assistantText)}`,
-    `function speakAssistantText(){let text=assistantTextToSpeak();state.assistantFinalSpoken=true;state.assistantSpokenText=state.assistantText;rememberAssistantText(state.assistantText);if(!text)return false;enqueue(text);return true}`,
+    `function takeAssistantTextToSpeak(){let text=assistantTextToSpeak();state.assistantFinalSpoken=true;state.assistantSpokenText=state.assistantText;rememberAssistantText(state.assistantText);return text}`,
+    `function speakAssistantText(){let text=takeAssistantTextToSpeak();if(!text)return false;enqueue(text);return true}`,
     `function finishAssistant(epoch=state.epoch){clearTimeout(state.flushTimer);state.flushTimer=null;if(epoch!==state.epoch||!state.active)return;state.finalizing=false;if(state.assistantFinalSpoken||!state.assistantText){startListeningSoon(600);return}if(!speakAssistantText()){startListeningSoon(600);return}clearTimeout(state.restartTimer);let waitEpoch=state.epoch;state.restartTimer=setTimeout(()=>waitForQuietAssistant(waitEpoch),700)}`,
     `function finishAssistantSoon(delay=500){clearTimeout(state.flushTimer);let epoch=state.epoch;state.flushTimer=setTimeout(()=>finishAssistant(epoch),delay)}`,
     `function waitForQuietAssistant(epoch=state.epoch){if(epoch!==state.epoch||!state.active)return;if(!state.speaking&&!isResponseInProgress())startListeningSoon(600);else{isResponseInProgress()&&startInterruptMonitor();state.restartTimer=setTimeout(()=>waitForQuietAssistant(epoch),500)}}`,
-    `function assistant(item,copyText,cid,turnKey,turnInProgress){if(!state.active||state.awaitingUserTranscript)return null;let id=conversationId(cid);if(id)state.lastConversationId=id;if(id!==state.activeConversationId){deactivate("insert");return null}let text=clean(copyText||item?.content||"");if(!text)return null;let responding=isResponseInProgress(),liveTurn=turnInProgress===!0,key=assistantKey(item,text,turnKey,liveTurn||responding),completed=item?.completed===!0,finalTurn=!liveTurn||completed,seen=key&&state.seenAssistantKeys.has(key),sameAssistant=state.assistantText&&(text.startsWith(state.assistantText)||state.assistantText.startsWith(text)),canObserve=state.allowAssistant||responding||state.finalizing||state.assistantKey!=null;if(beforeCursor(item)){key&&state.seenAssistantKeys.add(key);return null}if(!canObserve){key&&state.seenAssistantKeys.add(key);return null}if(seen&&completed&&key!==state.assistantKey){key&&state.seenAssistantKeys.add(key);return null}if(!state.assistantKey){if(!liveTurn&&!responding&&!state.finalizing&&!state.allowAssistant){key&&state.seenAssistantKeys.add(key);return null}beginAssistant(key)}else if(key&&key!==state.assistantKey&&!sameAssistant){if(!responding&&!liveTurn&&!state.finalizing&&(!state.allowAssistant||completed||seen)){state.seenAssistantKeys.add(key);return null}beginAssistant(key)}rememberAssistantKey(key);key&&state.seenAssistantKeys.add(key);if(text!==state.assistantText){state.assistantText=text;state.assistantFinalSpoken=state.assistantSpokenText===state.assistantText;if(liveTurn&&!completed){clearTimeout(state.restartTimer);return null}}else if(liveTurn&&!completed)return null;if(!finalTurn||state.assistantFinalSpoken)return null;if(state.finalizing&&!responding){finishAssistantSoon(250);return null}if(!speakAssistantText())return null;if(responding)startInterruptMonitor();else{clearTimeout(state.restartTimer);let epoch=state.epoch;state.restartTimer=setTimeout(()=>waitForQuietAssistant(epoch),700)}return null}`,
+    `function assistant(item,copyText,cid,turnKey,turnInProgress){if(!state.active||state.awaitingUserTranscript)return null;let id=conversationId(cid);if(id)state.lastConversationId=id;if(id!==state.activeConversationId){deactivate("insert");return null}let text=clean(copyText||item?.content||"");if(!text)return null;let responding=isResponseInProgress(),liveTurn=turnInProgress===!0,key=assistantKey(item,text,turnKey,liveTurn||responding),completed=item?.completed===!0,finalTurn=!liveTurn||completed,seen=key&&state.seenAssistantKeys.has(key),sameAssistant=state.assistantText&&(text.startsWith(state.assistantText)||state.assistantText.startsWith(text)),canObserve=state.allowAssistant||responding||state.finalizing||state.assistantKey!=null;if(beforeCursor(item)){key&&state.seenAssistantKeys.add(key);return null}if(!canObserve){key&&state.seenAssistantKeys.add(key);return null}if(seen&&completed&&key!==state.assistantKey){key&&state.seenAssistantKeys.add(key);return null}if(!state.assistantKey){if(!liveTurn&&!responding&&!state.finalizing&&!state.allowAssistant){key&&state.seenAssistantKeys.add(key);return null}beginAssistant(key)}else if(key&&key!==state.assistantKey&&!sameAssistant){if(responding&&completed&&!liveTurn&&!state.assistantFinalSpoken){state.seenAssistantKeys.add(key);return null}if(!responding&&!liveTurn&&!state.finalizing&&(!state.allowAssistant||completed||seen)){state.seenAssistantKeys.add(key);return null}beginAssistant(key)}rememberAssistantKey(key);key&&state.seenAssistantKeys.add(key);if(text!==state.assistantText){state.assistantText=text;state.assistantFinalSpoken=state.assistantSpokenText===state.assistantText;if(liveTurn&&!completed){clearTimeout(state.restartTimer);return null}}else if(liveTurn&&!completed)return null;if(responding&&completed&&!liveTurn&&state.speaking)return null;if(!finalTurn||state.assistantFinalSpoken)return null;if(state.finalizing&&!responding){finishAssistantSoon(250);return null}if(!speakAssistantText())return null;if(responding)startInterruptMonitor();else{clearTimeout(state.restartTimer);let epoch=state.epoch;state.restartTimer=setTimeout(()=>waitForQuietAssistant(epoch),700)}return null}`,
     `function startListeningSoon(delay=250,force=false){clearTimeout(state.restartTimer);if(!state.active||state.muted||state.listening||state.transcribing||(!force&&isResponseInProgress()))return;let wait=Math.max(delay,state.speechCooldownUntil-Date.now());let epoch=state.epoch;state.restartTimer=setTimeout(()=>{if(epoch!==state.epoch||!state.active||state.muted||state.listening||state.transcribing||(!force&&isResponseInProgress())||Date.now()<state.speechCooldownUntil)return;stopInterruptMonitor();state.controls?.startDictation?.()},wait)}`,
     `function toggle(controls){if(!available())return false;let id=conversationId(controls?.conversationId);if(!id)return false;if(state.active){deactivate("discard");return true}state.controls=controls;state.active=true;state.muted=false;state.activeConversationId=id;state.epoch++;state.awaitingUserTranscript=controls?.isResponseInProgress===!0;state.allowAssistant=false;state.seenAssistantKeys.clear();state.spokenAssistant.clear();state.spokenAssistantTexts=[];state.cursorSentAtMs=0;resetTranscriptState();resetTurnState();stopSpeech();updateUi();if(controls?.isResponseInProgress)controls.onStop?.();startListeningSoon(0,!0);return true}`,
     `function endpoint({stream,stop,isActive}){if(!state.active||state.muted)return null;state.listening=true;let graph=makeAudioGraph(stream);if(!graph){state.listening=false;stopTracks(stream);return()=>{}}let sawSpeech=false,lastSpeech=0,voicedSince=0,{quietMs,threshold,possibleThreshold,speechMs}=speechSettings(),raf=0,done=false,finish=()=>{if(done)return;done=true;cancelAnimationFrame(raf);graph.close();state.listening=false},tick=()=>{if(done)return;if(!state.active||state.muted||!isActive?.()){finish();return}let now=performance.now(),level=graph.level(),voiced=level>threshold,possible=level>possibleThreshold;if(voiced){voicedSince||(voicedSince=now);if(now-voicedSince>=speechMs){sawSpeech||stopSpeech(!0);sawSpeech=!0;lastSpeech=now;stopInterruptMonitor()}}else if(sawSpeech&&possible){lastSpeech=now;voicedSince=0}else voicedSince=0;if(sawSpeech&&now-lastSpeech>=quietMs){finish();stop?.();return}raf=requestAnimationFrame(tick)};raf=requestAnimationFrame(tick);return finish}`,
@@ -186,9 +200,21 @@ function applyComposerControlPatch(source) {
     warn("Could not find composer voice button click handler", "conversation mode composer control patch");
   }
 
-  patched = patched
-    .replace(/defaultMessage:`Start realtime voice`/g, "defaultMessage:`Start conversation mode`")
-    .replace(/defaultMessage:`Start realtime voice mode in the composer`/g, "defaultMessage:`Start conversation mode in the composer`");
+  if (patched.includes("codexLinuxConversationActive=globalThis.codexLinuxConversationIsActive")) {
+    patched = patched
+      .replace(
+        /defaultMessage:`(?:Start realtime voice|Start conversation mode)`/g,
+        "defaultMessage:codexLinuxConversationActive?`Stop conversation mode`:`Start conversation mode`",
+      )
+      .replace(
+        /defaultMessage:`(?:Start realtime voice mode|Start conversation mode) in the composer`/g,
+        "defaultMessage:codexLinuxConversationActive?`Stop conversation mode in the composer`:`Start conversation mode in the composer`",
+      );
+  } else {
+    patched = patched
+      .replace(/defaultMessage:`Start realtime voice`/g, "defaultMessage:`Start conversation mode`")
+      .replace(/defaultMessage:`Start realtime voice mode in the composer`/g, "defaultMessage:`Start conversation mode in the composer`");
+  }
 
   return patched;
 }

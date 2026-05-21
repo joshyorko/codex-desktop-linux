@@ -52,6 +52,7 @@ test("main bundle patch adds a Linux read aloud handler", () => {
   assert.match(patched, /not-explicit/);
   assert.match(patched, /action===`setup`/);
   assert.match(patched, /source===`button`/);
+  assert.match(patched, /codexLinuxReadAloudSpeak\(e\.text,\{requireEnabled:!1\}\)/);
   assert.match(patched, /constants\.X_OK/);
   assert.match(patched, /kokoro-stdin/);
   assert.match(patched, /kokoro-v1\.0\.onnx/);
@@ -453,7 +454,7 @@ test("main handler enables native fallback by default but allows explicit disabl
   }
 });
 
-test("main handler keeps button speech opt-in while allowing explicit callers to use the backend", async () => {
+test("main handler treats the message button as an explicit speech request", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-read-aloud-main-"));
   try {
     const source = [
@@ -493,18 +494,17 @@ test("main handler keeps button speech opt-in while allowing explicit callers to
       "process",
       `${patched};return codexLinuxReadAloudHandle({action:"speak",source:"button",text:"hello"});`,
     )(requireStub, processStub);
-    assert.equal(buttonResult.spoken, false);
-    assert.equal(buttonResult.reason, "disabled");
-    assert.equal(spawned.length, 0);
+    assert.equal(buttonResult.spoken, true);
+    assert.equal(buttonResult.engine, "spd-say");
+    assert.ok(spawned.some((entry) => entry.command === "spd-say" && entry.args.includes("--")));
 
-    const explicitResult = await new Function(
+    const directResult = await new Function(
       "require",
       "process",
-      `${patched};return codexLinuxReadAloudSpeak("hello",{requireEnabled:false});`,
+      `${patched};return codexLinuxReadAloudSpeak("hello");`,
     )(requireStub, processStub);
-    assert.equal(explicitResult.spoken, true);
-    assert.equal(explicitResult.engine, "spd-say");
-    assert.ok(spawned.some((entry) => entry.command === "spd-say" && entry.args.includes("--")));
+    assert.equal(directResult.spoken, false);
+    assert.equal(directResult.reason, "disabled");
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
