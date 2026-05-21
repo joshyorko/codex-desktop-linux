@@ -38,6 +38,8 @@ const REMOTE_CONTROL_ENABLEMENT_BRIDGE_MARKER = "codexLinuxRemoteControlEnableme
 const REMOTE_CONTROL_AUTO_CONNECT_CLEANUP_MARKER = "codexLinuxRemoteControlAutoConnectCleanup";
 const REMOTE_CONTROL_SELF_AUTO_CONNECT_MARKER = "codexLinuxRemoteControlSelfAutoConnect";
 const REMOTE_MOBILE_ACTIVE_STATUS_MARKER = "codexLinuxRemoteMobileActiveStatus";
+const REMOTE_MOBILE_AVATAR_OVERLAY_SESSION_STATUS_MARKER =
+  "codexLinuxRemoteMobileAvatarOverlaySessionStatus";
 const REMOTE_CONTROL_REVOKE_SETUP_RESET_MARKER = "codexLinuxRemoteControlResetMobileSetupAfterRevoke";
 const REMOTE_MOBILE_APP_SERVER_REMOTE_CONTROL_MARKER = "codexLinuxRemoteMobileAppServerArgs";
 const REMOTE_MOBILE_APP_SERVER_ARGS_NEEDLE = "args:[`app-server`,`--analytics-default-enabled`]";
@@ -987,6 +989,33 @@ function applyLinuxRemoteMobileActiveStatusPatch(source) {
   );
 }
 
+function applyLinuxRemoteMobileAvatarOverlaySessionStatusPatch(source) {
+  if (source.includes(REMOTE_MOBILE_AVATAR_OVERLAY_SESSION_STATUS_MARKER)) {
+    return source;
+  }
+
+  const statusPattern =
+    /function ([A-Za-z_$][\w$]*)\(e\)\{let t=e\.resumeState===`needs_resume`\?e\.threadRuntimeStatus:null,n=e\.resumeState===`needs_resume`\?t\?\.type===`active`:e\.resumeState===`resuming`\|\|e\.turns\.at\(-1\)\?\.status===`inProgress`,r=e\.resumeState===`needs_resume`\?t\?\.type===`active`&&t\.activeFlags\.includes\(`waitingOnUserInput`\):e\.requests\.some\(e=>e\.method===`item\/tool\/requestUserInput`\),a=e\.turns\.some\(e=>e\.items\.some\(e=>e\.type===`planImplementation`&&!e\.isCompleted\)\),o=e\.resumeState===`needs_resume`\?t\?\.type===`systemError`:e\.turns\.at\(-1\)\?\.status===`failed`;return ([A-Za-z_$][\w$]*)\(e\)\|\|r\|\|a\?`waiting`:o\?`failed`:n\?`running`:e\.hasUnreadTurn\?`review`:`idle`\}/u;
+  const statusMatch = source.match(statusPattern);
+  if (statusMatch == null) {
+    console.warn("WARN: Could not find avatar overlay session status needle - skipping Linux remote-mobile avatar overlay status patch");
+    return source;
+  }
+
+  const [, statusFunctionName, waitingRequestFunctionName] = statusMatch;
+  const statusReplacement = [
+    `function ${statusFunctionName}(e){/*${REMOTE_MOBILE_AVATAR_OVERLAY_SESSION_STATUS_MARKER}*/`,
+    "let t=e.threadRuntimeStatus??null,",
+    "n=t?.type===`active`||e.resumeState===`resuming`||e.turns.at(-1)?.status===`inProgress`,",
+    "r=t?.type===`active`&&t.activeFlags?.includes(`waitingOnUserInput`)===!0||e.requests.some(e=>e.method===`item/tool/requestUserInput`),",
+    "a=e.turns.some(e=>e.items.some(e=>e.type===`planImplementation`&&!e.isCompleted)),",
+    "o=t?.type===`systemError`||e.turns.at(-1)?.status===`failed`;",
+    `return ${waitingRequestFunctionName}(e)||r||a?\`waiting\`:o?\`failed\`:n?\`running\`:e.hasUnreadTurn?\`review\`:\`idle\`}`,
+  ].join("");
+
+  return source.replace(statusPattern, statusReplacement);
+}
+
 function applyLinuxRemoteMobileProjectlessRemoteTaskPatch(source) {
   if (source.includes(REMOTE_MOBILE_PROJECTLESS_REMOTE_TASK_MARKER)) {
     return source;
@@ -1167,6 +1196,16 @@ module.exports = [
     apply: applyLinuxRemoteMobileActiveStatusPatch,
   },
   {
+    id: "linux-remote-mobile-avatar-overlay-session-status",
+    phase: "webview-asset",
+    pattern: /^avatar-overlay-page-.*\.js$/,
+    order: 20_162,
+    ciPolicy: "optional",
+    missingDescription: "avatar overlay page bundle",
+    skipDescription: "Linux remote-mobile avatar overlay session status patch",
+    apply: applyLinuxRemoteMobileAvatarOverlaySessionStatusPatch,
+  },
+  {
     id: "linux-remote-mobile-projectless-remote-task",
     phase: "webview-asset",
     pattern: /^sidebar-project-groups-.*\.js$/,
@@ -1185,6 +1224,8 @@ module.exports.applyLinuxRemoteMobileChromeBridgePatch = applyLinuxRemoteMobileC
 module.exports.applyLinuxRemoteMobileConversationHydrationPatch = applyLinuxRemoteMobileConversationHydrationPatch;
 module.exports.applyLinuxRemoteControlEnablementBridgePatch = applyLinuxRemoteControlEnablementBridgePatch;
 module.exports.applyLinuxRemoteMobileActiveStatusPatch = applyLinuxRemoteMobileActiveStatusPatch;
+module.exports.applyLinuxRemoteMobileAvatarOverlaySessionStatusPatch =
+  applyLinuxRemoteMobileAvatarOverlaySessionStatusPatch;
 module.exports.applyLinuxRemoteMobileProjectlessRemoteTaskPatch =
   applyLinuxRemoteMobileProjectlessRemoteTaskPatch;
 module.exports.applyLinuxRemoteControlPreserveConfigPatch = applyLinuxRemoteControlPreserveConfigPatch;

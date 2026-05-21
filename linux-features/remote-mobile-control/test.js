@@ -28,6 +28,7 @@ const {
   applyLinuxRemoteControlLoadGatePatch,
   applyLinuxRemoteControlEnablementBridgePatch,
   applyLinuxRemoteMobileActiveStatusPatch,
+  applyLinuxRemoteMobileAvatarOverlaySessionStatusPatch,
   applyLinuxRemoteMobileAppServerRemoteControlPatch,
   applyLinuxRemoteMobileChromeBridgePatch,
   applyLinuxRemoteMobileConversationHydrationPatch,
@@ -217,6 +218,13 @@ function syntheticCurrentAppServerManagerSignalsBundle() {
 function syntheticAppMainActiveStatusBundle() {
   return [
     "function pS({latestTurnStatus:e,resumeState:t,streamRole:n,threadRuntimeStatus:r}){return n==null?t===`needs_resume`?`needs-resume`:`read-only`:n.role===`follower`?`follower`:r?.type===`active`||e===`inProgress`?`active`:`inactive`}",
+  ].join("");
+}
+
+function syntheticAvatarOverlayPageBundle() {
+  return [
+    "function i(e){return false}",
+    "function $e(e){let t=e.resumeState===`needs_resume`?e.threadRuntimeStatus:null,n=e.resumeState===`needs_resume`?t?.type===`active`:e.resumeState===`resuming`||e.turns.at(-1)?.status===`inProgress`,r=e.resumeState===`needs_resume`?t?.type===`active`&&t.activeFlags.includes(`waitingOnUserInput`):e.requests.some(e=>e.method===`item/tool/requestUserInput`),a=e.turns.some(e=>e.items.some(e=>e.type===`planImplementation`&&!e.isCompleted)),o=e.resumeState===`needs_resume`?t?.type===`systemError`:e.turns.at(-1)?.status===`failed`;return i(e)||r||a?`waiting`:o?`failed`:n?`running`:e.hasUnreadTurn?`review`:`idle`}",
   ].join("");
 }
 
@@ -617,6 +625,7 @@ test("remote mobile control feature exposes opt-in main-bundle and webview patch
       "feature:remote-mobile-control:linux-remote-mobile-conversation-hydration",
       "feature:remote-mobile-control:linux-remote-control-enablement-bridge",
       "feature:remote-mobile-control:linux-remote-mobile-active-status",
+      "feature:remote-mobile-control:linux-remote-mobile-avatar-overlay-session-status",
       "feature:remote-mobile-control:linux-remote-mobile-projectless-remote-task",
     ]);
     assert.deepEqual(descriptors.map((descriptor) => descriptor.phase), [
@@ -625,6 +634,7 @@ test("remote mobile control feature exposes opt-in main-bundle and webview patch
       "main-bundle",
       "main-bundle",
       "extracted-app",
+      "webview-asset",
       "webview-asset",
       "webview-asset",
       "webview-asset",
@@ -1188,6 +1198,40 @@ test("Linux remote mobile active-status patch treats active thread status as act
   );
 });
 
+test("Linux remote mobile avatar overlay patch treats active runtime status as a running bubble", () => {
+  const source = syntheticAvatarOverlayPageBundle();
+  const patched = applyLinuxRemoteMobileAvatarOverlaySessionStatusPatch(source);
+
+  assert.notEqual(patched, source);
+  assert.match(patched, /codexLinuxRemoteMobileAvatarOverlaySessionStatus/);
+  assert.equal(applyLinuxRemoteMobileAvatarOverlaySessionStatusPatch(patched), patched);
+
+  const context = { module: { exports: {} } };
+  vm.runInNewContext(`${patched};module.exports=$e;`, context);
+  const status = context.module.exports;
+  const baseConversation = {
+    hasUnreadTurn: false,
+    requests: [],
+    resumeState: "resumed",
+    turns: [{ items: [], status: "completed" }],
+  };
+
+  assert.equal(
+    status({
+      ...baseConversation,
+      threadRuntimeStatus: { activeFlags: [], type: "active" },
+    }),
+    "running",
+  );
+  assert.equal(
+    status({
+      ...baseConversation,
+      threadRuntimeStatus: { activeFlags: ["waitingOnUserInput"], type: "active" },
+    }),
+    "waiting",
+  );
+});
+
 test("Linux remote-control enablement bridge loads remote-control clients on Linux", async () => {
   const source = syntheticAppMainEnablementBridgeBundle();
   const patched = applyLinuxRemoteControlEnablementBridgePatch(source);
@@ -1380,6 +1424,10 @@ test("remote mobile control feature participates in ASAR patching and reports", 
           path.join(assetsDir, "sidebar-project-groups-test.js"),
           syntheticSidebarProjectGroupsBundle(),
         );
+        fs.writeFileSync(
+          path.join(assetsDir, "avatar-overlay-page-test.js"),
+          syntheticAvatarOverlayPageBundle(),
+        );
 
         const report = createPatchReport();
         patchExtractedApp(tempApp, { report });
@@ -1421,6 +1469,10 @@ test("remote mobile control feature participates in ASAR patching and reports", 
           path.join(assetsDir, "sidebar-project-groups-test.js"),
           "utf8",
         );
+        const patchedAvatarOverlayFile = fs.readFileSync(
+          path.join(assetsDir, "avatar-overlay-page-test.js"),
+          "utf8",
+        );
         assert.match(patchedFile, /codexLinuxRemoteControlDeviceKeyClient/);
         assert.match(patchedFile, /n\.kind===`local`&&process\.platform!==`linux`/);
         assert.match(patchedAppServerLaunchFile, /codexLinuxRemoteMobileAppServerArgs/);
@@ -1441,6 +1493,7 @@ test("remote mobile control feature participates in ASAR patching and reports", 
         assert.match(patchedSidebarProjectGroupsFile, /codexLinuxRemoteMobileProjectlessRemoteTaskId/);
         assert.match(patchedAppMainFile, /codexLinuxRemoteControlEnablementBridge/);
         assert.match(patchedAppMainFile, /codexLinuxRemoteMobileActiveStatus/);
+        assert.match(patchedAvatarOverlayFile, /codexLinuxRemoteMobileAvatarOverlaySessionStatus/);
         assert.ok(
           report.patches.some((patch) =>
             patch.name === "feature:remote-mobile-control:linux-remote-control-device-key" &&
@@ -1528,6 +1581,12 @@ test("remote mobile control feature participates in ASAR patching and reports", 
         assert.ok(
           report.patches.some((patch) =>
             patch.name === "feature:remote-mobile-control:linux-remote-mobile-projectless-remote-task" &&
+            patch.status === "applied",
+          ),
+        );
+        assert.ok(
+          report.patches.some((patch) =>
+            patch.name === "feature:remote-mobile-control:linux-remote-mobile-avatar-overlay-session-status" &&
             patch.status === "applied",
           ),
         );
