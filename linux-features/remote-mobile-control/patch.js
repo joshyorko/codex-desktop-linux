@@ -782,7 +782,7 @@ function applyLinuxRemoteMobileConversationHydrationPatch(source) {
       "this.codexLinuxRemoteMobilePendingNotifications?.delete(r),R.error(`Failed to hydrate conversation for turn/started`,{safe:{conversationId:r},sensitive:{error:e}})});s();break}",
       "this.markConversationStreaming(r),",
     ].join("");
-    const unknownTurnReplacement = unknownTurnRetryNeedle;
+    const unknownTurnReplacement = unknownTurnLocalPathRetryNeedle;
     if (patched.includes(unknownTurnNeedle)) {
       patched = patched.replace(unknownTurnNeedle, unknownTurnReplacement);
     } else if (patched.includes(hydrationV1Needle)) {

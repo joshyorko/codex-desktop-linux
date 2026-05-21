@@ -591,12 +591,12 @@ test("Linux remote mobile conversation hydration patch handles stale refresh and
   assert.match(patched, /codexLinuxRemoteMobileNotificationQueue/);
   assert.match(patched, /codexLinuxRemoteMobilePendingNotifications\?\?=new Map/);
   assert.match(patched, /this\.readThread\(r,\{includeTurns:!1\}\)/);
-  assert.doesNotMatch(patched, /typeof t\?\.path==`string`&&t\.path\.endsWith\(`\.jsonl`\)/);
-  assert.match(patched, /if\(!t\)\{if\(a<12\)/);
-  assert.match(patched, /Retrying hydration for missing conversation/);
+  assert.match(patched, /typeof t\?\.path==`string`&&t\.path\.endsWith\(`\.jsonl`\)/);
+  assert.match(patched, /if\(!\(typeof t\?\.path==`string`&&t\.path\.endsWith\(`\.jsonl`\)\)\)\{if\(a<12\)/);
+  assert.match(patched, /Retrying hydration for non-persisted conversation/);
   assert.match(patched, /queuedNotificationCount:i\.length,attempt:a\+1/);
   assert.match(patched, /setTimeout\(\(\)=>s\(a\+1\),250\)/);
-  assert.match(patched, /Skipping hydration for missing conversation/);
+  assert.match(patched, /Skipping hydration for non-persisted conversation/);
   assert.match(patched, /releaseBrowserUseTurnRoute\(r,t\.id\)/);
   assert.match(patched, /for\(let e of i\)this\.onNotification\(e\.method,e\.params\)/);
   assert.match(patched, /Queueing item\/started for hydrating conversation/);
@@ -610,7 +610,7 @@ test("Linux remote mobile conversation hydration patch retries transient thread 
   const patched = applyLinuxRemoteMobileConversationHydrationPatch(source);
 
   assert.match(patched, /Retrying hydration for turn\/started/);
-  assert.match(patched, /Retrying hydration for missing conversation/);
+  assert.match(patched, /Retrying hydration for non-persisted conversation/);
   assert.match(patched, /if\(a<12\)/);
   assert.match(patched, /setTimeout\(\(\)=>s\(a\+1\),250\)/);
   assert.match(patched, /Failed to hydrate conversation for turn\/started/);
@@ -620,7 +620,7 @@ test("Linux remote mobile conversation hydration patch upgrades unsafe queued hy
   const source = syntheticAppServerManagerSignalsBundle();
   const patched = applyLinuxRemoteMobileConversationHydrationPatch(source);
   const safeRead =
-    "this.readThread(r,{includeTurns:!1}).then(e=>{let t=e?.thread??e,i=this.codexLinuxRemoteMobilePendingNotifications?.get(r)??[];if(!t){if(a<12){R.warning(`Retrying hydration for missing conversation`,{safe:{conversationId:r,queuedNotificationCount:i.length,attempt:a+1},sensitive:{}}),setTimeout(()=>s(a+1),250);return}this.codexLinuxRemoteMobilePendingNotifications?.delete(r);for(let e of i)if(e.method===`turn/completed`){let{turn:t}=e.params;this.browserUseTurnRouteIdsByConversationId.get(r)?.has(t.id)===!0&&this.releaseBrowserUseTurnRoute(r,t.id),this.computerUseTurnRouteIdsByConversationId.get(r)?.has(t.id)===!0&&this.releaseComputerUseTurnRoute(r,t.id)}R.warning(`Skipping hydration for missing conversation`,{safe:{conversationId:r,queuedNotificationCount:i.length},sensitive:{}});return}this.upsertConversationFromThread(t);this.codexLinuxRemoteMobilePendingNotifications?.delete(r);for(let e of i)this.onNotification(e.method,e.params)}).catch";
+    "this.readThread(r,{includeTurns:!1}).then(e=>{let t=e?.thread??e,i=this.codexLinuxRemoteMobilePendingNotifications?.get(r)??[];if(!(typeof t?.path==`string`&&t.path.endsWith(`.jsonl`))){if(a<12){R.warning(`Retrying hydration for non-persisted conversation`,{safe:{conversationId:r,path:t?.path??null,queuedNotificationCount:i.length,attempt:a+1},sensitive:{}}),setTimeout(()=>s(a+1),250);return}this.codexLinuxRemoteMobilePendingNotifications?.delete(r);for(let e of i)if(e.method===`turn/completed`){let{turn:t}=e.params;this.browserUseTurnRouteIdsByConversationId.get(r)?.has(t.id)===!0&&this.releaseBrowserUseTurnRoute(r,t.id),this.computerUseTurnRouteIdsByConversationId.get(r)?.has(t.id)===!0&&this.releaseComputerUseTurnRoute(r,t.id)}R.warning(`Skipping hydration for non-persisted conversation`,{safe:{conversationId:r,path:t?.path??null,queuedNotificationCount:i.length},sensitive:{}});return}this.upsertConversationFromThread(t);this.codexLinuxRemoteMobilePendingNotifications?.delete(r);for(let e of i)this.onNotification(e.method,e.params)}).catch";
   const unsafeRead =
     "this.readThread(r,{includeTurns:!1}).then(e=>{let t=e?.thread??e;if(t){this.upsertConversationFromThread(t);let e=this.codexLinuxRemoteMobilePendingNotifications?.get(r)??[];this.codexLinuxRemoteMobilePendingNotifications?.delete(r);for(let t of e)this.onNotification(t.method,t.params)}}).catch";
   const unsafeQueued = patched.replace(safeRead, unsafeRead);
@@ -630,28 +630,25 @@ test("Linux remote mobile conversation hydration patch upgrades unsafe queued hy
   const upgraded = applyLinuxRemoteMobileConversationHydrationPatch(unsafeQueued);
 
   assert.match(upgraded, /codexLinuxRemoteMobileNotificationQueue/);
-  assert.match(upgraded, /Retrying hydration for missing conversation/);
-  assert.match(upgraded, /Skipping hydration for missing conversation/);
-  assert.doesNotMatch(upgraded, /typeof t\?\.path==`string`&&t\.path\.endsWith\(`\.jsonl`\)/);
+  assert.match(upgraded, /Retrying hydration for non-persisted conversation/);
+  assert.match(upgraded, /Skipping hydration for non-persisted conversation/);
+  assert.match(upgraded, /typeof t\?\.path==`string`&&t\.path\.endsWith\(`\.jsonl`\)/);
   assert.equal(applyLinuxRemoteMobileConversationHydrationPatch(upgraded), upgraded);
 });
 
 test("Linux remote mobile conversation hydration patch upgrades local-path guarded hydration", () => {
   const source = syntheticAppServerManagerSignalsBundle();
   const patched = applyLinuxRemoteMobileConversationHydrationPatch(source);
-  const cloudBackedRead =
-    "this.readThread(r,{includeTurns:!1}).then(e=>{let t=e?.thread??e,i=this.codexLinuxRemoteMobilePendingNotifications?.get(r)??[];if(!t){if(a<12){R.warning(`Retrying hydration for missing conversation`,{safe:{conversationId:r,queuedNotificationCount:i.length,attempt:a+1},sensitive:{}}),setTimeout(()=>s(a+1),250);return}this.codexLinuxRemoteMobilePendingNotifications?.delete(r);for(let e of i)if(e.method===`turn/completed`){let{turn:t}=e.params;this.browserUseTurnRouteIdsByConversationId.get(r)?.has(t.id)===!0&&this.releaseBrowserUseTurnRoute(r,t.id),this.computerUseTurnRouteIdsByConversationId.get(r)?.has(t.id)===!0&&this.releaseComputerUseTurnRoute(r,t.id)}R.warning(`Skipping hydration for missing conversation`,{safe:{conversationId:r,queuedNotificationCount:i.length},sensitive:{}});return}this.upsertConversationFromThread(t);this.codexLinuxRemoteMobilePendingNotifications?.delete(r);for(let e of i)this.onNotification(e.method,e.params)}).catch";
   const localPathGuardedRead =
     "this.readThread(r,{includeTurns:!1}).then(e=>{let t=e?.thread??e,i=this.codexLinuxRemoteMobilePendingNotifications?.get(r)??[];if(!(typeof t?.path==`string`&&t.path.endsWith(`.jsonl`))){if(a<12){R.warning(`Retrying hydration for non-persisted conversation`,{safe:{conversationId:r,path:t?.path??null,queuedNotificationCount:i.length,attempt:a+1},sensitive:{}}),setTimeout(()=>s(a+1),250);return}this.codexLinuxRemoteMobilePendingNotifications?.delete(r);for(let e of i)if(e.method===`turn/completed`){let{turn:t}=e.params;this.browserUseTurnRouteIdsByConversationId.get(r)?.has(t.id)===!0&&this.releaseBrowserUseTurnRoute(r,t.id),this.computerUseTurnRouteIdsByConversationId.get(r)?.has(t.id)===!0&&this.releaseComputerUseTurnRoute(r,t.id)}R.warning(`Skipping hydration for non-persisted conversation`,{safe:{conversationId:r,path:t?.path??null,queuedNotificationCount:i.length},sensitive:{}});return}this.upsertConversationFromThread(t);this.codexLinuxRemoteMobilePendingNotifications?.delete(r);for(let e of i)this.onNotification(e.method,e.params)}).catch";
-  const oldGuarded = patched.replace(cloudBackedRead, localPathGuardedRead);
+  const oldGuarded = patched.replace(localPathGuardedRead, localPathGuardedRead);
 
-  assert.notEqual(oldGuarded, patched);
+  assert.equal(oldGuarded, patched);
   assert.match(oldGuarded, /Skipping hydration for non-persisted conversation/);
   const upgraded = applyLinuxRemoteMobileConversationHydrationPatch(oldGuarded);
 
-  assert.doesNotMatch(upgraded, /Skipping hydration for non-persisted conversation/);
-  assert.doesNotMatch(upgraded, /typeof t\?\.path==`string`&&t\.path\.endsWith\(`\.jsonl`\)/);
-  assert.match(upgraded, /Skipping hydration for missing conversation/);
+  assert.match(upgraded, /Skipping hydration for non-persisted conversation/);
+  assert.match(upgraded, /typeof t\?\.path==`string`&&t\.path\.endsWith\(`\.jsonl`\)/);
   assert.equal(applyLinuxRemoteMobileConversationHydrationPatch(upgraded), upgraded);
 });
 
