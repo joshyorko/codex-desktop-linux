@@ -121,6 +121,26 @@ remote_mobile_control_daemon_pid() {
     sed -n 's/.*"pid"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$pid_file" | head -n 1
 }
 
+cleanup_stale_remote_mobile_daemon_state() {
+    local codex_home="$1"
+    local pid_file=""
+    local pid=""
+
+    for pid_file in \
+        "$codex_home/app-server-daemon/app-server.pid" \
+        "$codex_home/app-server-daemon/app-server-updater.pid"
+    do
+        [ -e "$pid_file" ] || continue
+        pid="$(remote_mobile_control_daemon_pid "$pid_file" || true)"
+        if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+            continue
+        fi
+        if rm -f "$pid_file"; then
+            echo "Removed stale remote mobile control daemon pid file: $pid_file"
+        fi
+    done
+}
+
 remote_mobile_process_mentions_path() {
     local pid="$1"
     local needle="$2"
@@ -221,6 +241,7 @@ remote_mobile_control_main() {
         return 0
     fi
     if desktop_app_server_remote_control_enabled; then
+        cleanup_stale_remote_mobile_daemon_state "$codex_home"
         echo "Remote mobile control daemon autostart skipped; Desktop app-server launches with remote-control enabled"
         return 0
     fi
