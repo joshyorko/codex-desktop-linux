@@ -20,22 +20,23 @@
               !(pkgs.lib.hasSuffix "/.codex" pathStr || pkgs.lib.hasInfix "/.codex/" pathStr));
         };
 
+        codexVersion = "26.519.22136";
         codexDmg = pkgs.fetchurl {
-          url = "https://persistent.oaistatic.com/codex-app-prod/Codex.dmg";
-          hash = "sha256-bUQMcTN3GTXIYKVUa81gP4ubZbN+m4K9sAGdT9DIW2o=";
+          name = "Codex-${codexVersion}.dmg";
+          url = "https://persistent.oaistatic.com/codex-app-prod/Codex.dmg?codex_version=${codexVersion}";
+          hash = "sha256-f4/zAyMCeW9hDeIy6Hrac5VdGJyq1a0UAlSGXLrXtyk=";
         };
 
-        codexVersion = "26.513.31313";
-        electronVersion = "42.0.1";
+        electronVersion = "42.1.0";
         electronPlatform =
           {
             x86_64-linux = {
               arch = "x64";
-              hash = "sha256-4bi1uG0//2nis1AlhjY9OECF7gV4vQQfpZFf0LVXxPE=";
+              hash = "sha256-iCBHNDqeIDxs/F05sWbqngJd0laUPg03EfhnJa0OO9k=";
             };
             aarch64-linux = {
               arch = "arm64";
-              hash = "sha256-oIpOaROATrBc6nmNi9CvrOTRuI6dB9uGt3nqSkSL4HA=";
+              hash = "sha256-HnAPfz2u95TMRSNeUcEXJmSu1JpOdze4iW3cOYv/TX0=";
             };
           }.${system} or (throw "codex-desktop-linux Nix package is not supported on ${system}");
 
@@ -46,7 +47,7 @@
 
         electronHeaders = pkgs.fetchurl {
           url = "https://artifacts.electronjs.org/headers/dist/v${electronVersion}/node-v${electronVersion}-headers.tar.gz";
-          hash = "sha256-yQBrv98qtbQ8cdZpuqx2uyP1mkIAVhLlUFjI/vxh9gA=";
+          hash = "sha256-DPwdIPJS1sKb3RSx88qjDtxkd9uT5aZiBnRCSzjc3f0=";
         };
 
         browserUseNodeReplRuntime = pkgs.fetchurl {

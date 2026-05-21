@@ -64,6 +64,11 @@ Environment variables:
   CODEX_APP_DISPLAY_NAME
                       Override display name (default: Codex Desktop)
   CODEX_WEBVIEW_PORT  Override webview HTTP port (default: 5175, or 5176 for non-default app ids)
+  CODEX_DMG_URL       Override the Codex DMG download URL
+  CODEX_DMG_CACHE_BUST
+                      Add a cache-busting query value to DMG downloads. Set to
+                      0/false/no/off to disable. Defaults to a timestamp for
+                      --fresh downloads that remove the cached DMG.
   ELECTRON_HEADERS_URL
                       Override the Electron headers URL used by @electron/rebuild
                       (default: https://artifacts.electronjs.org/headers/dist)

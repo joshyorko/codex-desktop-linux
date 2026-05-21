@@ -447,11 +447,12 @@ capture_upstream_metadata() {
     local dmg_path="$1"
     local headers_file
     headers_file="$(mktemp)"
+    local metadata_url="${UPSTREAM_DMG_EFFECTIVE_URL:-$UPSTREAM_DMG_URL}"
 
     local last_modified="unknown"
     local etag="no-etag"
     local content_length="unknown"
-    if curl -fsSLI "$UPSTREAM_DMG_URL" > "$headers_file"; then
+    if curl -fsSLI "$metadata_url" > "$headers_file"; then
         last_modified="$(awk 'BEGIN{IGNORECASE=1} /^last-modified:/ {sub(/\r$/,""); sub(/^[^:]+: /,""); print; exit}' "$headers_file")"
         etag="$(awk 'BEGIN{IGNORECASE=1} /^etag:/ {sub(/\r$/,""); sub(/^[^:]+: /,""); gsub(/"/,""); print; exit}' "$headers_file")"
         content_length="$(awk 'BEGIN{IGNORECASE=1} /^content-length:/ {sub(/\r$/,""); sub(/^[^:]+: /,""); print; exit}' "$headers_file")"
@@ -469,7 +470,7 @@ capture_upstream_metadata() {
     dmg_size_bytes="$(stat -c '%s' "$dmg_path")"
     tested_at_utc="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
 
-    node - "$UPSTREAM_DMG_URL" "$dmg_path" "$last_modified" "$etag" "$content_length" "$dmg_sha256" "$dmg_size_bytes" "$tested_at_utc" "${UPSTREAM_DMG_CACHE_HIT:-unknown}" <<'NODE'
+    node - "$metadata_url" "$dmg_path" "$last_modified" "$etag" "$content_length" "$dmg_sha256" "$dmg_size_bytes" "$tested_at_utc" "${UPSTREAM_DMG_CACHE_HIT:-unknown}" <<'NODE'
 const fs = require("node:fs");
 const [url, path, lastModified, etag, contentLength, sha256, sizeBytes, testedAtUtc, cacheHit] = process.argv.slice(2);
 const metadata = {
@@ -487,7 +488,7 @@ fs.writeFileSync("upstream-dmg-metadata.json", JSON.stringify(metadata, null, 2)
 NODE
 
     append_summary "Upstream Build App" \
-        "DMG URL: \`$UPSTREAM_DMG_URL\`" \
+        "DMG URL: \`$metadata_url\`" \
         "DMG Last-Modified: \`$last_modified\`" \
         "DMG ETag: \`$etag\`" \
         "DMG Content-Length: \`$content_length\`" \
@@ -496,6 +497,38 @@ NODE
         "Tested At (UTC): \`$tested_at_utc\`" \
         "Cache Hit: \`${UPSTREAM_DMG_CACHE_HIT:-unknown}\`" \
         "Build command: \`make build-app DMG=$dmg_path\`"
+}
+
+append_query_param() {
+    local url="$1"
+    local key="$2"
+    local value="$3"
+
+    case "$url" in
+        *\?*) printf '%s&%s=%s\n' "$url" "$key" "$value" ;;
+        *) printf '%s?%s=%s\n' "$url" "$key" "$value" ;;
+    esac
+}
+
+upstream_dmg_download_url() {
+    local cache_bust="${UPSTREAM_DMG_CACHE_BUST:-auto}"
+
+    case "$cache_bust" in
+        0|false|FALSE|no|NO|off|OFF)
+            printf '%s\n' "$UPSTREAM_DMG_URL"
+            return
+            ;;
+        auto)
+            cache_bust="$(date -u '+%Y%m%dT%H%M%SZ')"
+            ;;
+    esac
+
+    if [ -n "$cache_bust" ]; then
+        append_query_param "$UPSTREAM_DMG_URL" "codex_cache_bust" "$cache_bust"
+        return
+    fi
+
+    printf '%s\n' "$UPSTREAM_DMG_URL"
 }
 
 run_upstream_job() {
@@ -507,7 +540,9 @@ run_upstream_job() {
 
     if [ ! -s "$dmg_path" ]; then
         info "Downloading upstream DMG"
-        curl -fL --retry 3 -o "$dmg_path" "$UPSTREAM_DMG_URL"
+        UPSTREAM_DMG_EFFECTIVE_URL="$(upstream_dmg_download_url)"
+        export UPSTREAM_DMG_EFFECTIVE_URL
+        curl -fL --retry 3 -o "$dmg_path" "$UPSTREAM_DMG_EFFECTIVE_URL"
     else
         info "Using cached upstream DMG: $dmg_path"
     fi

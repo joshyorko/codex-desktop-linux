@@ -77,9 +77,41 @@ assert_equal() {
     echo "OK: $label = $actual"
 }
 
+append_query_param() {
+    local url="$1"
+    local key="$2"
+    local value="$3"
+
+    case "$url" in
+        *\?*) printf '%s&%s=%s\n' "$url" "$key" "$value" ;;
+        *) printf '%s?%s=%s\n' "$url" "$key" "$value" ;;
+    esac
+}
+
+upstream_dmg_download_url() {
+    local cache_bust="${UPSTREAM_DMG_CACHE_BUST:-auto}"
+
+    case "$cache_bust" in
+        0|false|FALSE|no|NO|off|OFF)
+            printf '%s\n' "$UPSTREAM_DMG_URL"
+            return
+            ;;
+        auto)
+            cache_bust="$(date -u '+%Y%m%dT%H%M%SZ')"
+            ;;
+    esac
+
+    if [ -n "$cache_bust" ]; then
+        append_query_param "$UPSTREAM_DMG_URL" "codex_cache_bust" "$cache_bust"
+        return
+    fi
+
+    printf '%s\n' "$UPSTREAM_DMG_URL"
+}
+
 if [ ! -s "$UPSTREAM_DMG_PATH" ]; then
     mkdir -p "$(dirname "$UPSTREAM_DMG_PATH")"
-    curl -fL --retry 3 -o "$UPSTREAM_DMG_PATH" "$UPSTREAM_DMG_URL"
+    curl -fL --retry 3 -o "$UPSTREAM_DMG_PATH" "$(upstream_dmg_download_url)"
 fi
 
 SEVEN_ZIP_CMD="$(find_seven_zip)" || fail "7z/7zz/7za not found"

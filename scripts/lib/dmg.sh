@@ -4,6 +4,45 @@
 # Sourced by install.sh. Do not run directly.
 # shellcheck shell=bash
 
+append_query_param() {
+    local url="$1"
+    local key="$2"
+    local value="$3"
+
+    case "$url" in
+        *\?*) printf '%s&%s=%s\n' "$url" "$key" "$value" ;;
+        *) printf '%s?%s=%s\n' "$url" "$key" "$value" ;;
+    esac
+}
+
+cache_bust_disabled() {
+    case "${1:-}" in
+        0|false|FALSE|no|NO|off|OFF) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+codex_dmg_download_url() {
+    local dmg_url="${CODEX_DMG_URL:-https://persistent.oaistatic.com/codex-app-prod/Codex.dmg}"
+    local cache_bust="${CODEX_DMG_CACHE_BUST:-}"
+
+    if cache_bust_disabled "$cache_bust"; then
+        printf '%s\n' "$dmg_url"
+        return
+    fi
+
+    if [ -z "$cache_bust" ] && [ "$FRESH_INSTALL" -eq 1 ] && [ "$REUSE_CACHED_DMG" -ne 1 ]; then
+        cache_bust="$(date -u '+%Y%m%dT%H%M%SZ')"
+    fi
+
+    if [ -n "$cache_bust" ]; then
+        append_query_param "$dmg_url" "codex_cache_bust" "$cache_bust"
+        return
+    fi
+
+    printf '%s\n' "$dmg_url"
+}
+
 # ---- Download or find Codex DMG ----
 get_dmg() {
     local dmg_dest="$CACHED_DMG_PATH"
@@ -16,7 +55,8 @@ get_dmg() {
     fi
 
     info "Downloading Codex Desktop DMG..."
-    local dmg_url="https://persistent.oaistatic.com/codex-app-prod/Codex.dmg"
+    local dmg_url
+    dmg_url="$(codex_dmg_download_url)"
     info "URL: $dmg_url"
 
     if ! curl -L --progress-bar --max-time 600 --connect-timeout 30 \
@@ -128,4 +168,3 @@ process.stdout.write(String(pkg.devDependencies?.electron ?? pkg.dependencies?.e
     warn "Could not auto-detect Electron version; using fallback $ELECTRON_VERSION"
     return 0
 }
-
