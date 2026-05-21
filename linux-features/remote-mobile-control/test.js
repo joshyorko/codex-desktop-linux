@@ -339,11 +339,14 @@ test("remote mobile cold-start hook stops stale standalone daemon before startin
     fs.mkdirSync(path.dirname(brewCodex), { recursive: true });
     fs.mkdirSync(daemonDir, { recursive: true });
     fs.mkdirSync(home, { recursive: true });
-    fs.writeFileSync(standaloneCodex, "#!/usr/bin/env bash\nsleep 60\n");
+    fs.writeFileSync(
+      standaloneCodex,
+      `#!/usr/bin/env bash\nif [ "$1" = "remote-control" ]; then printf 'standalone:%s\\n' "$*" >> ${JSON.stringify(callsLog)}; exit 0; fi\nsleep 60\n`,
+    );
     fs.chmodSync(standaloneCodex, 0o755);
     fs.writeFileSync(
       brewCodex,
-      `#!/usr/bin/env sh\nprintf '%s\\n' "$*" >> ${JSON.stringify(callsLog)}\nexit 0\n`,
+      `#!/usr/bin/env sh\nprintf 'brew:%s\\n' "$*" >> ${JSON.stringify(callsLog)}\nexit 0\n`,
     );
     fs.chmodSync(brewCodex, 0o755);
     staleProcess = spawn(standaloneCodex, [], { stdio: "ignore" });
@@ -360,7 +363,7 @@ test("remote mobile cold-start hook stops stale standalone daemon before startin
     });
 
     assert.equal(result.status, 0, result.stderr || result.stdout);
-    assert.equal(fs.readFileSync(callsLog, "utf8"), "remote-control stop\nremote-control start\n");
+    assert.equal(fs.readFileSync(callsLog, "utf8"), "standalone:remote-control stop\nbrew:remote-control start\n");
     assert.match(result.stdout, /Stopping stale remote mobile control standalone daemon/);
   } finally {
     if (staleProcess?.pid) {

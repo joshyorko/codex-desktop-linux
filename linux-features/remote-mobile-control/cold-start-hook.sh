@@ -140,9 +140,11 @@ stop_stale_standalone_remote_mobile_daemon() {
     local codex_home="$1"
     local daemon_codex="$2"
     local standalone_root="$3"
+    local standalone_codex="$4"
     local daemon_pid=""
     local daemon_codex_resolved=""
     local daemon_exe=""
+    local stop_codex=""
 
     daemon_codex_resolved="$(readlink -f "$daemon_codex" 2>/dev/null || true)"
     [ -n "$daemon_codex_resolved" ] || daemon_codex_resolved="$daemon_codex"
@@ -161,7 +163,12 @@ stop_stale_standalone_remote_mobile_daemon() {
     fi
 
     echo "Stopping stale remote mobile control standalone daemon pid=$daemon_pid before switching to $daemon_codex"
-    "$daemon_codex" remote-control stop || \
+    if [ -x "$standalone_codex" ]; then
+        stop_codex="$standalone_codex"
+    else
+        stop_codex="$daemon_codex"
+    fi
+    "$stop_codex" remote-control stop || \
         echo "Remote mobile control could not stop stale standalone daemon pid=$daemon_pid; continuing best-effort"
 }
 
@@ -211,7 +218,7 @@ remote_mobile_control_main() {
         fi
     fi
 
-    stop_stale_standalone_remote_mobile_daemon "$codex_home" "$daemon_codex" "$standalone_root"
+    stop_stale_standalone_remote_mobile_daemon "$codex_home" "$daemon_codex" "$standalone_root" "$standalone_codex"
 
     if "$daemon_codex" remote-control start; then
         echo "Remote mobile control daemon is ready via $daemon_codex"
