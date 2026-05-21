@@ -46,6 +46,8 @@ const REMOTE_CONTROL_SELECTED_TAB_NEEDLE =
   "function rr({selectedConnectionsTab:e,showControlThisMacTab:t,showRemoteControlConnectionsSection:n,showTabbedSshPage:r}){return n?e===`control-this-mac`&&!t||e===`ssh`&&!r?`access-other-devices`:e:`ssh`}";
 const REMOTE_CONTROL_SELECTED_TAB_REPLACEMENT =
   "function rr({selectedConnectionsTab:e,showControlThisMacTab:t,showRemoteControlConnectionsSection:n,showTabbedSshPage:r}){let i=typeof navigator!=`undefined`&&navigator.userAgent.includes(`Linux`);if(i){if(!n)return`ssh`;if(e===`access-other-devices`)return t?`control-this-mac`:`ssh`;if(e===`control-this-mac`&&!t)return`ssh`;if(e===`ssh`&&!r)return t?`control-this-mac`:`ssh`;return e}return n?e===`control-this-mac`&&!t||e===`ssh`&&!r?`access-other-devices`:e:`ssh`}";
+const REMOTE_CONTROL_SELECTED_TAB_REGEX =
+  /function ([A-Za-z_$][\w$]*)\(\{selectedConnectionsTab:([A-Za-z_$][\w$]*),showControlThisMacTab:([A-Za-z_$][\w$]*),showRemoteControlConnectionsSection:([A-Za-z_$][\w$]*),showTabbedSshPage:([A-Za-z_$][\w$]*)\}\)\{return \4\?\2===`control-this-mac`&&!\3\|\|\2===`ssh`&&!\5\?`access-other-devices`:\2:`ssh`\}/u;
 const REMOTE_CONTROL_LINUX_COPY_REPLACEMENTS = [
   ["defaultMessage:`Mac`", "defaultMessage:`Linux`"],
   ["Keep this Mac awake", "Keep this Linux desktop awake"],
@@ -82,7 +84,7 @@ function replaceOnce(source, needle, replacement) {
   return source.replace(needle, replacement);
 }
 
-function linuxRemoteControlClientAccountCompatibilityHelpers(loadEnrollmentFn) {
+function linuxRemoteControlClientAccountCompatibilityHelpers(loadEnrollmentFn, enrollmentKeyFn) {
   return [
     "function codexLinuxRemoteControlEnrollmentAccountUserIds(e){",
     "return[...new Set([e.tokenAccountUserId,e.tokenAuthUserId].filter(e=>e!=null))]",
@@ -91,7 +93,7 @@ function linuxRemoteControlClientAccountCompatibilityHelpers(loadEnrollmentFn) {
     "return t===i||r!=null&&e===r&&n===i",
     "}",
     "async function codexLinuxRemoteControlLoadEnrollment({authIdentity:e,deviceKeyClient:t,enrollmentKey:n,globalState:r}){",
-    `let i=(await Promise.all(codexLinuxRemoteControlEnrollmentAccountUserIds(e).map(async e=>{let i=pd(n,e);return{enrollment:await ${loadEnrollmentFn}({deviceKeyClient:t,enrollmentKey:i,globalState:r}),enrollmentRecordKey:i}}))).find(e=>e.enrollment!=null);`,
+    `let i=(await Promise.all(codexLinuxRemoteControlEnrollmentAccountUserIds(e).map(async e=>{let i=${enrollmentKeyFn}(n,e);return{enrollment:await ${loadEnrollmentFn}({deviceKeyClient:t,enrollmentKey:i,globalState:r}),enrollmentRecordKey:i}}))).find(e=>e.enrollment!=null);`,
     "return i?.enrollment==null?null:i",
     "}",
   ].join("");
@@ -202,8 +204,22 @@ function applyLinuxRemoteControlClientAccountCompatibilityPatch(source) {
     return source;
   }
 
-  const enrollmentStartRegex =
-    /let ([A-Za-z_$][\w$]*)=Sd\(([A-Za-z_$][\w$]*)\),([A-Za-z_$][\w$]*)=\1\.tokenAccountUserId;if\(\3==null\)throw Error\(`Remote control enrollment requires the current ChatGPT account user id\.`\);let ([A-Za-z_$][\w$]*)=pd\(([A-Za-z_$][\w$]*),\3\),([A-Za-z_$][\w$]*)=await ([A-Za-z_$][\w$]*)\(\{deviceKeyClient:([A-Za-z_$][\w$]*),enrollmentKey:\4,globalState:([A-Za-z_$][\w$]*)\}\),([A-Za-z_$][\w$]*)=\6,([A-Za-z_$][\w$]*);/u;
+  const enrollmentKeyHelperRegex = /function ([A-Za-z_$][\w$]*)\(e,t\)\{return`\$\{e\}\\n\$\{t\}`\}/u;
+  const helpersMatch = source.match(enrollmentKeyHelperRegex);
+  if (helpersMatch == null) {
+    console.warn("WARN: Could not find remote-control enrollment key helper - skipping account compatibility patch");
+    return source;
+  }
+  const enrollmentKeyFn = helpersMatch[1];
+
+  const enrollmentStartRegex = new RegExp(
+    `let ([A-Za-z_$][\\w$]*)=([A-Za-z_$][\\w$]*)\\(([A-Za-z_$][\\w$]*)\\),([A-Za-z_$][\\w$]*)=\\1\\.tokenAccountUserId;` +
+      `if\\(\\4==null\\)throw Error\\(\`Remote control enrollment requires the current ChatGPT account user id\\.\`\\);` +
+      `let ([A-Za-z_$][\\w$]*)=${enrollmentKeyFn}\\(([A-Za-z_$][\\w$]*),\\4\\),` +
+      `([A-Za-z_$][\\w$]*)=await ([A-Za-z_$][\\w$]*)\\(\\{deviceKeyClient:([A-Za-z_$][\\w$]*),enrollmentKey:\\5,globalState:([A-Za-z_$][\\w$]*)\\}\\),` +
+      `([A-Za-z_$][\\w$]*)=\\7,([A-Za-z_$][\\w$]*);`,
+    "u",
+  );
   const startMatch = source.match(enrollmentStartRegex);
   if (startMatch == null) {
     console.warn("WARN: Could not find remote-control enrollment start shape - skipping account compatibility patch");
@@ -213,6 +229,7 @@ function applyLinuxRemoteControlClientAccountCompatibilityPatch(source) {
   const [
     startNeedle,
     authIdentityVar,
+    authIdentityFn,
     headersVar,
     tokenAccountUserIdVar,
     enrollmentRecordKeyVar,
@@ -226,7 +243,7 @@ function applyLinuxRemoteControlClientAccountCompatibilityPatch(source) {
   ] = startMatch;
 
   const stepUpValidatorRegex =
-    /function ([A-Za-z_$][\w$]*)\(\{accountUserId:([A-Za-z_$][\w$]*),stepUpToken:([A-Za-z_$][\w$]*)\}\)\{let ([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)\(\3\);([A-Za-z_$][\w$]*)\(\{payload:\4\}\);let ([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)\.parse\(\4\),([A-Za-z_$][\w$]*)=\7\[`https:\/\/api\.openai\.com\/auth`\],([A-Za-z_$][\w$]*)=\9\.chatgpt_account_user_id\?\?\9\.account_user_id,([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)\(\7\);if\(\10!==\2\)throw Error\(`Remote control enrollment step-up token does not match current account\.`\);if\(Math\.floor\(Date\.now\(\)\/1e3\)-\7\.iat>([A-Za-z_$][\w$]*)\)throw Error\(`Remote control enrollment step-up token is not fresh\.`\);if\(Date\.now\(\)-\7\.pwd_auth_time>\13\*1e3\)throw Error\(`Remote control enrollment step-up token does not have fresh password auth\.`\);if\(\11\.length!==1\|\|\11\[0\]!==([A-Za-z_$][\w$]*)\)throw Error\(`Remote control enrollment step-up token is missing required authorization\.`\);return\{accountUserId:\10\?\?null,issuedAt:\7\.iat,passwordAuthTime:\7\.pwd_auth_time,scopes:\11\}\}/u;
+    /function ([A-Za-z_$][\w$]*)\(\{accountUserId:([A-Za-z_$][\w$]*),stepUpToken:([A-Za-z_$][\w$]*)\}\)\{let ([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)\(\3\);([A-Za-z_$][\w$]*)\(\{payload:\4\}\);let ([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)?)\.parse\(\4\),([A-Za-z_$][\w$]*)=\7\[`https:\/\/api\.openai\.com\/auth`\],([A-Za-z_$][\w$]*)=\9\.chatgpt_account_user_id\?\?\9\.account_user_id,([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)\(\7\);if\(\10!==\2\)throw (?:Error\(`Remote control enrollment step-up token does not match current account\.`\)|new [A-Za-z_$][\w$]*);if\(Math\.floor\(Date\.now\(\)\/1e3\)-\7\.iat>([A-Za-z_$][\w$]*)\)throw Error\(`Remote control enrollment step-up token is not fresh\.`\);if\(Date\.now\(\)-\7\.pwd_auth_time>\13\*1e3\)throw Error\(`Remote control enrollment step-up token does not have fresh password auth\.`\);if\(\11\.length!==1\|\|\11\[0\]!==([A-Za-z_$][\w$]*)\)throw Error\(`Remote control enrollment step-up token is missing required authorization\.`\);return\{accountUserId:\10\?\?null,issuedAt:\7\.iat,passwordAuthTime:\7\.pwd_auth_time,scopes:\11\}\}/u;
   const validatorMatch = source.match(stepUpValidatorRegex);
   if (validatorMatch == null) {
     console.warn("WARN: Could not find remote-control step-up token validator - skipping account compatibility patch");
@@ -252,33 +269,27 @@ function applyLinuxRemoteControlClientAccountCompatibilityPatch(source) {
   ] = validatorMatch;
 
   let patched = source;
-  const helpersNeedle = /function pd\(e,t\)\{return`\$\{e\}\\n\$\{t\}`\}/u;
-  const helpersMatch = patched.match(helpersNeedle);
-  if (helpersMatch == null) {
-    console.warn("WARN: Could not find remote-control enrollment key helper - skipping account compatibility patch");
-    return source;
-  }
   patched = patched.replace(
-    helpersNeedle,
-    `${helpersMatch[0]}${linuxRemoteControlClientAccountCompatibilityHelpers(loadEnrollmentFn)}`,
+    enrollmentKeyHelperRegex,
+    `${helpersMatch[0]}${linuxRemoteControlClientAccountCompatibilityHelpers(loadEnrollmentFn, enrollmentKeyFn)}`,
   );
 
   patched = patched.replace(
     startNeedle,
     [
-      `let ${authIdentityVar}=Sd(${headersVar}),${tokenAccountUserIdVar}=${authIdentityVar}.tokenAccountUserId;`,
+      `let ${authIdentityVar}=${authIdentityFn}(${headersVar}),${tokenAccountUserIdVar}=${authIdentityVar}.tokenAccountUserId;`,
       `if(${tokenAccountUserIdVar}==null)throw Error(\`Remote control enrollment requires the current ChatGPT account user id.\`);`,
       `let codexLinuxRemoteControlCurrentAccountId=${authIdentityVar}.tokenAccountId??${authIdentityVar}.headerChatGptAccountId,`,
       `codexLinuxRemoteControlEnrollmentKey=${enrollmentKeyVar},`,
       `codexLinuxRemoteControlExistingEnrollment=await codexLinuxRemoteControlLoadEnrollment({authIdentity:${authIdentityVar},deviceKeyClient:${deviceKeyClientVar},enrollmentKey:${enrollmentKeyVar},globalState:${globalStateVar}}),`,
-      `${enrollmentRecordKeyVar}=codexLinuxRemoteControlExistingEnrollment?.enrollmentRecordKey??pd(${enrollmentKeyVar},${tokenAccountUserIdVar}),`,
+      `${enrollmentRecordKeyVar}=codexLinuxRemoteControlExistingEnrollment?.enrollmentRecordKey??${enrollmentKeyFn}(${enrollmentKeyVar},${tokenAccountUserIdVar}),`,
       `${loadedEnrollmentVar}=codexLinuxRemoteControlExistingEnrollment?.enrollment??null,`,
       `${enrollmentVar}=${loadedEnrollmentVar},${tokenResponseVar};`,
     ].join(""),
   );
 
   const authCheckRegex =
-    /remote_control_client_enrollment_start_response[\s\S]{0,500}?\),([A-Za-z_$][\w$]*)\.account_user_id!==([A-Za-z_$][\w$]*)\)throw/u;
+    /remote_control_client_enrollment_start_response[\s\S]{0,500}?\),([A-Za-z_$][\w$]*)\.account_user_id!==([A-Za-z_$][\w$]*)/u;
   const authCheckMatch = patched.match(authCheckRegex);
   if (authCheckMatch == null) {
     console.warn("WARN: Could not find remote-control enrollment account check - skipping account compatibility patch");
@@ -301,7 +312,7 @@ function applyLinuxRemoteControlClientAccountCompatibilityPatch(source) {
   }
 
   const createEnrollmentRegex = new RegExp(
-    `${escapeRegExp(enrollmentVar)}=await ([A-Za-z_$][\\w$]*)\\(\\{accountUserId:${escapeRegExp(tokenAccountUserIdVar)},clientId:${escapeRegExp(responseVar)}\\.client_id,deviceKeyClient:${escapeRegExp(deviceKeyClientVar)}\\}\\);try\\{`,
+    `${escapeRegExp(enrollmentVar)}=await ([A-Za-z_$][\\w$]*)\\(\\{accountUserId:(?:${escapeRegExp(tokenAccountUserIdVar)}|${escapeRegExp(responseVar)}\\.account_user_id),clientId:${escapeRegExp(responseVar)}\\.client_id,deviceKeyClient:${escapeRegExp(deviceKeyClientVar)}\\}\\);try\\{`,
     "u",
   );
   const createEnrollmentMatch = patched.match(createEnrollmentRegex);
@@ -310,9 +321,13 @@ function applyLinuxRemoteControlClientAccountCompatibilityPatch(source) {
     return source;
   }
   const createEnrollmentFn = createEnrollmentMatch[1];
+  const createdEnrollmentRecordKeyUpdate =
+    responseVar === enrollmentRecordKeyVar
+      ? ""
+      : `${enrollmentRecordKeyVar}=${enrollmentKeyFn}(codexLinuxRemoteControlEnrollmentKey,${enrollmentVar}.accountUserId);`;
   patched = patched.replace(
     createEnrollmentRegex,
-    `${enrollmentVar}=await ${createEnrollmentFn}({accountUserId:${responseVar}.account_user_id,clientId:${responseVar}.client_id,deviceKeyClient:${deviceKeyClientVar}});${enrollmentRecordKeyVar}=pd(codexLinuxRemoteControlEnrollmentKey,${enrollmentVar}.accountUserId);try{`,
+    `${enrollmentVar}=await ${createEnrollmentFn}({accountUserId:${responseVar}.account_user_id,clientId:${responseVar}.client_id,deviceKeyClient:${deviceKeyClientVar}});${createdEnrollmentRecordKeyUpdate}try{`,
   );
 
   const stepUpCallRegex = new RegExp(
@@ -333,32 +348,39 @@ function applyLinuxRemoteControlClientAccountCompatibilityPatch(source) {
   patched = patched.replace(
     validatorNeedle,
     [
-      `function ${stepUpValidatorFn}({accountId:e,accountUserId:t,stepUpToken:n}){`,
-      `let r=${decodeTokenFn}(n);${logPayloadFn}({payload:r});`,
-      `let i=${tokenParserVar}.parse(r),a=i[\`https://api.openai.com/auth\`],`,
-      `o=a.chatgpt_account_user_id??a.account_user_id??null,`,
-      `s=a.chatgpt_account_id??a.account_id??null,c=${readScopesFn}(i);`,
-      "if(!codexLinuxRemoteControlAccountMatches({candidateAccountId:s,candidateAccountUserId:o,candidateUserId:a.user_id??null,expectedAccountId:e,expectedAccountUserId:t}))",
+      `function ${stepUpValidatorFn}({accountId:codexLinuxExpectedAccountId,accountUserId:codexLinuxExpectedAccountUserId,stepUpToken:codexLinuxStepUpToken}){`,
+      `let codexLinuxStepUpPayload=${decodeTokenFn}(codexLinuxStepUpToken);${logPayloadFn}({payload:codexLinuxStepUpPayload});`,
+      `let codexLinuxStepUpClaims=${tokenParserVar}.parse(codexLinuxStepUpPayload),codexLinuxStepUpAuth=codexLinuxStepUpClaims[\`https://api.openai.com/auth\`],`,
+      `codexLinuxStepUpAccountUserId=codexLinuxStepUpAuth.chatgpt_account_user_id??codexLinuxStepUpAuth.account_user_id??null,`,
+      `codexLinuxStepUpAccountId=codexLinuxStepUpAuth.chatgpt_account_id??codexLinuxStepUpAuth.account_id??null,codexLinuxStepUpScopes=${readScopesFn}(codexLinuxStepUpClaims);`,
+      "if(!codexLinuxRemoteControlAccountMatches({candidateAccountId:codexLinuxStepUpAccountId,candidateAccountUserId:codexLinuxStepUpAccountUserId,candidateUserId:codexLinuxStepUpAuth.user_id??null,expectedAccountId:codexLinuxExpectedAccountId,expectedAccountUserId:codexLinuxExpectedAccountUserId}))",
       "throw Error(`Remote control enrollment step-up token does not match current account.`);",
-      `if(Math.floor(Date.now()/1e3)-i.iat>${freshnessWindowVar})throw Error(\`Remote control enrollment step-up token is not fresh.\`);`,
-      `if(Date.now()-i.pwd_auth_time>${freshnessWindowVar}*1e3)throw Error(\`Remote control enrollment step-up token does not have fresh password auth.\`);`,
-      `if(c.length!==1||c[0]!==${requiredScopeVar})throw Error(\`Remote control enrollment step-up token is missing required authorization.\`);`,
-      "return{accountUserId:o??null,issuedAt:i.iat,passwordAuthTime:i.pwd_auth_time,scopes:c}}",
+      `if(Math.floor(Date.now()/1e3)-codexLinuxStepUpClaims.iat>${freshnessWindowVar})throw Error(\`Remote control enrollment step-up token is not fresh.\`);`,
+      `if(Date.now()-codexLinuxStepUpClaims.pwd_auth_time>${freshnessWindowVar}*1e3)throw Error(\`Remote control enrollment step-up token does not have fresh password auth.\`);`,
+      `if(codexLinuxStepUpScopes.length!==1||codexLinuxStepUpScopes[0]!==${requiredScopeVar})throw Error(\`Remote control enrollment step-up token is missing required authorization.\`);`,
+      "return{accountUserId:codexLinuxStepUpAccountUserId??null,issuedAt:codexLinuxStepUpClaims.iat,passwordAuthTime:codexLinuxStepUpClaims.pwd_auth_time,scopes:codexLinuxStepUpScopes}}",
     ].join(""),
   );
 
   const authorizationCheckRegex =
-    /async function ([A-Za-z_$][\w$]*)\(\{appServerClient:([A-Za-z_$][\w$]*),desktopApiOptions:([A-Za-z_$][\w$]*),deviceKeyClient:([A-Za-z_$][\w$]*),globalState:([A-Za-z_$][\w$]*)\}\)\{let ([A-Za-z_$][\w$]*)=Sd\(await ([A-Za-z_$][\w$]*)\(\{action:`check remote control authorization`,appServerClient:\2,desktopApiOptions:\3\}\)\)\.tokenAccountUserId;if\(\6==null\)return\{clientAuthorized:!1,clientId:null\};let ([A-Za-z_$][\w$]*)=await ([A-Za-z_$][\w$]*)\(\{deviceKeyClient:\4,enrollmentKey:pd\(([A-Za-z_$][\w$]*)\(\3\),\6\),globalState:\5\}\);return\{clientAuthorized:\8!=null,clientId:\8\?\.clientId\?\?null\}\}/u;
+    new RegExp(
+      `async function ([A-Za-z_$][\\w$]*)\\(\\{appServerClient:([A-Za-z_$][\\w$]*),desktopApiOptions:([A-Za-z_$][\\w$]*),deviceKeyClient:([A-Za-z_$][\\w$]*),globalState:([A-Za-z_$][\\w$]*)\\}\\)\\{` +
+        `let ([A-Za-z_$][\\w$]*)=([A-Za-z_$][\\w$]*)\\(await ([A-Za-z_$][\\w$]*)\\(\\{action:\`check remote control authorization\`,appServerClient:\\2,desktopApiOptions:\\3\\}\\)\\)\\.tokenAccountUserId;` +
+        `if\\(\\6==null\\)return\\{clientAuthorized:!1,clientId:null\\};` +
+        `let ([A-Za-z_$][\\w$]*)=await ([A-Za-z_$][\\w$]*)\\(\\{deviceKeyClient:\\4,enrollmentKey:${enrollmentKeyFn}\\(([A-Za-z_$][\\w$]*)\\(\\3\\),\\6\\),globalState:\\5\\}\\);` +
+        `return\\{clientAuthorized:\\9!=null,clientId:\\9\\?\\.clientId\\?\\?null\\}\\}`,
+      "u",
+    );
   const authorizationCheckMatch = patched.match(authorizationCheckRegex);
   if (authorizationCheckMatch == null) {
     console.warn("WARN: Could not find remote-control authorization status check - skipping account compatibility patch");
     return source;
   }
-  const [, authCheckFn, appServerClientVar, desktopApiOptionsVar, authDeviceKeyClientVar, authGlobalStateVar, authStatusIdentityVar, authHeadersFn, enrollmentVarForStatus, , enrollmentKeyFn] =
+  const [, authCheckFn, appServerClientVar, desktopApiOptionsVar, authDeviceKeyClientVar, authGlobalStateVar, authStatusIdentityVar, authStatusIdentityFn, authHeadersFn, enrollmentVarForStatus, , statusBaseEnrollmentKeyFn] =
     authorizationCheckMatch;
   patched = patched.replace(
     authorizationCheckRegex,
-    `async function ${authCheckFn}({appServerClient:${appServerClientVar},desktopApiOptions:${desktopApiOptionsVar},deviceKeyClient:${authDeviceKeyClientVar},globalState:${authGlobalStateVar}}){let ${authStatusIdentityVar}=Sd(await ${authHeadersFn}({action:\`check remote control authorization\`,appServerClient:${appServerClientVar},desktopApiOptions:${desktopApiOptionsVar}}));if(${authStatusIdentityVar}.tokenAccountUserId==null)return{clientAuthorized:!1,clientId:null};let ${enrollmentVarForStatus}=await codexLinuxRemoteControlLoadEnrollment({authIdentity:${authStatusIdentityVar},deviceKeyClient:${authDeviceKeyClientVar},enrollmentKey:${enrollmentKeyFn}(${desktopApiOptionsVar}),globalState:${authGlobalStateVar}});return{clientAuthorized:${enrollmentVarForStatus}!=null,clientId:${enrollmentVarForStatus}?.enrollment.clientId??null}}`,
+    `async function ${authCheckFn}({appServerClient:${appServerClientVar},desktopApiOptions:${desktopApiOptionsVar},deviceKeyClient:${authDeviceKeyClientVar},globalState:${authGlobalStateVar}}){let ${authStatusIdentityVar}=${authStatusIdentityFn}(await ${authHeadersFn}({action:\`check remote control authorization\`,appServerClient:${appServerClientVar},desktopApiOptions:${desktopApiOptionsVar}}));if(${authStatusIdentityVar}.tokenAccountUserId==null)return{clientAuthorized:!1,clientId:null};let ${enrollmentVarForStatus}=await codexLinuxRemoteControlLoadEnrollment({authIdentity:${authStatusIdentityVar},deviceKeyClient:${authDeviceKeyClientVar},enrollmentKey:${statusBaseEnrollmentKeyFn}(${desktopApiOptionsVar}),globalState:${authGlobalStateVar}});return{clientAuthorized:${enrollmentVarForStatus}!=null,clientId:${enrollmentVarForStatus}?.enrollment.clientId??null}}`,
   );
 
   return patched;
@@ -614,14 +636,15 @@ function applyLinuxRemoteControlSettingsUxPatch(source) {
   let patched = replaceLinuxRemoteControlCopy(source).patched;
 
   if (!patched.includes(REMOTE_CONTROL_SETTINGS_UX_MARKER)) {
-    const helperNeedle = "function nr(e,t){return e.displayName.localeCompare(t.displayName)}";
-    if (!patched.includes(helperNeedle)) {
+    const helperNeedle = /function ([A-Za-z_$][\w$]*)\(e,t\)\{return e\.displayName\.localeCompare\(t\.displayName\)\}/u;
+    const helperMatch = patched.match(helperNeedle);
+    if (helperMatch == null) {
       console.warn("WARN: Could not find remote-control settings helper needle - skipping Linux remote-control settings UX patch");
       return patched;
     }
     const helper =
       "function codexLinuxRemoteControlSettingsTabs(e){return typeof navigator!=`undefined`&&navigator.userAgent.includes(`Linux`)?e.filter(e=>e.key!==`access-other-devices`):e}";
-    patched = patched.replace(helperNeedle, `${helper}${helperNeedle}`);
+    patched = patched.replace(helperNeedle, `${helper}${helperMatch[0]}`);
   }
 
   patched = wrapRemoteControlTabs(patched, "control-this-mac");
@@ -630,11 +653,25 @@ function applyLinuxRemoteControlSettingsUxPatch(source) {
   if (patched.includes(REMOTE_CONTROL_SELECTED_TAB_REPLACEMENT)) {
     return patched;
   }
-  if (!patched.includes(REMOTE_CONTROL_SELECTED_TAB_NEEDLE)) {
+  if (
+    patched.includes("navigator.userAgent.includes(`Linux`)") &&
+    patched.includes("if(e===`access-other-devices`)return")
+  ) {
+    return patched;
+  }
+  const selectedTabMatch = patched.match(REMOTE_CONTROL_SELECTED_TAB_REGEX);
+  if (selectedTabMatch == null) {
     console.warn("WARN: Could not find remote-control selected-tab needle - skipping Linux remote-control selected-tab patch");
     return patched;
   }
-  return patched.replace(REMOTE_CONTROL_SELECTED_TAB_NEEDLE, REMOTE_CONTROL_SELECTED_TAB_REPLACEMENT);
+  const [, functionName, selectedVar, controlThisMacVar, sectionVar, sshVar] = selectedTabMatch;
+  const selectedTabReplacement =
+    `function ${functionName}({selectedConnectionsTab:${selectedVar},showControlThisMacTab:${controlThisMacVar},showRemoteControlConnectionsSection:${sectionVar},showTabbedSshPage:${sshVar}}){` +
+    `let i=typeof navigator!=\`undefined\`&&navigator.userAgent.includes(\`Linux\`);` +
+    `if(i){if(!${sectionVar})return\`ssh\`;if(${selectedVar}===\`access-other-devices\`)return ${controlThisMacVar}?\`control-this-mac\`:\`ssh\`;` +
+    `if(${selectedVar}===\`control-this-mac\`&&!${controlThisMacVar})return\`ssh\`;if(${selectedVar}===\`ssh\`&&!${sshVar})return ${controlThisMacVar}?\`control-this-mac\`:\`ssh\`;return ${selectedVar}}` +
+    `return ${sectionVar}?${selectedVar}===\`control-this-mac\`&&!${controlThisMacVar}||${selectedVar}===\`ssh\`&&!${sshVar}?\`access-other-devices\`:${selectedVar}:\`ssh\`}`;
+  return patched.replace(REMOTE_CONTROL_SELECTED_TAB_REGEX, selectedTabReplacement);
 }
 
 function applyLinuxRemoteConnectionsRefreshPatch(source) {
@@ -643,8 +680,11 @@ function applyLinuxRemoteConnectionsRefreshPatch(source) {
   }
 
   let patched = source;
+  const intervalConstantRegex = /(^|[,\s;])([A-Za-z_$][\w$]*)=15e3(?=[,;])/u;
   if (patched.includes("Qn=15e3")) {
     patched = patched.replace("Qn=15e3", "Qn=5e3");
+  } else if (intervalConstantRegex.test(patched) && patched.includes("refresh-remote-connections")) {
+    patched = patched.replace(intervalConstantRegex, "$1$2=5e3");
   } else if (patched.includes("15e3") && patched.includes("refresh-remote-connections")) {
     console.warn("WARN: Could not find remote-connections refresh interval constant - skipping interval patch");
   }
@@ -737,12 +777,37 @@ function applyLinuxRemoteMobileConversationHydrationPatch(source) {
     }
   }
 
+  const buildUnknownTurnReplacement = (includeComputerUseRoute) => {
+    const captureComputerUseRoute = includeComputerUseRoute ? ",this.captureComputerUseTurnRoute(r,t.id)" : "";
+    const releaseComputerUseRoute = includeComputerUseRoute ?
+      ",this.computerUseTurnRouteIdsByConversationId.get(r)?.has(t.id)===!0&&this.releaseComputerUseTurnRoute(r,t.id)" :
+      "";
+    return [
+      `if(this.captureBrowserUseTurnRoute(r,t.id)${captureComputerUseRoute},!i){/*${REMOTE_MOBILE_UNKNOWN_TURN_MARKER}*//*${REMOTE_MOBILE_NOTIFICATION_QUEUE_MARKER}*/`,
+      "let a=this.codexLinuxRemoteMobilePendingNotifications??=new Map,o=a.get(r);o||(o=[],a.set(r,o)),o.push(n),",
+      "R.warning(`Hydrating conversation for turn/started`,{safe:{conversationId:r,queuedNotificationCount:o.length},sensitive:{}});",
+      "let s=(a=0)=>this.readThread(r,{includeTurns:!1}).then(e=>{let t=e?.thread??e,i=this.codexLinuxRemoteMobilePendingNotifications?.get(r)??[];",
+      "if(!(typeof t?.path==`string`&&t.path.endsWith(`.jsonl`))){if(a<12){",
+      "R.warning(`Retrying hydration for non-persisted conversation`,{safe:{conversationId:r,path:t?.path??null,queuedNotificationCount:i.length,attempt:a+1},sensitive:{}}),",
+      "setTimeout(()=>s(a+1),250);return}",
+      "this.codexLinuxRemoteMobilePendingNotifications?.delete(r);for(let e of i)if(e.method===`turn/completed`){let{turn:t}=e.params;",
+      "this.browserUseTurnRouteIdsByConversationId.get(r)?.has(t.id)===!0&&this.releaseBrowserUseTurnRoute(r,t.id)",
+      releaseComputerUseRoute,
+      "}",
+      "R.warning(`Skipping hydration for non-persisted conversation`,{safe:{conversationId:r,path:t?.path??null,queuedNotificationCount:i.length},sensitive:{}});return}",
+      "this.upsertConversationFromThread(t);this.codexLinuxRemoteMobilePendingNotifications?.delete(r);for(let e of i)this.onNotification(e.method,e.params)}).catch(e=>{",
+      "if(a<12){R.warning(`Retrying hydration for turn/started`,{safe:{conversationId:r,attempt:a+1},sensitive:{error:e}}),setTimeout(()=>s(a+1),250);return}",
+      "this.codexLinuxRemoteMobilePendingNotifications?.delete(r),R.error(`Failed to hydrate conversation for turn/started`,{safe:{conversationId:r},sensitive:{error:e}})});s();break}",
+      "this.markConversationStreaming(r),",
+    ].join("");
+  };
+
   const hasNotificationQueue = patched.includes(REMOTE_MOBILE_NOTIFICATION_QUEUE_MARKER);
   const hasMissingHydrationGuard = patched.includes("Skipping hydration for missing conversation");
   const hasLocalPathHydrationGuard = patched.includes("typeof t?.path==`string`&&t.path.endsWith(`.jsonl`)");
   if (!hasNotificationQueue || !hasMissingHydrationGuard || hasLocalPathHydrationGuard) {
     const unknownTurnNeedle =
-      "if(this.captureBrowserUseTurnRoute(r,t.id),this.captureComputerUseTurnRoute(r,t.id),!i){R.error(`Received turn/started for unknown conversation`,{safe:{conversationId:r},sensitive:{}});break}this.markConversationStreaming(r),";
+      /if\(this\.captureBrowserUseTurnRoute\(r,t\.id\)(?:,this\.captureComputerUseTurnRoute\(r,t\.id\))?,!i\)\{R\.error\(`Received turn\/started for unknown conversation`,\{safe:\{conversationId:r\},sensitive:\{\}\}\);break\}this\.markConversationStreaming\(r\),/u;
     const hydrationV1Needle =
       `if(this.captureBrowserUseTurnRoute(r,t.id),this.captureComputerUseTurnRoute(r,t.id),!i){/*${REMOTE_MOBILE_UNKNOWN_TURN_MARKER}*/R.warning(\`Hydrating conversation for turn/started\`,{safe:{conversationId:r},sensitive:{}}),this.readThread(r,{includeTurns:!1}).then(e=>{let t=e?.thread??e;t&&(this.upsertConversationFromThread(t),this.onNotification(\`turn/started\`,n.params))}).catch(e=>R.error(\`Failed to hydrate conversation for turn/started\`,{safe:{conversationId:r},sensitive:{error:e}}));break}this.markConversationStreaming(r),`;
     const hydrationQueuedUnsafeNeedle =
@@ -783,8 +848,11 @@ function applyLinuxRemoteMobileConversationHydrationPatch(source) {
       "this.codexLinuxRemoteMobilePendingNotifications?.delete(r),R.error(`Failed to hydrate conversation for turn/started`,{safe:{conversationId:r},sensitive:{error:e}})});s();break}",
       "this.markConversationStreaming(r),",
     ].join("");
-    const unknownTurnReplacement = unknownTurnLocalPathRetryNeedle;
-    if (patched.includes(unknownTurnNeedle)) {
+    const unknownTurnMatch = patched.match(unknownTurnNeedle);
+    const unknownTurnReplacement = buildUnknownTurnReplacement(
+      unknownTurnMatch?.[0]?.includes("captureComputerUseTurnRoute") ?? true,
+    );
+    if (unknownTurnMatch != null) {
       patched = patched.replace(unknownTurnNeedle, unknownTurnReplacement);
     } else if (patched.includes(hydrationV1Needle)) {
       patched = patched.replace(hydrationV1Needle, unknownTurnReplacement);
@@ -823,10 +891,14 @@ function applyLinuxRemoteMobileConversationHydrationPatch(source) {
     }
 
     const turnCompletedNeedle =
-      "if(!this.conversations.get(r)){this.browserUseTurnRouteIdsByConversationId.get(r)?.has(t.id)===!0&&this.releaseBrowserUseTurnRoute(r,t.id),this.computerUseTurnRouteIdsByConversationId.get(r)?.has(t.id)===!0&&this.releaseComputerUseTurnRoute(r,t.id),R.error(`Received turn/completed for unknown conversation`,{safe:{conversationId:r},sensitive:{}});break}";
-    const turnCompletedReplacement =
-      "if(!this.conversations.get(r)){let i=this.codexLinuxRemoteMobilePendingNotifications?.get(r);if(i){i.push(n),R.warning(`Queueing turn/completed for hydrating conversation`,{safe:{conversationId:r,queuedNotificationCount:i.length},sensitive:{}});break}this.browserUseTurnRouteIdsByConversationId.get(r)?.has(t.id)===!0&&this.releaseBrowserUseTurnRoute(r,t.id),this.computerUseTurnRouteIdsByConversationId.get(r)?.has(t.id)===!0&&this.releaseComputerUseTurnRoute(r,t.id),R.error(`Received turn/completed for unknown conversation`,{safe:{conversationId:r},sensitive:{}});break}";
-    if (patched.includes(turnCompletedNeedle)) {
+      /if\(!this\.conversations\.get\(r\)\)\{this\.browserUseTurnRouteIdsByConversationId\.get\(r\)\?\.has\(t\.id\)===!0&&this\.releaseBrowserUseTurnRoute\(r,t\.id\)(?:,this\.computerUseTurnRouteIdsByConversationId\.get\(r\)\?\.has\(t\.id\)===!0&&this\.releaseComputerUseTurnRoute\(r,t\.id\))?,R\.error\(`Received turn\/completed for unknown conversation`,\{safe:\{conversationId:r\},sensitive:\{\}\}\);break\}/u;
+    const turnCompletedMatch = patched.match(turnCompletedNeedle);
+    if (turnCompletedMatch != null) {
+      const releaseComputerUseRoute = turnCompletedMatch[0].includes("releaseComputerUseTurnRoute") ?
+        ",this.computerUseTurnRouteIdsByConversationId.get(r)?.has(t.id)===!0&&this.releaseComputerUseTurnRoute(r,t.id)" :
+        "";
+      const turnCompletedReplacement =
+        `if(!this.conversations.get(r)){let i=this.codexLinuxRemoteMobilePendingNotifications?.get(r);if(i){i.push(n),R.warning(\`Queueing turn/completed for hydrating conversation\`,{safe:{conversationId:r,queuedNotificationCount:i.length},sensitive:{}});break}this.browserUseTurnRouteIdsByConversationId.get(r)?.has(t.id)===!0&&this.releaseBrowserUseTurnRoute(r,t.id)${releaseComputerUseRoute},R.error(\`Received turn/completed for unknown conversation\`,{safe:{conversationId:r},sensitive:{}});break}`;
       patched = patched.replace(turnCompletedNeedle, turnCompletedReplacement);
     } else if (patched.includes("Received turn/completed for unknown conversation")) {
       console.warn("WARN: Could not find unknown turn/completed needle - skipping remote mobile turn queue patch");
