@@ -188,19 +188,26 @@ function applyLinuxAvatarOverlayMousePassthroughPatch(currentSource) {
     }
   }
 
-  const applyLayoutNeedle =
-    "this.setWindowBounds(e,r.windowBounds),this.sendLayoutToRenderer(e)}getLayout(e){";
-  const applyLayoutPatch =
-    "this.setWindowBounds(e,r.windowBounds),this.sendLayoutToRenderer(e),process.platform===`linux`&&this.applyPointerInteractivityPolicy()}getLayout(e){";
-  const previousApplyLayoutPatch =
-    "this.setWindowBounds(e,r.windowBounds),this.sendLayoutToRenderer(e),this.codexLinuxSyncAvatarPointerInteractivity(e)&&this.applyPointerInteractivityPolicy()}getLayout(e){";
-  if (patchedSource.includes(previousApplyLayoutPatch)) {
-    patchedSource = patchedSource.replace(previousApplyLayoutPatch, applyLayoutPatch);
-  } else if (patchedSource.includes(applyLayoutNeedle)) {
-    patchedSource = patchedSource.replace(applyLayoutNeedle, applyLayoutPatch);
+  const applyLayoutPatchedRegex =
+    /this\.setWindowBounds\(([A-Za-z_$][\w$]*),([A-Za-z_$][\w$]*)\.windowBounds\),this\.sendLayoutToRenderer\(\1\),process\.platform===`linux`&&this\.applyPointerInteractivityPolicy\(\)\}getLayout\(([A-Za-z_$][\w$]*)\)\{/;
+  const previousApplyLayoutPatchRegex =
+    /this\.setWindowBounds\(([A-Za-z_$][\w$]*),([A-Za-z_$][\w$]*)\.windowBounds\),this\.sendLayoutToRenderer\(\1\),this\.codexLinuxSyncAvatarPointerInteractivity\(\1\)&&this\.applyPointerInteractivityPolicy\(\)\}getLayout\(([A-Za-z_$][\w$]*)\)\{/;
+  const applyLayoutNeedleRegex =
+    /this\.setWindowBounds\(([A-Za-z_$][\w$]*),([A-Za-z_$][\w$]*)\.windowBounds\),this\.sendLayoutToRenderer\(\1\)\}getLayout\(([A-Za-z_$][\w$]*)\)\{/;
+  const applyLayoutReplacement = (_match, windowVar, layoutVar, getLayoutVar) =>
+    `this.setWindowBounds(${windowVar},${layoutVar}.windowBounds),this.sendLayoutToRenderer(${windowVar}),process.platform===\`linux\`&&this.applyPointerInteractivityPolicy()}getLayout(${getLayoutVar}){`;
+  if (applyLayoutPatchedRegex.test(patchedSource)) {
+    // Already patched.
+  } else if (previousApplyLayoutPatchRegex.test(patchedSource)) {
+    patchedSource = patchedSource.replace(
+      previousApplyLayoutPatchRegex,
+      applyLayoutReplacement,
+    );
+  } else if (applyLayoutNeedleRegex.test(patchedSource)) {
+    patchedSource = patchedSource.replace(applyLayoutNeedleRegex, applyLayoutReplacement);
   } else if (
     patchedSource.includes("avatar-overlay") &&
-    !patchedSource.includes(applyLayoutPatch)
+    !applyLayoutPatchedRegex.test(patchedSource)
   ) {
     console.warn(
       "WARN: Could not find avatar overlay layout application — skipping Linux avatar overlay layout sync patch",

@@ -567,6 +567,13 @@ function avatarOverlayBundleFixture() {
   ].join("");
 }
 
+function avatarOverlayBundleWithLayoutResultVarDriftFixture() {
+  return avatarOverlayBundleFixture().replace(
+    "applyLayout(e,t=n.screen.getDisplayNearestPoint(hV(this.anchor)).bounds){if(e.isDestroyed())return;let r=UB({anchor:this.anchor,displayBounds:t,mascotSize:this.mascotSize,previousPlacement:this.placement,traySize:this.traySize??sV});this.anchor=r.anchor,this.layout=r,this.placement=r.placement,this.setWindowBounds(e,r.windowBounds),this.sendLayoutToRenderer(e)}getLayout(e){if(this.layout??this.applyLayout(e),this.layout==null)throw Error(`Expected avatar overlay layout`);return this.layout}",
+    "applyLayout(e,t=this.getCurrentDisplayBounds()){if(e.isDestroyed())return;let n=UB({anchor:this.anchor,displayBounds:t,mascotSize:this.mascotSize,previousPlacement:this.placement,traySize:this.traySize??sV});this.anchor=n.anchor,this.layout=n,this.placement=n.placement,this.setWindowBounds(e,n.windowBounds),this.sendLayoutToRenderer(e)}getLayout(e){if(this.layout??this.applyLayout(e),this.layout==null)throw Error(`Expected avatar overlay layout`);return this.layout}",
+  );
+}
+
 test("adds Linux file manager support without relying on exact minified variable names", () => {
   const source = `${mainBundlePrefix}${fileManagerBundle}`;
 
@@ -967,6 +974,18 @@ test("adds Linux avatar overlay mouse passthrough recovery", () => {
   assert.match(patched, /e\.moveTop\(\),e\.showInactive\(\),process\.platform===`linux`&&this\.codexLinuxApplyAvatarCompositorHints\(e\),process\.platform===`linux`&&this\.applyPointerInteractivityPolicy\(\)/);
   assert.doesNotMatch(patched, /codexLinuxRecoverAvatarPointerInteractivity/);
   assert.match(patched, /this\.window===t&&\(this\.codexLinuxStopAvatarPassthroughRecovery\(\),this\.codexLinuxAvatarInputShapeKey=null,this\.codexLinuxAvatarCompositorHintsApplied=!1,this\.codexLinuxAvatarCompositorHintsApplying=!1,this\.cancelMomentum\(\)/);
+});
+
+test("adds Linux avatar overlay layout sync with drifted layout result variable", () => {
+  const { value: patched, warnings } = captureWarns(() =>
+    applyPatchTwice(
+      applyLinuxAvatarOverlayMousePassthroughPatch,
+      avatarOverlayBundleWithLayoutResultVarDriftFixture(),
+    ),
+  );
+
+  assert.match(patched, /this\.setWindowBounds\(e,n\.windowBounds\),this\.sendLayoutToRenderer\(e\),process\.platform===`linux`&&this\.applyPointerInteractivityPolicy\(\)/);
+  assert.doesNotMatch(warnings.join("\n"), /avatar overlay layout application/);
 });
 
 test("adds Linux window icon handling when an icon asset is available", () => {
