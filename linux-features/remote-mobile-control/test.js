@@ -163,6 +163,17 @@ function syntheticCurrentSettingsBundle() {
   ].join("");
 }
 
+function syntheticRemoteConnectionDeleteBundle() {
+  return [
+    "const i=`linux`,Q={jsx(){},jsxs(){}};",
+    "tabs:[{key:`control-this-mac`,name:(0,Q.jsx)(N,{id:`settings.remoteConnections.tabs.controlThisMac`,defaultMessage:`Control this Mac`,description:`Tab label for settings that let other devices control this computer`})},{key:`access-other-devices`,name:(0,Q.jsx)(N,{id:`settings.remoteConnections.tabs.accessOtherDevices`,defaultMessage:`Control other devices`,description:`Tab label for settings that let this computer control other devices`})},{key:`ssh`,name:(0,Q.jsx)(N,{id:`settings.remoteConnections.tabs.ssh`,defaultMessage:`SSH`,description:`Tab label for SSH remote connections`})}],selectedKey:Pe,variant:`underline`,onSelect:le}",
+    "function $n(e,t){return e.displayName.localeCompare(t.displayName)}",
+    "function er({selectedConnectionsTab:e,showControlThisMacTab:t,showRemoteControlConnectionsSection:n,showTabbedSshPage:r}){return n?e===`control-this-mac`&&!t||e===`ssh`&&!r?`access-other-devices`:e:`ssh`}",
+    "var Xn=[],Zn=[];",
+    "function Qn(){let e=L(F),t=ee(U),n=oe(),r=I(),{platform:i}=ue(),[o]=E(`remote_connections`),[c]=E(`remote_control_connections`),ye=[...o??Xn].sort($n),be=tr(c??Zn),{data:xe}=W(s.ADDED_REMOTE_CONTROL_ENV_IDS),Se=G({addedRemoteControlEnvIds:xe,remoteControlConnections:be}),ke=ye.map(e=>Pt(Nt(e),{connectionAnalyticsId:e.connectionAnalyticsId})),qe=B(`save-codex-managed-remote-ssh-connections`,{onSuccess:()=>{},onError:t=>{}}),$e=qe.isPending,_t=e=>{$e||qe.mutate({remoteConnections:ke.filter(t=>t.hostId!==e)})};return _t}",
+  ].join("");
+}
+
 function syntheticCurrentSettingsRefreshBundle() {
   return [
     "var Jn=`[remote-connections/settings]`,Yn=15e3,Xn=[],Zn=[];",
@@ -887,6 +898,24 @@ test("Linux remote-control settings UX patch handles current minified helper nam
   assert.match(patched, /if\(e===`access-other-devices`\)return t\?`control-this-mac`:`ssh`/);
   assert.match(patched, /Control this Linux desktop/);
   assert.doesNotMatch(patched, /Control this Mac/);
+  assert.equal(applyLinuxRemoteControlSettingsUxPatch(patched), patched);
+});
+
+test("Linux remote-control settings UX patch clears selected host state when deleting SSH hosts", () => {
+  const source = syntheticRemoteConnectionDeleteBundle();
+  const patched = applyLinuxRemoteControlSettingsUxPatch(source);
+
+  assert.notEqual(patched, source);
+  assert.match(patched, /codexLinuxRemoteControlDeleteConnectionCleanup/);
+  assert.match(patched, /\{data:codexLinuxRemoteSelectedHostId\}=W\(s\.SELECTED_REMOTE_HOST_ID\)/);
+  assert.match(
+    patched,
+    /\{data:codexLinuxRemoteAutoConnectByHostId\}=W\(s\.REMOTE_CONNECTION_AUTO_CONNECT_BY_HOST_ID\)/,
+  );
+  assert.match(
+    patched,
+    /codexLinuxRemoteControlDeleteConnectionCleanup\(e,s,codexLinuxDeletedHostId,n,codexLinuxRemoteSelectedHostId,codexLinuxRemoteAutoConnectByHostId\)/,
+  );
   assert.equal(applyLinuxRemoteControlSettingsUxPatch(patched), patched);
 });
 
