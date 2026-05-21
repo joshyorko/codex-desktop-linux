@@ -833,6 +833,22 @@ function applyLinuxRemoteMobileConversationHydrationPatch(source) {
       "this.codexLinuxRemoteMobilePendingNotifications?.delete(r),R.error(`Failed to hydrate conversation for turn/started`,{safe:{conversationId:r},sensitive:{error:e}})});s();break}",
       "this.markConversationStreaming(r),",
     ].join("");
+    const unknownTurnLocalPathRetryNeedleWithoutComputerUseRoute = [
+      `if(this.captureBrowserUseTurnRoute(r,t.id),!i){/*${REMOTE_MOBILE_UNKNOWN_TURN_MARKER}*//*${REMOTE_MOBILE_NOTIFICATION_QUEUE_MARKER}*/`,
+      "let a=this.codexLinuxRemoteMobilePendingNotifications??=new Map,o=a.get(r);o||(o=[],a.set(r,o)),o.push(n),",
+      "R.warning(`Hydrating conversation for turn/started`,{safe:{conversationId:r,queuedNotificationCount:o.length},sensitive:{}});",
+      "let s=(a=0)=>this.readThread(r,{includeTurns:!1}).then(e=>{let t=e?.thread??e,i=this.codexLinuxRemoteMobilePendingNotifications?.get(r)??[];",
+      "if(!(typeof t?.path==`string`&&t.path.endsWith(`.jsonl`))){if(a<12){",
+      "R.warning(`Retrying hydration for non-persisted conversation`,{safe:{conversationId:r,path:t?.path??null,queuedNotificationCount:i.length,attempt:a+1},sensitive:{}}),",
+      "setTimeout(()=>s(a+1),250);return}",
+      "this.codexLinuxRemoteMobilePendingNotifications?.delete(r);for(let e of i)if(e.method===`turn/completed`){let{turn:t}=e.params;",
+      "this.browserUseTurnRouteIdsByConversationId.get(r)?.has(t.id)===!0&&this.releaseBrowserUseTurnRoute(r,t.id)}",
+      "R.warning(`Skipping hydration for non-persisted conversation`,{safe:{conversationId:r,path:t?.path??null,queuedNotificationCount:i.length},sensitive:{}});return}",
+      "this.upsertConversationFromThread(t);this.codexLinuxRemoteMobilePendingNotifications?.delete(r);for(let e of i)this.onNotification(e.method,e.params)}).catch(e=>{",
+      "if(a<12){R.warning(`Retrying hydration for turn/started`,{safe:{conversationId:r,attempt:a+1},sensitive:{error:e}}),setTimeout(()=>s(a+1),250);return}",
+      "this.codexLinuxRemoteMobilePendingNotifications?.delete(r),R.error(`Failed to hydrate conversation for turn/started`,{safe:{conversationId:r},sensitive:{error:e}})});s();break}",
+      "this.markConversationStreaming(r),",
+    ].join("");
     const unknownTurnRetryNeedle = [
       `if(this.captureBrowserUseTurnRoute(r,t.id),this.captureComputerUseTurnRoute(r,t.id),!i){/*${REMOTE_MOBILE_UNKNOWN_TURN_MARKER}*//*${REMOTE_MOBILE_NOTIFICATION_QUEUE_MARKER}*/`,
       "let a=this.codexLinuxRemoteMobilePendingNotifications??=new Map,o=a.get(r);o||(o=[],a.set(r,o)),o.push(n),",
@@ -864,6 +880,8 @@ function applyLinuxRemoteMobileConversationHydrationPatch(source) {
       patched = patched.replace(hydrationRetryUnsafeNeedle, unknownTurnReplacement);
     } else if (patched.includes(unknownTurnLocalPathRetryNeedle)) {
       patched = patched.replace(unknownTurnLocalPathRetryNeedle, unknownTurnReplacement);
+    } else if (patched.includes(unknownTurnLocalPathRetryNeedleWithoutComputerUseRoute)) {
+      patched = patched.replace(unknownTurnLocalPathRetryNeedleWithoutComputerUseRoute, buildUnknownTurnReplacement(false));
     } else if (patched.includes(unknownTurnRetryNeedle)) {
       // Already upgraded to retry hydration.
     } else if (patched.includes("Received turn/started for unknown conversation")) {
