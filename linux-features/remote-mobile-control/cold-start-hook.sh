@@ -158,36 +158,15 @@ remote_mobile_process_mentions_path() {
 
 desktop_app_server_remote_control_enabled() {
     local app_dir="${CODEX_LINUX_APP_DIR:-}"
-    local patch_report=""
+    local marker=""
 
     if truthy_env_value "${CODEX_REMOTE_CONTROL_FORCE_COLD_START_DAEMON:-}"; then
         return 1
     fi
 
     [ -n "$app_dir" ] || return 1
-    patch_report="$app_dir/../patch-report.json"
-    [ -f "$patch_report" ] || return 1
-
-    awk '
-        /"name"[[:space:]]*:[[:space:]]*"feature:remote-mobile-control:linux-remote-mobile-app-server-remote-control"/ {
-            in_patch = 1
-            if ($0 ~ /"status"[[:space:]]*:[[:space:]]*"applied"/) {
-                found = 1
-                exit
-            }
-            next
-        }
-        in_patch && /"status"[[:space:]]*:[[:space:]]*"applied"/ {
-            found = 1
-            exit
-        }
-        in_patch && /^[[:space:]]*}/ {
-            in_patch = 0
-        }
-        END {
-            exit found ? 0 : 1
-        }
-    ' "$patch_report"
+    marker="$app_dir/.codex-linux/desktop-app-server-remote-control-enabled"
+    [ -f "$marker" ]
 }
 
 stop_stale_standalone_remote_mobile_daemon() {

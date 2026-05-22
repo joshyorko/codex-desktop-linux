@@ -580,6 +580,7 @@ stage_chrome_plugin_from_upstream() {
     cp -R "$source_plugin" "$target_plugin"
     remove_macos_sidecar_files "$target_plugin"
     patch_chrome_plugin_for_linux "$target_plugin"
+    patch_browser_use_node_repl_env_guard "$target_plugin/scripts/browser-client.mjs"
     patch_browser_use_site_status_allowlist_fallback "$target_plugin/scripts/browser-client.mjs"
     if ! install_chrome_extension_host_resource "$target_plugin"; then
         rm -rf "$target_plugin"
@@ -638,6 +639,32 @@ replacement = (
     f'Please try again later or use another source.`));let {json_value}=await {response}.json();return {status}({json_value})}}'
 )
 path.write_text(source[:match.start()] + replacement + source[match.end():], encoding="utf-8")
+PY
+}
+
+patch_browser_use_node_repl_env_guard() {
+    local client="$1"
+
+    if grep -Fq 'globalThis.nodeRepl?.env?.[e]' "$client"; then
+        return 0
+    fi
+
+    python3 - "$client" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+source = path.read_text(encoding="utf-8")
+old = 'function lu(e){let t=globalThis.nodeRepl?.env[e];return typeof t=="string"?t:void 0}'
+new = 'function lu(e){let t=globalThis.nodeRepl?.env?.[e];return typeof t=="string"?t:void 0}'
+if old not in source:
+    print(
+        "WARN: Could not find Browser Use nodeRepl env guard insertion point — leaving browser-client.mjs unchanged",
+        file=sys.stderr,
+    )
+    raise SystemExit(0)
+
+path.write_text(source.replace(old, new, 1), encoding="utf-8")
 PY
 }
 
@@ -720,6 +747,7 @@ stage_browser_plugin_from_upstream() {
     rm -rf "$target_plugin"
     cp -R "$source_plugin" "$target_plugin"
     remove_macos_sidecar_files "$target_plugin"
+    patch_browser_use_node_repl_env_guard "$target_client"
     patch_browser_use_site_status_allowlist_fallback "$target_client"
 
     info "Browser plugin staged from upstream DMG"

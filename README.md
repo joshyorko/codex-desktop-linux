@@ -212,7 +212,7 @@ Linux Computer Use is an **opt-in** plugin that lets Codex inspect and control d
 - app listing and accessibility trees via AT-SPI
 - screenshots through GNOME Shell DBus or XDG Desktop Portal
 - window listing and focusing on GNOME, KWin/Plasma, Hyprland, and i3
-- keyboard, text, click, scroll, and drag input through `ydotool`
+- keyboard, text, click, scroll, and drag input through a uinput absolute pointer, the XDG Desktop Portal RemoteDesktop session, or `ydotool`
 
 ### Runtime dependencies
 

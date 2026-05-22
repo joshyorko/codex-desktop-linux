@@ -294,11 +294,47 @@ function captureWarnings(fn) {
   }
 }
 
+const COLD_START_TEST_ENV_KEYS = [
+  "CODEX_HOME",
+  "CODEX_LINUX_APP_DIR",
+  "CODEX_REMOTE_CONTROL_CODEX_PATH",
+  "CODEX_REMOTE_CONTROL_CODEX_RELEASE",
+  "CODEX_REMOTE_CONTROL_DAEMON_AUTOSTART_DISABLED",
+  "CODEX_REMOTE_CONTROL_DAEMON_AUTOSTART_TIMEOUT_SECONDS",
+  "CODEX_REMOTE_CONTROL_FORCE_COLD_START_DAEMON",
+  "CODEX_REMOTE_CONTROL_RUNTIME_AUTO_INSTALL_DISABLED",
+];
+
+function coldStartTestEnv(env) {
+  const result = { ...process.env };
+  for (const key of COLD_START_TEST_ENV_KEYS) {
+    delete result[key];
+  }
+  return { ...result, ...env };
+}
+
 function runColdStartHook(env) {
-  return spawnSync("bash", [path.join(__dirname, "cold-start-hook.sh"), "--run-main"], {
-    env: { ...process.env, ...env },
-    encoding: "utf8",
-  });
+  const tempBin = fs.mkdtempSync(path.join(os.tmpdir(), "codex-remote-mobile-cold-start-bin-"));
+  try {
+    const systemctl = path.join(tempBin, "systemctl");
+    fs.writeFileSync(systemctl, "#!/usr/bin/env sh\nexit 3\n");
+    fs.chmodSync(systemctl, 0o755);
+
+    const childEnv = coldStartTestEnv(env);
+    childEnv.PATH = `${tempBin}${path.delimiter}${childEnv.PATH ?? ""}`;
+    return spawnSync("bash", [path.join(__dirname, "cold-start-hook.sh"), "--run-main"], {
+      env: childEnv,
+      encoding: "utf8",
+    });
+  } finally {
+    fs.rmSync(tempBin, { recursive: true, force: true });
+  }
+}
+
+function writeDesktopAppServerRemoteControlMarker(appDir) {
+  const marker = path.join(appDir, ".codex-linux", "desktop-app-server-remote-control-enabled");
+  fs.mkdirSync(path.dirname(marker), { recursive: true });
+  fs.writeFileSync(marker, "desktop-app-server-remote-control\n");
 }
 
 test("remote mobile cold-start hook removes leaked standalone codex symlink from interactive PATH", () => {
@@ -362,24 +398,13 @@ test("remote mobile cold-start hook skips daemon when Desktop app-server owns re
     const home = path.join(tempRoot, "home");
     const codexHome = path.join(tempRoot, "codex-home");
     const appDir = path.join(tempRoot, "package", "share", "codex-desktop", "app");
-    const patchReport = path.join(tempRoot, "package", "share", "codex-desktop", "patch-report.json");
     const brewCodex = path.join(tempRoot, "brew", "bin", "codex");
     const callsLog = path.join(tempRoot, "calls.log");
 
     fs.mkdirSync(path.dirname(brewCodex), { recursive: true });
     fs.mkdirSync(home, { recursive: true });
     fs.mkdirSync(appDir, { recursive: true });
-    fs.writeFileSync(
-      patchReport,
-      JSON.stringify({
-        patches: [
-          {
-            name: "feature:remote-mobile-control:linux-remote-mobile-app-server-remote-control",
-            status: "applied",
-          },
-        ],
-      }),
-    );
+    writeDesktopAppServerRemoteControlMarker(appDir);
     fs.writeFileSync(
       brewCodex,
       `#!/usr/bin/env sh\nprintf '%s\\n' "$*" >> ${JSON.stringify(callsLog)}\nexit 0\n`,
@@ -409,22 +434,11 @@ test("remote mobile cold-start hook removes dead standalone daemon pid files whe
     const codexHome = path.join(tempRoot, "codex-home");
     const daemonDir = path.join(codexHome, "app-server-daemon");
     const appDir = path.join(tempRoot, "package", "share", "codex-desktop", "app");
-    const patchReport = path.join(tempRoot, "package", "share", "codex-desktop", "patch-report.json");
 
     fs.mkdirSync(home, { recursive: true });
     fs.mkdirSync(daemonDir, { recursive: true });
     fs.mkdirSync(appDir, { recursive: true });
-    fs.writeFileSync(
-      patchReport,
-      JSON.stringify({
-        patches: [
-          {
-            name: "feature:remote-mobile-control:linux-remote-mobile-app-server-remote-control",
-            status: "applied",
-          },
-        ],
-      }),
-    );
+    writeDesktopAppServerRemoteControlMarker(appDir);
     fs.writeFileSync(
       path.join(daemonDir, "app-server.pid"),
       JSON.stringify({ pid: 999999, processStartTime: "fixture" }),
@@ -457,23 +471,12 @@ test("remote mobile cold-start hook preserves live non-standalone daemon pid fil
     const codexHome = path.join(tempRoot, "codex-home");
     const daemonDir = path.join(codexHome, "app-server-daemon");
     const appDir = path.join(tempRoot, "package", "share", "codex-desktop", "app");
-    const patchReport = path.join(tempRoot, "package", "share", "codex-desktop", "patch-report.json");
     const pidFile = path.join(daemonDir, "app-server.pid");
 
     fs.mkdirSync(home, { recursive: true });
     fs.mkdirSync(daemonDir, { recursive: true });
     fs.mkdirSync(appDir, { recursive: true });
-    fs.writeFileSync(
-      patchReport,
-      JSON.stringify({
-        patches: [
-          {
-            name: "feature:remote-mobile-control:linux-remote-mobile-app-server-remote-control",
-            status: "applied",
-          },
-        ],
-      }),
-    );
+    writeDesktopAppServerRemoteControlMarker(appDir);
     fs.writeFileSync(pidFile, JSON.stringify({ pid: process.pid, processStartTime: "fixture" }));
 
     const result = runColdStartHook({
@@ -500,7 +503,6 @@ test("remote mobile cold-start hook stops live standalone daemon when Desktop ap
     const standaloneCodex = path.join(codexHome, "packages", "standalone", "current", "codex");
     const brewCodex = path.join(tempRoot, "brew", "bin", "codex");
     const appDir = path.join(tempRoot, "package", "share", "codex-desktop", "app");
-    const patchReport = path.join(tempRoot, "package", "share", "codex-desktop", "patch-report.json");
     const callsLog = path.join(tempRoot, "calls.log");
 
     fs.mkdirSync(path.dirname(standaloneCodex), { recursive: true });
@@ -508,17 +510,7 @@ test("remote mobile cold-start hook stops live standalone daemon when Desktop ap
     fs.mkdirSync(daemonDir, { recursive: true });
     fs.mkdirSync(home, { recursive: true });
     fs.mkdirSync(appDir, { recursive: true });
-    fs.writeFileSync(
-      patchReport,
-      JSON.stringify({
-        patches: [
-          {
-            name: "feature:remote-mobile-control:linux-remote-mobile-app-server-remote-control",
-            status: "applied",
-          },
-        ],
-      }),
-    );
+    writeDesktopAppServerRemoteControlMarker(appDir);
     fs.writeFileSync(
       standaloneCodex,
       `#!/usr/bin/env bash\nif [ "$1" = "remote-control" ]; then printf 'standalone:%s\\n' "$*" >> ${JSON.stringify(callsLog)}; exit 0; fi\nsleep 60\n`,

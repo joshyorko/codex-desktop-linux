@@ -6,6 +6,9 @@ FLAKE_FILE="${FLAKE_FILE:-$REPO_DIR/flake.nix}"
 UPSTREAM_DMG_URL="${UPSTREAM_DMG_URL:-https://persistent.oaistatic.com/codex-app-prod/Codex.dmg}"
 UPSTREAM_DMG_PATH="${UPSTREAM_DMG_PATH:-/tmp/Codex.dmg}"
 VERIFY_LOG="${VERIFY_LOG:-/tmp/codex-nix-build-verify.log}"
+# Upstream Codex Sparkle appcast (x64 runners). Used to gate the pin refresh on
+# the advertised latest release so we never pin a transient mid-rollout DMG.
+APPCAST_URL="${APPCAST_URL:-https://persistent.oaistatic.com/codex-app-prod/appcast-x64.xml}"
 
 PACKAGE_OUTPUTS=(
     ".#codex-desktop"
@@ -18,6 +21,31 @@ PACKAGE_OUTPUTS=(
 validate_sri_hash() {
     local hash="$1"
     [[ "$hash" =~ ^sha256-[A-Za-z0-9+/=]{44}$ ]]
+}
+
+read_flake_string() {
+    local name="$1"
+    grep -m1 "$name = " "$FLAKE_FILE" | sed 's/.*"\(.*\)".*/\1/'
+}
+
+prefetch_sri() {
+    local url="$1"
+    nix store prefetch-file --json --hash-type sha256 "$url" \
+        | python3 -c 'import sys, json; print(json.load(sys.stdin)["hash"])'
+}
+
+# When electronVersion changes, the electron zip + headers URLs move to the new
+# version while flake.nix keeps the old fixed-output hashes, so the verify build
+# would fail. Refresh both per-arch electron zip hashes and the headers hash.
+refresh_electron_hashes() {
+    local version="$1"
+    local base="https://github.com/electron/electron/releases/download/v${version}"
+    replace_flake_hash "x86_64-linux = {" "hash = " \
+        "$(prefetch_sri "${base}/electron-v${version}-linux-x64.zip")"
+    replace_flake_hash "aarch64-linux = {" "hash = " \
+        "$(prefetch_sri "${base}/electron-v${version}-linux-arm64.zip")"
+    replace_flake_hash "electronHeaders = pkgs.fetchurl {" "hash = " \
+        "$(prefetch_sri "https://artifacts.electronjs.org/headers/dist/v${version}/node-v${version}-headers.tar.gz")"
 }
 
 replace_flake_hash() {
@@ -140,6 +168,41 @@ main() {
         exit 1
     fi
 
+    # Refresh the version pins (codexVersion/electronVersion + native-modules)
+    # from the DMG, gated on the upstream Sparkle appcast: only proceed when the
+    # moving Codex.dmg has caught up to the appcast's advertised latest version,
+    # so we never pin a transient mid-rollout build. Exit 75 means "rollout in
+    # progress" and is treated as a no-op skip.
+    local old_electron_version
+    old_electron_version="$(read_flake_string electronVersion)"
+
+    local validate_status=0
+    WRITE_PINS=1 APPCAST_URL="$APPCAST_URL" \
+        "$REPO_DIR/scripts/ci/validate-nix-pins.sh" "$UPSTREAM_DMG_PATH" || validate_status="$?"
+    if [ "$validate_status" -eq 75 ]; then
+        echo "Upstream rollout in progress; leaving pins unchanged until Codex.dmg matches the appcast."
+        exit 0
+    fi
+    if [ "$validate_status" -ne 0 ]; then
+        exit "$validate_status"
+    fi
+
+    # If the Electron pin moved, refresh its fixed-output hashes so the verify
+    # build does not fail on the new download URLs.
+    local new_electron_version
+    new_electron_version="$(read_flake_string electronVersion)"
+    if [ "$old_electron_version" != "$new_electron_version" ]; then
+        echo "Electron pin: $old_electron_version -> $new_electron_version; refreshing electron hashes."
+        refresh_electron_hashes "$new_electron_version"
+    fi
+
+    # Regenerate the native-module lockfile whenever its package.json changed, so
+    # the committed refresh stays reproducible for importNpmLock / npm ci.
+    if ! git -C "$REPO_DIR" diff --quiet -- nix/native-modules/package.json; then
+        echo "native-modules package.json changed; regenerating package-lock.json."
+        ( cd "$REPO_DIR/nix/native-modules" && npm install --package-lock-only --ignore-scripts >/dev/null )
+    fi
+
     current_dmg_hash="$(read_flake_hash "codexDmg = pkgs.fetchurl {" "hash = ")"
     echo "Current Codex.dmg hash:  $current_dmg_hash"
     echo "Upstream Codex.dmg hash: $new_dmg_hash"
@@ -149,9 +212,8 @@ main() {
     # already downloaded for hashing instead of fetching the same artifact again.
     nix-store --add-fixed sha256 "$UPSTREAM_DMG_PATH" >/dev/null
 
-    "$REPO_DIR/scripts/ci/validate-nix-pins.sh" "$UPSTREAM_DMG_PATH"
     run_nix_build "$VERIFY_LOG" "${PACKAGE_OUTPUTS[@]}"
-    echo "Nix builds succeeded after refreshing the Codex.dmg hash."
+    echo "Nix builds succeeded after refreshing the upstream pins and Codex.dmg hash."
 }
 
 case "${1:-}" in

@@ -304,15 +304,22 @@ pub(crate) fn stable_validated_package(path: &Path) -> Result<StablePackage> {
         "Package path is not a file: {}",
         path.display()
     );
-    let kind = PackageKind::from_path(path);
-    ensure_codex_package(path)?;
+    let source_path = package_identity_path(path)?;
+    let requested_kind = PackageKind::from_path(path);
+    let kind = PackageKind::from_path(&source_path);
+    anyhow::ensure!(
+        requested_kind == kind,
+        "Package format changed while resolving {}",
+        path.display()
+    );
+    ensure_codex_package(&source_path)?;
 
     let dir = create_private_temp_dir()?;
-    let stable_path = dir.join(stable_file_name(kind, path)?);
-    fs::copy(path, &stable_path).with_context(|| {
+    let stable_path = dir.join(stable_file_name(kind, &source_path)?);
+    fs::copy(&source_path, &stable_path).with_context(|| {
         format!(
             "Failed to copy package {} into private staging area",
-            path.display()
+            source_path.display()
         )
     })?;
     set_private_file_permissions(&stable_path)?;
@@ -328,6 +335,11 @@ pub(crate) fn stable_validated_package(path: &Path) -> Result<StablePackage> {
         dir,
         path: stable_path,
     })
+}
+
+fn package_identity_path(path: &Path) -> Result<PathBuf> {
+    fs::canonicalize(path)
+        .with_context(|| format!("Failed to resolve package path {}", path.display()))
 }
 
 pub(crate) fn ensure_codex_package(path: &Path) -> Result<()> {
@@ -1198,6 +1210,33 @@ mod tests {
             pacman_package_version(Path::new(
                 "/tmp/codex-desktop-2026.04.02.120000-1-x86_64.pkg.tar.zst"
             ))?,
+            "2026.04.02.120000-1"
+        );
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resolves_pacman_latest_symlink_to_versioned_package_identity() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let package_name = "codex-desktop-2026.04.02.120000-1-x86_64.pkg.tar.zst";
+        let package_path = temp.path().join(package_name);
+        let latest_path = temp.path().join("codex-desktop-latest.pkg.tar.zst");
+        std::fs::write(&package_path, b"pkg")?;
+        std::os::unix::fs::symlink(package_name, &latest_path)?;
+
+        let identity_path = package_identity_path(&latest_path)?;
+
+        assert_eq!(
+            identity_path.file_name().and_then(|name| name.to_str()),
+            Some(package_name)
+        );
+        assert_eq!(
+            stable_file_name(PackageKind::Pacman, &identity_path)?,
+            package_name
+        );
+        assert_eq!(
+            pacman_package_version(&identity_path)?,
             "2026.04.02.120000-1"
         );
         Ok(())

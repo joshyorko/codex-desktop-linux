@@ -205,6 +205,23 @@ function applyLinuxComputerUseRendererAvailabilityPatch(currentSource) {
   let patchedSource = currentSource;
   let platformPredicateChanged = false;
   let availabilityChanged = false;
+  let availabilityGateFound = false;
+
+  const computerUseFeatureNeedle = "featureName:`computer_use`";
+  const hasComputerUseAvailabilityGate = () =>
+    currentSource.includes(computerUseFeatureNeedle) &&
+    (currentSource.includes("isComputerUseAvailable") || currentSource.includes("1506311413"));
+  const availabilityAlreadyPatched = () =>
+    /featureName:`computer_use`[\s\S]{0,1200}?let ([A-Za-z_$][\w$]*)=[A-Za-z_$][\w$]*&&[A-Za-z_$][\w$]*&&\([A-Za-z_$][\w$]*===`linux`\|\|[A-Za-z_$][\w$]*&&\([A-Za-z_$][\w$]*\|\|[A-Za-z_$][\w$]*\)\),[A-Za-z_$][\w$]*=\1&&![A-Za-z_$][\w$]*&&\([A-Za-z_$][\w$]*===`linux`\|\|[A-Za-z_$][\w$]*\.enabled\)&&![A-Za-z_$][\w$]*\.isLoading/.test(patchedSource) ||
+    patchedSource.includes(availabilityPatch) ||
+    patchedSource.includes(currentAvailabilityPatch);
+
+  const findPlatformVarForAvailabilityGate = (offset, platformLoadingVar) => {
+    const lookback = patchedSource.slice(Math.max(0, offset - 900), offset);
+    const loadingFirst = new RegExp(String.raw`\{isLoading:${platformLoadingVar},platform:([A-Za-z_$][\w$]*)\}=`);
+    const platformFirst = new RegExp(String.raw`\{platform:([A-Za-z_$][\w$]*),isLoading:${platformLoadingVar}\}=`);
+    return lookback.match(loadingFirst)?.[1] ?? lookback.match(platformFirst)?.[1] ?? null;
+  };
 
   const platformPredicateNeedle = "function hae(e){return e===`macOS`||e===`windows`}";
   const platformPredicatePatch =
@@ -245,11 +262,45 @@ function applyLinuxComputerUseRendererAvailabilityPatch(currentSource) {
     availabilityChanged = true;
   }
 
-  if (availabilityChanged || patchedSource.includes(availabilityPatch) || patchedSource.includes(currentAvailabilityPatch)) {
+  const currentHookAvailabilityPattern =
+    /let ([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)&&([A-Za-z_$][\w$]*)&&([A-Za-z_$][\w$]*)&&\(([A-Za-z_$][\w$]*)\|\|([A-Za-z_$][\w$]*)\),([A-Za-z_$][\w$]*)=\1&&!\5&&([A-Za-z_$][\w$]*)\.enabled&&!\8\.isLoading,([A-Za-z_$][\w$]*)=\1&&\8\.isLoading,([A-Za-z_$][\w$]*)=\1&&\(\5\|\|\8\.isLoading\),([A-Za-z_$][\w$]*);/g;
+  patchedSource = patchedSource.replace(
+    currentHookAvailabilityPattern,
+    (
+      match,
+      availabilityVar,
+      enabledVar,
+      isHostLocalVar,
+      rolloutVar,
+      platformLoadingVar,
+      supportedPlatformVar,
+      availableVar,
+      featureQueryVar,
+      fetchingVar,
+      loadingVar,
+      resultVar,
+      offset,
+    ) => {
+      const contextStart = Math.max(0, offset - 900);
+      const context = patchedSource.slice(contextStart, offset + match.length);
+      if (!context.includes(computerUseFeatureNeedle)) {
+        return match;
+      }
+      availabilityGateFound = true;
+      const platformVar = findPlatformVarForAvailabilityGate(offset, platformLoadingVar);
+      if (platformVar == null) {
+        return match;
+      }
+      availabilityChanged = true;
+      return `let ${availabilityVar}=${enabledVar}&&${isHostLocalVar}&&(${platformVar}===\`linux\`||${rolloutVar}&&(${platformLoadingVar}||${supportedPlatformVar})),${availableVar}=${availabilityVar}&&!${platformLoadingVar}&&(${platformVar}===\`linux\`||${featureQueryVar}.enabled)&&!${featureQueryVar}.isLoading,${fetchingVar}=${availabilityVar}&&${platformVar}!==\`linux\`&&${featureQueryVar}.isLoading,${loadingVar}=${availabilityVar}&&(${platformLoadingVar}||${platformVar}!==\`linux\`&&${featureQueryVar}.isLoading),${resultVar};`;
+    },
+  );
+
+  if (availabilityChanged || availabilityAlreadyPatched()) {
     return patchedSource;
   }
 
-  if (currentSource.includes("featureName:`computer_use`") && currentSource.includes("isComputerUseAvailable")) {
+  if (hasComputerUseAvailabilityGate() || availabilityGateFound) {
     console.warn(
       "WARN: Could not find Computer Use renderer availability gate — skipping Linux Computer Use UI availability patch",
     );

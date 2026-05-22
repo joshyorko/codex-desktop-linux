@@ -900,6 +900,8 @@ sync_computer_use_bundled_plugin_cache() {
     local tmp_plugin
     local marketplace_root
     local marketplace_plugins_dir
+    local marketplace_plugin_link
+    local needs_copy=1
 
     [ -f "$plugin_json" ] || return 0
     [ -f "$source_backend" ] || return 0
@@ -907,8 +909,9 @@ sync_computer_use_bundled_plugin_cache() {
 
     marketplace_root="$codex_home/.tmp/bundled-marketplaces/openai-bundled"
     marketplace_plugins_dir="$marketplace_root/.agents/plugins"
+    marketplace_plugin_link="$marketplace_root/plugins/computer-use"
     if [ -f "$source_marketplace" ]; then
-        mkdir -p "$marketplace_plugins_dir"
+        mkdir -p "$marketplace_plugins_dir" "$marketplace_root/plugins"
         rm -f "$marketplace_plugins_dir/marketplace.json"
         cp "$source_marketplace" "$marketplace_plugins_dir/marketplace.json" && \
             chmod u+w "$marketplace_plugins_dir/marketplace.json" || \
@@ -926,24 +929,38 @@ sync_computer_use_bundled_plugin_cache() {
     if [ -f "$cache_backend" ] && [ -f "$cache_cosmic_helper" ] && \
         cmp -s "$source_backend" "$cache_backend" && \
         cmp -s "$source_cosmic_helper" "$cache_cosmic_helper"; then
-        return 0
+        needs_copy=0
     fi
 
-    cache_parent="$(dirname "$cache_plugin")"
-    tmp_plugin="$cache_parent/.computer-use-$version.tmp.$$"
-    remove_tree_if_exists "$tmp_plugin"
-    mkdir -p "$cache_parent"
-
-    if cp -R "$source_plugin" "$tmp_plugin"; then
-        make_tree_owner_writable "$tmp_plugin"
-        find "$tmp_plugin" -type f -name '*:com.apple.*' -delete
-        remove_tree_if_exists "$cache_plugin"
-        mv "$tmp_plugin" "$cache_plugin"
-        echo "Computer Use plugin cache synced from bundled resources: $cache_plugin"
-    else
+    if [ "$needs_copy" -eq 1 ]; then
+        cache_parent="$(dirname "$cache_plugin")"
+        tmp_plugin="$cache_parent/.computer-use-$version.tmp.$$"
         remove_tree_if_exists "$tmp_plugin"
-        echo "Computer Use plugin cache sync failed; continuing with existing cache."
+        mkdir -p "$cache_parent"
+
+        if cp -R "$source_plugin" "$tmp_plugin"; then
+            make_tree_owner_writable "$tmp_plugin"
+            find "$tmp_plugin" -type f -name '*:com.apple.*' -delete
+            remove_tree_if_exists "$cache_plugin"
+            mv "$tmp_plugin" "$cache_plugin"
+            echo "Computer Use plugin cache synced from bundled resources: $cache_plugin"
+        else
+            remove_tree_if_exists "$tmp_plugin"
+            echo "Computer Use plugin cache sync failed; continuing with existing cache."
+            return 0
+        fi
     fi
+
+    if [ -e "$cache_root/latest" ] && [ ! -L "$cache_root/latest" ]; then
+        remove_tree_if_exists "$cache_root/latest"
+    fi
+    ln -sfn "$version" "$cache_root/latest"
+
+    mkdir -p "$marketplace_root/plugins"
+    if [ -e "$marketplace_plugin_link" ] && [ ! -L "$marketplace_plugin_link" ]; then
+        remove_tree_if_exists "$marketplace_plugin_link"
+    fi
+    ln -sfn "$cache_root/latest" "$marketplace_plugin_link"
 }
 
 sync_read_aloud_bundled_plugin_cache() {
@@ -964,6 +981,8 @@ sync_read_aloud_bundled_plugin_cache() {
     local tmp_plugin
     local marketplace_root
     local marketplace_plugins_dir
+    local marketplace_plugin_link
+    local needs_copy=1
 
     [ -f "$plugin_json" ] || return 0
     [ -x "$source_backend" ] || return 0
@@ -972,8 +991,9 @@ sync_read_aloud_bundled_plugin_cache() {
 
     marketplace_root="$codex_home/.tmp/bundled-marketplaces/openai-bundled"
     marketplace_plugins_dir="$marketplace_root/.agents/plugins"
+    marketplace_plugin_link="$marketplace_root/plugins/read-aloud"
     if [ -f "$source_marketplace" ]; then
-        mkdir -p "$marketplace_plugins_dir"
+        mkdir -p "$marketplace_plugins_dir" "$marketplace_root/plugins"
         rm -f "$marketplace_plugins_dir/marketplace.json"
         cp "$source_marketplace" "$marketplace_plugins_dir/marketplace.json" && \
             chmod u+w "$marketplace_plugins_dir/marketplace.json" || \
@@ -993,24 +1013,38 @@ sync_read_aloud_bundled_plugin_cache() {
         cmp -s "$source_backend" "$cache_backend" && \
         cmp -s "$source_runner" "$cache_runner" && \
         cmp -s "$source_python_runner" "$cache_python_runner"; then
-        return 0
+        needs_copy=0
     fi
 
-    cache_parent="$(dirname "$cache_plugin")"
-    tmp_plugin="$cache_parent/.read-aloud-$version.tmp.$$"
-    remove_tree_if_exists "$tmp_plugin"
-    mkdir -p "$cache_parent"
-
-    if cp -R "$source_plugin" "$tmp_plugin"; then
-        make_tree_owner_writable "$tmp_plugin"
-        find "$tmp_plugin" -type f -name '*:com.apple.*' -delete
-        remove_tree_if_exists "$cache_plugin"
-        mv "$tmp_plugin" "$cache_plugin"
-        echo "Read Aloud plugin cache synced from bundled resources: $cache_plugin"
-    else
+    if [ "$needs_copy" -eq 1 ]; then
+        cache_parent="$(dirname "$cache_plugin")"
+        tmp_plugin="$cache_parent/.read-aloud-$version.tmp.$$"
         remove_tree_if_exists "$tmp_plugin"
-        echo "Read Aloud plugin cache sync failed; continuing with existing cache."
+        mkdir -p "$cache_parent"
+
+        if cp -R "$source_plugin" "$tmp_plugin"; then
+            make_tree_owner_writable "$tmp_plugin"
+            find "$tmp_plugin" -type f -name '*:com.apple.*' -delete
+            remove_tree_if_exists "$cache_plugin"
+            mv "$tmp_plugin" "$cache_plugin"
+            echo "Read Aloud plugin cache synced from bundled resources: $cache_plugin"
+        else
+            remove_tree_if_exists "$tmp_plugin"
+            echo "Read Aloud plugin cache sync failed; continuing with existing cache."
+            return 0
+        fi
     fi
+
+    if [ -e "$cache_root/latest" ] && [ ! -L "$cache_root/latest" ]; then
+        remove_tree_if_exists "$cache_root/latest"
+    fi
+    ln -sfn "$version" "$cache_root/latest"
+
+    mkdir -p "$marketplace_root/plugins"
+    if [ -e "$marketplace_plugin_link" ] && [ ! -L "$marketplace_plugin_link" ]; then
+        remove_tree_if_exists "$marketplace_plugin_link"
+    fi
+    ln -sfn "$cache_root/latest" "$marketplace_plugin_link"
 }
 
 resolve_browser_use_runtime_env() {
@@ -1203,6 +1237,7 @@ find_codex_cli() {
     local candidate
     for candidate in \
         "$HOME/.bun/bin/codex" \
+        "$HOME/.npm-global/bin/codex" \
         "$HOME/.nvm/versions/node/current/bin/codex" \
         "$HOME/.nvm/versions/node"/*/bin/codex \
         "$HOME/.local/share/pnpm/codex" \

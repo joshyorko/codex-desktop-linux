@@ -5,6 +5,16 @@ REPO_DIR="${REPO_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 FLAKE_FILE="${FLAKE_FILE:-$REPO_DIR/flake.nix}"
 UPSTREAM_DMG_URL="${UPSTREAM_DMG_URL:-https://persistent.oaistatic.com/codex-app-prod/Codex.dmg}"
 UPSTREAM_DMG_PATH="${1:-${UPSTREAM_DMG_PATH:-/tmp/Codex.dmg}}"
+NATIVE_MODULES_PKG="${NATIVE_MODULES_PKG:-$REPO_DIR/nix/native-modules/package.json}"
+
+# Opt-in pin-writing mode (used by the hash-refresh bot, not by PR CI). When set,
+# the version pins are rewritten from the DMG before the assertions run, so they
+# confirm the write instead of failing on drift. APPCAST_URL, when also set,
+# gates the write on the upstream Sparkle appcast: the moving Codex.dmg must
+# already match the appcast's advertised latest version, otherwise we are mid
+# rollout and exit 75 (skip) rather than pinning a transient build.
+WRITE_PINS="${WRITE_PINS:-0}"
+APPCAST_URL="${APPCAST_URL:-}"
 
 fail() {
     echo "ERROR: $*" >&2
@@ -36,6 +46,62 @@ if not match:
     raise SystemExit(f"Could not find Nix string {sys.argv[2]!r}")
 print(match.group(1))
 PY
+}
+
+write_nix_string() {
+    local name="$1"
+    local value="$2"
+    python3 - "$FLAKE_FILE" "$name" "$value" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+path = Path(sys.argv[1])
+name = re.escape(sys.argv[2])
+value = sys.argv[3]
+text = path.read_text()
+new_text, count = re.subn(
+    rf'(\b{name}\s*=\s*")[^"]+(";)',
+    lambda match: match.group(1) + value + match.group(2),
+    text,
+    count=1,
+)
+if count != 1:
+    raise SystemExit(f"Could not write Nix string {sys.argv[2]!r}")
+path.write_text(new_text)
+PY
+}
+
+write_json_dep() {
+    local file="$1"
+    local dep="$2"
+    local value="$3"
+    node -e '
+const fs = require("fs");
+const [file, dep, value] = process.argv.slice(1);
+const pkg = JSON.parse(fs.readFileSync(file, "utf8"));
+if (!pkg.dependencies || !(dep in pkg.dependencies)) {
+  console.error(`missing dependency ${dep} in ${file}`);
+  process.exit(1);
+}
+pkg.dependencies[dep] = value;
+fs.writeFileSync(file, JSON.stringify(pkg, null, 2) + "\n");
+' "$file" "$dep" "$value"
+}
+
+fetch_appcast_latest_version() {
+    local url="$1"
+    curl -fsSL --retry 3 "$url" | python3 -c '
+import re
+import sys
+
+xml = sys.stdin.read()
+# Appcast items are newest-first; the first shortVersionString is the latest.
+match = re.search(r"<sparkle:shortVersionString>([^<]+)</sparkle:shortVersionString>", xml)
+if not match:
+    sys.exit("Could not find sparkle:shortVersionString in appcast")
+sys.stdout.write(match.group(1).strip())
+'
 }
 
 read_nix_fetchurl_field() {
@@ -149,6 +215,32 @@ nix_electron_version="$(read_nix_string electronVersion)"
 native_electron_version="$(node -p "require('$REPO_DIR/nix/native-modules/package.json').dependencies.electron")"
 native_better_sqlite3_version="$(node -p "require('$REPO_DIR/nix/native-modules/package.json').dependencies['better-sqlite3']")"
 native_node_pty_version="$(node -p "require('$REPO_DIR/nix/native-modules/package.json').dependencies['node-pty']")"
+
+if [ "$WRITE_PINS" = "1" ]; then
+    if [ -n "$APPCAST_URL" ]; then
+        appcast_latest_version="$(fetch_appcast_latest_version "$APPCAST_URL")"
+        echo "Appcast latest version: $appcast_latest_version"
+        echo "DMG codex version:      $dmg_codex_version"
+        if [ "$dmg_codex_version" != "$appcast_latest_version" ]; then
+            echo "DMG ($dmg_codex_version) is not yet aligned with the appcast latest ($appcast_latest_version);" >&2
+            echo "upstream rollout in progress, skipping pin update (exit 75)." >&2
+            exit 75
+        fi
+    fi
+
+    write_nix_string codexVersion "$dmg_codex_version"
+    write_nix_string electronVersion "$dmg_electron_version"
+    write_json_dep "$NATIVE_MODULES_PKG" electron "$dmg_electron_version"
+    write_json_dep "$NATIVE_MODULES_PKG" better-sqlite3 "$dmg_better_sqlite3_version"
+    write_json_dep "$NATIVE_MODULES_PKG" node-pty "$dmg_node_pty_version"
+
+    # Re-read so the assertions below confirm the writes landed.
+    nix_codex_version="$(read_nix_string codexVersion)"
+    nix_electron_version="$(read_nix_string electronVersion)"
+    native_electron_version="$(node -p "require('$NATIVE_MODULES_PKG').dependencies.electron")"
+    native_better_sqlite3_version="$(node -p "require('$NATIVE_MODULES_PKG').dependencies['better-sqlite3']")"
+    native_node_pty_version="$(node -p "require('$NATIVE_MODULES_PKG').dependencies['node-pty']")"
+fi
 
 assert_equal "Codex app version pin" "$dmg_codex_version" "$nix_codex_version"
 assert_equal "Electron version pin" "$dmg_electron_version" "$nix_electron_version"

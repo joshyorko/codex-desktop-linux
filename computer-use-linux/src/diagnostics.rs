@@ -35,6 +35,33 @@ pub struct DoctorReport {
     pub windowing: WindowingReport,
     pub input: InputReport,
     pub readiness: ReadinessReport,
+    /// Which interchangeable backends this environment supports, per layer, plus
+    /// the one the tool prefers. Lets an agent (or selector) understand what's
+    /// available and choose accordingly instead of assuming one fixed path.
+    pub capabilities: CapabilityMap,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct CapabilityMap {
+    /// Pointer/keyboard injection backends, best-first.
+    pub input: Vec<String>,
+    /// Screen capture backends, best-first.
+    pub screenshot: Vec<String>,
+    /// Window listing/focus backends available.
+    pub window_control: Vec<String>,
+    /// Accessibility (element-targeted, non-pointer) backends.
+    pub accessibility: Vec<String>,
+    /// Display/session isolation contexts the host can provide.
+    pub isolation: Vec<String>,
+    /// The backend the tool will use by default for each selectable layer.
+    pub preferred: PreferredBackends,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct PreferredBackends {
+    pub input: Option<String>,
+    pub screenshot: Option<String>,
+    pub window_control: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
@@ -159,6 +186,8 @@ pub fn doctor_report() -> DoctorReport {
     let input = input_report();
     let readiness = readiness_report(&platform, &accessibility, &windowing, &input, &bluefin);
 
+    let capabilities = capability_map(&platform, &portals, &accessibility, &windowing, &input);
+
     DoctorReport {
         platform,
         bluefin,
@@ -167,6 +196,82 @@ pub fn doctor_report() -> DoctorReport {
         windowing,
         input,
         readiness,
+        capabilities,
+    }
+}
+
+/// Derive the per-layer backend capability map from the individual checks. Lists
+/// are ordered best-first and mirror the order the tool actually tries them.
+fn capability_map(
+    platform: &PlatformReport,
+    portals: &PortalReport,
+    accessibility: &AccessibilityReport,
+    windowing: &WindowingReport,
+    input: &InputReport,
+) -> CapabilityMap {
+    let mut input_backends = Vec::new();
+    // Absolute uinput pointer: accurate, non-blocking of coordinates; preferred.
+    if input.uinput.ok {
+        input_backends.push("abs_pointer".to_string());
+    }
+    if portals.remote_desktop.ok {
+        input_backends.push("portal".to_string());
+    }
+    if input.ydotool_socket.ok {
+        input_backends.push("ydotool".to_string());
+    }
+
+    let mut screenshot_backends = Vec::new();
+    if platform.gnome_shell_version.ok {
+        screenshot_backends.push("gnome_shell".to_string());
+    }
+    if portals.screenshot.ok {
+        screenshot_backends.push("portal".to_string());
+    }
+
+    let mut window_backends = Vec::new();
+    if windowing.codex_gnome_shell_extension.ok {
+        window_backends.push("gnome_shell_extension".to_string());
+    }
+    if windowing.gnome_shell_introspect.ok {
+        window_backends.push("gnome_introspect".to_string());
+    }
+    if windowing.kwin.ok {
+        window_backends.push("kwin".to_string());
+    }
+    if windowing.hyprland.ok {
+        window_backends.push("hyprland".to_string());
+    }
+    if windowing.cosmic_helper.ok {
+        window_backends.push("cosmic".to_string());
+    }
+
+    let mut accessibility_backends = Vec::new();
+    if accessibility.at_spi_enabled.ok || accessibility.toolkit_accessibility.ok {
+        accessibility_backends.push("at_spi".to_string());
+    }
+
+    // Isolation contexts: the live shared session is always available; a headless
+    // GNOME session is possible when gnome-shell is installed (it supports
+    // --headless --virtual-monitor), giving the agent its own seat.
+    let mut isolation = vec!["shared".to_string()];
+    if platform.gnome_shell_version.ok {
+        isolation.push("headless_gnome".to_string());
+    }
+
+    let preferred = PreferredBackends {
+        input: input_backends.first().cloned(),
+        screenshot: screenshot_backends.first().cloned(),
+        window_control: window_backends.first().cloned(),
+    };
+
+    CapabilityMap {
+        input: input_backends,
+        screenshot: screenshot_backends,
+        window_control: window_backends,
+        accessibility: accessibility_backends,
+        isolation,
+        preferred,
     }
 }
 

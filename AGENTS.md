@@ -250,7 +250,7 @@ This path is for users who do not want a system-wide native package; the daily-d
 ## Crate Versioning
 
 - Current updater crate version: `0.7.1` (`updater/Cargo.toml`).
-- Current `codex-computer-use-linux` crate version: `0.1.2-linux-alpha1` (`computer-use-linux/Cargo.toml`).
+- Current `codex-computer-use-linux` crate version: `0.2.3-linux-alpha1` (`computer-use-linux/Cargo.toml`). The enumeration tracks the standalone `agent-sh/computer-use-linux` crate (currently `0.2.3`); a mismatch means a sync between the two is pending.
 - Bump `patch` for fixes, docs, and maintenance-only updates.
 - Bump `minor` for compatible feature additions.
 - Bump `major` for incompatible CLI, persisted-state, or install-flow changes.

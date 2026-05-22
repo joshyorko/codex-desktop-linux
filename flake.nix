@@ -20,13 +20,12 @@
               !(pkgs.lib.hasSuffix "/.codex" pathStr || pkgs.lib.hasInfix "/.codex/" pathStr));
         };
 
-        codexVersion = "26.519.22136";
         codexDmg = pkgs.fetchurl {
-          name = "Codex-${codexVersion}.dmg";
-          url = "https://persistent.oaistatic.com/codex-app-prod/Codex.dmg?codex_version=${codexVersion}";
-          hash = "sha256-f4/zAyMCeW9hDeIy6Hrac5VdGJyq1a0UAlSGXLrXtyk=";
+          url = "https://persistent.oaistatic.com/codex-app-prod/Codex.dmg";
+          hash = "sha256-0wuxD/77hV3NniIRhSDLb7Zhnc/X7GgYR6oVm08qDz0=";
         };
 
+        codexVersion = "26.519.31651";
         electronVersion = "42.1.0";
         electronPlatform =
           {
