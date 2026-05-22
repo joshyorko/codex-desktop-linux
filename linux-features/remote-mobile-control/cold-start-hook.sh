@@ -228,6 +228,12 @@ stop_stale_standalone_remote_mobile_daemon() {
 
 remote_mobile_control_main() {
     local codex_home="${CODEX_HOME:-$HOME/.codex}"
+    local standalone_codex="$codex_home/packages/standalone/current/codex"
+    local standalone_root
+    local daemon_codex
+
+    standalone_root="$(readlink -f "$codex_home/packages/standalone" 2>/dev/null || true)"
+    [ -n "$standalone_root" ] || standalone_root="$codex_home/packages/standalone"
 
     cleanup_remote_mobile_control_interactive_symlink "$codex_home"
 
@@ -242,15 +248,12 @@ remote_mobile_control_main() {
     fi
     if desktop_app_server_remote_control_enabled; then
         cleanup_stale_remote_mobile_daemon_state "$codex_home"
+        daemon_codex="$(resolve_remote_mobile_control_codex "$codex_home")"
+        stop_stale_standalone_remote_mobile_daemon "$codex_home" "$daemon_codex" "$standalone_root" "$standalone_codex"
         echo "Remote mobile control daemon autostart skipped; Desktop app-server launches with remote-control enabled"
         return 0
     fi
 
-    local standalone_codex="$codex_home/packages/standalone/current/codex"
-    local standalone_root
-    local daemon_codex
-    standalone_root="$(readlink -f "$codex_home/packages/standalone" 2>/dev/null || true)"
-    [ -n "$standalone_root" ] || standalone_root="$codex_home/packages/standalone"
     daemon_codex="$(resolve_remote_mobile_control_codex "$codex_home")"
 
     if [ ! -x "$daemon_codex" ]; then
