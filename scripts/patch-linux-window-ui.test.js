@@ -468,6 +468,14 @@ function legacySettingsPersistenceBundleFixture() {
   ].join("");
 }
 
+function currentSettingsPersistenceBundleFixture() {
+  return [
+    "let i=require(`node:path`),o=require(`node:fs`);",
+    "var sG=`.codex-global-state.json`,cG=`config.toml`;",
+    "class AppServer{setGlobalStateValue(e,t,n){this.globalState.set(e,t,n)} handlers={\"set-global-state\":async({key:e,value:t,origin:n})=>(this.setGlobalStateValue(e,t,n),{success:!0})}}",
+  ].join("");
+}
+
 function runSettingsPersistence(patchedSource, env, key, value) {
   vm.runInNewContext(
     `${patchedSource};codexLinuxPersistSettingsState(${JSON.stringify(key)},${JSON.stringify(value)});`,
@@ -1204,6 +1212,34 @@ test("persists Linux settings under the effective side-by-side app id", () => {
       false,
     );
     assert.equal(fs.existsSync(path.join(xdgConfig, "codex-desktop", "settings.json")), false);
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("persists Linux settings with current setGlobalStateValue handler shape", () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "codex-settings-current-shape-"));
+  try {
+    const settingsFile = path.join(tempRoot, "config", "codex-desktop", "settings.json");
+    const patched = applyPatchTwice(applyLinuxSettingsPersistencePatch, currentSettingsPersistenceBundleFixture());
+
+    assert.match(patched, /var sG=`\.codex-global-state\.json`;function codexLinuxSettingsAppId/);
+    assert.match(patched, /var cG=`config\.toml`/);
+    assert.match(patched, /this\.setGlobalStateValue\(e,t,n\),codexLinuxPersistSettingsState\(e,t\)/);
+    runSettingsPersistence(
+      patched,
+      {
+        CODEX_LINUX_SETTINGS_FILE: settingsFile,
+        HOME: path.join(tempRoot, "home"),
+      },
+      "codex-linux-computer-use-ui-enabled",
+      true,
+    );
+
+    assert.equal(
+      JSON.parse(fs.readFileSync(settingsFile, "utf8"))["codex-linux-computer-use-ui-enabled"],
+      true,
+    );
   } finally {
     fs.rmSync(tempRoot, { recursive: true, force: true });
   }

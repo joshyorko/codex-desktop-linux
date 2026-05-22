@@ -9,7 +9,11 @@ const TRAY_GUARD_LOOKAHEAD = 1200;
 const CLOSE_GATE_PREFIX_LOOKBACK = 8000;
 const HANDLER_PREFIX_LOOKBACK = 12000;
 
+const COMPUTER_USE_UI_ENV_VAR = "CODEX_LINUX_ENABLE_COMPUTER_USE_UI";
+const COMPUTER_USE_UI_SETTINGS_KEY = "codex-linux-computer-use-ui-enabled";
+
 const linuxSettingsKeys = {
+  computerUseUi: COMPUTER_USE_UI_SETTINGS_KEY,
   promptWindow: "codex-linux-prompt-window-enabled",
   systemTray: "codex-linux-system-tray-enabled",
   warmStart: "codex-linux-warm-start-enabled",
@@ -38,9 +42,6 @@ function findIconAsset(extractedDir) {
 
 const keybindsSettingsAsset = "keybinds-settings-linux.js";
 const linuxKeybindOverridesKey = "codex-linux-keybind-overrides";
-
-const COMPUTER_USE_UI_ENV_VAR = "CODEX_LINUX_ENABLE_COMPUTER_USE_UI";
-const COMPUTER_USE_UI_SETTINGS_KEY = "codex-linux-computer-use-ui-enabled";
 
 // Two opt-in surfaces, both checked at build time:
 //
