@@ -26,6 +26,9 @@ const REMOTE_CONTROL_SETTINGS_VISIBILITY_NEEDLE =
   /function ([A-Za-z_$][\w$]*)\(\{remoteControlConnectionsState:([A-Za-z_$][\w$]*),slingshotEnabled:([A-Za-z_$][\w$]*)\}\)\{return \3&&\(\2\?\.available\?\?!0\)\}/u;
 const REMOTE_CONTROL_SETTINGS_UX_MARKER = "codexLinuxRemoteControlSettingsTabs";
 const REMOTE_CONNECTIONS_REFRESH_MARKER = "codexLinuxRemoteConnectionsRefreshNow";
+const REMOTE_CONTROL_DELETE_CLEANUP_MARKER = "codexLinuxRemoteControlDeleteConnectionCleanup";
+const REMOTE_CONTROL_STALE_SELECTION_CLEANUP_MARKER = "codexLinuxRemoteControlReconcileDeletedConnectionState";
+const REMOTE_CONTROL_STALE_SELECTION_EFFECT_MARKER = "codexLinuxRemoteControlReconcileDeletedConnectionStateEffect";
 const REMOTE_MOBILE_CHROME_BRIDGE_MARKER = "codexLinuxRemoteMobileBrowserBackends";
 const REMOTE_CONTROL_LOAD_GATE_MARKER = "codexLinuxRemoteControlLoadGateEnabled";
 const REMOTE_CONTROL_FEATURE_SYNC_MARKER = "codexLinuxRemoteControlFeatureSyncEnabled";
@@ -72,6 +75,19 @@ const REMOTE_CONTROL_LINUX_COPY_REPLACEMENTS = [
   ["local Mac", "local Linux desktop"],
 ];
 const CLIENT_ACCOUNT_COMPAT_MARKER = "codexLinuxRemoteControlAccountMatches";
+
+function linuxRemoteControlStaleSelectionEffectDeclarator({
+  reactVar,
+  scopeVar,
+  globalStateEnumVar,
+  connectionsVar,
+}) {
+  return (
+    `${REMOTE_CONTROL_STALE_SELECTION_EFFECT_MARKER}=(0,${reactVar}.useEffect)(()=>{` +
+    `${REMOTE_CONTROL_STALE_SELECTION_CLEANUP_MARKER}(${scopeVar},${globalStateEnumVar},${connectionsVar},codexLinuxRemoteSelectedHostId,codexLinuxRemoteAutoConnectByHostId)` +
+    `},[${scopeVar},${connectionsVar},codexLinuxRemoteSelectedHostId,codexLinuxRemoteAutoConnectByHostId]),`
+  );
+}
 
 function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -651,27 +667,144 @@ function applyLinuxRemoteControlSettingsUxPatch(source) {
   patched = wrapRemoteControlTabs(patched, "access-other-devices");
 
   if (patched.includes(REMOTE_CONTROL_SELECTED_TAB_REPLACEMENT)) {
-    return patched;
+    return applyLinuxRemoteControlDeleteCleanupPatch(patched);
   }
   if (
-    patched.includes("navigator.userAgent.includes(`Linux`)") &&
-    patched.includes("if(e===`access-other-devices`)return")
+    !patched.includes("navigator.userAgent.includes(`Linux`)") ||
+    !patched.includes("if(e===`access-other-devices`)return")
   ) {
+    const selectedTabMatch = patched.match(REMOTE_CONTROL_SELECTED_TAB_REGEX);
+    if (selectedTabMatch == null) {
+      console.warn("WARN: Could not find remote-control selected-tab needle - skipping Linux remote-control selected-tab patch");
+      return applyLinuxRemoteControlDeleteCleanupPatch(patched);
+    }
+    const [, functionName, selectedVar, controlThisMacVar, sectionVar, sshVar] = selectedTabMatch;
+    const selectedTabReplacement =
+      `function ${functionName}({selectedConnectionsTab:${selectedVar},showControlThisMacTab:${controlThisMacVar},showRemoteControlConnectionsSection:${sectionVar},showTabbedSshPage:${sshVar}}){` +
+      `let i=typeof navigator!=\`undefined\`&&navigator.userAgent.includes(\`Linux\`);` +
+      `if(i){if(!${sectionVar})return\`ssh\`;if(${selectedVar}===\`access-other-devices\`)return ${controlThisMacVar}?\`control-this-mac\`:\`ssh\`;` +
+      `if(${selectedVar}===\`control-this-mac\`&&!${controlThisMacVar})return\`ssh\`;if(${selectedVar}===\`ssh\`&&!${sshVar})return ${controlThisMacVar}?\`control-this-mac\`:\`ssh\`;return ${selectedVar}}` +
+      `return ${sectionVar}?${selectedVar}===\`control-this-mac\`&&!${controlThisMacVar}||${selectedVar}===\`ssh\`&&!${sshVar}?\`access-other-devices\`:${selectedVar}:\`ssh\`}`;
+    patched = patched.replace(REMOTE_CONTROL_SELECTED_TAB_REGEX, selectedTabReplacement);
+  }
+  return applyLinuxRemoteControlDeleteCleanupPatch(patched);
+}
+
+function applyLinuxRemoteControlDeleteCleanupPatch(source) {
+  if (source.includes(REMOTE_CONTROL_DELETE_CLEANUP_MARKER)) {
+    return migrateLinuxRemoteControlRenderCleanupPatch(source);
+  }
+  if (!source.includes("save-codex-managed-remote-ssh-connections")) {
+    return source;
+  }
+
+  const helperNeedle =
+    /function codexLinuxRemoteControlSettingsTabs\(e\)\{return typeof navigator!=`undefined`&&navigator\.userAgent\.includes\(`Linux`\)\?e\.filter\(e=>e\.key!==`access-other-devices`\):e\}/u;
+  const stateNeedle = /\{data:([A-Za-z_$][\w$]*)\}=W\(([A-Za-z_$][\w$]*)\.ADDED_REMOTE_CONTROL_ENV_IDS\),/u;
+  const scopeNeedle = /function [A-Za-z_$][\w$]*\(\)\{let ([A-Za-z_$][\w$]*)=L\([A-Za-z_$][\w$]*\),/u;
+  const deleteNeedle =
+    /([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)=>\{([A-Za-z_$][\w$]*)\|\|([A-Za-z_$][\w$]*)\.mutate\(\{remoteConnections:([A-Za-z_$][\w$]*)\.filter\(([A-Za-z_$][\w$]*)=>\6\.hostId!==\2\)\}\)\}/u;
+  const reactVarMatch =
+    source.match(/\(0,([A-Za-z_$][\w$]*)\.useState\)\(/u) ??
+    source.match(/\(0,([A-Za-z_$][\w$]*)\.useEffect\)\(/u);
+  const helperMatch = source.match(helperNeedle);
+  const stateMatch = source.match(stateNeedle);
+  const scopeMatch = source.match(scopeNeedle);
+  const deleteMatch = source.match(deleteNeedle);
+  if (helperMatch == null || stateMatch == null || scopeMatch == null || deleteMatch == null || reactVarMatch == null) {
+    console.warn("WARN: Could not find remote-control delete cleanup needle - skipping Linux remote-control delete cleanup patch");
+    return source;
+  }
+
+  const [, addedEnvIdsVar, globalStateEnumVar] = stateMatch;
+  const [, scopeVar] = scopeMatch;
+  const [, removeFnVar, deletedHostVar, pendingVar, mutationVar, connectionsVar, filterVar] = deleteMatch;
+  const [, reactVar] = reactVarMatch;
+  const safeDeletedHostVar = deletedHostVar === scopeVar ? "codexLinuxDeletedHostId" : deletedHostVar;
+  const helper =
+    "function codexLinuxRemoteControlDeleteConnectionCleanup(e,t,n,r,i,a){let o=new Set((r??[]).map(e=>e.hostId));i===n&&!o.has(n)&&d(e,t.SELECTED_REMOTE_HOST_ID,null);if(a&&typeof a==`object`&&!Array.isArray(a)&&Object.prototype.hasOwnProperty.call(a,n)){let r={...a};delete r[n],d(e,t.REMOTE_CONNECTION_AUTO_CONNECT_BY_HOST_ID,r)}}" +
+    `function ${REMOTE_CONTROL_STALE_SELECTION_CLEANUP_MARKER}(e,t,n,r,i){let a=new Set((n??[]).map(e=>e.hostId));r!=null&&!a.has(r)&&d(e,t.SELECTED_REMOTE_HOST_ID,null);if(i&&typeof i==\`object\`&&!Array.isArray(i)){let n={},r=!1;for(let[e,t]of Object.entries(i))a.has(e)?n[e]=t:r=!0;r&&d(e,t.REMOTE_CONNECTION_AUTO_CONNECT_BY_HOST_ID,n)}}`;
+  const stateReplacement =
+    `{data:${addedEnvIdsVar}}=W(${globalStateEnumVar}.ADDED_REMOTE_CONTROL_ENV_IDS),` +
+    `{data:codexLinuxRemoteSelectedHostId}=W(${globalStateEnumVar}.SELECTED_REMOTE_HOST_ID),` +
+    `{data:codexLinuxRemoteAutoConnectByHostId}=W(${globalStateEnumVar}.REMOTE_CONNECTION_AUTO_CONNECT_BY_HOST_ID),`;
+  const deleteReplacement =
+    `${removeFnVar}=${safeDeletedHostVar}=>{${pendingVar}||${mutationVar}.mutate({remoteConnections:${connectionsVar}.filter(${filterVar}=>${filterVar}.hostId!==${safeDeletedHostVar})},{onSuccess:({remoteConnections:n})=>{codexLinuxRemoteControlDeleteConnectionCleanup(${scopeVar},${globalStateEnumVar},${safeDeletedHostVar},n,codexLinuxRemoteSelectedHostId,codexLinuxRemoteAutoConnectByHostId)}})}`;
+
+  let patched = source
+    .replace(helperNeedle, `${helper}${helperMatch[0]}`)
+    .replace(stateNeedle, stateReplacement)
+    .replace(deleteNeedle, deleteReplacement);
+  const connectionAssignmentRegex = new RegExp(
+    `${escapeRegExp(connectionsVar)}=([A-Za-z_$][\\w$]*)\\.map\\(([A-Za-z_$][\\w$]*)=>Pt\\(Nt\\(\\2\\),\\{connectionAnalyticsId:\\2\\.connectionAnalyticsId\\}\\)\\),`,
+    "u",
+  );
+  const connectionAssignmentMatch = patched.match(connectionAssignmentRegex);
+  if (connectionAssignmentMatch == null) {
+    console.warn("WARN: Could not find remote-control connection assignment needle - skipping stale selected host reconciliation patch");
     return patched;
   }
-  const selectedTabMatch = patched.match(REMOTE_CONTROL_SELECTED_TAB_REGEX);
-  if (selectedTabMatch == null) {
-    console.warn("WARN: Could not find remote-control selected-tab needle - skipping Linux remote-control selected-tab patch");
-    return patched;
+
+  patched = patched.replace(
+    connectionAssignmentRegex,
+    `${connectionAssignmentMatch[0]}${linuxRemoteControlStaleSelectionEffectDeclarator({
+      reactVar,
+      scopeVar,
+      globalStateEnumVar,
+      connectionsVar,
+    })}`,
+  );
+  return patched;
+}
+
+function migrateLinuxRemoteControlRenderCleanupPatch(source) {
+  if (
+    source.includes(REMOTE_CONTROL_STALE_SELECTION_EFFECT_MARKER) &&
+    !source.includes(`/*${REMOTE_CONTROL_STALE_SELECTION_EFFECT_MARKER}*/`)
+  ) {
+    return source;
   }
-  const [, functionName, selectedVar, controlThisMacVar, sectionVar, sshVar] = selectedTabMatch;
-  const selectedTabReplacement =
-    `function ${functionName}({selectedConnectionsTab:${selectedVar},showControlThisMacTab:${controlThisMacVar},showRemoteControlConnectionsSection:${sectionVar},showTabbedSshPage:${sshVar}}){` +
-    `let i=typeof navigator!=\`undefined\`&&navigator.userAgent.includes(\`Linux\`);` +
-    `if(i){if(!${sectionVar})return\`ssh\`;if(${selectedVar}===\`access-other-devices\`)return ${controlThisMacVar}?\`control-this-mac\`:\`ssh\`;` +
-    `if(${selectedVar}===\`control-this-mac\`&&!${controlThisMacVar})return\`ssh\`;if(${selectedVar}===\`ssh\`&&!${sshVar})return ${controlThisMacVar}?\`control-this-mac\`:\`ssh\`;return ${selectedVar}}` +
-    `return ${sectionVar}?${selectedVar}===\`control-this-mac\`&&!${controlThisMacVar}||${selectedVar}===\`ssh\`&&!${sshVar}?\`access-other-devices\`:${selectedVar}:\`ssh\`}`;
-  return patched.replace(REMOTE_CONTROL_SELECTED_TAB_REGEX, selectedTabReplacement);
+
+  const reactVarMatch =
+    source.match(/\(0,([A-Za-z_$][\w$]*)\.useState\)\(/u) ??
+    source.match(/\(0,([A-Za-z_$][\w$]*)\.useEffect\)\(/u);
+  const renderCleanupCall = new RegExp(
+    `${REMOTE_CONTROL_STALE_SELECTION_CLEANUP_MARKER}\\(([A-Za-z_$][\\w$]*),([A-Za-z_$][\\w$]*),([A-Za-z_$][\\w$]*),codexLinuxRemoteSelectedHostId,codexLinuxRemoteAutoConnectByHostId\\),`,
+    "u",
+  );
+  const cleanupMatch = source.match(renderCleanupCall);
+  if (reactVarMatch == null || cleanupMatch == null) {
+    const invalidEffectCall = new RegExp(
+      `\\(0,([A-Za-z_$][\\w$]*)\\.useEffect\\)\\(\\(\\)=>\\{${REMOTE_CONTROL_STALE_SELECTION_CLEANUP_MARKER}\\(([A-Za-z_$][\\w$]*),([A-Za-z_$][\\w$]*),([A-Za-z_$][\\w$]*),codexLinuxRemoteSelectedHostId,codexLinuxRemoteAutoConnectByHostId\\)\\/\\*${REMOTE_CONTROL_STALE_SELECTION_EFFECT_MARKER}\\*\\/\\},\\[\\2,\\4,codexLinuxRemoteSelectedHostId,codexLinuxRemoteAutoConnectByHostId\\]\\),`,
+      "u",
+    );
+    const invalidEffectMatch = source.match(invalidEffectCall);
+    if (invalidEffectMatch == null) {
+      return source;
+    }
+    const [, invalidReactVar, invalidScopeVar, invalidGlobalStateEnumVar, invalidConnectionsVar] = invalidEffectMatch;
+    return source.replace(
+      invalidEffectCall,
+      linuxRemoteControlStaleSelectionEffectDeclarator({
+        reactVar: invalidReactVar,
+        scopeVar: invalidScopeVar,
+        globalStateEnumVar: invalidGlobalStateEnumVar,
+        connectionsVar: invalidConnectionsVar,
+      }),
+    );
+  }
+
+  const [, reactVar] = reactVarMatch;
+  const [, scopeVar, globalStateEnumVar, connectionsVar] = cleanupMatch;
+  return source.replace(
+    renderCleanupCall,
+    linuxRemoteControlStaleSelectionEffectDeclarator({
+      reactVar,
+      scopeVar,
+      globalStateEnumVar,
+      connectionsVar,
+    }),
+  );
 }
 
 function applyLinuxRemoteConnectionsRefreshPatch(source) {
