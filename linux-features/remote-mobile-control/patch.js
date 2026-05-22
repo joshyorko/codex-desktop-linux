@@ -28,6 +28,7 @@ const REMOTE_CONTROL_SETTINGS_UX_MARKER = "codexLinuxRemoteControlSettingsTabs";
 const REMOTE_CONNECTIONS_REFRESH_MARKER = "codexLinuxRemoteConnectionsRefreshNow";
 const REMOTE_CONTROL_DELETE_CLEANUP_MARKER = "codexLinuxRemoteControlDeleteConnectionCleanup";
 const REMOTE_CONTROL_STALE_SELECTION_CLEANUP_MARKER = "codexLinuxRemoteControlReconcileDeletedConnectionState";
+const REMOTE_CONTROL_STALE_SELECTION_EFFECT_MARKER = "codexLinuxRemoteControlReconcileDeletedConnectionStateEffect";
 const REMOTE_MOBILE_CHROME_BRIDGE_MARKER = "codexLinuxRemoteMobileBrowserBackends";
 const REMOTE_CONTROL_LOAD_GATE_MARKER = "codexLinuxRemoteControlLoadGateEnabled";
 const REMOTE_CONTROL_FEATURE_SYNC_MARKER = "codexLinuxRemoteControlFeatureSyncEnabled";
@@ -76,6 +77,19 @@ const REMOTE_CONTROL_LINUX_COPY_REPLACEMENTS = [
   ["local Mac", "local Linux desktop"],
 ];
 const CLIENT_ACCOUNT_COMPAT_MARKER = "codexLinuxRemoteControlAccountMatches";
+
+function linuxRemoteControlStaleSelectionEffectDeclarator({
+  reactVar,
+  scopeVar,
+  globalStateEnumVar,
+  connectionsVar,
+}) {
+  return (
+    `${REMOTE_CONTROL_STALE_SELECTION_EFFECT_MARKER}=(0,${reactVar}.useEffect)(()=>{` +
+    `${REMOTE_CONTROL_STALE_SELECTION_CLEANUP_MARKER}(${scopeVar},${globalStateEnumVar},${connectionsVar},codexLinuxRemoteSelectedHostId,codexLinuxRemoteAutoConnectByHostId)` +
+    `},[${scopeVar},${connectionsVar},codexLinuxRemoteSelectedHostId,codexLinuxRemoteAutoConnectByHostId]),`
+  );
+}
 
 function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -680,7 +694,7 @@ function applyLinuxRemoteControlSettingsUxPatch(source) {
 
 function applyLinuxRemoteControlDeleteCleanupPatch(source) {
   if (source.includes(REMOTE_CONTROL_DELETE_CLEANUP_MARKER)) {
-    return source;
+    return migrateLinuxRemoteControlRenderCleanupPatch(source);
   }
   if (!source.includes("save-codex-managed-remote-ssh-connections")) {
     return source;
@@ -692,11 +706,14 @@ function applyLinuxRemoteControlDeleteCleanupPatch(source) {
   const scopeNeedle = /function [A-Za-z_$][\w$]*\(\)\{let ([A-Za-z_$][\w$]*)=L\([A-Za-z_$][\w$]*\),/u;
   const deleteNeedle =
     /([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)=>\{([A-Za-z_$][\w$]*)\|\|([A-Za-z_$][\w$]*)\.mutate\(\{remoteConnections:([A-Za-z_$][\w$]*)\.filter\(([A-Za-z_$][\w$]*)=>\6\.hostId!==\2\)\}\)\}/u;
+  const reactVarMatch =
+    source.match(/\(0,([A-Za-z_$][\w$]*)\.useState\)\(/u) ??
+    source.match(/\(0,([A-Za-z_$][\w$]*)\.useEffect\)\(/u);
   const helperMatch = source.match(helperNeedle);
   const stateMatch = source.match(stateNeedle);
   const scopeMatch = source.match(scopeNeedle);
   const deleteMatch = source.match(deleteNeedle);
-  if (helperMatch == null || stateMatch == null || scopeMatch == null || deleteMatch == null) {
+  if (helperMatch == null || stateMatch == null || scopeMatch == null || deleteMatch == null || reactVarMatch == null) {
     console.warn("WARN: Could not find remote-control delete cleanup needle - skipping Linux remote-control delete cleanup patch");
     return source;
   }
@@ -704,6 +721,7 @@ function applyLinuxRemoteControlDeleteCleanupPatch(source) {
   const [, addedEnvIdsVar, globalStateEnumVar] = stateMatch;
   const [, scopeVar] = scopeMatch;
   const [, removeFnVar, deletedHostVar, pendingVar, mutationVar, connectionsVar, filterVar] = deleteMatch;
+  const [, reactVar] = reactVarMatch;
   const safeDeletedHostVar = deletedHostVar === scopeVar ? "codexLinuxDeletedHostId" : deletedHostVar;
   const helper =
     "function codexLinuxRemoteControlDeleteConnectionCleanup(e,t,n,r,i,a){let o=new Set((r??[]).map(e=>e.hostId));i===n&&!o.has(n)&&d(e,t.SELECTED_REMOTE_HOST_ID,null);if(a&&typeof a==`object`&&!Array.isArray(a)&&Object.prototype.hasOwnProperty.call(a,n)){let r={...a};delete r[n],d(e,t.REMOTE_CONNECTION_AUTO_CONNECT_BY_HOST_ID,r)}}" +
@@ -731,9 +749,64 @@ function applyLinuxRemoteControlDeleteCleanupPatch(source) {
 
   patched = patched.replace(
     connectionAssignmentRegex,
-    `${connectionAssignmentMatch[0]}${REMOTE_CONTROL_STALE_SELECTION_CLEANUP_MARKER}(${scopeVar},${globalStateEnumVar},${connectionsVar},codexLinuxRemoteSelectedHostId,codexLinuxRemoteAutoConnectByHostId),`,
+    `${connectionAssignmentMatch[0]}${linuxRemoteControlStaleSelectionEffectDeclarator({
+      reactVar,
+      scopeVar,
+      globalStateEnumVar,
+      connectionsVar,
+    })}`,
   );
   return patched;
+}
+
+function migrateLinuxRemoteControlRenderCleanupPatch(source) {
+  if (
+    source.includes(REMOTE_CONTROL_STALE_SELECTION_EFFECT_MARKER) &&
+    !source.includes(`/*${REMOTE_CONTROL_STALE_SELECTION_EFFECT_MARKER}*/`)
+  ) {
+    return source;
+  }
+
+  const reactVarMatch =
+    source.match(/\(0,([A-Za-z_$][\w$]*)\.useState\)\(/u) ??
+    source.match(/\(0,([A-Za-z_$][\w$]*)\.useEffect\)\(/u);
+  const renderCleanupCall = new RegExp(
+    `${REMOTE_CONTROL_STALE_SELECTION_CLEANUP_MARKER}\\(([A-Za-z_$][\\w$]*),([A-Za-z_$][\\w$]*),([A-Za-z_$][\\w$]*),codexLinuxRemoteSelectedHostId,codexLinuxRemoteAutoConnectByHostId\\),`,
+    "u",
+  );
+  const cleanupMatch = source.match(renderCleanupCall);
+  if (reactVarMatch == null || cleanupMatch == null) {
+    const invalidEffectCall = new RegExp(
+      `\\(0,([A-Za-z_$][\\w$]*)\\.useEffect\\)\\(\\(\\)=>\\{${REMOTE_CONTROL_STALE_SELECTION_CLEANUP_MARKER}\\(([A-Za-z_$][\\w$]*),([A-Za-z_$][\\w$]*),([A-Za-z_$][\\w$]*),codexLinuxRemoteSelectedHostId,codexLinuxRemoteAutoConnectByHostId\\)\\/\\*${REMOTE_CONTROL_STALE_SELECTION_EFFECT_MARKER}\\*\\/\\},\\[\\2,\\4,codexLinuxRemoteSelectedHostId,codexLinuxRemoteAutoConnectByHostId\\]\\),`,
+      "u",
+    );
+    const invalidEffectMatch = source.match(invalidEffectCall);
+    if (invalidEffectMatch == null) {
+      return source;
+    }
+    const [, invalidReactVar, invalidScopeVar, invalidGlobalStateEnumVar, invalidConnectionsVar] = invalidEffectMatch;
+    return source.replace(
+      invalidEffectCall,
+      linuxRemoteControlStaleSelectionEffectDeclarator({
+        reactVar: invalidReactVar,
+        scopeVar: invalidScopeVar,
+        globalStateEnumVar: invalidGlobalStateEnumVar,
+        connectionsVar: invalidConnectionsVar,
+      }),
+    );
+  }
+
+  const [, reactVar] = reactVarMatch;
+  const [, scopeVar, globalStateEnumVar, connectionsVar] = cleanupMatch;
+  return source.replace(
+    renderCleanupCall,
+    linuxRemoteControlStaleSelectionEffectDeclarator({
+      reactVar,
+      scopeVar,
+      globalStateEnumVar,
+      connectionsVar,
+    }),
+  );
 }
 
 function applyLinuxRemoteConnectionsRefreshPatch(source) {

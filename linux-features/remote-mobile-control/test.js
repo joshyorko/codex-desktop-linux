@@ -170,12 +170,12 @@ function syntheticCurrentSettingsBundle() {
 
 function syntheticRemoteConnectionDeleteBundle() {
   return [
-    "const i=`linux`,Q={jsx(){},jsxs(){}};",
-    "tabs:[{key:`control-this-mac`,name:(0,Q.jsx)(N,{id:`settings.remoteConnections.tabs.controlThisMac`,defaultMessage:`Control this Mac`,description:`Tab label for settings that let other devices control this computer`})},{key:`access-other-devices`,name:(0,Q.jsx)(N,{id:`settings.remoteConnections.tabs.accessOtherDevices`,defaultMessage:`Control other devices`,description:`Tab label for settings that let this computer control other devices`})},{key:`ssh`,name:(0,Q.jsx)(N,{id:`settings.remoteConnections.tabs.ssh`,defaultMessage:`SSH`,description:`Tab label for SSH remote connections`})}],selectedKey:Pe,variant:`underline`,onSelect:le}",
+    "const i=`linux`,Q={jsx(){},jsxs(){}},Z={useEffect(){},useState(){}};",
+    "const codexLinuxTabsFixture={tabs:[{key:`control-this-mac`,name:(0,Q.jsx)(N,{id:`settings.remoteConnections.tabs.controlThisMac`,defaultMessage:`Control this Mac`,description:`Tab label for settings that let other devices control this computer`})},{key:`access-other-devices`,name:(0,Q.jsx)(N,{id:`settings.remoteConnections.tabs.accessOtherDevices`,defaultMessage:`Control other devices`,description:`Tab label for SSH remote connections`})},{key:`ssh`,name:(0,Q.jsx)(N,{id:`settings.remoteConnections.tabs.ssh`,defaultMessage:`SSH`,description:`Tab label for SSH remote connections`})}],selectedKey:Pe,variant:`underline`,onSelect:le};",
     "function $n(e,t){return e.displayName.localeCompare(t.displayName)}",
     "function er({selectedConnectionsTab:e,showControlThisMacTab:t,showRemoteControlConnectionsSection:n,showTabbedSshPage:r}){return n?e===`control-this-mac`&&!t||e===`ssh`&&!r?`access-other-devices`:e:`ssh`}",
     "var Xn=[],Zn=[];",
-    "function Qn(){let e=L(F),t=ee(U),n=oe(),r=I(),{platform:i}=ue(),[o]=E(`remote_connections`),[c]=E(`remote_control_connections`),ye=[...o??Xn].sort($n),be=tr(c??Zn),{data:xe}=W(s.ADDED_REMOTE_CONTROL_ENV_IDS),Se=G({addedRemoteControlEnvIds:xe,remoteControlConnections:be}),ke=ye.map(e=>Pt(Nt(e),{connectionAnalyticsId:e.connectionAnalyticsId})),qe=B(`save-codex-managed-remote-ssh-connections`,{onSuccess:()=>{},onError:t=>{}}),$e=qe.isPending,_t=e=>{$e||qe.mutate({remoteConnections:ke.filter(t=>t.hostId!==e)})};return _t}",
+    "function Qn(){let e=L(F),t=ee(U),n=oe(),r=I(),{platform:i}=ue(),[p,m]=(0,Z.useState)(null),[o]=E(`remote_connections`),[c]=E(`remote_control_connections`),ye=[...o??Xn].sort($n),be=tr(c??Zn),{data:xe}=W(s.ADDED_REMOTE_CONTROL_ENV_IDS),Se=G({addedRemoteControlEnvIds:xe,remoteControlConnections:be}),ke=ye.map(e=>Pt(Nt(e),{connectionAnalyticsId:e.connectionAnalyticsId})),qe=B(`save-codex-managed-remote-ssh-connections`,{onSuccess:()=>{},onError:t=>{}}),$e=qe.isPending,_t=e=>{$e||qe.mutate({remoteConnections:ke.filter(t=>t.hostId!==e)})};return _t}",
   ].join("");
 }
 
@@ -938,7 +938,8 @@ test("Linux remote-control settings UX patch clears selected host state when del
 
   assert.notEqual(patched, source);
   assert.match(patched, /codexLinuxRemoteControlDeleteConnectionCleanup/);
-  assert.match(patched, /codexLinuxRemoteControlReconcileDeletedConnectionState/);
+  assert.match(patched, /codexLinuxRemoteSelectedHostId/);
+  assert.match(patched, /codexLinuxRemoteAutoConnectByHostId/);
   assert.match(patched, /\{data:codexLinuxRemoteSelectedHostId\}=W\(s\.SELECTED_REMOTE_HOST_ID\)/);
   assert.match(
     patched,
@@ -950,7 +951,12 @@ test("Linux remote-control settings UX patch clears selected host state when del
   );
   assert.match(
     patched,
-    /codexLinuxRemoteControlReconcileDeletedConnectionState\(e,s,ke,codexLinuxRemoteSelectedHostId,codexLinuxRemoteAutoConnectByHostId\)/,
+    /codexLinuxRemoteControlReconcileDeletedConnectionStateEffect=\(0,Z\.useEffect\)\(\(\)=>\{codexLinuxRemoteControlReconcileDeletedConnectionState\(e,s,ke,codexLinuxRemoteSelectedHostId,codexLinuxRemoteAutoConnectByHostId\)\}/,
+  );
+  assert.doesNotThrow(() => new vm.Script(patched));
+  assert.doesNotMatch(
+    patched,
+    /ke=ye\.map\(e=>Pt\(Nt\(e\),\{connectionAnalyticsId:e\.connectionAnalyticsId\}\)\),codexLinuxRemoteControlReconcileDeletedConnectionState\(/,
   );
   assert.equal(applyLinuxRemoteControlSettingsUxPatch(patched), patched);
 });
@@ -965,9 +971,32 @@ test("Linux remote-control settings UX patch reconciles stale selected host stat
   assert.match(patched, /ke=Ae\.map\(e=>Pt\(Nt\(e\),\{connectionAnalyticsId:e\.connectionAnalyticsId\}\)\)/);
   assert.match(
     patched,
-    /codexLinuxRemoteControlReconcileDeletedConnectionState\(e,s,ke,codexLinuxRemoteSelectedHostId,codexLinuxRemoteAutoConnectByHostId\)/,
+    /codexLinuxRemoteControlReconcileDeletedConnectionStateEffect=\(0,Z\.useEffect\)\(\(\)=>\{codexLinuxRemoteControlReconcileDeletedConnectionState\(e,s,ke,codexLinuxRemoteSelectedHostId,codexLinuxRemoteAutoConnectByHostId\)\}/,
   );
+  assert.doesNotThrow(() => new vm.Script(patched));
   assert.equal(applyLinuxRemoteControlSettingsUxPatch(patched), patched);
+});
+
+test("Linux remote-control settings UX patch migrates render-time stale host cleanup", () => {
+  const patched = applyLinuxRemoteControlSettingsUxPatch(syntheticRemoteConnectionDeleteBundle());
+  const oldPatched = patched.replace(
+    /codexLinuxRemoteControlReconcileDeletedConnectionStateEffect=\(0,Z\.useEffect\)\(\(\)=>\{codexLinuxRemoteControlReconcileDeletedConnectionState\(e,s,ke,codexLinuxRemoteSelectedHostId,codexLinuxRemoteAutoConnectByHostId\)\},\[e,ke,codexLinuxRemoteSelectedHostId,codexLinuxRemoteAutoConnectByHostId\]\),/,
+    "codexLinuxRemoteControlReconcileDeletedConnectionState(e,s,ke,codexLinuxRemoteSelectedHostId,codexLinuxRemoteAutoConnectByHostId),",
+  );
+
+  assert.notEqual(oldPatched, patched);
+  assert.equal(applyLinuxRemoteControlSettingsUxPatch(oldPatched), patched);
+});
+
+test("Linux remote-control settings UX patch migrates malformed stale host cleanup effect", () => {
+  const patched = applyLinuxRemoteControlSettingsUxPatch(syntheticRemoteConnectionDeleteBundle());
+  const malformedPatched = patched.replace(
+    /codexLinuxRemoteControlReconcileDeletedConnectionStateEffect=\(0,Z\.useEffect\)\(\(\)=>\{codexLinuxRemoteControlReconcileDeletedConnectionState\(e,s,ke,codexLinuxRemoteSelectedHostId,codexLinuxRemoteAutoConnectByHostId\)\},\[e,ke,codexLinuxRemoteSelectedHostId,codexLinuxRemoteAutoConnectByHostId\]\),/,
+    "(0,Z.useEffect)(()=>{codexLinuxRemoteControlReconcileDeletedConnectionState(e,s,ke,codexLinuxRemoteSelectedHostId,codexLinuxRemoteAutoConnectByHostId)/*codexLinuxRemoteControlReconcileDeletedConnectionStateEffect*/},[e,ke,codexLinuxRemoteSelectedHostId,codexLinuxRemoteAutoConnectByHostId]),",
+  );
+
+  assert.throws(() => new vm.Script(malformedPatched), /Unexpected token/);
+  assert.equal(applyLinuxRemoteControlSettingsUxPatch(malformedPatched), patched);
 });
 
 test("Linux remote-control selected-tab fallback avoids outbound control on Linux", () => {
