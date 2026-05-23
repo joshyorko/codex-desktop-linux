@@ -13,3 +13,4 @@ dist-next/
 linux-features/features.json
 .idea/
 .claude/
+.codex/
