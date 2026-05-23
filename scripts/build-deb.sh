@@ -67,6 +67,7 @@ main() {
     stage_common_package_files "$PKG_ROOT"
     stage_optional_update_builder_bundle "$PKG_ROOT"
     write_launcher_stub "$PKG_ROOT"
+    normalize_package_payload_permissions "$PKG_ROOT"
 
     sed \
         -e "s/__PACKAGE_NAME__/$PACKAGE_NAME/g" \

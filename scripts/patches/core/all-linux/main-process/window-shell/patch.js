@@ -8,6 +8,7 @@ const {
   applyLinuxOpaqueBackgroundPatch,
   applyLinuxFileManagerPatch,
   applyLinuxCodeEditorOpenTargetPatch,
+  applyLinuxBuildInfoTrayPatch,
   applyLinuxTrayPatch,
   applyLinuxSingleInstancePatch,
   applyLinuxGitOriginsSourceFallbackPatch,
@@ -77,6 +78,13 @@ module.exports = [
     order: 110,
     ciPolicy: "optional",
     apply: (source, context) => applyLinuxTrayPatch(source, context.iconPathExpression),
+  },
+  {
+    id: "linux-build-info-tray",
+    phase: "main-bundle",
+    order: 115,
+    ciPolicy: "optional",
+    apply: applyLinuxBuildInfoTrayPatch,
   },
   {
     id: "linux-single-instance",

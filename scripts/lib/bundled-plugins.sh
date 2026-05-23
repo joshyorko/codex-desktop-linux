@@ -581,6 +581,7 @@ stage_chrome_plugin_from_upstream() {
     remove_macos_sidecar_files "$target_plugin"
     patch_chrome_plugin_for_linux "$target_plugin"
     patch_browser_use_node_repl_env_guard "$target_plugin/scripts/browser-client.mjs"
+    patch_browser_use_native_pipe_import_meta_bridge "$target_plugin/scripts/browser-client.mjs"
     patch_browser_use_site_status_allowlist_fallback "$target_plugin/scripts/browser-client.mjs"
     if ! install_chrome_extension_host_resource "$target_plugin"; then
         rm -rf "$target_plugin"
@@ -668,6 +669,44 @@ path.write_text(source.replace(old, new, 1), encoding="utf-8")
 PY
 }
 
+patch_browser_use_native_pipe_import_meta_bridge() {
+    local client="$1"
+
+    if grep -Fq "globalThis.nodeRepl?.nativePipe??import.meta.__codexNativePipe" "$client"; then
+        return 0
+    fi
+
+    python3 - "$client" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+path = Path(sys.argv[1])
+source = path.read_text(encoding="utf-8")
+pattern = re.compile(
+    r'function (?P<helper>[A-Za-z_$][\w$]*)\(\)\{'
+    r'let (?P<bridge>[A-Za-z_$][\w$]*)='
+    r'(?:globalThis\.nodeRepl\?\.nativePipe|import\.meta\.__codexNativePipe);'
+    r'return (?P=bridge)==null\|\|typeof (?P=bridge)\.createConnection!="function"\?null:(?P=bridge)\}'
+)
+match = pattern.search(source)
+if match is None:
+    print(
+        "WARN: Could not find Browser Use nativePipe bridge helper — leaving browser-client.mjs unchanged",
+        file=sys.stderr,
+    )
+    raise SystemExit(0)
+
+helper = match.group("helper")
+bridge = match.group("bridge")
+replacement = (
+    f'function {helper}(){{let {bridge}=globalThis.nodeRepl?.nativePipe??import.meta.__codexNativePipe;'
+    f'return {bridge}==null||typeof {bridge}.createConnection!="function"?null:{bridge}}}'
+)
+path.write_text(source[:match.start()] + replacement + source[match.end():], encoding="utf-8")
+PY
+}
+
 find_browser_plugin_source() {
     local bundled_root="$1"
     local source_marketplace="$2"
@@ -748,6 +787,7 @@ stage_browser_plugin_from_upstream() {
     cp -R "$source_plugin" "$target_plugin"
     remove_macos_sidecar_files "$target_plugin"
     patch_browser_use_node_repl_env_guard "$target_client"
+    patch_browser_use_native_pipe_import_meta_bridge "$target_client"
     patch_browser_use_site_status_allowlist_fallback "$target_client"
 
     info "Browser plugin staged from upstream DMG"

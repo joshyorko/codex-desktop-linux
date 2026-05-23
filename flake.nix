@@ -10,6 +10,8 @@
     flake-utils.lib.eachSystem [ "x86_64-linux" "aarch64-linux" ] (system:
       let
         pkgs = import nixpkgs { inherit system; };
+        flakeSourceCommit = self.rev or (self.dirtyRev or "");
+        flakeSourceDateEpoch = toString (self.lastModified or 1);
         sourceRoot = pkgs.lib.cleanSourceWith {
           src = ./.;
           filter = path: type:
@@ -22,10 +24,10 @@
 
         codexDmg = pkgs.fetchurl {
           url = "https://persistent.oaistatic.com/codex-app-prod/Codex.dmg";
-          hash = "sha256-0wuxD/77hV3NniIRhSDLb7Zhnc/X7GgYR6oVm08qDz0=";
+          hash = "sha256-MQHAXf1AMUEVQYxK2H7e4CQZ0Jf3FkxnfdvdRVmtikI=";
         };
 
-        codexVersion = "26.519.31651";
+        codexVersion = "26.519.41501";
         electronVersion = "42.1.0";
         electronPlatform =
           {
@@ -378,7 +380,10 @@ PY
             export npm_config_cafile="$SSL_CERT_FILE"
             export CARGO_HOME="$TMPDIR/cargo-home"
             export CARGO_BUILD_JOBS=1
-            export SOURCE_DATE_EPOCH=1
+            export SOURCE_DATE_EPOCH="${flakeSourceDateEpoch}"
+            ${pkgs.lib.optionalString (flakeSourceCommit != "") ''
+            export CODEX_LINUX_SOURCE_COMMIT="${flakeSourceCommit}"
+            ''}
             ${pkgs.lib.optionalString enableComputerUseUi ''
             export CODEX_LINUX_ENABLE_COMPUTER_USE_UI=1
             ''}

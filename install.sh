@@ -37,6 +37,7 @@ ICON_SOURCE="$SCRIPT_DIR/assets/codex.png"
 . "$SCRIPT_DIR/scripts/lib/bundled-plugins.sh"
 . "$SCRIPT_DIR/scripts/lib/linux-features.sh"
 . "$SCRIPT_DIR/scripts/lib/rebuild-report.sh"
+. "$SCRIPT_DIR/scripts/lib/build-info.sh"
 
 # ---- Create start script ----
 create_start_script() {
@@ -117,6 +118,7 @@ main() {
     install_bundled_plugin_resources "$app_dir"
     run_linux_feature_stage_hooks "$app_dir"
     create_start_script
+    write_build_info "$dmg_path" "$app_dir"
 
     if [ -n "${CODEX_REBUILD_REPORT_JSON:-}" ] && [ -n "${CODEX_PATCH_REPORT_JSON:-}" ]; then
         write_rebuild_report_json \

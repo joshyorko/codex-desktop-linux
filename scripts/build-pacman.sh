@@ -71,6 +71,7 @@ main() {
 	stage_common_package_files "$staging_root"
 	stage_optional_update_builder_bundle "$staging_root"
 	write_launcher_stub "$staging_root"
+	normalize_package_payload_permissions "$staging_root"
 
 	local package_name
 	local pacman_pkgver

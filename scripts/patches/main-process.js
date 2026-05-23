@@ -589,18 +589,18 @@ function applyLinuxTrayPatch(currentSource, iconPathExpression) {
   }
 
   const patchedCloseToTrayRegex =
-    /if\(\(process\.platform===`win32`\|\|process\.platform===`linux`\)&&!this\.isAppQuitting&&!\(typeof codexLinuxIsQuitInProgress===`function`&&codexLinuxIsQuitInProgress\(\)\)&&this\.options\.canHideLastLocalWindowToTray\?\.\(\)===!0&&![A-Za-z_$][\w$]*\)\{[A-Za-z_$][\w$]*\.preventDefault\(\),[A-Za-z_$][\w$]*\.hide\(\);return\}/;
+    /if\(\(process\.platform===`win32`\|\|process\.platform===`linux`\)&&!this\.isAppQuitting&&!\(typeof codexLinuxIsQuitInProgress===`function`&&codexLinuxIsQuitInProgress\(\)\)&&this\.options\.canHideLast(?:Local)?WindowToTray\?\.\(\)===!0&&![A-Za-z_$][\w$]*\)\{[A-Za-z_$][\w$]*\.preventDefault\(\),[A-Za-z_$][\w$]*\.hide\(\);return\}/;
   if (patchedCloseToTrayRegex.test(patchedSource)) {
     // Already patched with a newer minifier's window variable.
   } else {
     const closeToTrayRegex =
-      /if\(process\.platform===`win32`&&!this\.isAppQuitting&&this\.options\.canHideLastLocalWindowToTray\?\.\(\)===!0&&!([A-Za-z_$][\w$]*)\)\{([A-Za-z_$][\w$]*)\.preventDefault\(\),([A-Za-z_$][\w$]*)\.hide\(\);return\}/;
+      /if\(process\.platform===`win32`&&!this\.isAppQuitting&&this\.options\.(canHideLast(?:Local)?WindowToTray)\?\.\(\)===!0&&!([A-Za-z_$][\w$]*)\)\{([A-Za-z_$][\w$]*)\.preventDefault\(\),([A-Za-z_$][\w$]*)\.hide\(\);return\}/;
     const closeToTrayMatch = patchedSource.match(closeToTrayRegex);
     if (closeToTrayMatch != null) {
-      const [, hasOtherWindowVar, eventVar, windowVar] = closeToTrayMatch;
+      const [, gateMethodName, hasOtherWindowVar, eventVar, windowVar] = closeToTrayMatch;
       patchedSource = patchedSource.replace(
         closeToTrayRegex,
-        `if((process.platform===\`win32\`||process.platform===\`linux\`)&&!this.isAppQuitting&&!(typeof codexLinuxIsQuitInProgress===\`function\`&&codexLinuxIsQuitInProgress())&&this.options.canHideLastLocalWindowToTray?.()===!0&&!${hasOtherWindowVar}){${eventVar}.preventDefault(),${windowVar}.hide();return}`,
+        `if((process.platform===\`win32\`||process.platform===\`linux\`)&&!this.isAppQuitting&&!(typeof codexLinuxIsQuitInProgress===\`function\`&&codexLinuxIsQuitInProgress())&&this.options.${gateMethodName}?.()===!0&&!${hasOtherWindowVar}){${eventVar}.preventDefault(),${windowVar}.hide();return}`,
       );
     } else {
       console.warn("WARN: Could not find close-to-tray condition — skipping Linux close-to-tray patch");
@@ -726,6 +726,43 @@ function applyLinuxTrayPatch(currentSource, iconPathExpression) {
   return patchedSource;
 }
 
+function buildLinuxBuildInfoHelpers(electronVar, fsVar, pathVar) {
+  return `function codexLinuxBuildInfoPaths(){let e=[];try{e.push((0,${pathVar}.join)(process.resourcesPath,\`codex-linux-build-info.json\`)),e.push((0,${pathVar}.join)(process.resourcesPath,\`..\`,\`.codex-linux\`,\`build-info.json\`))}catch{}return e}function codexLinuxReadBuildInfo(){for(let e of codexLinuxBuildInfoPaths())try{if(${fsVar}.existsSync(e)){let t=JSON.parse(${fsVar}.readFileSync(e,\`utf8\`));return t&&typeof t===\`object\`&&!Array.isArray(t)?t:null}}catch{}return null}function codexLinuxBuildInfoValue(e,t=\`unknown\`){return typeof e===\`string\`&&e.trim().length>0?e:Array.isArray(e)&&e.length>0?e.join(\`, \`):e==null?t:String(e)}function codexLinuxBuildInfoDetail(e){if(!e)return\`No Linux build metadata file was found in this app install.\`;let t=e.linuxTarget??{},n=t.distro??{},r=e.upstreamDmg??{},i=e.source??{},a=e.linuxFeatures?.enabled??[],o=e.packageProfile??{},s=i.shortCommit||i.commit,c=s?i.dirty?\`\${s} (dirty)\`:s:\`unknown\`,l=n.prettyName||[n.id,n.versionId].filter(Boolean).join(\` \`)||\`unknown\`;return[\`Linux package profile: \${codexLinuxBuildInfoValue(o.label)}\`,\`Distro: \${l}\`,\`Package manager: \${codexLinuxBuildInfoValue(t.packageManager??o.packageManager)}\`,\`Package format: \${codexLinuxBuildInfoValue(t.packageFormat??o.format)}\`,\`Enabled features: \${a.length>0?a.join(\`, \`):\`none\`}\`,\`Upstream app version: \${codexLinuxBuildInfoValue(r.appVersion)}\`,\`Upstream DMG SHA256: \${codexLinuxBuildInfoValue(r.sha256)}\`,\`Electron: \${codexLinuxBuildInfoValue(e.electronVersion)}\`,\`Linux source revision: \${c}\`,\`Source branch: \${codexLinuxBuildInfoValue(i.branch)}\`,\`Generated: \${codexLinuxBuildInfoValue(e.generatedAt)}\`].join(\`\\n\`)}async function codexLinuxShowBuildInfo(){try{let e=codexLinuxReadBuildInfo();await ${electronVar}.dialog?.showMessageBox({type:\`info\`,buttons:[\`OK\`],defaultId:0,noLink:!0,message:\`Codex Desktop Linux build information\`,detail:codexLinuxBuildInfoDetail(e)})}catch{}}`;
+}
+
+function applyLinuxBuildInfoTrayPatch(currentSource) {
+  if (currentSource.includes("function codexLinuxShowBuildInfo()")) {
+    return currentSource;
+  }
+
+  const electronVar = requireName(currentSource, "electron");
+  const fsVar = requireName(currentSource, "node:fs");
+  const pathVar = requireName(currentSource, "node:path");
+  if (electronVar == null || fsVar == null || pathVar == null) {
+    console.warn("WARN: Could not find build info module bindings — skipping Linux build info tray patch");
+    return currentSource;
+  }
+
+  const trayMenuRegex = /getNativeTrayMenuItems\(\)\{return\[/g;
+  if (!trayMenuRegex.test(currentSource)) {
+    console.warn("WARN: Could not find tray menu items method — skipping Linux build info tray patch");
+    return currentSource;
+  }
+
+  const classRegex = /var [A-Za-z_$][\w$]*=class\{[^]*?getNativeTrayMenuItems\(\)\{return\[/;
+  const classMatch = currentSource.match(classRegex);
+  if (classMatch == null || classMatch.index == null) {
+    console.warn("WARN: Could not find tray class insertion point — skipping Linux build info tray patch");
+    return currentSource;
+  }
+
+  const helpers = buildLinuxBuildInfoHelpers(electronVar, fsVar, pathVar);
+  const menuPrefix =
+    "...process.platform===`linux`?[{label:`Build Information`,click:()=>{codexLinuxShowBuildInfo()}},{type:`separator`}]:[],";
+  const withMenuItem = currentSource.replace(trayMenuRegex, `getNativeTrayMenuItems(){return[${menuPrefix}`);
+  return `${withMenuItem.slice(0, classMatch.index)}${helpers};${withMenuItem.slice(classMatch.index)}`;
+}
+
 function applyLinuxSingleInstancePatch(currentSource) {
   let patchedSource = currentSource;
 
@@ -777,16 +814,89 @@ function applyBrowserUseNodeReplApprovalPatch(currentSource) {
   const approvalPatch =
     "startup_timeout_sec:120,tools:{js:{approval_mode:`approve`}},env:{";
   const needle = "startup_timeout_sec:120,env:{";
-  if (!currentSource.includes(needle)) {
-    if (!currentSource.includes(approvalPatch)) {
-      console.warn(
-        "WARN: Could not find Browser Use node_repl config insertion point — skipping node_repl approval patch",
-      );
-    }
-    return currentSource;
+  let patchedSource = currentSource;
+  let patchedTrustedHashes = false;
+  if (patchedSource.includes(needle)) {
+    patchedSource = patchedSource.split(needle).join(approvalPatch);
   }
 
-  return currentSource.split(needle).join(approvalPatch);
+  const currentRuntimeConfigRegex =
+    /([A-Za-z_$][\w$]*)\.Dn\(\{([^{}]*?)nodeReplPath:([^,{}]+)(,)(?!tools:\{js:\{approval_mode:`approve`\}\})/g;
+  let patchedAnyCurrentRuntimeConfig = false;
+  patchedSource = patchedSource.replace(
+    currentRuntimeConfigRegex,
+    (_match, runtimeFactoryVar, configPrefix, nodeReplPathVar, comma) => {
+      patchedAnyCurrentRuntimeConfig = true;
+      return `${runtimeFactoryVar}.Dn({${configPrefix}nodeReplPath:${nodeReplPathVar}${comma}tools:{js:{approval_mode:\`approve\`}},`;
+    },
+  );
+
+  const trustedHashesRegex =
+    /trustedBrowserClientSha256s:([^,{}]+)\|\|([^,{}]+)\?([A-Za-z_$][\w$]*):\[\]/g;
+  patchedSource = patchedSource.replace(
+    trustedHashesRegex,
+    (match, browserUseEnabledVar, nativePipeEnabledVar, trustedHashesVar) => {
+      if (match.includes("codexLinuxTrustedBrowserClientSha256s(")) {
+        return match;
+      }
+      patchedTrustedHashes = true;
+      return `trustedBrowserClientSha256s:${browserUseEnabledVar}||${nativePipeEnabledVar}?codexLinuxTrustedBrowserClientSha256s(${trustedHashesVar}):[]`;
+    },
+  );
+
+  if (
+    patchedTrustedHashes &&
+    !patchedSource.includes("function codexLinuxTrustedBrowserClientSha256s(")
+  ) {
+    const fsVar = requireName(patchedSource, "node:fs");
+    const pathVar = requireName(patchedSource, "node:path");
+    const cryptoVar = requireName(patchedSource, "node:crypto");
+    if (fsVar == null || pathVar == null || cryptoVar == null) {
+      console.warn(
+        "WARN: Could not find fs/path/crypto aliases — skipping Linux Browser Use trusted hash patch",
+      );
+      patchedSource = patchedSource.replace(
+        /trustedBrowserClientSha256s:([^,{}]+)\|\|([^,{}]+)\?codexLinuxTrustedBrowserClientSha256s\(([A-Za-z_$][\w$]*)\):\[\]/g,
+        "trustedBrowserClientSha256s:$1||$2?$3:[]",
+      );
+      patchedTrustedHashes = false;
+    } else {
+      const helper =
+        `function codexLinuxTrustedBrowserClientSha256s(e,t=process.resourcesPath){if(process.platform!==\`linux\`)return e;let n=Array.isArray(e)?[...e]:[],r=t??"";if(r.length===0)return Array.from(new Set(n));for(let a of[\`browser\`,\`chrome\`])try{let e=(0,${pathVar}.join)(r,\`plugins\`,\`openai-bundled\`,\`plugins\`,a,\`scripts\`,\`browser-client.mjs\`);(0,${fsVar}.existsSync)(e)&&n.push((0,${cryptoVar}.createHash)(\`sha256\`).update((0,${fsVar}.readFileSync)(e)).digest(\`hex\`))}catch{}return Array.from(new Set(n))}`;
+      const strictDirective = '"use strict";';
+      const helperInsertionIndex = patchedSource.startsWith(strictDirective)
+        ? strictDirective.length
+        : 0;
+      patchedSource =
+        patchedSource.slice(0, helperInsertionIndex) +
+        helper +
+        patchedSource.slice(helperInsertionIndex);
+    }
+  }
+
+  if (
+    !patchedTrustedHashes &&
+    !patchedSource.includes("codexLinuxTrustedBrowserClientSha256s(") &&
+    patchedSource.includes("NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S")
+  ) {
+    console.warn(
+      "WARN: Could not find Browser Use trusted hash insertion point — skipping Linux Browser Use trusted hash patch",
+    );
+  }
+
+  if (
+    patchedSource === currentSource &&
+    !patchedSource.includes(approvalPatch) &&
+    !patchedAnyCurrentRuntimeConfig &&
+    !patchedTrustedHashes &&
+    !patchedSource.includes("codexLinuxTrustedBrowserClientSha256s(")
+  ) {
+    console.warn(
+      "WARN: Could not find Browser Use node_repl config insertion point — skipping node_repl approval patch",
+    );
+  }
+
+  return patchedSource;
 }
 
 function applyLinuxChromeExtensionStatusPatch(currentSource) {
@@ -944,6 +1054,7 @@ module.exports = {
   applyLinuxExplicitQuitPromptBypassPatch,
   applyLinuxExplicitTrayQuitPatch,
   applyLinuxCodeEditorOpenTargetPatch,
+  applyLinuxBuildInfoTrayPatch,
   applyLinuxFileManagerPatch,
   applyLinuxGitOriginsSourceFallbackPatch,
   applyLinuxMenuPatch,

@@ -28,18 +28,31 @@ function applyLinuxSettingsPersistencePatch(currentSource) {
   }
 
   if (!patchedSource.includes("function codexLinuxPersistSettingsState(")) {
-    const stateFileRegex = /var ([A-Za-z_$][\w$]*)=`\.codex-global-state\.json`([,;])/;
-    const stateFileMatch = patchedSource.match(stateFileRegex);
     const pathVar = inferModuleAlias(patchedSource, "node:path");
     const fsVar = inferModuleAlias(patchedSource, "node:fs");
-    if (stateFileMatch == null || pathVar == null || fsVar == null) {
+    const stateFileHelperSource =
+      (stateFileVar) =>
+        `var ${stateFileVar}=\`.codex-global-state.json\`;function codexLinuxSettingsAppId(){let e=process.env.CODEX_LINUX_APP_ID||process.env.CODEX_APP_ID||\`codex-desktop\`;return/^[A-Za-z0-9._-]+$/.test(e)?e:\`codex-desktop\`}function codexLinuxSettingsPath(){let e=process.env.CODEX_LINUX_SETTINGS_FILE;if(typeof e===\`string\`&&e.length>0)return e;let t=process.env.XDG_CONFIG_HOME||process.env.HOME&&${pathVar}.join(process.env.HOME,\`.config\`);return t?${pathVar}.join(t,codexLinuxSettingsAppId(),\`settings.json\`):null}function codexLinuxReadSettingsFile(){let e=codexLinuxSettingsPath();if(!e||!${fsVar}.existsSync(e))return{};try{let t=${fsVar}.readFileSync(e,\`utf8\`),n=JSON.parse(t);return n&&typeof n===\`object\`&&!Array.isArray(n)?n:{}}catch(e){return{}}}function codexLinuxPersistSettingsState(e,t){if(process.platform!==\`linux\`||![${Object.values(linuxSettingsKeys).map((key) => `\`${key}\``).join(",")}].includes(e))return;try{let n=codexLinuxSettingsPath();if(!n)return;let r=codexLinuxReadSettingsFile();t===void 0?delete r[e]:r[e]=t,${fsVar}.mkdirSync(${pathVar}.dirname(n),{recursive:!0,mode:448}),${fsVar}.writeFileSync(n,JSON.stringify(r,null,2)+\`\\n\`,\`utf8\`)}catch(e){}}`;
+    const stateFileCommaRegex = /var ([A-Za-z_$][\w$]*)=`\.codex-global-state\.json`,/;
+    const stateFileSemicolonRegex = /var ([A-Za-z_$][\w$]*)=`\.codex-global-state\.json`;/;
+    if (pathVar == null || fsVar == null) {
       console.warn("WARN: Could not find Linux settings state file marker — skipping settings persistence patch");
       return patchedSource;
     }
-    const varListContinuation = stateFileMatch[2] === "," ? "var " : "";
-    const stateFilePatch =
-      `var ${stateFileMatch[1]}=\`.codex-global-state.json\`;function codexLinuxSettingsAppId(){let e=process.env.CODEX_LINUX_APP_ID||process.env.CODEX_APP_ID||\`codex-desktop\`;return/^[A-Za-z0-9._-]+$/.test(e)?e:\`codex-desktop\`}function codexLinuxSettingsPath(){let e=process.env.CODEX_LINUX_SETTINGS_FILE;if(typeof e===\`string\`&&e.length>0)return e;let t=process.env.XDG_CONFIG_HOME||process.env.HOME&&${pathVar}.join(process.env.HOME,\`.config\`);return t?${pathVar}.join(t,codexLinuxSettingsAppId(),\`settings.json\`):null}function codexLinuxReadSettingsFile(){let e=codexLinuxSettingsPath();if(!e||!${fsVar}.existsSync(e))return{};try{let t=${fsVar}.readFileSync(e,\`utf8\`),n=JSON.parse(t);return n&&typeof n===\`object\`&&!Array.isArray(n)?n:{}}catch(e){return{}}}function codexLinuxPersistSettingsState(e,t){if(process.platform!==\`linux\`||![${Object.values(linuxSettingsKeys).map((key) => `\`${key}\``).join(",")}].includes(e))return;try{let n=codexLinuxSettingsPath();if(!n)return;let r=codexLinuxReadSettingsFile();t===void 0?delete r[e]:r[e]=t,${fsVar}.mkdirSync(${pathVar}.dirname(n),{recursive:!0,mode:448}),${fsVar}.writeFileSync(n,JSON.stringify(r,null,2)+\`\\n\`,\`utf8\`)}catch(e){}}${varListContinuation}`;
-    patchedSource = patchedSource.replace(stateFileRegex, stateFilePatch);
+    if (stateFileCommaRegex.test(patchedSource)) {
+      patchedSource = patchedSource.replace(
+        stateFileCommaRegex,
+        (_match, stateFileVar) => `${stateFileHelperSource(stateFileVar)}var `,
+      );
+    } else if (stateFileSemicolonRegex.test(patchedSource)) {
+      patchedSource = patchedSource.replace(
+        stateFileSemicolonRegex,
+        (_match, stateFileVar) => stateFileHelperSource(stateFileVar),
+      );
+    } else {
+      console.warn("WARN: Could not find Linux settings state file marker — skipping settings persistence patch");
+      return patchedSource;
+    }
   } else if (!patchedSource.includes("function codexLinuxSettingsAppId()")) {
     const legacySettingsPathRegex =
       /function codexLinuxSettingsPath\(\)\{let ([A-Za-z_$][\w$]*)=process\.env\.XDG_CONFIG_HOME\|\|process\.env\.HOME&&([A-Za-z_$][\w$]*)\.join\(process\.env\.HOME,`\.config`\);return \1\?\2\.join\(\1,`codex-desktop`,`settings\.json`\):null\}/;
@@ -53,26 +66,21 @@ function applyLinuxSettingsPersistencePatch(currentSource) {
   if (/"set-global-state":async\(\{key:[A-Za-z_$][\w$]*,value:[A-Za-z_$][\w$]*,origin:[A-Za-z_$][\w$]*\}\)=>\([\s\S]{0,300}?codexLinuxPersistSettingsState\(/.test(patchedSource)) {
     return patchedSource;
   }
+  if (/"set-global-state":async\(\{key:[A-Za-z_$][\w$]*,value:[A-Za-z_$][\w$]*,origin:[A-Za-z_$][\w$]*\}\)=>\(this\.setGlobalStateValue\([A-Za-z_$][\w$]*,[A-Za-z_$][\w$]*,[A-Za-z_$][\w$]*\),codexLinuxPersistSettingsState\(/.test(patchedSource)) {
+    return patchedSource;
+  }
   const setGlobalStateRegex =
-    /"set-global-state":async\(\{key:([A-Za-z_$][\w$]*),value:([A-Za-z_$][\w$]*),origin:([A-Za-z_$][\w$]*)\}\)=>\(this\.globalState\.set\(\1,\2\),/;
-  const setGlobalStateValueRegex =
-    /"set-global-state":async\(\{key:([A-Za-z_$][\w$]*),value:([A-Za-z_$][\w$]*),origin:([A-Za-z_$][\w$]*)\}\)=>\(this\.setGlobalStateValue\(\1,\2,\3\),/;
-  if (setGlobalStateRegex.test(patchedSource)) {
-    return patchedSource.replace(
-      setGlobalStateRegex,
-      (_match, keyVar, valueVar, originVar) =>
-        `"set-global-state":async({key:${keyVar},value:${valueVar},origin:${originVar}})=>(this.globalState.set(${keyVar},${valueVar}),codexLinuxPersistSettingsState(${keyVar},${valueVar}),`,
-    );
+    /"set-global-state":async\(\{key:([A-Za-z_$][\w$]*),value:([A-Za-z_$][\w$]*),origin:([A-Za-z_$][\w$]*)\}\)=>\((this\.(?:globalState\.set\(\1,\2\)|setGlobalStateValue\(\1,\2,\3\))),/;
+  if (!setGlobalStateRegex.test(patchedSource)) {
+    console.warn("WARN: Could not find Linux set-global-state needle — skipping settings persistence hook");
+    return patchedSource;
   }
-  if (setGlobalStateValueRegex.test(patchedSource)) {
-    return patchedSource.replace(
-      setGlobalStateValueRegex,
-      (_match, keyVar, valueVar, originVar) =>
-        `"set-global-state":async({key:${keyVar},value:${valueVar},origin:${originVar}})=>(this.setGlobalStateValue(${keyVar},${valueVar},${originVar}),codexLinuxPersistSettingsState(${keyVar},${valueVar}),`,
-    );
-  }
-  console.warn("WARN: Could not find Linux set-global-state needle — skipping settings persistence hook");
-  return patchedSource;
+
+  return patchedSource.replace(
+    setGlobalStateRegex,
+    (_match, keyVar, valueVar, originVar, setterCall) =>
+      `"set-global-state":async({key:${keyVar},value:${valueVar},origin:${originVar}})=>(${setterCall},codexLinuxPersistSettingsState(${keyVar},${valueVar}),`,
+  );
 }
 
 function applyLinuxTrayCloseSettingPatch(currentSource) {
@@ -117,6 +125,8 @@ function buildSemanticLinuxLaunchActionPatch({
   openerFn,
   windowManagerVar,
   hostExpr,
+  getPrimaryWindowCall,
+  createFreshWindowMethod,
   currentWindowVar,
   createdWindowVar,
   routeVar,
@@ -141,7 +151,8 @@ function buildSemanticLinuxLaunchActionPatch({
     ? `process.platform===\`linux\`&&codexLinuxStartLaunchActionSocket();${setterVar}(e=>{codexLinuxHandleLaunchActionArgsFallback(e,()=>{${fallbackFn}()})});`
     : `process.platform===\`linux\`&&(${appVar}.app.on(\`before-quit\`,codexLinuxBeforeQuitHandler),${disposableVar}.add(()=>{${appVar}.app.off(\`before-quit\`,codexLinuxBeforeQuitHandler)}),codexLinuxStartLaunchActionSocket(),${appVar}.app.on(\`second-instance\`,codexLinuxSecondInstanceHandler),${disposableVar}.add(()=>{${appVar}.app.off(\`second-instance\`,codexLinuxSecondInstanceHandler)}));${setterVar}(e=>{codexLinuxHandleLaunchActionArgsFallback(e,()=>{${fallbackFn}()})});`;
 
-  return `${quitState}codexLinuxGetSetting=e=>process.platform!==\`linux\`||${globalStateExpr}.get(e)!==!1,codexLinuxIsTrayEnabled=()=>codexLinuxGetSetting(\`${linuxSettingsKeys.systemTray}\`),codexLinuxIsWarmStartEnabled=()=>codexLinuxGetSetting(\`${linuxSettingsKeys.warmStart}\`),codexLinuxIsPromptWindowEnabled=()=>codexLinuxGetSetting(\`${linuxSettingsKeys.promptWindow}\`),codexLinuxLaunchActionAppId=()=>{let e=process.env.CODEX_LINUX_APP_ID||process.env.CODEX_APP_ID||\`codex-desktop\`;return/^[A-Za-z0-9._-]+$/.test(e)?e:\`codex-desktop\`},codexLinuxLaunchActionInstanceId=()=>{let e=process.env.CODEX_LINUX_INSTANCE_ID?.trim();return e&&/^[A-Za-z0-9._-]+$/.test(e)?e:null},codexLinuxDefaultLaunchActionSocket=()=>{let e=codexLinuxLaunchActionAppId(),t=codexLinuxLaunchActionInstanceId(),n=process.env.XDG_RUNTIME_DIR?.trim();if(n&&n.length>0)return t?${pathVar}.default.join(n,e,\`instances\`,t,\`launch-action.sock\`):${pathVar}.default.join(n,e,\`launch-action.sock\`);let r=process.env.XDG_STATE_HOME?.trim(),i=process.env.HOME?.trim();if((!r||r.length===0)&&i&&i.length>0)r=${pathVar}.default.join(i,\`.local\`,\`state\`);if(!r||r.length===0)return null;return t?${pathVar}.default.join(r,e,\`instances\`,t,\`launch-action.sock\`):${pathVar}.default.join(r,e,\`launch-action.sock\`)},${openerFn}=async(e,t)=>{${windowManagerVar}.hotkeyWindowLifecycleManager.hide();let ${currentWindowVar}=${windowManagerVar}.getPrimaryWindow(${hostExpr}),${createdWindowVar}=${currentWindowVar}??await ${windowManagerVar}.createFreshLocalWindow(e);${createdWindowVar}!=null&&(${notificationPrefix}${currentWindowVar}!=null&&t.navigateExistingWindow&&${routeVar}.navigateToRoute(${createdWindowVar},e),${focusFn}(${createdWindowVar}))},codexLinuxGetHotkeyWindowController=()=>typeof ${windowManagerVar}.hotkeyWindowLifecycleManager.ensureHotkeyWindowController===\`function\`?${windowManagerVar}.hotkeyWindowLifecycleManager.ensureHotkeyWindowController():${windowManagerVar}.hotkeyWindowLifecycleManager,codexLinuxShowHotkeyWindow=async()=>{let e=codexLinuxGetHotkeyWindowController();typeof e.openHome===\`function\`?await e.openHome():typeof e.show===\`function\`?await e.show():await ${windowManagerVar}.ensureHostWindow(${hostExpr})},codexLinuxOpenQuickChat=async()=>{${windowManagerVar}.hotkeyWindowLifecycleManager.hide();let e=${windowManagerVar}.getPrimaryWindow(${hostExpr}),t=e??await ${windowManagerVar}.createFreshLocalWindow(\`/\`);t!=null&&(${windowManagerVar}.windowManager.sendMessageToWindow(t,{type:\`new-quick-chat\`}),${focusFn}(t))},codexLinuxHasDeepLink=e=>Array.isArray(e)&&e.some(e=>typeof e===\`string\`&&(e.startsWith(\`codex://\`)||e.startsWith(\`codex-browser-sidebar://\`))),codexLinuxHandleLaunchActionArgs=async e=>(typeof codexLinuxIsQuitInProgress===\`function\`&&codexLinuxIsQuitInProgress())?!0:codexLinuxHasDeepLink(e)&&${deepLinksVar}.deepLinks.queueProcessArgs(e)?!0:Array.isArray(e)&&(e.includes(\`--prompt-chat\`)||e.includes(\`--hotkey-window\`))?(codexLinuxIsPromptWindowEnabled()?(await codexLinuxShowHotkeyWindow(),!0):!1):Array.isArray(e)&&e.includes(\`--quick-chat\`)?(await codexLinuxOpenQuickChat(),!0):Array.isArray(e)&&e.includes(\`--new-chat\`)?(await ${openerFn}(\`/\`,{navigateExistingWindow:!0}),!0):!1,codexLinuxHandleLaunchActionArgsFallback=(e,t)=>{if(typeof codexLinuxIsQuitInProgress===\`function\`&&codexLinuxIsQuitInProgress())return;codexLinuxHandleLaunchActionArgs(e).then(e=>{e||t()}).catch(e=>{${reporterVar}.reportNonFatal(e instanceof Error?e:\`Failed to handle Linux launch action\`,{kind:\`linux-launch-action-failed\`}),t()})},codexLinuxPrewarmHotkeyWindow=()=>{if(!codexLinuxIsPromptWindowEnabled())return;try{let e=codexLinuxGetHotkeyWindowController();typeof e.prewarm===\`function\`&&e.prewarm()}catch(e){${reporterVar}.reportNonFatal(e instanceof Error?e:\`Failed to prewarm Linux hotkey window\`,{kind:\`linux-hotkey-window-prewarm-failed\`})}},codexLinuxStartLaunchActionSocket=()=>{let e=process.env.CODEX_DESKTOP_LAUNCH_ACTION_SOCKET?.trim()||codexLinuxDefaultLaunchActionSocket();if(process.platform!==\`linux\`||!e||!codexLinuxIsWarmStartEnabled())return;try{${fsVar}.mkdirSync(${pathVar}.default.dirname(e),{recursive:!0,mode:448}),${fsVar}.rmSync(e,{force:!0});let t=${netVar}.default.createServer(t=>{let n=\`\`,r=!1,i=()=>{if(r)return;r=!0;let i=[];try{let e=JSON.parse(n.trim());Array.isArray(e.argv)&&(i=e.argv.filter(e=>typeof e===\`string\`))}catch(e){t.end?.(\`error\\n\`);return}codexLinuxHandleLaunchActionArgs(i).then(e=>e?void 0:${fallbackFn}()).then(()=>{t.end?.(\`ok\\n\`)}).catch(e=>{${reporterVar}.reportNonFatal(e instanceof Error?e:\`Failed to handle Linux launch action socket\`,{kind:\`linux-launch-action-socket-failed\`}),t.end?.(\`error\\n\`)})};t.setEncoding?.(\`utf8\`),t.on(\`data\`,e=>{n+=e,n.includes(\`\\n\`)?i():n.length>65536&&t.destroy()}),t.on(\`end\`,i)});t.on(\`error\`,e=>{${reporterVar}.reportNonFatal(e instanceof Error?e:\`Failed Linux launch action socket\`,{kind:\`linux-launch-action-socket-error\`})}),t.listen(e),${disposableVar}.add(()=>{t.close(),${fsVar}.rmSync(e,{force:!0})})}catch(e){${reporterVar}.reportNonFatal(e instanceof Error?e:\`Failed to start Linux launch action socket\`,{kind:\`linux-launch-action-socket-start-failed\`})}}${directHandler};${startup}`;
+  const ensureHostWindowCall = hostExpr == null ? `${windowManagerVar}.ensureHostWindow()` : `${windowManagerVar}.ensureHostWindow(${hostExpr})`;
+  return `${quitState}codexLinuxGetSetting=e=>process.platform!==\`linux\`||${globalStateExpr}.get(e)!==!1,codexLinuxIsTrayEnabled=()=>codexLinuxGetSetting(\`${linuxSettingsKeys.systemTray}\`),codexLinuxIsWarmStartEnabled=()=>codexLinuxGetSetting(\`${linuxSettingsKeys.warmStart}\`),codexLinuxIsPromptWindowEnabled=()=>codexLinuxGetSetting(\`${linuxSettingsKeys.promptWindow}\`),codexLinuxLaunchActionAppId=()=>{let e=process.env.CODEX_LINUX_APP_ID||process.env.CODEX_APP_ID||\`codex-desktop\`;return/^[A-Za-z0-9._-]+$/.test(e)?e:\`codex-desktop\`},codexLinuxLaunchActionInstanceId=()=>{let e=process.env.CODEX_LINUX_INSTANCE_ID?.trim();return e&&/^[A-Za-z0-9._-]+$/.test(e)?e:null},codexLinuxDefaultLaunchActionSocket=()=>{let e=codexLinuxLaunchActionAppId(),t=codexLinuxLaunchActionInstanceId(),n=process.env.XDG_RUNTIME_DIR?.trim();if(n&&n.length>0)return t?${pathVar}.default.join(n,e,\`instances\`,t,\`launch-action.sock\`):${pathVar}.default.join(n,e,\`launch-action.sock\`);let r=process.env.XDG_STATE_HOME?.trim(),i=process.env.HOME?.trim();if((!r||r.length===0)&&i&&i.length>0)r=${pathVar}.default.join(i,\`.local\`,\`state\`);if(!r||r.length===0)return null;return t?${pathVar}.default.join(r,e,\`instances\`,t,\`launch-action.sock\`):${pathVar}.default.join(r,e,\`launch-action.sock\`)},${openerFn}=async(e,t)=>{${windowManagerVar}.hotkeyWindowLifecycleManager.hide();let ${currentWindowVar}=${getPrimaryWindowCall},${createdWindowVar}=${currentWindowVar}??await ${windowManagerVar}.${createFreshWindowMethod}(e);${createdWindowVar}!=null&&(${notificationPrefix}${currentWindowVar}!=null&&t.navigateExistingWindow&&${routeVar}.navigateToRoute(${createdWindowVar},e),${focusFn}(${createdWindowVar}))},codexLinuxGetHotkeyWindowController=()=>typeof ${windowManagerVar}.hotkeyWindowLifecycleManager.ensureHotkeyWindowController===\`function\`?${windowManagerVar}.hotkeyWindowLifecycleManager.ensureHotkeyWindowController():${windowManagerVar}.hotkeyWindowLifecycleManager,codexLinuxShowHotkeyWindow=async()=>{let e=codexLinuxGetHotkeyWindowController();typeof e.openHome===\`function\`?await e.openHome():typeof e.show===\`function\`?await e.show():await ${ensureHostWindowCall}},codexLinuxOpenQuickChat=async()=>{${windowManagerVar}.hotkeyWindowLifecycleManager.hide();let e=${getPrimaryWindowCall},t=e??await ${windowManagerVar}.${createFreshWindowMethod}(\`/\`);t!=null&&(${windowManagerVar}.windowManager.sendMessageToWindow(t,{type:\`new-quick-chat\`}),${focusFn}(t))},codexLinuxHasDeepLink=e=>Array.isArray(e)&&e.some(e=>typeof e===\`string\`&&(e.startsWith(\`codex://\`)||e.startsWith(\`codex-browser-sidebar://\`))),codexLinuxHandleLaunchActionArgs=async e=>(typeof codexLinuxIsQuitInProgress===\`function\`&&codexLinuxIsQuitInProgress())?!0:codexLinuxHasDeepLink(e)&&${deepLinksVar}.deepLinks.queueProcessArgs(e)?!0:Array.isArray(e)&&(e.includes(\`--prompt-chat\`)||e.includes(\`--hotkey-window\`))?(codexLinuxIsPromptWindowEnabled()?(await codexLinuxShowHotkeyWindow(),!0):!1):Array.isArray(e)&&e.includes(\`--quick-chat\`)?(await codexLinuxOpenQuickChat(),!0):Array.isArray(e)&&e.includes(\`--new-chat\`)?(await ${openerFn}(\`/\`,{navigateExistingWindow:!0}),!0):!1,codexLinuxHandleLaunchActionArgsFallback=(e,t)=>{if(typeof codexLinuxIsQuitInProgress===\`function\`&&codexLinuxIsQuitInProgress())return;codexLinuxHandleLaunchActionArgs(e).then(e=>{e||t()}).catch(e=>{${reporterVar}.reportNonFatal(e instanceof Error?e:\`Failed to handle Linux launch action\`,{kind:\`linux-launch-action-failed\`}),t()})},codexLinuxPrewarmHotkeyWindow=()=>{if(!codexLinuxIsPromptWindowEnabled())return;try{let e=codexLinuxGetHotkeyWindowController();typeof e.prewarm===\`function\`&&e.prewarm()}catch(e){${reporterVar}.reportNonFatal(e instanceof Error?e:\`Failed to prewarm Linux hotkey window\`,{kind:\`linux-hotkey-window-prewarm-failed\`})}},codexLinuxStartLaunchActionSocket=()=>{let e=process.env.CODEX_DESKTOP_LAUNCH_ACTION_SOCKET?.trim()||codexLinuxDefaultLaunchActionSocket();if(process.platform!==\`linux\`||!e||!codexLinuxIsWarmStartEnabled())return;try{${fsVar}.mkdirSync(${pathVar}.default.dirname(e),{recursive:!0,mode:448}),${fsVar}.rmSync(e,{force:!0});let t=${netVar}.default.createServer(t=>{let n=\`\`,r=!1,i=()=>{if(r)return;r=!0;let i=[];try{let e=JSON.parse(n.trim());Array.isArray(e.argv)&&(i=e.argv.filter(e=>typeof e===\`string\`))}catch(e){t.end?.(\`error\\n\`);return}codexLinuxHandleLaunchActionArgs(i).then(e=>e?void 0:${fallbackFn}()).then(()=>{t.end?.(\`ok\\n\`)}).catch(e=>{${reporterVar}.reportNonFatal(e instanceof Error?e:\`Failed to handle Linux launch action socket\`,{kind:\`linux-launch-action-socket-failed\`}),t.end?.(\`error\\n\`)})};t.setEncoding?.(\`utf8\`),t.on(\`data\`,e=>{n+=e,n.includes(\`\\n\`)?i():n.length>65536&&t.destroy()}),t.on(\`end\`,i)});t.on(\`error\`,e=>{${reporterVar}.reportNonFatal(e instanceof Error?e:\`Failed Linux launch action socket\`,{kind:\`linux-launch-action-socket-error\`})}),t.listen(e),${disposableVar}.add(()=>{t.close(),${fsVar}.rmSync(e,{force:!0})})}catch(e){${reporterVar}.reportNonFatal(e instanceof Error?e:\`Failed to start Linux launch action socket\`,{kind:\`linux-launch-action-socket-start-failed\`})}}${directHandler};${startup}`;
 }
 
 function applyCurrentSemanticLinuxLaunchActionArgsPatch(currentSource) {
@@ -164,13 +175,13 @@ function applyCurrentSemanticLinuxLaunchActionArgsPatch(currentSource) {
 
     const openerText = currentSource.slice(openerLetIndex, openerEnd + 1);
     const openerVars = openerText.match(
-      /([A-Za-z_$][\w$]*)\.hotkeyWindowLifecycleManager\.hide\(\);let ([A-Za-z_$][\w$]*)=\1\.getPrimaryWindow\(([^)]*)\),([A-Za-z_$][\w$]*)=\2\?\?await \1\.createFreshLocalWindow\(e\);/,
+      /([A-Za-z_$][\w$]*)\.hotkeyWindowLifecycleManager\.hide\(\);let ([A-Za-z_$][\w$]*)=\1\.getPrimaryWindow(?:\(([^)]*)\))?,([A-Za-z_$][\w$]*)=\2\?\?await \1\.(createFreshLocalWindow|createFreshWindow)\(e\);/,
     );
     if (openerVars == null) {
       continue;
     }
 
-    const [, windowManagerVar, currentWindowVar, hostExpr, createdWindowVar] = openerVars;
+    const [, windowManagerVar, currentWindowVar, hostExprRaw, createdWindowVar, createFreshWindowMethod] = openerVars;
     const routeVar = openerText.match(/([A-Za-z_$][\w$]*)\.navigateToRoute\([A-Za-z_$][\w$]*,e\)/)?.[1];
     const focusFn = openerText.match(new RegExp(`,([A-Za-z_$][\\w$]*)\\(${escapeRegExp(createdWindowVar)}\\)\\)\\}$`))?.[1];
     if (routeVar == null || focusFn == null) {
@@ -179,6 +190,13 @@ function applyCurrentSemanticLinuxLaunchActionArgsPatch(currentSource) {
 
     const prefix = currentSource.slice(Math.max(0, match.index - HANDLER_PREFIX_LOOKBACK), match.index);
     const globalStateExpr = findLinuxGlobalStateExpression(prefix);
+    const hostExpr =
+      hostExprRaw?.trim() ||
+      prefix.match(/localHost:([A-Za-z_$][\w$]*)/)?.[1] ||
+      null;
+    const getPrimaryWindowCall = hostExpr == null
+      ? `${windowManagerVar}.getPrimaryWindow()`
+      : `${windowManagerVar}.getPrimaryWindow(${hostExpr})`;
     const reporterVar = findLastRegexMatch(
       prefix,
       /([A-Za-z_$][\w$]*)\.reportNonFatal\(e instanceof Error\?e:`Failed to open window on second instance`/g,
@@ -200,7 +218,9 @@ function applyCurrentSemanticLinuxLaunchActionArgsPatch(currentSource) {
       fallbackFn,
       openerFn,
       windowManagerVar,
-      hostExpr: hostExpr.trim(),
+      hostExpr,
+      getPrimaryWindowCall,
+      createFreshWindowMethod,
       currentWindowVar,
       createdWindowVar,
       routeVar,
@@ -278,7 +298,7 @@ function applyLinuxHotkeyWindowPrewarmPatch(currentSource) {
   }
 
   const dynamicStartupPrewarmRegex =
-    /(w\(`local window ensured`,([A-Za-z_$][\w$]*),\{hostId:[^,{}]+,localWindowVisible:[^}]+\}\),)\2=Date\.now\(\),await ([A-Za-z_$][\w$]*)\.deepLinks\.flushPendingDeepLinks\(\)/;
+    /(w\(`(?:local )?window ensured`,([A-Za-z_$][\w$]*),\{(?:hostId:[^,{}]+,localWindowVisible:[^}]+|windowVisible:[^}]+)\}\),)\2=Date\.now\(\),await ([A-Za-z_$][\w$]*)\.deepLinks\.flushPendingDeepLinks\(\)/;
   const dynamicStartupPrewarmMatch = patchedSource.match(dynamicStartupPrewarmRegex);
   if (dynamicStartupPrewarmMatch != null) {
     const [, prefix, timeVar, deepLinksVar] = dynamicStartupPrewarmMatch;

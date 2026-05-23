@@ -437,10 +437,10 @@ Ubuntu-family `p7zip-full` can be too old for newer APFS DMGs, so `install-deps.
 
 ```bash
 # Fedora 41+
-sudo dnf install python3 7zip curl unzip @development-tools
+sudo dnf install python3 7zip curl unzip rpm-build @development-tools
 
 # Fedora < 41
-sudo dnf install python3 p7zip p7zip-plugins curl unzip
+sudo dnf install python3 p7zip p7zip-plugins curl unzip rpm-build
 sudo dnf groupinstall 'Development Tools'
 
 # openSUSE

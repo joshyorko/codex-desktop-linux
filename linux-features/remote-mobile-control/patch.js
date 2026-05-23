@@ -218,6 +218,16 @@ function applyLinuxRemoteControlClientAccountCompatibilityPatch(source) {
     return source;
   }
 
+  if (
+    source.includes("function ep({authIdentity:e,connectionKey:t,deviceKeyClient:n,globalState:r})") &&
+    source.includes("Promise.all(tp(e).map(async e=>{let i=jf(t,e);") &&
+    source.includes("function tp(e){if(e.tokenAccountUserId==null)return[];") &&
+    source.includes("tokenAuthUserId!==e.tokenAccountUserId&&t.push(e.tokenAuthUserId)") &&
+    source.includes("u.account_user_id!==c&&!(s.tokenAccountId!=null&&s.headerChatGptAccountId===s.tokenAccountId&&s.tokenAuthUserId===u.account_user_id)")
+  ) {
+    return source;
+  }
+
   if (!source.includes("Remote control enrollment start does not match current account.")) {
     return source;
   }
@@ -644,6 +654,15 @@ function replaceLinuxRemoteControlCopy(source) {
 function applyLinuxRemoteControlCopyPatch(source) {
   const { patched, changed } = replaceLinuxRemoteControlCopy(source);
   if (!changed) {
+    if (
+      !source.includes("this Mac") &&
+      !source.includes("Keep this Mac awake") &&
+      !source.includes("Control this Mac") &&
+      !source.includes("local Mac") &&
+      !source.includes("settings.remoteConnections")
+    ) {
+      return source;
+    }
     console.warn("WARN: Could not find remote-control Mac copy - skipping Linux remote-control copy patch");
     return source;
   }

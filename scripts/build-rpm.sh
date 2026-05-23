@@ -86,6 +86,7 @@ main() {
 exec /opt/$PACKAGE_NAME/start.sh "\$@"
 SCRIPT
     chmod 0755 "$staging_root/usr/bin/$PACKAGE_NAME"
+    normalize_package_payload_permissions "$staging_root"
 
     local spec_file="$build_root/codex-desktop.spec"
     sed \

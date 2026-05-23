@@ -31,6 +31,20 @@ assert_file_not_exists() {
     [ ! -e "$path" ] || fail "Expected file not to exist: $path"
 }
 
+assert_mode() {
+    local path="$1"
+    local expected="$2"
+    local actual
+    actual="$(python3 - "$path" <<'PY'
+import os
+import sys
+
+print(format(os.lstat(sys.argv[1]).st_mode & 0o777, "o"))
+PY
+)"
+    [ "$actual" = "$expected" ] || fail "Expected mode $expected for $path, got $actual"
+}
+
 assert_contains() {
     local path="$1"
     local pattern="$2"
@@ -109,7 +123,7 @@ JSON
 {"name":"browser","version":"0.1.0-alpha2","interface":{"category":"Engineering"}}
 JSON
     cat > "$resources_dir/plugins/openai-bundled/plugins/browser/scripts/browser-client.mjs" <<'JS'
-function lu(e){let t=globalThis.nodeRepl?.env[e];return typeof t=="string"?t:void 0}class Uf{async fetchBlocked(e){let r=await bS(e.endpoint,{method:"GET"});if(!r.ok)throw new Error(ae(`Browser Use cannot determine if ${e.displayUrl} is allowed. Please try again later or use another source.`));let n=await r.json();return TF(n)}}export function setupAtlasRuntime() {}
+function lu(e){let t=globalThis.nodeRepl?.env[e];return typeof t=="string"?t:void 0}function th(){let e=import.meta.__codexNativePipe;return e==null||typeof e.createConnection!="function"?null:e}class Uf{async fetchBlocked(e){let r=await bS(e.endpoint,{method:"GET"});if(!r.ok)throw new Error(ae(`Browser Use cannot determine if ${e.displayUrl} is allowed. Please try again later or use another source.`));let n=await r.json();return TF(n)}}export function setupAtlasRuntime() {}
 JS
 }
 
@@ -131,6 +145,30 @@ test_common_helper_sourcing() {
     # shellcheck disable=SC1091
     source "$REPO_DIR/scripts/lib/package-common.sh"
     ensure_file_exists "$probe_file" "probe file"
+}
+
+test_package_payload_permission_normalization() {
+    info "Checking package payload permission normalization"
+    local root="$TMP_DIR/package-permissions"
+    local app_root="$root/opt/codex-desktop"
+
+    mkdir -p "$app_root/content/webview" "$root/usr/bin"
+    printf '%s\n' '#!/bin/bash' 'echo start' > "$app_root/start.sh"
+    printf '%s\n' '<!doctype html>' > "$app_root/content/webview/index.html"
+    printf '%s\n' '#!/bin/bash' 'exec /opt/codex-desktop/start.sh "$@"' > "$root/usr/bin/codex-desktop"
+    chmod 0700 "$root/opt" "$app_root" "$app_root/content" "$app_root/content/webview"
+    chmod 0700 "$app_root/start.sh" "$root/usr/bin/codex-desktop"
+    chmod 0600 "$app_root/content/webview/index.html"
+
+    # shellcheck disable=SC1091
+    source "$REPO_DIR/scripts/lib/package-common.sh"
+    normalize_package_payload_permissions "$root"
+
+    assert_mode "$app_root" "755"
+    assert_mode "$app_root/content/webview" "755"
+    assert_mode "$app_root/start.sh" "755"
+    assert_mode "$root/usr/bin/codex-desktop" "755"
+    assert_mode "$app_root/content/webview/index.html" "644"
 }
 
 test_deb_builder_smoke() {
@@ -189,6 +227,8 @@ SCRIPT
     assert_file_exists "$pkg_root/opt/codex-desktop/update-builder/scripts/lib/linux-update-bridge-patch.js"
     assert_file_exists "$pkg_root/opt/codex-desktop/update-builder/scripts/lib/patch-report.js"
     assert_file_exists "$pkg_root/opt/codex-desktop/update-builder/scripts/lib/rebuild-report.sh"
+    assert_file_exists "$pkg_root/opt/codex-desktop/update-builder/scripts/lib/build-info.js"
+    assert_file_exists "$pkg_root/opt/codex-desktop/update-builder/scripts/lib/build-info.sh"
     assert_file_exists "$pkg_root/opt/codex-desktop/update-builder/scripts/lib/linux-features.js"
     assert_file_exists "$pkg_root/opt/codex-desktop/update-builder/scripts/lib/linux-features.sh"
     assert_file_exists "$pkg_root/opt/codex-desktop/update-builder/scripts/lib/linux-target-context.js"
@@ -210,6 +250,7 @@ SCRIPT
     assert_file_exists "$pkg_root/opt/codex-desktop/update-builder/updater/Cargo.toml"
     assert_file_exists "$pkg_root/opt/codex-desktop/update-builder/plugins/openai-bundled/plugins/computer-use/.mcp.json"
     assert_file_exists "$pkg_root/opt/codex-desktop/update-builder/plugins/openai-bundled/plugins/read-aloud/.mcp.json"
+    assert_file_exists "$pkg_root/opt/codex-desktop/update-builder/.codex-linux/source-info.json"
     assert_file_exists "$pkg_root/opt/codex-desktop/.codex-linux/codex-packaged-runtime.sh"
     assert_file_exists "$pkg_root/opt/codex-desktop/.codex-linux/codex-desktop-entry-doctor.sh"
     assert_file_exists "$pkg_root/opt/codex-desktop/update-builder/packaging/linux/codex-desktop-entry-doctor.sh"
@@ -223,6 +264,7 @@ test_update_builder_preserves_enabled_linux_features_config() {
     local app_dir="$workspace/app"
     local feature_config="$workspace/features.json"
     local staged_config="$root/opt/codex-desktop/update-builder/linux-features/features.json"
+    local source_info="$root/opt/codex-desktop/update-builder/.codex-linux/source-info.json"
 
     mkdir -p "$workspace"
     make_fake_app "$app_dir"
@@ -240,6 +282,8 @@ JSON
         export PACKAGE_NAME="codex-desktop"
         export UPDATER_SERVICE_SOURCE="$REPO_DIR/packaging/linux/codex-update-manager.service"
         export CODEX_LINUX_FEATURES_CONFIG="$feature_config"
+        export CODEX_LINUX_SOURCE_REMOTE="https://builder:secret-token@example.com/org/repo.git"
+        export SOURCE_DATE_EPOCH="1710000000"
 
         # shellcheck disable=SC1091
         source "$REPO_DIR/scripts/lib/package-common.sh"
@@ -256,6 +300,18 @@ const configPath = process.argv[2];
 const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
 if (JSON.stringify(config) !== JSON.stringify({ enabled: ["example-feature"] })) {
   process.exit(1);
+}
+NODE
+
+    node - "$source_info" <<'NODE' || fail "Expected staged source info to be sanitized and reproducible"
+const fs = require("node:fs");
+const sourceInfoPath = process.argv[2];
+const info = JSON.parse(fs.readFileSync(sourceInfoPath, "utf8"));
+if (info.remote !== "https://example.com/org/repo.git") {
+  throw new Error(`unexpected remote: ${info.remote}`);
+}
+if (info.capturedAt !== new Date(1710000000 * 1000).toISOString()) {
+  throw new Error(`unexpected capturedAt: ${info.capturedAt}`);
 }
 NODE
 }
@@ -452,6 +508,9 @@ test_rpm_builder_smoke() {
     mkdir -p "$workspace" "$dist_dir" "$capture_dir"
     make_stub_bin_dir "$bin_dir"
     make_fake_app "$app_dir"
+    chmod 0700 "$app_dir" "$app_dir/content" "$app_dir/content/webview"
+    chmod 0700 "$app_dir/start.sh"
+    chmod 0600 "$app_dir/content/webview/index.html"
     printf '#!/usr/bin/env bash\nexit 0\n' > "$updater_bin"
     chmod +x "$updater_bin"
 
@@ -514,7 +573,16 @@ SCRIPT
     assert_file_not_exists "$capture_dir/staging/usr/lib/systemd/user/codex-update-manager.service"
     assert_file_not_exists "$capture_dir/staging/usr/share/polkit-1/actions/com.github.ilysenko.codex-desktop-linux.update.policy"
     assert_file_not_exists "$capture_dir/staging/opt/codex-desktop/update-builder"
+    assert_mode "$capture_dir/staging/opt/codex-desktop" "755"
+    assert_mode "$capture_dir/staging/opt/codex-desktop/content/webview" "755"
+    assert_mode "$capture_dir/staging/opt/codex-desktop/start.sh" "755"
+    assert_mode "$capture_dir/staging/opt/codex-desktop/content/webview/index.html" "644"
     assert_contains "$capture_dir/codex-desktop.spec" "%if 0"
+    assert_contains "$capture_dir/codex-desktop.spec" "codex_elf_suffix ()(64bit)"
+    assert_contains "$capture_dir/codex-desktop.spec" "libatk-bridge-2.0.so.0"
+    assert_contains "$capture_dir/codex-desktop.spec" "libgbm.so.1"
+    assert_not_contains "$capture_dir/codex-desktop.spec" "at-spi2-atk"
+    assert_not_contains "$capture_dir/codex-desktop.spec" "mesa-libgbm"
     assert_contains "$capture_dir/codex-desktop.spec" "codex_no_updater_cleanup_update_manager_service"
     assert_contains "$capture_dir/staging/opt/codex-desktop/.codex-linux/codex-no-updater-transition-cleanup.sh" "codex_no_updater_cleanup_user_enablement_links"
 }
@@ -811,6 +879,25 @@ test_native_shortcut_targets_compose_existing_flows() {
 
     make -n -C "$REPO_DIR" setup-native >"$setup_log"
     assert_contains "$setup_log" 'bash scripts/bootstrap-wizard.sh'
+}
+
+test_fedora_dependency_bootstrap_installs_rpmbuild() {
+    info "Checking Fedora dependency bootstrap includes rpmbuild"
+    local install_deps="$REPO_DIR/scripts/install-deps.sh"
+    local helper="$REPO_DIR/scripts/lib/install-helpers.sh"
+    local readme="$REPO_DIR/README.md"
+
+    awk '/^install_dnf5\(\) \{/,/^}/' "$install_deps" | grep -q -- "rpm-build" \
+        || fail "install_dnf5 must install rpm-build for rpmbuild"
+    awk '/^install_dnf\(\) \{/,/^}/' "$install_deps" | grep -q -- "rpm-build" \
+        || fail "install_dnf must install rpm-build for rpmbuild"
+
+    assert_contains "$install_deps" "sudo dnf install python3 7zip curl unzip rpm-build @development-tools"
+    assert_contains "$install_deps" "sudo dnf install nodejs npm python3 p7zip p7zip-plugins curl unzip rpm-build"
+    assert_contains "$helper" "sudo dnf install python3 7zip curl unzip rpm-build @development-tools"
+    assert_contains "$helper" "sudo dnf install nodejs npm python3 p7zip p7zip-plugins curl unzip rpm-build"
+    assert_contains "$readme" "sudo dnf install python3 7zip curl unzip rpm-build @development-tools"
+    assert_contains "$readme" "sudo dnf install python3 p7zip p7zip-plugins curl unzip rpm-build"
 }
 
 test_setup_native_wizard_noninteractive_feature_writer() {
@@ -4016,6 +4103,8 @@ test_browser_plugin_renamed_upstream_staging() {
     assert_contains "$browser_dir/.codex-plugin/plugin.json" '"name":"browser"'
     assert_contains "$browser_dir/scripts/browser-client.mjs" 'globalThis.nodeRepl?.env?.\[e\]'
     assert_not_contains "$browser_dir/scripts/browser-client.mjs" 'globalThis.nodeRepl?.env\[e\]'
+    assert_contains "$browser_dir/scripts/browser-client.mjs" "nativePipe??import.meta.__codexNativePipe"
+    assert_not_contains "$browser_dir/scripts/browser-client.mjs" "let e=import.meta.__codexNativePipe;return"
     assert_contains "$browser_dir/scripts/browser-client.mjs" "codexLinuxSiteStatusAllowlistFallback"
     assert_contains "$marketplace" '"name": "browser"'
     assert_contains "$marketplace" '"path": "./plugins/browser"'
@@ -4079,6 +4168,7 @@ JSON
 import{resolve as GF}from"path";import{homedir as VF,platform as WF}from"os";var Tc=GF(VF(),WF()==="win32"?"AppData\\Local\\Google\\Chrome\\User Data":"Library/Application Support/Google/Chrome");import{ClassicLevel as KF}from"./node_modules/classic-level.mjs";import{resolve as Gf}from"path";import{tmpdir as YF}from"os";import{cp as ZF,mkdtemp as JF,rm as kS}from"fs/promises";import{existsSync as XF}from"fs";var IS=async(t,e)=>{let r=Gf(Tc,t,"Local Extension Settings",e);if(!XF(r))return null;let n=await JF(Gf(QF(),"codex"));await ZF(r,n,{recursive:!0}),await kS(Gf(n,"LOCK"));let o=new KF(n,{createIfMissing:!1,keyEncoding:"utf8",valueEncoding:"utf8"});try{await o.open();let i=await o.get("extensionInstanceId");if(!i)return null;let s=JSON.parse(i);return typeof s!="string"?null:s}finally{await o.close(),await kS(n,{force:!0,recursive:!0})}},QF=()=>"nodeRepl"in globalThis&&globalThis.nodeRepl?globalThis.nodeRepl.tmpDir:YF();var AS=async t=>{if(t.type!=="extension"||!t.metadata?.extensionInstanceId||!t.metadata.extensionId)return t;let e=await rO(t.metadata.extensionId,t.metadata.extensionInstanceId);return e?{...t,metadata:{...t.metadata,profileName:e.name,profileIsLastUsed:e.isLastUsed.toString(),profileOrdering:e.orderingIndex.toString()}}:t},rO=async(t,e)=>(await nO(t)).find(o=>o.instanceId===e)||null,nO=async t=>{let e=await oO();return await Promise.all(e.map(async r=>({...r,instanceId:await IS(r.id,t).catch(n=>(ee(n),null))})))},oO=async()=>{let t=tO(Tc,"Local State"),e=JSON.parse(await eO(t,"utf8"));return e.profile.profiles_order.map((r,n)=>{let o=e.profile.info_cache[r];return o?{id:r,name:o.name,isLastUsed:e.profile.last_used===r,orderingIndex:n,avatarUrl:o.avatar_icon}:null}).filter(r=>!!r)};
 var Xv=t=>t==="win32"?"\\\\.\\pipe\\codex-browser-use":"/tmp/codex-browser-use";function Tm(){let t=import.meta.__codexNativePipe;return t==null||typeof t.createConnection!="function"?null:t}
 function lu(e){let t=globalThis.nodeRepl?.env[e];return typeof t=="string"?t:void 0}
+import{platform as yT}from"node:os";function eh(){return"privileged native pipe bridge is not available; browser-client is not trusted"}function th(){let e=globalThis.nodeRepl?.nativePipe;return e==null||typeof e.createConnection!="function"?null:e}var ml=class e{constructor(t){this.socket=t}static async create(t){let r=th();if(r!=null){let n=await r.createConnection(t);return new e(n)}throw new Error(eh())}};
 async fetchBlocked(e){let r=await bS(e.endpoint,{method:"GET"});if(!r.ok)throw new Error(ae(`Browser Use cannot determine if ${e.displayUrl} is allowed. Please try again later or use another source.`));let n=await r.json();return TF(n)}
 JS
     cat > "$chrome_dir/scripts/check-native-host-manifest.js" <<'JS'
@@ -4201,6 +4291,9 @@ test_chrome_plugin_staging() {
     assert_contains "$chrome_dir/scripts/browser-client.mjs" "CODEX_BROWSER_USE_SOCKET_DIR"
     assert_contains "$chrome_dir/scripts/browser-client.mjs" 'globalThis.nodeRepl?.env?.\[e\]'
     assert_not_contains "$chrome_dir/scripts/browser-client.mjs" 'globalThis.nodeRepl?.env\[e\]'
+    assert_contains "$chrome_dir/scripts/browser-client.mjs" "nativePipe??import.meta.__codexNativePipe"
+    assert_not_contains "$chrome_dir/scripts/browser-client.mjs" "codexLinuxNativePipeFallback"
+    assert_not_contains "$chrome_dir/scripts/browser-client.mjs" 'await import("node:net")'
     assert_contains "$chrome_dir/scripts/browser-client.mjs" "codexLinuxSiteStatusAllowlistFallback"
     assert_contains "$install_dir/resources/plugins/openai-bundled/.agents/plugins/marketplace.json" '"name": "chrome"'
     assert_contains "$output_log" "Chrome plugin staged from upstream DMG"
@@ -6164,6 +6257,7 @@ EOF
 
 main() {
     test_common_helper_sourcing
+    test_package_payload_permission_normalization
     test_deb_builder_smoke
     test_update_builder_preserves_enabled_linux_features_config
     test_deb_builder_respects_package_identity
@@ -6177,6 +6271,7 @@ main() {
     test_make_build_app_uses_installer_download_flow_by_default
     test_make_build_app_fresh_uses_installer_fresh_flow
     test_native_shortcut_targets_compose_existing_flows
+    test_fedora_dependency_bootstrap_installs_rpmbuild
     test_setup_native_wizard_noninteractive_feature_writer
     test_setup_native_wizard_rejects_invalid_feature_ids
     test_setup_native_wizard_rejects_conflicting_feature_ids
