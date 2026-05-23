@@ -248,7 +248,7 @@ If you are on Fedora + KDE Plasma and the system unit path is awkward, a user-se
 - old system-level overrides are removed if they force the wrong socket path
 - `codex-computer-use-linux doctor` reports `can_send_development_input: true`
 
-A working XDG Desktop Portal implementation is needed if you are not on GNOME — `xdg-desktop-portal-kde` for KDE Plasma, `xdg-desktop-portal-wlr` for sway / Hyprland, or your distro's preferred portal backend for i3. GNOME ships a working portal by default.
+A working XDG Desktop Portal implementation is needed if you are not on GNOME — `xdg-desktop-portal-kde` for KDE Plasma, `xdg-desktop-portal-wlr` for sway, `xdg-desktop-portal-hyprland` for Hyprland, or your distro's preferred portal backend for i3. GNOME ships a working portal by default.
 
 ### Verifying readiness
 
