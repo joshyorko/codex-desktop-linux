@@ -168,6 +168,14 @@ function syntheticCurrentSettingsBundle() {
   ].join("");
 }
 
+function syntheticRemoteConnectionInstallActionGateBundle() {
+  return [
+    syntheticCurrentSettingsBundle(),
+    "function cn(e){let t=[],n={hostId:`pi5-01`},r=!1,i=!1,a=()=>{},s=()=>{},m=e.error,g=e.state,k=null,h=null,p=null,f={},E=ae(`2153867414`),A,j,M;A=m,j=g==null?null:je(f,{canLogin:!0,error:A,state:g,surface:`connections-row`});let l=!E&&(A?.code===`remote-codex-not-found`||A?.code===`update-required`);M=j==null||l?null:dn({action:j.action,disabled:r,hostId:n.hostId,installCodexPending:i,onAuthenticate:a,onInstallCodex:s}),t[8]=p;return M}",
+    "function dn({action:e,disabled:t,hostId:n,installCodexPending:r,onAuthenticate:i,onInstallCodex:a}){switch(e.kind){case`install-codex`:return{label:`Install Codex`,onClick:()=>a(n)};case`authenticate`:return{label:`Authenticate`,onClick:()=>i(n)};default:return null}}",
+  ].join("");
+}
+
 function syntheticRemoteConnectionDeleteBundle() {
   return [
     "const i=`linux`,Q={jsx(){},jsxs(){}},Z={useEffect(){},useState(){}};",
@@ -921,6 +929,18 @@ test("Linux remote-control settings UX patch handles current minified helper nam
   assert.match(patched, /if\(e===`access-other-devices`\)return t\?`control-this-mac`:`ssh`/);
   assert.match(patched, /Control this Linux desktop/);
   assert.doesNotMatch(patched, /Control this Mac/);
+  assert.equal(applyLinuxRemoteControlSettingsUxPatch(patched), patched);
+});
+
+test("Linux remote-control settings UX patch keeps SSH install actions visible on Linux", () => {
+  const source = syntheticRemoteConnectionInstallActionGateBundle();
+  const patched = applyLinuxRemoteControlSettingsUxPatch(source);
+
+  assert.notEqual(patched, source);
+  assert.match(patched, /codexLinuxRemoteControlSshInstallActions/);
+  assert.match(patched, /M=j==null\?null:dn\(\{action:j\.action/);
+  assert.doesNotMatch(patched, /M=j==null\|\|l\?null:dn/);
+  assert.doesNotMatch(patched, /A\?\.code===`remote-codex-not-found`\|\|A\?\.code===`update-required`/);
   assert.equal(applyLinuxRemoteControlSettingsUxPatch(patched), patched);
 });
 
@@ -1709,6 +1729,7 @@ test("remote mobile control feature participates in ASAR patching and reports", 
           syntheticSettingsBundle() +
             syntheticRemoteConnectionsSettingsCopyBundle() +
             syntheticSettingsRefreshBundle() +
+            syntheticRemoteConnectionInstallActionGateBundle() +
             syntheticRevokeSetupResetBundle(),
         );
         fs.writeFileSync(
@@ -1790,6 +1811,7 @@ test("remote mobile control feature participates in ASAR patching and reports", 
         assert.match(patchedAppMainFile, /`remote_control`/);
         assert.match(patchedVisibilityFile, /navigator\.userAgent\.includes\(`Linux`\)/);
         assert.match(patchedRemoteConnectionsSettingsFile, /codexLinuxRemoteControlSettingsTabs/);
+        assert.match(patchedRemoteConnectionsSettingsFile, /codexLinuxRemoteControlSshInstallActions/);
         assert.match(patchedRemoteConnectionsSettingsFile, /codexLinuxRemoteControlResetMobileSetupAfterRevoke/);
         assert.match(patchedRemoteConnectionsSettingsFile, /codexLinuxRemoteConnectionsRefreshNow/);
         assert.match(patchedRemoteConnectionsSettingsFile, /Qn=5e3/);

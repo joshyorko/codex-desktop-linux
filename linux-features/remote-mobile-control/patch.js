@@ -25,6 +25,7 @@ const REMOTE_CONTROL_VISIBILITY_OLD_REPLACEMENT =
 const REMOTE_CONTROL_SETTINGS_VISIBILITY_NEEDLE =
   /function ([A-Za-z_$][\w$]*)\(\{remoteControlConnectionsState:([A-Za-z_$][\w$]*),slingshotEnabled:([A-Za-z_$][\w$]*)\}\)\{return \3&&\(\2\?\.available\?\?!0\)\}/u;
 const REMOTE_CONTROL_SETTINGS_UX_MARKER = "codexLinuxRemoteControlSettingsTabs";
+const REMOTE_CONTROL_SSH_INSTALL_ACTION_MARKER = "codexLinuxRemoteControlSshInstallActions";
 const REMOTE_CONNECTIONS_REFRESH_MARKER = "codexLinuxRemoteConnectionsRefreshNow";
 const REMOTE_CONTROL_DELETE_CLEANUP_MARKER = "codexLinuxRemoteControlDeleteConnectionCleanup";
 const REMOTE_CONTROL_STALE_SELECTION_CLEANUP_MARKER = "codexLinuxRemoteControlReconcileDeletedConnectionState";
@@ -669,8 +670,31 @@ function applyLinuxRemoteControlCopyPatch(source) {
   return patched;
 }
 
+function applyLinuxRemoteControlSshInstallActionPatch(source) {
+  if (source.includes(REMOTE_CONTROL_SSH_INSTALL_ACTION_MARKER)) {
+    return source;
+  }
+  if (!source.includes("remote-codex-not-found") && !source.includes("update-required")) {
+    return source;
+  }
+
+  const actionGateRegex =
+    /let ([A-Za-z_$][\w$]*)=!([A-Za-z_$][\w$]*)&&\(([A-Za-z_$][\w$]*)\?\.code===`remote-codex-not-found`\|\|\3\?\.code===`update-required`\);([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)==null\|\|\1\?null:([A-Za-z_$][\w$]*)\(\{action:\5\.action,/u;
+  const match = source.match(actionGateRegex);
+  if (match == null) {
+    console.warn("WARN: Could not find remote-control SSH install action gate - skipping Linux install action patch");
+    return source;
+  }
+
+  const [, gateVar, , , renderedActionVar, connectionActionVar, renderActionFn] = match;
+  return source.replace(
+    actionGateRegex,
+    `let ${gateVar}=/*${REMOTE_CONTROL_SSH_INSTALL_ACTION_MARKER}*/!1;${renderedActionVar}=${connectionActionVar}==null?null:${renderActionFn}({action:${connectionActionVar}.action,`,
+  );
+}
+
 function applyLinuxRemoteControlSettingsUxPatch(source) {
-  let patched = replaceLinuxRemoteControlCopy(source).patched;
+  let patched = applyLinuxRemoteControlSshInstallActionPatch(replaceLinuxRemoteControlCopy(source).patched);
 
   if (!patched.includes(REMOTE_CONTROL_SETTINGS_UX_MARKER)) {
     const helperNeedle = /function ([A-Za-z_$][\w$]*)\(e,t\)\{return e\.displayName\.localeCompare\(t\.displayName\)\}/u;
@@ -1424,3 +1448,4 @@ module.exports.applyLinuxRemoteControlFeatureSyncPatch = applyLinuxRemoteControl
 module.exports.applyLinuxRemoteControlVisibilityPatch = applyLinuxRemoteControlVisibilityPatch;
 module.exports.applyLinuxRemoteControlCopyPatch = applyLinuxRemoteControlCopyPatch;
 module.exports.applyLinuxRemoteControlSettingsUxPatch = applyLinuxRemoteControlSettingsUxPatch;
+module.exports.applyLinuxRemoteControlSshInstallActionPatch = applyLinuxRemoteControlSshInstallActionPatch;
