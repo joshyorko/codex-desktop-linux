@@ -3779,6 +3779,27 @@ PY
     [[ "$output" == *"electron=<--ozone-platform=x11>"* ]] || fail "pass-through ozone platform must reach Electron: $output"
     [[ "$output" != *"<--ozone-platform-hint=auto>"* ]] || fail "launcher must not add ozone hint when pass-through supplies an ozone platform: $output"
 
+    output="$(env -i PATH="$PATH" HOME="$HOME" CODEX_LINUX_RENDERING_MODE=wayland-gpu "$launcher_probe" probe)"
+    [[ "$output" == *"mode=wayland-gpu"* && "$output" == *"ozone_platform=wayland"* && "$output" == *"gpu=1"* ]] || fail "wayland-gpu profile must force native Wayland with GPU enabled: $output"
+    [[ "$output" == *"comp=0"* && "$output" != *"<--disable-gpu-compositing>"* ]] || fail "wayland-gpu profile must keep GPU compositing enabled: $output"
+    [[ "$output" == *"<--ozone-platform=wayland>"* && "$output" == *"<--enable-features=WaylandWindowDecorations>"* ]] || fail "wayland-gpu profile must add Wayland launch args: $output"
+    [[ "$output" == *"renderer_accessibility=0"* && "$output" != *"<--force-renderer-accessibility>"* ]] || fail "wayland-gpu profile must skip renderer accessibility by default: $output"
+
+    output="$(env -i PATH="$PATH" HOME="$HOME" CODEX_LINUX_RENDERING_MODE=wayland-gpu CODEX_FORCE_RENDERER_ACCESSIBILITY=1 "$launcher_probe" probe)"
+    [[ "$output" == *"renderer_accessibility=1"* && "$output" == *"<--force-renderer-accessibility>"* ]] || fail "CODEX_FORCE_RENDERER_ACCESSIBILITY=1 must force renderer accessibility under wayland-gpu: $output"
+
+    output="$(env -i PATH="$PATH" HOME="$HOME" CODEX_LINUX_RENDERING_MODE=wayland-gpu "$launcher_probe" probe --x11)"
+    [[ "$output" == *"mode=wayland-gpu"* && "$output" == *"ozone_platform=x11"* ]] || fail "explicit --x11 must override the wayland-gpu platform: $output"
+    [[ "$output" == *"renderer_accessibility=1"* && "$output" == *"<--force-renderer-accessibility>"* ]] || fail "wayland-gpu with explicit --x11 must keep X11 renderer accessibility default: $output"
+
+    output="$(env -i PATH="$PATH" HOME="$HOME" CODEX_LINUX_RENDERING_MODE=wayland-gpu "$launcher_probe" probe --safe-mode)"
+    [[ "$output" == *"mode=wayland-gpu"* && "$output" == *"ozone_platform=x11"* && "$output" == *"gpu=0"* ]] || fail "safe-mode must override wayland-gpu to X11 software rendering: $output"
+    [[ "$output" == *"renderer_accessibility=1"* && "$output" == *"<--force-renderer-accessibility>"* ]] || fail "wayland-gpu with safe-mode must keep X11 renderer accessibility default: $output"
+
+    output="$(env -i PATH="$PATH" HOME="$HOME" CODEX_LINUX_RENDERING_MODE=wayland-gpu "$launcher_probe" probe -- --ozone-platform=x11)"
+    [[ "$output" == *"electron=<--ozone-platform=x11>"* && "$output" != *"<--ozone-platform-hint=auto>"* ]] || fail "pass-through X11 platform must override wayland-gpu hinting: $output"
+    [[ "$output" == *"renderer_accessibility=1"* && "$output" == *"<--force-renderer-accessibility>"* ]] || fail "wayland-gpu with pass-through X11 platform must keep X11 renderer accessibility default: $output"
+
     output="$(env -i PATH="$PATH" HOME="$HOME" CODEX_LINUX_RENDERING_MODE=wslg "$launcher_probe" probe)"
     [[ "$output" == *"mode=wslg"* && "$output" == *"comp=0"* && "$output" == *"gl_added=1"* ]] || fail "forced WSLg profile must keep GPU compositing enabled and add ANGLE: $output"
     [[ "$output" == *"<--ozone-platform=x11>"* && "$output" == *"electron=<--use-gl=angle>"* ]] || fail "forced WSLg profile must use X11 and ANGLE by default: $output"
@@ -3833,6 +3854,7 @@ PY
     assert_contains "$REPO_DIR/launcher/start.sh.template" '--app-id="$CODEX_LINUX_APP_ID"'
     assert_contains "$REPO_DIR/scripts/lib/process-detection.sh" "CODEX_APP_ID"
     assert_contains "$REPO_DIR/launcher/start.sh.template" 'ELECTRON_OZONE_HINT="auto"'
+    assert_contains "$REPO_DIR/launcher/start.sh.template" "CODEX_LINUX_RENDERING_MODE=auto|default|wslg|wayland-gpu"
     assert_contains "$REPO_DIR/launcher/start.sh.template" '--ozone-platform-hint="$ELECTRON_OZONE_HINT"'
     assert_contains "$REPO_DIR/launcher/start.sh.template" "--disable-gpu-sandbox"
     assert_contains "$REPO_DIR/launcher/start.sh.template" "--force-renderer-accessibility"

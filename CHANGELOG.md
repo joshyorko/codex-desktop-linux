@@ -7,6 +7,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
+- Launcher rendering mode `CODEX_LINUX_RENDERING_MODE=wayland-gpu`, which
+  forces native Wayland with GPU compositing enabled and skips forced renderer
+  accessibility by default for Wayland desktops where XWayland or software
+  rendering is unstable.
 - New opt-in Linux feature `read-aloud-mcp` that stages a standalone Rust Read
   Aloud MCP plugin with `doctor`, `read_aloud`, and `stop` tools. The MCP server
   reuses the Kokoro runner/model configuration from the Read Aloud UI feature

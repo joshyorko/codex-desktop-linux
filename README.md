@@ -20,7 +20,7 @@ Optional Linux-only additions live in `linux-features/`. Use them for integratio
 | Atomic desktops / other Linux distros | none | `.AppImage` | Local self-build only; no bundled auto-updater |
 | NixOS / Nix | flake | runnable directly | `nix run github:ilysenko/codex-desktop-linux` |
 
-Anything systemd-based should work for the optional auto-updater service (`systemd --user`). The launcher targets Wayland with `XWayland` first (better Electron popup positioning); pure Wayland sessions fall through to `--ozone-platform-hint=auto`. X11 is fully supported.
+Anything systemd-based should work for the optional auto-updater service (`systemd --user`). The launcher targets Wayland with `XWayland` first (better Electron popup positioning); pure Wayland sessions fall through to `--ozone-platform-hint=auto`. X11 is fully supported. If XWayland or software rendering is unstable on a Wayland desktop, `CODEX_LINUX_RENDERING_MODE=wayland-gpu` forces native Wayland while keeping GPU compositing enabled.
 
 ## What you get
 
@@ -553,7 +553,7 @@ make clean-state
 | `CODEX_CLI_PATH` error | Reopen the app to retry the automatic CLI install flow, or install manually with `npm i -g @openai/codex` / `npm i -g --prefix ~/.local @openai/codex` |
 | `gh auth status` works in a terminal but fails inside Codex Desktop | The app shell may be using isolated XDG paths or missing keyring DBus access. See [GitHub CLI auth in app-launched shells](docs/github-cli-auth.md) |
 | Electron hangs while CLI is outdated | Re-run the launcher and check `~/.cache/codex-desktop/launcher.log` plus `~/.local/state/codex-update-manager/service.log`. Best-effort CLI preflight will warn if the automatic refresh fails |
-| GPU / Vulkan / Wayland errors | Under Wayland with `DISPLAY` available, the launcher uses `--ozone-platform=x11` for window-positioning compatibility. Otherwise it uses `--ozone-platform-hint=auto`. The GPU sandbox is disabled by default, while GPU compositing stays enabled |
+| GPU / Vulkan / Wayland errors | Under Wayland with `DISPLAY` available, the launcher uses `--ozone-platform=x11` for window-positioning compatibility. Otherwise it uses `--ozone-platform-hint=auto`. The GPU sandbox is disabled by default, while GPU compositing stays enabled. On desktops where XWayland or software rendering hangs, such as some COSMIC/NVIDIA sessions, try `CODEX_LINUX_RENDERING_MODE=wayland-gpu ./codex-app/start.sh` |
 | Window flickering | Try `CODEX_ELECTRON_DISABLE_GPU_COMPOSITING=1 ./codex-app/start.sh` to use the legacy compositing workaround. If flickering persists, try `./codex-app/start.sh --disable-gpu` to fully disable GPU acceleration |
 | Sandbox errors | The launcher already sets `--no-sandbox` |
 | Stale install / cached DMG | `make build-app-fresh` removes the existing install dir and cached DMG, then re-downloads |

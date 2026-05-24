@@ -12,6 +12,7 @@ const vm = require("node:vm");
 const {
   COMPUTER_USE_UI_ENV_VAR,
   COMPUTER_USE_UI_SETTINGS_KEY,
+  applyAutomationScheduleMultiTimePatch,
   applyKeybindsSettingsIndexPatch,
   applyLinuxComputerUseFeaturePatch,
   applyLinuxComputerUseInstallFlowPatch,
@@ -54,6 +55,7 @@ const {
   patchExtractedApp,
   patchPackageJson,
   patchLinuxAppUpdaterBridge,
+  patchAutomationScheduleAssets,
   createPatchReport,
   corePatchDescriptors,
   detectLinuxTargetContext,
@@ -116,6 +118,66 @@ function captureWarns(fn) {
     console.warn = originalWarn;
   }
 }
+
+function automationScheduleBundleFixture() {
+  return [
+    "var Cc={MO:1,TU:2,WE:3,TH:4,FR:5,SA:6,SU:0};",
+    "function wc(e){let t=Tc(e.byhour),n=Tc(e.byminute);return t!=null&&n!=null?{hour:t,minute:n}:e.dtstart?{hour:e.dtstart.getHours(),minute:e.dtstart.getMinutes()}:null}",
+    "function Tc(e){return Array.isArray(e)?typeof e[0]==`number`?e[0]:null:typeof e==`number`?e:null}",
+    "function Ec(e,t){let n=new Date(e),r=new Date(n.getFullYear(),n.getMonth(),n.getDate(),t.hour,t.minute,0,0);return r.getTime()<=e&&r.setDate(r.getDate()+1),r.getTime()}",
+    "function Dc(e,t,n){let r=new Date(e),i=r.getDay(),a=n.length>0?n:[0,1,2,3,4,5,6];for(let n=0;n<=7;n+=1){let o=(i+n)%7;if(!a.includes(o))continue;let s=new Date(r.getFullYear(),r.getMonth(),r.getDate()+n,t.hour,t.minute,0,0);if(s.getTime()>e)return s.getTime()}return e}",
+    "function Oc(e){return e?(Array.isArray(e)?e:[e]).map(e=>{if(typeof e==`number`)return Ac(e);if(kc(e))return Ac(e.weekday);let t=String(e);return t in Cc?Cc[t]:null}).filter(e=>e!=null):[]}",
+    "function kc(e){return typeof e!=`object`||!e||!(`weekday`in e)?!1:typeof e.weekday==`number`}",
+    "function Ac(e){return!Number.isInteger(e)||e<0||e>6?null:(e+1)%7}",
+    "var jc=`codex_chronicle`;",
+  ].join("");
+}
+
+function evaluateAutomationSchedule(source, now, options) {
+  const context = { now, options, result: null };
+  vm.runInNewContext(
+    `${source};result=Dc(now,wc(options),Oc(options.byweekday));`,
+    context,
+  );
+  return context.result;
+}
+
+test("automation schedule patch honors multiple BYHOUR values", () => {
+  const patched = applyPatchTwice(applyAutomationScheduleMultiTimePatch, automationScheduleBundleFixture());
+  const options = {
+    byhour: [11, 14, 17, 20],
+    byminute: [0],
+    byweekday: ["MO", "TU", "WE", "TH", "FR"],
+    dtstart: new Date(2026, 4, 22, 16, 27, 0, 0),
+  };
+
+  assert.match(patched, /function codexLinuxNormalizeRruleNumbers/);
+  assert.equal(
+    evaluateAutomationSchedule(patched, new Date(2026, 4, 22, 16, 27, 0, 0).getTime(), options),
+    new Date(2026, 4, 22, 17, 0, 0, 0).getTime(),
+  );
+  assert.equal(
+    evaluateAutomationSchedule(patched, new Date(2026, 4, 22, 20, 1, 0, 0).getTime(), options),
+    new Date(2026, 4, 25, 11, 0, 0, 0).getTime(),
+  );
+});
+
+test("automation schedule asset patch updates workspace-root bundle", () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "codex-automation-schedule-"));
+  try {
+    const buildDir = path.join(tempRoot, ".vite", "build");
+    fs.mkdirSync(buildDir, { recursive: true });
+    const bundlePath = path.join(buildDir, "workspace-root-drop-handler-test.js");
+    fs.writeFileSync(bundlePath, automationScheduleBundleFixture(), "utf8");
+
+    assert.deepEqual(patchAutomationScheduleAssets(tempRoot), { matched: 1, changed: 1 });
+    const patched = fs.readFileSync(bundlePath, "utf8");
+    assert.match(patched, /function codexLinuxRruleTimes/);
+    assert.deepEqual(patchAutomationScheduleAssets(tempRoot), { matched: 1, changed: 0 });
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
 
 test("asset patch helpers match every file when passed a global regex", () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "codex-asset-global-"));
@@ -449,6 +511,7 @@ test("default core patch descriptors are grouped and unique", () => {
     "linux-launch-actions",
     "linux-hotkey-window-prewarm",
     "linux-git-origins-source-fallback",
+    "automation-schedule-multi-time-rrule",
     "linux-app-sunset-gate",
     "linux-app-server-feature-enablement",
     "opaque-window-default-general-settings",
