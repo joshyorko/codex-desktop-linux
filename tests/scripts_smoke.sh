@@ -123,7 +123,7 @@ JSON
 {"name":"browser","version":"0.1.0-alpha2","interface":{"category":"Engineering"}}
 JSON
     cat > "$resources_dir/plugins/openai-bundled/plugins/browser/scripts/browser-client.mjs" <<'JS'
-function lu(e){let t=globalThis.nodeRepl?.env[e];return typeof t=="string"?t:void 0}function th(){let e=import.meta.__codexNativePipe;return e==null||typeof e.createConnection!="function"?null:e}class Uf{async fetchBlocked(e){let r=await bS(e.endpoint,{method:"GET"});if(!r.ok)throw new Error(ae(`Browser Use cannot determine if ${e.displayUrl} is allowed. Please try again later or use another source.`));let n=await r.json();return TF(n)}}export function setupAtlasRuntime() {}
+function lu(e){let t=globalThis.nodeRepl?.env[e];return typeof t=="string"?t:void 0}function th(){let e=import.meta.__codexNativePipe;return e==null||typeof e.createConnection!="function"?null:e}var I2=new Set(["about:blank"]);function Gb(e){if(I2.has(e))return!0;let t;try{t=new URL(e)}catch{return!1}return t.protocol==="http:"||t.protocol==="https:"}class Uf{async fetchBlocked(e){let r=await bS(e.endpoint,{method:"GET"});if(!r.ok)throw new Error(ae(`Browser Use cannot determine if ${e.displayUrl} is allowed. Please try again later or use another source.`));let n=await r.json();return TF(n)}}export function setupAtlasRuntime() {}
 JS
 }
 
@@ -4087,9 +4087,80 @@ test_browser_use_node_repl_fallback_runtime() {
     assert_contains "$install_dir/resources/plugins/openai-bundled/plugins/browser/scripts/browser-client.mjs" 'globalThis.nodeRepl?.env?.\[e\]'
     assert_not_contains "$install_dir/resources/plugins/openai-bundled/plugins/browser/scripts/browser-client.mjs" 'globalThis.nodeRepl?.env\[e\]'
     assert_contains "$install_dir/resources/plugins/openai-bundled/plugins/browser/scripts/browser-client.mjs" "codexLinuxSiteStatusAllowlistFallback"
+    assert_contains "$install_dir/resources/plugins/openai-bundled/plugins/browser/scripts/browser-client.mjs" "codexLinuxFileUrlPolicy"
     assert_contains "$output_log" "Browser Use node_repl runtime is not a Linux executable for x86_64; skipping"
     assert_not_contains "$output_log" "WARN.*Browser Use node_repl runtime is not a Linux executable"
     assert_contains "$output_log" "Downloading Browser Use node_repl fallback runtime"
+}
+
+test_browser_use_file_url_policy_patch_behavior() {
+    info "Checking Browser Use file URL policy patch behavior"
+    local workspace="$TMP_DIR/browser-file-url-policy"
+    local client="$workspace/browser-client.mjs"
+    local output_log="$workspace/output.log"
+
+    mkdir -p "$workspace"
+    cat > "$client" <<'JS'
+var I2=new Set(["about:blank"]);function Gb(e){if(I2.has(e))return!0;let t;try{t=new URL(e)}catch{return!1}return t.protocol==="http:"||t.protocol==="https:"}
+JS
+
+    (
+        warn() { echo "[WARN] $*" >&2; }
+        info() { echo "[INFO] $*" >&2; }
+        # shellcheck disable=SC1091
+        source "$REPO_DIR/scripts/lib/bundled-plugins.sh"
+        patch_browser_use_file_url_policy "$client"
+    ) >"$output_log" 2>&1
+
+    assert_contains "$client" "codexLinuxFileUrlPolicy"
+    assert_contains "$client" 'protocol==="file:"'
+    assert_not_contains "$client" 'protocol==="data:"'
+    assert_not_contains "$output_log" "Could not find Browser Use URL policy insertion point"
+
+    node - "$client" <<'NODE'
+const fs = require("fs");
+const vm = require("vm");
+
+const client = process.argv[2];
+const source = fs.readFileSync(client, "utf8");
+const context = { URL };
+vm.createContext(context);
+vm.runInContext(
+  `${source}
+this.results = {
+  aboutBlank: Gb("about:blank"),
+  http: Gb("http://example.com/"),
+  https: Gb("https://example.com/"),
+  localFile: Gb("file:///tmp/codex-browser-file-policy.html"),
+  localhostFile: Gb("file://localhost/tmp/codex-browser-file-policy.html"),
+  remoteFile: Gb("file://example.com/tmp/codex-browser-file-policy.html"),
+  data: Gb("data:text/html,hello"),
+  javascript: Gb("javascript:alert(1)"),
+  ftp: Gb("ftp://example.com/"),
+  invalid: Gb("not a url"),
+};`,
+  context,
+);
+
+const expected = {
+  aboutBlank: true,
+  http: true,
+  https: true,
+  localFile: true,
+  localhostFile: true,
+  remoteFile: false,
+  data: false,
+  javascript: false,
+  ftp: false,
+  invalid: false,
+};
+
+for (const [key, value] of Object.entries(expected)) {
+  if (context.results[key] !== value) {
+    throw new Error(`${key}: expected ${value}, got ${context.results[key]}`);
+  }
+}
+NODE
 }
 
 test_browser_plugin_renamed_upstream_staging() {
@@ -4128,6 +4199,9 @@ test_browser_plugin_renamed_upstream_staging() {
     assert_contains "$browser_dir/scripts/browser-client.mjs" "nativePipe??import.meta.__codexNativePipe"
     assert_not_contains "$browser_dir/scripts/browser-client.mjs" "let e=import.meta.__codexNativePipe;return"
     assert_contains "$browser_dir/scripts/browser-client.mjs" "codexLinuxSiteStatusAllowlistFallback"
+    assert_contains "$browser_dir/scripts/browser-client.mjs" "codexLinuxFileUrlPolicy"
+    assert_contains "$browser_dir/scripts/browser-client.mjs" 'protocol==="file:"'
+    assert_not_contains "$browser_dir/scripts/browser-client.mjs" 'protocol==="data:"'
     assert_contains "$marketplace" '"name": "browser"'
     assert_contains "$marketplace" '"path": "./plugins/browser"'
     assert_contains "$output_log" "Browser plugin staged from upstream DMG"
@@ -4405,28 +4479,30 @@ test_chrome_native_host_manifest_writer() {
     local workspace="$TMP_DIR/chrome-native-host-manifest"
     local plugin_dir="$workspace/plugin"
     local home_dir="$workspace/home"
+    local app_dir="$workspace/app"
     local host_path="$workspace/extension-host"
     local manifest_path
 
-    mkdir -p "$plugin_dir/scripts" "$home_dir" "$(dirname "$host_path")"
+    mkdir -p "$plugin_dir/scripts" "$home_dir" "$app_dir/.codex-linux" "$(dirname "$host_path")"
     printf '#!/bin/sh\n' > "$host_path"
     chmod +x "$host_path"
     cat > "$plugin_dir/scripts/extension-id.json" <<'JSON'
 {"extensionId":"abcdefghijklmnopabcdefghijklmnop","extensionHostName":"com.example.codextest"}
 JSON
+    printf '%s\n' ".config/example-browser/NativeMessagingHosts" > "$app_dir/.codex-linux/chrome-native-host-manifest-paths"
 
-    python3 - "$REPO_DIR/launcher/start.sh.template" "$host_path" "$home_dir" "$plugin_dir" <<'PY'
+    python3 - "$REPO_DIR/launcher/start.sh.template" "$host_path" "$home_dir" "$plugin_dir" "$app_dir" <<'PY'
 import subprocess
 import sys
 from pathlib import Path
 
 source = Path(sys.argv[1]).read_text(encoding="utf-8")
-marker = "python3 - \"$host_path\" \"$HOME\" \"$plugin_dir\" <<'PY'\n"
+marker = "python3 - \"$host_path\" \"$HOME\" \"$plugin_dir\" \"$SCRIPT_DIR\" <<'PY'\n"
 start = source.index(marker) + len(marker)
 end = source.index("\nPY\n", start)
 script = source[start:end]
 subprocess.run(
-    ["python3", "-", sys.argv[2], sys.argv[3], sys.argv[4]],
+    ["python3", "-", sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5]],
     input=script,
     text=True,
     check=True,
@@ -4436,7 +4512,8 @@ PY
     for relative in \
         ".config/google-chrome/NativeMessagingHosts" \
         ".config/BraveSoftware/Brave-Browser/NativeMessagingHosts" \
-        ".config/chromium/NativeMessagingHosts"; do
+        ".config/chromium/NativeMessagingHosts" \
+        ".config/example-browser/NativeMessagingHosts"; do
         manifest_path="$home_dir/$relative/com.example.codextest.json"
         assert_file_exists "$manifest_path"
         assert_contains "$manifest_path" "com.example.codextest"
@@ -6332,6 +6409,7 @@ main() {
     test_native_module_rebuild_accepts_prebuilt_source
     test_bundled_plugin_builders_accept_prebuilt_binaries
     test_browser_use_node_repl_fallback_runtime
+    test_browser_use_file_url_policy_patch_behavior
     test_browser_plugin_renamed_upstream_staging
     test_browser_use_node_repl_glibc_pidfd_patch_static
     test_browser_use_node_repl_ldd_output_compatibility

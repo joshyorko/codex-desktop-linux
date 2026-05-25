@@ -703,7 +703,7 @@ write_chrome_native_host_manifests() {
     local host_path="$1"
     local plugin_dir="$2"
 
-    python3 - "$host_path" "$HOME" "$plugin_dir" <<'PY'
+    python3 - "$host_path" "$HOME" "$plugin_dir" "$SCRIPT_DIR" <<'PY'
 import json
 import pathlib
 import re
@@ -712,6 +712,7 @@ import sys
 host_path = sys.argv[1]
 home = pathlib.Path(sys.argv[2])
 plugin_dir = pathlib.Path(sys.argv[3])
+app_dir = pathlib.Path(sys.argv[4])
 scripts_dir = plugin_dir / "scripts"
 
 extension_id = None
@@ -749,11 +750,29 @@ manifest = {
 }
 text = json.dumps(manifest, separators=(",", ":"))
 
-for relative in (
+manifest_locations = [
     ".config/google-chrome/NativeMessagingHosts",
     ".config/BraveSoftware/Brave-Browser/NativeMessagingHosts",
     ".config/chromium/NativeMessagingHosts",
-):
+]
+
+extra_locations = app_dir / ".codex-linux" / "chrome-native-host-manifest-paths"
+try:
+    for line in extra_locations.read_text(encoding="utf-8").splitlines():
+        relative = line.strip()
+        if (
+            not relative
+            or relative.startswith("#")
+            or pathlib.PurePosixPath(relative).is_absolute()
+            or ".." in pathlib.PurePosixPath(relative).parts
+        ):
+            continue
+        if relative not in manifest_locations:
+            manifest_locations.append(relative)
+except OSError:
+    pass
+
+for relative in manifest_locations:
     directory = home / relative
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / manifest_name

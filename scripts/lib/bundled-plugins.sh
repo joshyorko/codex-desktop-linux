@@ -643,6 +643,74 @@ path.write_text(source[:match.start()] + replacement + source[match.end():], enc
 PY
 }
 
+patch_browser_use_file_url_policy() {
+    local client="$1"
+
+    if grep -q "codexLinuxFileUrlPolicy" "$client"; then
+        return 0
+    fi
+
+    python3 - "$client" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+path = Path(sys.argv[1])
+source = path.read_text(encoding="utf-8")
+patterns = [
+    re.compile(
+        r'function\s+(?P<helper>[A-Za-z_$][\w$]*)\((?P<url>[A-Za-z_$][\w$]*)\)\{'
+        r'if\((?P<allowlist>[A-Za-z_$][\w$]*)\.has\((?P=url)\)\)return\s*(?:true|!0);'
+        r'let\s+(?P<parsed>[A-Za-z_$][\w$]*);'
+        r'try\{\s*(?P=parsed)\s*=\s*new URL\((?P=url)\);?\s*\}'
+        r'catch\{\s*return\s*(?:false|!1);?\s*\}'
+        r'return\s+(?P=parsed)\.protocol\s*===\s*"http:"\s*\|\|\s*'
+        r'(?P=parsed)\.protocol\s*===\s*"https:"(?P<semicolon>;?)\}'
+    ),
+    re.compile(
+        r'function\s+(?P<helper>[A-Za-z_$][\w$]*)\((?P<url>[A-Za-z_$][\w$]*)\)\{'
+        r'if\((?P<allowlist>[A-Za-z_$][\w$]*)\.has\((?P=url)\)\)return\s*(?:true|!0);'
+        r'(?:const|let|var)\s+(?P<parsed>[A-Za-z_$][\w$]*)\s*=\s*new URL\((?P=url)\);'
+        r'return\s+(?P=parsed)\.protocol\s*===\s*"http:"\s*\|\|\s*'
+        r'(?P=parsed)\.protocol\s*===\s*"https:"(?P<semicolon>;?)\}'
+    ),
+]
+
+for pattern in patterns:
+    match = pattern.search(source)
+    if match is None:
+        continue
+
+    parsed = match.group("parsed")
+    semicolon = match.group("semicolon")
+    old_body = match.group(0)
+    old_return = re.compile(
+        rf'return\s+{re.escape(parsed)}\.protocol\s*===\s*"http:"\s*\|\|\s*'
+        rf'{re.escape(parsed)}\.protocol\s*===\s*"https:"{re.escape(semicolon)}'
+    )
+    file_policy = (
+        f'{parsed}.protocol==="file:"&&'
+        f'({parsed}.hostname===""||{parsed}.hostname==="localhost")'
+        f'/*codexLinuxFileUrlPolicy*/'
+    )
+    new_return = (
+        f'return {parsed}.protocol==="http:"||{parsed}.protocol==="https:"||'
+        f'{file_policy}{semicolon}'
+    )
+    new_body, count = old_return.subn(new_return, old_body, count=1)
+    if count != 1:
+        continue
+
+    path.write_text(source[:match.start()] + new_body + source[match.end():], encoding="utf-8")
+    raise SystemExit(0)
+
+print(
+    "WARN: Could not find Browser Use URL policy insertion point — leaving browser-client.mjs unchanged",
+    file=sys.stderr,
+)
+PY
+}
+
 patch_browser_use_node_repl_env_guard() {
     local client="$1"
 
@@ -789,6 +857,7 @@ stage_browser_plugin_from_upstream() {
     patch_browser_use_node_repl_env_guard "$target_client"
     patch_browser_use_native_pipe_import_meta_bridge "$target_client"
     patch_browser_use_site_status_allowlist_fallback "$target_client"
+    patch_browser_use_file_url_policy "$target_client"
 
     info "Browser plugin staged from upstream DMG"
     return 0

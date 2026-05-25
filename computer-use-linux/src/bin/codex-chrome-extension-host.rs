@@ -37,6 +37,7 @@ struct Client {
 struct PendingChromeRequest {
     client_id: usize,
     client_request_id: Value,
+    fallback_extension_info: bool,
 }
 
 #[derive(Clone)]
@@ -65,6 +66,7 @@ impl ChromeClientRouteError {
 struct HostState {
     stdout: Arc<Mutex<io::Stdout>>,
     rollout_tracker: RolloutTracker,
+    extension_id: Option<String>,
     clients: HashMap<usize, Client>,
     pending_chrome_requests: HashMap<String, PendingChromeRequest>,
     pending_client_requests: HashMap<String, PendingClientRequest>,
@@ -74,10 +76,15 @@ struct HostState {
 }
 
 impl HostState {
-    fn new(stdout: Arc<Mutex<io::Stdout>>, rollout_tracker: RolloutTracker) -> Self {
+    fn new(
+        stdout: Arc<Mutex<io::Stdout>>,
+        rollout_tracker: RolloutTracker,
+        extension_id: Option<String>,
+    ) -> Self {
         Self {
             stdout,
             rollout_tracker,
+            extension_id,
             clients: HashMap::new(),
             pending_chrome_requests: HashMap::new(),
             pending_client_requests: HashMap::new(),
@@ -305,7 +312,12 @@ fn main() -> Result<()> {
 
     let stdout = Arc::new(Mutex::new(io::stdout()));
     let rollout_tracker = RolloutTracker::new(Arc::clone(&stdout));
-    let state = Arc::new(Mutex::new(HostState::new(stdout, rollout_tracker)));
+    let extension_id = extension_id_from_args();
+    let state = Arc::new(Mutex::new(HostState::new(
+        stdout,
+        rollout_tracker,
+        extension_id,
+    )));
 
     log(&format!("listening on {}", socket_path.display()));
 
@@ -337,6 +349,19 @@ fn sessions_root() -> Option<PathBuf> {
     env::var_os("HOME")
         .map(PathBuf::from)
         .map(|home| home.join(".codex").join("sessions"))
+}
+
+fn extension_id_from_args() -> Option<String> {
+    env::args().skip(1).find_map(|arg| {
+        arg.strip_prefix("chrome-extension://")
+            .and_then(|value| value.split('/').next())
+            .filter(|value| is_extension_id(value))
+            .map(ToString::to_string)
+    })
+}
+
+fn is_extension_id(value: &str) -> bool {
+    value.len() == 32 && value.bytes().all(|byte| matches!(byte, b'a'..=b'p'))
 }
 
 fn socket_path(socket_dir: &Path) -> PathBuf {
@@ -561,6 +586,7 @@ fn handle_client_message(state: &SharedState, client_id: usize, message: Value) 
     let Some(client_request_id) = message.get("id").cloned() else {
         return;
     };
+    let fallback_extension_info = message.get("method").and_then(Value::as_str) == Some("getInfo");
 
     let mut state = state.lock().expect("host state mutex poisoned");
     if !state.clients.contains_key(&client_id) {
@@ -573,6 +599,7 @@ fn handle_client_message(state: &SharedState, client_id: usize, message: Value) 
         PendingChromeRequest {
             client_id,
             client_request_id,
+            fallback_extension_info,
         },
     );
     state.send_chrome(&with_id(message, Value::String(chrome_id)));
@@ -588,6 +615,19 @@ fn handle_chrome_message(state: &SharedState, message: Value) {
         let Some(pending) = state.pending_chrome_requests.remove(id) else {
             return;
         };
+
+        // chrome.runtime.getVersion() is available in Chrome/Chromium 143+.
+        // Keep forwarding getInfo for browsers that support it, and only
+        // synthesize discovery metadata for this older-runtime compatibility
+        // failure.
+        if pending.fallback_extension_info && is_missing_chrome_runtime_get_version_error(&message)
+        {
+            state.send_client(
+                pending.client_id,
+                &extension_info_response(pending.client_request_id, state.extension_id.as_deref()),
+            );
+            return;
+        }
 
         state.send_client(
             pending.client_id,
@@ -670,6 +710,43 @@ fn with_id(mut message: Value, id: Value) -> Value {
         object.insert("id".to_string(), id);
     }
     message
+}
+
+fn is_missing_chrome_runtime_get_version_error(message: &Value) -> bool {
+    message
+        .get("error")
+        .and_then(|error| error.get("message"))
+        .and_then(Value::as_str)
+        .is_some_and(|message| message.contains("chrome.runtime.getVersion is not a function"))
+}
+
+fn extension_info_response(id: Value, extension_id: Option<&str>) -> Value {
+    let mut metadata = serde_json::Map::new();
+    if let Some(extension_id) = extension_id {
+        metadata.insert(
+            "extensionId".to_string(),
+            Value::String(extension_id.to_string()),
+        );
+    }
+
+    json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "result": {
+            "name": "Chrome",
+            "version": "unknown",
+            "type": "extension",
+            "capabilities": {
+                "tab": [
+                    {
+                        "id": "pageAssets",
+                        "description": "List assets already observed in the current page state and bundle selected assets into a temporary local artifact."
+                    }
+                ]
+            },
+            "metadata": Value::Object(metadata)
+        }
+    })
 }
 
 fn session_turn_from_message(message: &Value) -> Option<(String, String)> {
@@ -957,6 +1034,7 @@ mod tests {
             PendingChromeRequest {
                 client_id: first_client_id,
                 client_request_id: json!("client-request-1"),
+                fallback_extension_info: false,
             },
         );
         state.pending_client_requests.insert(
@@ -995,6 +1073,50 @@ mod tests {
     }
 
     #[test]
+    fn get_info_falls_back_when_runtime_get_version_is_missing() {
+        let (client_writer, mut client_reader) = UnixStream::pair().unwrap();
+        let mut state = test_host_state();
+        state.clients.insert(
+            1,
+            Client {
+                writer: Arc::new(Mutex::new(client_writer)),
+            },
+        );
+        state.pending_chrome_requests.insert(
+            "linux-1-1".to_string(),
+            PendingChromeRequest {
+                client_id: 1,
+                client_request_id: json!("info-1"),
+                fallback_extension_info: true,
+            },
+        );
+        state.extension_id = Some("abcdefghijklmnopabcdefghijklmnop".to_string());
+        let state = Arc::new(Mutex::new(state));
+
+        handle_chrome_message(
+            &state,
+            json!({
+                "jsonrpc": "2.0",
+                "id": "linux-1-1",
+                "error": {
+                    "code": 1,
+                    "message": "chrome.runtime.getVersion is not a function"
+                }
+            }),
+        );
+
+        let message = read_frame(&mut client_reader).unwrap().unwrap();
+        assert_eq!(message["id"], "info-1");
+        assert_eq!(message["result"]["type"], "extension");
+        assert_eq!(message["result"]["version"], "unknown");
+        assert_eq!(
+            message["result"]["metadata"]["extensionId"],
+            "abcdefghijklmnopabcdefghijklmnop"
+        );
+        assert!(state.lock().unwrap().pending_chrome_requests.is_empty());
+    }
+
+    #[test]
     fn disconnect_cleanup_removes_pending_state_for_client() {
         let mut pending_chrome = HashMap::from([
             (
@@ -1002,6 +1124,7 @@ mod tests {
                 PendingChromeRequest {
                     client_id: 1,
                     client_request_id: json!("chrome-request-1"),
+                    fallback_extension_info: false,
                 },
             ),
             (
@@ -1009,6 +1132,7 @@ mod tests {
                 PendingChromeRequest {
                     client_id: 2,
                     client_request_id: json!("chrome-request-2"),
+                    fallback_extension_info: false,
                 },
             ),
         ]);
@@ -1055,6 +1179,7 @@ mod tests {
                 stdout,
                 sessions_root: None,
             },
+            Some("abcdefghijklmnopabcdefghijklmnop".to_string()),
         )
     }
 
