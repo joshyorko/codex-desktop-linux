@@ -3293,6 +3293,96 @@ CPP
     assert_contains "$output_log" "already applied"
 }
 
+test_v8_nullptr_workaround_skips_when_included_probe_succeeds() {
+    info "Checking V8 nullptr_t workaround probe stays inactive when not needed"
+    local workspace="$TMP_DIR/v8-nullptr-workaround-skip"
+    local fake_bin="$workspace/bin"
+    local cxx_log="$workspace/cxx.log"
+    local cxx_state="$workspace/cxx-state.log"
+    local output_log="$workspace/output.log"
+
+    mkdir -p "$fake_bin" "$workspace/work"
+    cat > "$fake_bin/c++" <<'SCRIPT'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'argv:%s\n' "$*" >> "$NATIVE_CXX_LOG"
+for arg in "$@"; do
+    if [ -f "$arg" ]; then
+        cat "$arg" >> "$NATIVE_CXX_LOG"
+    fi
+done
+exit 0
+SCRIPT
+    chmod +x "$fake_bin/c++"
+
+    (
+        CXX="$fake_bin/c++"
+        NATIVE_CXX_LOG="$cxx_log"
+        export CXX NATIVE_CXX_LOG
+        info() { echo "[INFO] $*" >&2; }
+        warn() { echo "[WARN] $*" >&2; }
+        error() { echo "[ERROR] $*" >&2; exit 1; }
+        # shellcheck disable=SC1091
+        source "$REPO_DIR/scripts/lib/native-modules.sh"
+        apply_v8_nullptr_t_workaround_if_needed "$workspace/work"
+        printf 'CXX=%s\n' "$CXX" > "$cxx_state"
+    ) > "$output_log" 2>&1
+
+    assert_contains "$cxx_log" "#include <cstddef>"
+    assert_contains "$cxx_log" "nullptr_t x = nullptr;"
+    assert_contains "$cxx_state" "CXX=$fake_bin/c++"
+    assert_not_contains "$output_log" "Applied GCC 16+ nullptr_t compatibility workaround"
+}
+
+test_v8_nullptr_workaround_wraps_when_included_probe_fails() {
+    info "Checking V8 nullptr_t workaround wraps CXX only when needed"
+    local workspace="$TMP_DIR/v8-nullptr-workaround-wrap"
+    local fake_bin="$workspace/bin"
+    local cxx_log="$workspace/cxx.log"
+    local cxx_state="$workspace/cxx-state.log"
+    local output_log="$workspace/output.log"
+
+    mkdir -p "$fake_bin" "$workspace/work"
+    cat > "$fake_bin/c++" <<'SCRIPT'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'argv:%s\n' "$*" >> "$NATIVE_CXX_LOG"
+for arg in "$@"; do
+    if [ -f "$arg" ]; then
+        cat "$arg" >> "$NATIVE_CXX_LOG"
+    fi
+    case "$arg" in
+        *.v8-nullptr-probe.cc) exit 1 ;;
+    esac
+done
+exit 0
+SCRIPT
+    chmod +x "$fake_bin/c++"
+    printf '%s\n' 'int main() { return 0; }' > "$workspace/dummy.cc"
+
+    (
+        CXX="$fake_bin/c++"
+        NATIVE_CXX_LOG="$cxx_log"
+        export CXX NATIVE_CXX_LOG
+        info() { echo "[INFO] $*" >&2; }
+        warn() { echo "[WARN] $*" >&2; }
+        error() { echo "[ERROR] $*" >&2; exit 1; }
+        # shellcheck disable=SC1091
+        source "$REPO_DIR/scripts/lib/native-modules.sh"
+        apply_v8_nullptr_t_workaround_if_needed "$workspace/work"
+        "$CXX" -x c++ -fsyntax-only "$workspace/dummy.cc"
+        printf 'CXX=%s\n' "$CXX" > "$cxx_state"
+    ) > "$output_log" 2>&1
+
+    assert_file_exists "$workspace/work/.v8-nullptr-fix.h"
+    assert_file_exists "$workspace/work/.cxx-v8-nullptr"
+    assert_contains "$workspace/work/.v8-nullptr-fix.h" "using std::nullptr_t;"
+    assert_contains "$cxx_state" "CXX=$workspace/work/.cxx-v8-nullptr"
+    assert_contains "$cxx_log" "-include"
+    assert_contains "$cxx_log" ".v8-nullptr-fix.h"
+    assert_contains "$output_log" "Applied GCC 16+ nullptr_t compatibility workaround"
+}
+
 test_native_module_rebuild_uses_local_electron_rebuild_toolchain() {
     info "Checking native module rebuild uses local Electron rebuild toolchain"
     local workspace="$TMP_DIR/native-module-rebuild-toolchain"
@@ -6405,6 +6495,8 @@ main() {
     test_port_validation_rejects_oversized_numeric_values
     test_managed_node_runtime_source_install
     test_better_sqlite3_electron_42_source_patch
+    test_v8_nullptr_workaround_skips_when_included_probe_succeeds
+    test_v8_nullptr_workaround_wraps_when_included_probe_fails
     test_native_module_rebuild_uses_local_electron_rebuild_toolchain
     test_native_module_rebuild_accepts_prebuilt_source
     test_bundled_plugin_builders_accept_prebuilt_binaries

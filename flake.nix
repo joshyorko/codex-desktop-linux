@@ -153,6 +153,7 @@
             error() { echo "[ERROR] $*" >&2; exit 1; }
             source ${sourceRoot}/scripts/lib/native-modules.sh
             patch_better_sqlite3_for_v8_external_pointer_api "$PWD/node_modules/better-sqlite3"
+            apply_v8_nullptr_t_workaround_if_needed "$TMPDIR/native-nullptr-workaround"
 
             node "$PWD/node_modules/@electron/rebuild/lib/cli.js" \
               -v ${electronVersion} \

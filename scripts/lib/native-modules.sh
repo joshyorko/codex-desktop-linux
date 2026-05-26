@@ -126,6 +126,50 @@ prune_native_module_build_artifacts() {
     find "$module_dir" -type f -name "*.target.mk" -delete 2>/dev/null || true
 }
 
+apply_v8_nullptr_t_workaround_if_needed() {
+    local build_dir="$1"
+    local probe_source="$build_dir/.v8-nullptr-probe.cc"
+    local nullptr_fix="$build_dir/.v8-nullptr-fix.h"
+    local cxx_wrapper="$build_dir/.cxx-v8-nullptr"
+    local -a cxx_command
+
+    mkdir -p "$build_dir"
+
+    # CXX is conventionally a command plus optional leading arguments, e.g.
+    # "ccache g++". Preserve that common form when wrapping the compiler.
+    # shellcheck disable=SC2206
+    cxx_command=( ${CXX:-c++} )
+    if [ "${#cxx_command[@]}" -eq 0 ]; then
+        cxx_command=(c++)
+    fi
+
+    command -v "${cxx_command[0]}" >/dev/null 2>&1 || error "C++ compiler not found: ${cxx_command[0]}"
+
+    cat > "$probe_source" <<'CPP'
+#include <cstddef>
+nullptr_t x = nullptr;
+CPP
+
+    if "${cxx_command[@]}" -x c++ -std=c++20 -fsyntax-only "$probe_source" >/dev/null 2>&1; then
+        return 0
+    fi
+
+    printf '#include <cstddef>\nusing std::nullptr_t;\n' > "$nullptr_fix"
+    {
+        printf '#!/bin/bash\n'
+        printf 'exec'
+        local arg
+        for arg in "${cxx_command[@]}"; do
+            printf ' %q' "$arg"
+        done
+        printf ' -include %q "$@"\n' "$nullptr_fix"
+    } > "$cxx_wrapper"
+    chmod +x "$cxx_wrapper"
+
+    export CXX="$cxx_wrapper"
+    info "Applied GCC 16+ nullptr_t compatibility workaround"
+}
+
 build_native_modules() {
     local app_extracted="$1"
 
@@ -168,6 +212,7 @@ build_native_modules() {
     info "Compiling for Electron v$ELECTRON_VERSION (this takes ~1 min)..."
     info "Using Electron headers: $ELECTRON_HEADERS_URL"
     [ -f "$build_dir/node_modules/@electron/rebuild/lib/cli.js" ] || error "electron-rebuild CLI not found in native build toolchain"
+    apply_v8_nullptr_t_workaround_if_needed "$build_dir"
     npm_config_disturl="$ELECTRON_HEADERS_URL" \
     NPM_CONFIG_DISTURL="$ELECTRON_HEADERS_URL" \
     node "$build_dir/node_modules/@electron/rebuild/lib/cli.js" -v "$ELECTRON_VERSION" --force --dist-url "$ELECTRON_HEADERS_URL" 2>&1 >&2
