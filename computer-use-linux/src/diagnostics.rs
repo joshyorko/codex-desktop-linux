@@ -8,7 +8,10 @@ use std::{
     collections::{BTreeMap, HashMap},
     env, fs,
     fs::OpenOptions,
-    os::unix::net::{UnixDatagram, UnixStream},
+    os::unix::{
+        fs::MetadataExt,
+        net::{UnixDatagram, UnixStream},
+    },
     path::{Path, PathBuf},
     process::Command,
 };
@@ -18,6 +21,7 @@ const DESKTOP_ENV_KEYS: &[&str] = &[
     "DESKTOP_SESSION",
     "DISPLAY",
     "HYPRLAND_INSTANCE_SIGNATURE",
+    "XAUTHORITY",
     "YDOTOOL_SOCKET",
     "XDG_SESSION_DESKTOP",
     "WAYLAND_DISPLAY",
@@ -73,6 +77,7 @@ pub struct PlatformReport {
     pub xdg_current_desktop: Option<String>,
     pub wayland_display: Option<String>,
     pub display: Option<String>,
+    pub xauthority: Option<String>,
     pub dbus_session_bus_address: Option<String>,
     pub xdg_runtime_dir: Option<String>,
     pub gnome_shell_version: Check,
@@ -361,6 +366,7 @@ fn hydrate_desktop_env_from_map(process_env: &HashMap<String, String>) {
 
 fn desktop_process_environments() -> Vec<HashMap<String, String>> {
     let mut environments = Vec::new();
+    let mut visited_pids = Vec::new();
     let mut pid = parent_pid("self");
 
     for _ in 0..8 {
@@ -371,10 +377,18 @@ fn desktop_process_environments() -> Vec<HashMap<String, String>> {
             break;
         }
 
+        visited_pids.push(current_pid);
         if let Some(process_env) = read_process_environ(current_pid) {
             environments.push(process_env);
         }
         pid = parent_pid(&current_pid.to_string());
+    }
+
+    if !visited_pids.contains(&1) && process_owner_matches_current_user(1) {
+        if let Some(process_env) = read_process_environ(1).filter(process_env_has_graphical_display)
+        {
+            environments.push(process_env);
+        }
     }
 
     environments
@@ -395,6 +409,22 @@ fn parse_parent_pid(status: &str) -> Option<u32> {
 fn read_process_environ(pid: u32) -> Option<HashMap<String, String>> {
     let bytes = fs::read(format!("/proc/{pid}/environ")).ok()?;
     Some(parse_environ(&bytes))
+}
+
+fn process_owner_matches_current_user(pid: u32) -> bool {
+    let Some(current_uid) = user_id().and_then(|uid| uid.parse::<u32>().ok()) else {
+        return false;
+    };
+    fs::metadata(format!("/proc/{pid}"))
+        .ok()
+        .is_some_and(|metadata| metadata.uid() == current_uid)
+}
+
+fn process_env_has_graphical_display(process_env: &HashMap<String, String>) -> bool {
+    process_env
+        .get("DISPLAY")
+        .or_else(|| process_env.get("WAYLAND_DISPLAY"))
+        .is_some_and(|value| !value.trim().is_empty())
 }
 
 fn parse_environ(bytes: &[u8]) -> HashMap<String, String> {
@@ -500,6 +530,7 @@ fn platform_report() -> PlatformReport {
         xdg_current_desktop: env_var("XDG_CURRENT_DESKTOP"),
         wayland_display: env_var("WAYLAND_DISPLAY"),
         display: env_var("DISPLAY"),
+        xauthority: env_var("XAUTHORITY"),
         dbus_session_bus_address: dbus_session_address(),
         xdg_runtime_dir: xdg_runtime_dir().map(|path| path.display().to_string()),
         gnome_shell_version: command_check("gnome-shell", &["--version"]),
@@ -1157,6 +1188,7 @@ mod tests {
             xdg_current_desktop: Some("GNOME".to_string()),
             wayland_display: Some("wayland-0".to_string()),
             display: Some(":0".to_string()),
+            xauthority: Some("/run/user/1000/Xauthority".to_string()),
             dbus_session_bus_address: Some("unix:path=/run/user/1000/bus".to_string()),
             xdg_runtime_dir: Some("/run/user/1000".to_string()),
             gnome_shell_version: Check::ok("GNOME Shell 46.0"),
@@ -1291,6 +1323,23 @@ mod tests {
             Some("/run/ydotoold/socket")
         );
         assert!(!environment.contains_key("NO_EQUALS"));
+    }
+
+    #[test]
+    fn desktop_env_hydration_includes_xauthority() {
+        assert!(DESKTOP_ENV_KEYS.contains(&"XAUTHORITY"));
+    }
+
+    #[test]
+    fn graphical_process_env_requires_display() {
+        let with_display = HashMap::from([("DISPLAY".to_string(), ":0".to_string())]);
+        let with_wayland =
+            HashMap::from([("WAYLAND_DISPLAY".to_string(), "wayland-0".to_string())]);
+        let without_display = HashMap::from([("XAUTHORITY".to_string(), "/tmp/xauth".to_string())]);
+
+        assert!(process_env_has_graphical_display(&with_display));
+        assert!(process_env_has_graphical_display(&with_wayland));
+        assert!(!process_env_has_graphical_display(&without_display));
     }
 
     #[test]

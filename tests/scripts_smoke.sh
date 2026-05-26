@@ -4353,6 +4353,7 @@ JSON
     cat > "$chrome_dir/scripts/browser-client.mjs" <<'JS'
 import{resolve as GF}from"path";import{homedir as VF,platform as WF}from"os";var Tc=GF(VF(),WF()==="win32"?"AppData\\Local\\Google\\Chrome\\User Data":"Library/Application Support/Google/Chrome");import{ClassicLevel as KF}from"./node_modules/classic-level.mjs";import{resolve as Gf}from"path";import{tmpdir as YF}from"os";import{cp as ZF,mkdtemp as JF,rm as kS}from"fs/promises";import{existsSync as XF}from"fs";var IS=async(t,e)=>{let r=Gf(Tc,t,"Local Extension Settings",e);if(!XF(r))return null;let n=await JF(Gf(QF(),"codex"));await ZF(r,n,{recursive:!0}),await kS(Gf(n,"LOCK"));let o=new KF(n,{createIfMissing:!1,keyEncoding:"utf8",valueEncoding:"utf8"});try{await o.open();let i=await o.get("extensionInstanceId");if(!i)return null;let s=JSON.parse(i);return typeof s!="string"?null:s}finally{await o.close(),await kS(n,{force:!0,recursive:!0})}},QF=()=>"nodeRepl"in globalThis&&globalThis.nodeRepl?globalThis.nodeRepl.tmpDir:YF();var AS=async t=>{if(t.type!=="extension"||!t.metadata?.extensionInstanceId||!t.metadata.extensionId)return t;let e=await rO(t.metadata.extensionId,t.metadata.extensionInstanceId);return e?{...t,metadata:{...t.metadata,profileName:e.name,profileIsLastUsed:e.isLastUsed.toString(),profileOrdering:e.orderingIndex.toString()}}:t},rO=async(t,e)=>(await nO(t)).find(o=>o.instanceId===e)||null,nO=async t=>{let e=await oO();return await Promise.all(e.map(async r=>({...r,instanceId:await IS(r.id,t).catch(n=>(ee(n),null))})))},oO=async()=>{let t=tO(Tc,"Local State"),e=JSON.parse(await eO(t,"utf8"));return e.profile.profiles_order.map((r,n)=>{let o=e.profile.info_cache[r];return o?{id:r,name:o.name,isLastUsed:e.profile.last_used===r,orderingIndex:n,avatarUrl:o.avatar_icon}:null}).filter(r=>!!r)};
 var Xv=t=>t==="win32"?"\\\\.\\pipe\\codex-browser-use":"/tmp/codex-browser-use";function Tm(){let t=import.meta.__codexNativePipe;return t==null||typeof t.createConnection!="function"?null:t}
+var oh=Vb(l9.platform()),d9=async e=>{let t=ST(),r=e.filter(o=>o.info.type==="iab"),n=p9(r,t);return await Promise.all(r.filter(o=>!n.includes(o)).map(async({api:o})=>o.close())),[...e.filter(o=>o.info.type!=="iab"),...n]},p9=(e,t)=>t==null?[]:e.filter(r=>r.info.metadata?.codexSessionId===t);
 function lu(e){let t=globalThis.nodeRepl?.env[e];return typeof t=="string"?t:void 0}
 import{platform as yT}from"node:os";function eh(){return"privileged native pipe bridge is not available; browser-client is not trusted"}function th(){let e=globalThis.nodeRepl?.nativePipe;return e==null||typeof e.createConnection!="function"?null:e}var ml=class e{constructor(t){this.socket=t}static async create(t){let r=th();if(r!=null){let n=await r.createConnection(t);return new e(n)}throw new Error(eh())}};
 async fetchBlocked(e){let r=await bS(e.endpoint,{method:"GET"});if(!r.ok)throw new Error(ae(`Browser Use cannot determine if ${e.displayUrl} is allowed. Please try again later or use another source.`));let n=await r.json();return TF(n)}
@@ -4397,10 +4398,56 @@ JS
 function resolveChromeUserDataDirectory() {
   return path.join(os.homedir(), ".config", "google-chrome");
 }
+
+function resolveChromeProfileDirectory(userDataDirectory) {
+  const localStateProfile =
+    resolveChromeProfileDirectoryFromLocalState(userDataDirectory);
+  if (localStateProfile) return localStateProfile;
+
+  const latestProfile = findLatestChromeProfile(userDataDirectory);
+  if (latestProfile) return latestProfile;
+
+  throw new Error(`No Chrome profile found in ${userDataDirectory}`);
+}
+
+function resolveChromeProfileDirectoryFromLocalState(userDataDirectory) {
+  return null;
+}
+
+function findLatestChromeProfile(userDataDirectory) {
+  return "Default";
+}
+
+function isUsableChromeProfile(userDataDirectory, profileDirectory) {
+  return profileDirectory.length > 0;
+}
 JS
     cat > "$chrome_dir/scripts/open-chrome-window.js" <<'JS'
 function resolveChromeUserDataDirectory() {
   return path.join(os.homedir(), ".config", "google-chrome");
+}
+
+function resolveChromeProfileDirectory(userDataDirectory) {
+  const localStateProfile =
+    resolveChromeProfileDirectoryFromLocalState(userDataDirectory);
+  if (localStateProfile) return localStateProfile;
+
+  const latestProfile = findLatestChromeProfile(userDataDirectory);
+  if (latestProfile) return latestProfile;
+
+  throw new Error(`No Chrome profile found in ${userDataDirectory}`);
+}
+
+function resolveChromeProfileDirectoryFromLocalState(userDataDirectory) {
+  return null;
+}
+
+function findLatestChromeProfile(userDataDirectory) {
+  return "Default";
+}
+
+function isUsableChromeProfile(userDataDirectory, profileDirectory) {
+  return profileDirectory.length > 0;
 }
 
 function getOpenChromeCommand(profileDirectory) {
@@ -4466,15 +4513,21 @@ test_chrome_plugin_staging() {
     assert_contains "$chrome_dir/scripts/check-extension-installed.js" "linuxBraveUserDataDirectory"
     assert_contains "$chrome_dir/scripts/check-extension-installed.js" "linuxChromiumUserDataDirectory"
     assert_contains "$chrome_dir/scripts/check-extension-installed.js" "linuxCandidateWithInstalledExtension"
+    assert_contains "$chrome_dir/scripts/check-extension-installed.js" "resolveChromeProfileDirectoryFromRunningProcess"
+    assert_contains "$chrome_dir/scripts/check-extension-installed.js" "defaultLinuxUserDataDirectoryForCommand"
     assert_contains "$chrome_dir/scripts/open-chrome-window.js" "brave-browser"
     assert_contains "$chrome_dir/scripts/open-chrome-window.js" "chromium"
     assert_contains "$chrome_dir/scripts/open-chrome-window.js" "defaultBrowser ==="
+    assert_contains "$chrome_dir/scripts/open-chrome-window.js" "resolveChromeProfileDirectoryFromRunningProcess"
+    assert_contains "$chrome_dir/scripts/open-chrome-window.js" "defaultLinuxUserDataDirectoryForCommand"
     assert_contains "$chrome_dir/scripts/browser-client.mjs" "codexLinuxChromeUserDataDirectories"
     assert_contains "$chrome_dir/scripts/browser-client.mjs" '"BraveSoftware","Brave-Browser"'
     assert_contains "$chrome_dir/scripts/browser-client.mjs" '".config","chromium"'
     assert_contains "$chrome_dir/scripts/browser-client.mjs" "instanceId:await IS(o.id,t,r)"
     assert_contains "$chrome_dir/scripts/browser-client.mjs" "codexLinuxNativePipeBridge"
     assert_contains "$chrome_dir/scripts/browser-client.mjs" "CODEX_BROWSER_USE_SOCKET_DIR"
+    assert_contains "$chrome_dir/scripts/browser-client.mjs" "codexLinuxRankBrowserBackends"
+    assert_contains "$chrome_dir/scripts/browser-client.mjs" "getUserTabs()"
     assert_contains "$chrome_dir/scripts/browser-client.mjs" 'globalThis.nodeRepl?.env?.\[e\]'
     assert_not_contains "$chrome_dir/scripts/browser-client.mjs" 'globalThis.nodeRepl?.env\[e\]'
     assert_contains "$chrome_dir/scripts/browser-client.mjs" "nativePipe??import.meta.__codexNativePipe"
@@ -4508,6 +4561,16 @@ JS
     assert_contains "$browser_client" "codexLinuxChromeUserDataDirectories"
     assert_contains "$browser_client" '"BraveSoftware","Brave-Browser"'
     assert_contains "$browser_client" '".config","chromium"'
+
+    cat > "$browser_client" <<'JS'
+import{resolve as Y5}from"path";import{homedir as Z5,platform as X5}from"os";var hl=Y5(Z5(),X5()==="win32"?"AppData\\Local\\Google\\Chrome\\User Data":"Library/Application Support/Google/Chrome");import{ClassicLevel as Q5}from"./node_modules/classic-level.mjs";import{resolve as rh}from"path";import{tmpdir as o9}from"os";import{cp as t9,mkdtemp as r9,rm as fT}from"fs/promises";import{existsSync as n9}from"fs";var mT=async(e,t)=>{let r=rh(hl,e,"Local Extension Settings",t);if(!n9(r))return null;let n=await r9(rh(o9(),"codex"));await t9(r,n,{recursive:!0}),await fT(rh(n,"LOCK"));let o=new Q5(n,{createIfMissing:!1,keyEncoding:"utf8",valueEncoding:"utf8"});try{await o.open();let i=await o.get("extensionInstanceId");if(!i)return null;let s=JSON.parse(i);return typeof s!="string"?null:s}finally{await o.close(),await fT(n,{force:!0,recursive:!0})}};var a9=async(e,t)=>(await u9(e)).find(o=>o.instanceId===t)||null,u9=async e=>{let t=await c9();return await Promise.all(t.map(async r=>({...r,instanceId:await mT(r.id,e).catch(n=>(ne(n),null))})))},c9=async()=>{let e=s9(hl,"Local State"),t=JSON.parse(await i9(e,"utf8"));return t.profile.profiles_order.map((r,n)=>{let o=t.profile.info_cache[r];return o?{id:r,name:o.name,isLastUsed:t.profile.last_used===r,orderingIndex:n,avatarUrl:o.avatar_icon}:null}).filter(r=>!!r)}
+JS
+    node "$REPO_DIR/scripts/lib/patch-chrome-plugin.js" "$chrome_dir" >/dev/null 2>&1
+    assert_contains "$browser_client" "codexLinuxChromeUserDataDirectories"
+    assert_contains "$browser_client" '"BraveSoftware","Brave-Browser"'
+    assert_contains "$browser_client" '".config","chromium"'
+    assert_contains "$browser_client" "async(e,t,r=hl)"
+    assert_contains "$browser_client" "instanceId:await mT(o.id,e,r)"
 }
 
 test_chrome_marketplace_fallback_synthesis() {
