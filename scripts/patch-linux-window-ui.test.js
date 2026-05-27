@@ -2527,6 +2527,20 @@ test("shows current use-is-plugins-enabled Computer Use UI on Linux", () => {
   );
 });
 
+test("shows object-helper Computer Use plugin UI on Linux", () => {
+  const source =
+    "function m(e){return e===`macOS`||e===`windows`}" +
+    "function h(e){let n=(0,f.c)(15),{enabled:r,hostId:i}=e,a=r===void 0?!0:r,{isLoading:o,platform:s}=u(),c=t(i).kind===`local`,d=l(`1506311413`),h;n[0]===i?h=n[1]:(h={featureName:`computer_use`,hostId:i},n[0]=i,n[1]=h);let _=p(h),v;n[2]!==_.enabled||n[3]!==_.isLoading||n[4]!==a||n[5]!==d||n[6]!==c||n[7]!==o||n[8]!==s?(v=g({enabled:a,isComputerUseFeatureEnabled:_.enabled,isComputerUseFeatureLoading:_.isLoading,isComputerUseGateEnabled:d,isHostCompatiblePlatform:m(s),isHostLocal:c,isPlatformLoading:o,windowType:`electron`}),n[2]=_.enabled,n[3]=_.isLoading,n[4]=a,n[5]=d,n[6]=c,n[7]=o,n[8]=s,n[9]=v):v=n[9];return v}";
+
+  const patched = applyPatchTwice(applyLinuxComputerUseRendererAvailabilityPatch, source);
+
+  assert.match(patched, /function m\(e\)\{return e===`macOS`\|\|e===`windows`\|\|e===`linux`\}/);
+  assert.match(
+    patched,
+    /v=g\(\{enabled:a,isComputerUseFeatureEnabled:s===`linux`\|\|_\.enabled,isComputerUseFeatureLoading:s!==`linux`&&_\.isLoading,isComputerUseGateEnabled:s===`linux`\|\|d,isHostCompatiblePlatform:m\(s\),isHostLocal:c,isPlatformLoading:o,windowType:`electron`\}\)/,
+  );
+});
+
 test("warns without partially patching when Computer Use renderer availability gate drifts", () => {
   const source =
     "function g(e){return e===`macOS`||e===`windows`}" +
@@ -3049,7 +3063,7 @@ test("patchExtractedApp scans apps bundles for Computer Use availability when UI
       fs.writeFileSync(
         path.join(assetsDir, "use-is-plugins-enabled-current.js"),
         "function p(e){return e===`macOS`||e===`windows`}" +
-          "function m(e){let t=(0,d.c)(8),{enabled:n,hostId:r,isHostLocal:i}=e,a=n===void 0?!0:n,{isLoading:o,platform:s}=l(),u=c(`1506311413`),m;t[0]===r?m=t[1]:(m={featureName:`computer_use`,hostId:r},t[0]=r,t[1]=m);let h=f(m),g;t[2]===s?g=t[3]:(g=p(s),t[2]=s,t[3]=g);let _=a&&i&&u&&(o||g),v=_&&!o&&h.enabled&&!h.isLoading,y=_&&h.isLoading,b=_&&(o||h.isLoading),x;return x}",
+          "function m(e){let n=(0,f.c)(15),{enabled:r,hostId:i}=e,a=r===void 0?!0:r,{isLoading:o,platform:s}=u(),c=t(i).kind===`local`,d=l(`1506311413`),h;n[0]===i?h=n[1]:(h={featureName:`computer_use`,hostId:i},n[0]=i,n[1]=h);let _=p(h),v;n[2]!==_.enabled||n[3]!==_.isLoading||n[4]!==a||n[5]!==d||n[6]!==c||n[7]!==o||n[8]!==s?(v=g({enabled:a,isComputerUseFeatureEnabled:_.enabled,isComputerUseFeatureLoading:_.isLoading,isComputerUseGateEnabled:d,isHostCompatiblePlatform:p(s),isHostLocal:c,isPlatformLoading:o,windowType:`electron`}),n[2]=_.enabled,n[3]=_.isLoading,n[4]=a,n[5]=d,n[6]=c,n[7]=o,n[8]=s,n[9]=v):v=n[9];return v}",
       );
       fs.writeFileSync(path.join(tempRoot, "package.json"), JSON.stringify({ name: "codex" }));
 
@@ -3061,7 +3075,7 @@ test("patchExtractedApp scans apps bundles for Computer Use availability when UI
       );
       assert.match(
         fs.readFileSync(path.join(assetsDir, "use-is-plugins-enabled-current.js"), "utf8"),
-        /let _=a&&i&&\(s===`linux`\|\|u&&\(o\|\|g\)\),v=_&&!o&&\(s===`linux`\|\|h\.enabled\)&&!h\.isLoading/,
+        /v=g\(\{enabled:a,isComputerUseFeatureEnabled:s===`linux`\|\|_\.enabled,isComputerUseFeatureLoading:s!==`linux`&&_\.isLoading,isComputerUseGateEnabled:s===`linux`\|\|d,isHostCompatiblePlatform:p\(s\),isHostLocal:c,isPlatformLoading:o,windowType:`electron`\}\)/,
       );
     } finally {
       fs.rmSync(tempRoot, { recursive: true, force: true });

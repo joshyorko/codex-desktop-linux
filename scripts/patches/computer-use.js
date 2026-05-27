@@ -296,6 +296,34 @@ function applyLinuxComputerUseRendererAvailabilityPatch(currentSource) {
     },
   );
 
+  const currentObjectAvailabilityPattern =
+    /([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)\(\{enabled:([A-Za-z_$][\w$]*),isComputerUseFeatureEnabled:([A-Za-z_$][\w$]*)\.enabled,isComputerUseFeatureLoading:\4\.isLoading,isComputerUseGateEnabled:([A-Za-z_$][\w$]*),isHostCompatiblePlatform:([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*)\),isHostLocal:([A-Za-z_$][\w$]*),isPlatformLoading:([A-Za-z_$][\w$]*),windowType:`electron`\}\)/g;
+  patchedSource = patchedSource.replace(
+    currentObjectAvailabilityPattern,
+    (
+      match,
+      resultVar,
+      helperVar,
+      enabledVar,
+      featureQueryVar,
+      rolloutVar,
+      platformPredicateVar,
+      platformVar,
+      isHostLocalVar,
+      platformLoadingVar,
+      offset,
+    ) => {
+      const contextStart = Math.max(0, offset - 900);
+      const context = patchedSource.slice(contextStart, offset + match.length);
+      if (!context.includes(computerUseFeatureNeedle)) {
+        return match;
+      }
+      availabilityGateFound = true;
+      availabilityChanged = true;
+      return `${resultVar}=${helperVar}({enabled:${enabledVar},isComputerUseFeatureEnabled:${platformVar}===\`linux\`||${featureQueryVar}.enabled,isComputerUseFeatureLoading:${platformVar}!==\`linux\`&&${featureQueryVar}.isLoading,isComputerUseGateEnabled:${platformVar}===\`linux\`||${rolloutVar},isHostCompatiblePlatform:${platformPredicateVar}(${platformVar}),isHostLocal:${isHostLocalVar},isPlatformLoading:${platformLoadingVar},windowType:\`electron\`})`;
+    },
+  );
+
   if (availabilityChanged || availabilityAlreadyPatched()) {
     return patchedSource;
   }
