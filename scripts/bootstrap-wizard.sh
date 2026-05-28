@@ -60,6 +60,7 @@ Environment:
   CODEX_LINUX_DISABLE_FEATURES=a,b     disable build-time Linux features
   CODEX_LINUX_FEATURES_ROOT=/path      override linux-features root
   CODEX_LINUX_FEATURES_CONFIG=/path    override features.json path
+  linux-features/local/<id>/           user-local feature dirs are discovered and marked [local]
   PACKAGE_NAME=codex-cua-lab           check side-by-side installed package state
   PACKAGE_WITH_UPDATER=0               choose manual-update package mode
 
@@ -723,26 +724,70 @@ def read_json(path, label):
     except Exception as exc:
         die(f"Could not read {label} at {path}: {exc}")
 
+def normalize_id_list(value, label, manifest_path):
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        die(f"Linux feature manifest {manifest_path} field {label} must be an array")
+    result = []
+    seen = set()
+    for item in value:
+        if not isinstance(item, str) or not id_re.match(item):
+            die(f"Linux feature manifest {manifest_path} field {label} contains invalid feature id: {item}")
+        if item not in seen:
+            seen.add(item)
+            result.append(item)
+    return result
+
+def feature_manifest_paths(root):
+    if not root.exists():
+        return []
+    reserved = {"local", "README.md", "features.example.json", "features.json"}
+    paths = []
+    for child in sorted(root.iterdir(), key=lambda item: item.name):
+        if child.name.startswith(".") or child.name in reserved or not child.is_dir():
+            continue
+        manifest_path = child / "feature.json"
+        if manifest_path.exists():
+            paths.append(("repo", manifest_path))
+    local_root = root / "local"
+    if local_root.is_dir():
+        for child in sorted(local_root.iterdir(), key=lambda item: item.name):
+            if child.name.startswith(".") or not child.is_dir():
+                continue
+            manifest_path = child / "feature.json"
+            if manifest_path.exists():
+                paths.append(("local", manifest_path))
+    return paths
+
 def discover_features(root):
     features = {}
     if not root.exists():
         warn(f"Linux features root not found: {root}")
         return features
-    for manifest_path in sorted(root.glob("*/feature.json")):
+    for origin, manifest_path in feature_manifest_paths(root):
         data = read_json(manifest_path, f"Linux feature manifest {manifest_path}") or {}
         feature_id = data.get("id")
         if not isinstance(feature_id, str) or not id_re.match(feature_id):
             warn(f"Skipping feature with invalid id in {manifest_path}")
             continue
+        if not (manifest_path.parent / "README.md").is_file():
+            die(f"Linux feature '{feature_id}' must include README.md next to feature.json")
+        if data.get("defaultEnabled") is True:
+            die(f"Linux feature '{feature_id}' must be disabled by default; defaultEnabled true is not allowed")
         if feature_id in features:
-            warn(f"Skipping duplicate Linux feature id: {feature_id}")
-            continue
+            die(f"Duplicate Linux feature id '{feature_id}' in {manifest_path} and {features[feature_id]['manifest_path']}")
         title = data.get("title") or data.get("name") or feature_id
         description = data.get("description") or ""
         features[feature_id] = {
             "id": feature_id,
             "title": str(title),
             "description": str(description),
+            "origin": origin,
+            "local": origin == "local",
+            "requires": normalize_id_list(data.get("requires"), "requires", manifest_path),
+            "conflicts": normalize_id_list(data.get("conflicts"), "conflicts", manifest_path),
+            "manifest_path": str(manifest_path),
         }
     return dict(sorted(features.items()))
 
@@ -791,6 +836,18 @@ for feature_id in enable:
     if feature_id not in final:
         final.append(feature_id)
 
+final_set = set(final)
+for feature_id in final:
+    feature = features.get(feature_id)
+    if feature is None:
+        continue
+    missing_required = [required for required in feature["requires"] if required not in final_set]
+    if missing_required:
+        die(f"Linux feature '{feature_id}' requires enabled feature(s): {csv(missing_required)}")
+    conflicting_enabled = [conflict for conflict in feature["conflicts"] if conflict in final_set]
+    if conflicting_enabled:
+        die(f"Linux feature '{feature_id}' conflicts with enabled feature(s): {csv(conflicting_enabled)}")
+
 if apply_changes and (enable or disable):
     config_path.parent.mkdir(parents=True, exist_ok=True)
     config_path.write_text(json.dumps({"enabled": final}, indent=2) + "\n")
@@ -814,7 +871,8 @@ if features:
     for index, (feature_id, feature) in enumerate(features.items(), start=1):
         state = "enabled" if feature_id in final else "available"
         sample = " (developer sample)" if feature_id == "example-feature" else ""
-        print(f"[setup]   {index}. [{state}] {feature_id}{sample} - {feature['title']}")
+        local = " [local]" if feature.get("local") else ""
+        print(f"[setup]   {index}. [{state}] {feature_id}{local}{sample} - {feature['title']}")
 else:
     print("[setup] Available Linux features: none found")
 

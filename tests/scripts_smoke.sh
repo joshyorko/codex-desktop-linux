@@ -95,18 +95,23 @@ make_wizard_feature_root() {
     cat > "$features_root/conversation-mode/feature.json" <<'JSON'
 {"id":"conversation-mode","name":"Conversation mode","description":"Voice conversation loop."}
 JSON
+    printf '%s\n' '# Conversation Mode' > "$features_root/conversation-mode/README.md"
     cat > "$features_root/example-feature/feature.json" <<'JSON'
 {"id":"example-feature","title":"Example Linux Feature","description":"Developer sample."}
 JSON
+    printf '%s\n' '# Example Linux Feature' > "$features_root/example-feature/README.md"
     cat > "$features_root/read-aloud/feature.json" <<'JSON'
 {"id":"read-aloud","name":"Read aloud","description":"Read assistant responses aloud."}
 JSON
+    printf '%s\n' '# Read Aloud' > "$features_root/read-aloud/README.md"
     cat > "$features_root/read-aloud-mcp/feature.json" <<'JSON'
 {"id":"read-aloud-mcp","title":"Read Aloud MCP","description":"Read Aloud MCP plugin staging."}
 JSON
+    printf '%s\n' '# Read Aloud MCP' > "$features_root/read-aloud-mcp/README.md"
     cat > "$features_root/remote-mobile-control/feature.json" <<'JSON'
 {"id":"remote-mobile-control","title":"Experimental Remote Mobile Control","description":"Mobile host enrollment patches."}
 JSON
+    printf '%s\n' '# Remote Mobile Control' > "$features_root/remote-mobile-control/README.md"
 }
 
 make_fake_browser_upstream_app() {
@@ -151,24 +156,42 @@ test_package_payload_permission_normalization() {
     info "Checking package payload permission normalization"
     local root="$TMP_DIR/package-permissions"
     local app_root="$root/opt/codex-desktop"
+    local private_file="$app_root/.codex-linux/features/private/secret.txt"
 
-    mkdir -p "$app_root/content/webview" "$root/usr/bin"
+    mkdir -p "$app_root/content/webview" "$root/usr/bin" "$(dirname "$private_file")"
     printf '%s\n' '#!/bin/bash' 'echo start' > "$app_root/start.sh"
     printf '%s\n' '<!doctype html>' > "$app_root/content/webview/index.html"
     printf '%s\n' '#!/bin/bash' 'exec /opt/codex-desktop/start.sh "$@"' > "$root/usr/bin/codex-desktop"
+    printf '%s\n' 'secret' > "$private_file"
+    cat > "$app_root/.codex-linux/linux-features-staged.json" <<'JSON'
+{
+  "version": 1,
+  "resources": [
+    {
+      "id": "private",
+      "type": "resource",
+      "target": ".codex-linux/features/private/secret.txt",
+      "mode": "0600"
+    }
+  ],
+  "runtimeHooks": []
+}
+JSON
     chmod 0700 "$root/opt" "$app_root" "$app_root/content" "$app_root/content/webview"
     chmod 0700 "$app_root/start.sh" "$root/usr/bin/codex-desktop"
-    chmod 0600 "$app_root/content/webview/index.html"
+    chmod 0600 "$app_root/content/webview/index.html" "$private_file"
 
     # shellcheck disable=SC1091
     source "$REPO_DIR/scripts/lib/package-common.sh"
     normalize_package_payload_permissions "$root"
+    PACKAGE_NAME="codex-desktop" restore_linux_feature_payload_permissions "$root"
 
     assert_mode "$app_root" "755"
     assert_mode "$app_root/content/webview" "755"
     assert_mode "$app_root/start.sh" "755"
     assert_mode "$root/usr/bin/codex-desktop" "755"
     assert_mode "$app_root/content/webview/index.html" "644"
+    assert_mode "$private_file" "600"
 }
 
 test_deb_builder_smoke() {
@@ -269,16 +292,28 @@ test_update_builder_preserves_enabled_linux_features_config() {
     local workspace="$TMP_DIR/update-builder-linux-features"
     local root="$workspace/root"
     local app_dir="$workspace/app"
+    local features_root="$workspace/linux-features"
     local feature_config="$workspace/features.json"
     local staged_config="$root/opt/codex-desktop/update-builder/linux-features/features.json"
+    local staged_local_manifest="$root/opt/codex-desktop/update-builder/linux-features/local/local-tool/feature.json"
     local source_info="$root/opt/codex-desktop/update-builder/.codex-linux/source-info.json"
 
     mkdir -p "$workspace"
     make_fake_app "$app_dir"
+    mkdir -p "$features_root/example-feature" "$features_root/local/local-tool"
+    printf '%s\n' '# Linux Features' > "$features_root/README.md"
+    printf '%s\n' '{"enabled":[]}' > "$features_root/features.example.json"
+    printf '%s\n' '{"id":"example-feature","title":"Example Linux Feature"}' \
+        > "$features_root/example-feature/feature.json"
+    printf '%s\n' '# Example Linux Feature' > "$features_root/example-feature/README.md"
+    printf '%s\n' '{"id":"local-tool","title":"Local Tool"}' \
+        > "$features_root/local/local-tool/feature.json"
+    printf '%s\n' '# Local Tool' > "$features_root/local/local-tool/README.md"
     cat > "$feature_config" <<'JSON'
 {
   "enabled": [
-    "example-feature"
+    "example-feature",
+    "local-tool"
   ],
   "localComment": "should not be packaged"
 }
@@ -288,6 +323,7 @@ JSON
         export APP_DIR="$app_dir"
         export PACKAGE_NAME="codex-desktop"
         export UPDATER_SERVICE_SOURCE="$REPO_DIR/packaging/linux/codex-update-manager.service"
+        export CODEX_LINUX_FEATURES_ROOT="$features_root"
         export CODEX_LINUX_FEATURES_CONFIG="$feature_config"
         export CODEX_LINUX_SOURCE_REMOTE="https://builder:secret-token@example.com/org/repo.git"
         export SOURCE_DATE_EPOCH="1710000000"
@@ -298,14 +334,16 @@ JSON
     )
 
     assert_file_exists "$staged_config"
+    assert_file_exists "$staged_local_manifest"
     assert_contains "$staged_config" "example-feature"
+    assert_contains "$staged_config" "local-tool"
     assert_not_contains "$staged_config" "localComment"
 
     node - "$staged_config" <<'NODE' || fail "Expected staged Linux features config to be sanitized"
 const fs = require("node:fs");
 const configPath = process.argv[2];
 const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
-if (JSON.stringify(config) !== JSON.stringify({ enabled: ["example-feature"] })) {
+if (JSON.stringify(config) !== JSON.stringify({ enabled: ["example-feature", "local-tool"] })) {
   process.exit(1);
 }
 NODE
@@ -321,6 +359,51 @@ if (info.capturedAt !== new Date(1710000000 * 1000).toISOString()) {
   throw new Error(`unexpected capturedAt: ${info.capturedAt}`);
 }
 NODE
+}
+
+test_linux_feature_package_hook_discovery_failure_blocks_build() {
+    info "Checking Linux feature package hook discovery failure blocks package staging"
+    local workspace="$TMP_DIR/package-hook-discovery-failure"
+    local root="$workspace/root"
+    local app_dir="$workspace/app"
+    local features_root="$workspace/linux-features"
+    local feature_config="$features_root/features.json"
+    local output_log="$workspace/output.log"
+
+    mkdir -p "$root" "$features_root/bad-package-hook"
+    make_fake_app "$app_dir"
+    printf '%s\n' '{"enabled":[]}' > "$features_root/features.example.json"
+    cat > "$features_root/bad-package-hook/feature.json" <<'JSON'
+{
+  "id": "bad-package-hook",
+  "title": "Bad Package Hook",
+  "packageHooks": [
+    {
+      "path": "missing.sh",
+      "formats": ["deb"]
+    }
+  ]
+}
+JSON
+    printf '%s\n' '# Bad Package Hook' > "$features_root/bad-package-hook/README.md"
+    printf '%s\n' '{"enabled":["bad-package-hook"]}' > "$feature_config"
+
+    if (
+        export APP_DIR="$app_dir"
+        export PACKAGE_NAME="codex-desktop"
+        export PACKAGE_VERSION="2026.03.24.120000+hookfailure"
+        export CODEX_LINUX_FEATURES_ROOT="$features_root"
+        export CODEX_LINUX_FEATURES_CONFIG="$feature_config"
+
+        # shellcheck disable=SC1091
+        source "$REPO_DIR/scripts/lib/package-common.sh"
+        run_linux_feature_package_hooks "$root" "deb"
+    ) >"$output_log" 2>&1; then
+        fail "Expected package hook discovery failure to stop package staging"
+    fi
+
+    assert_contains "$output_log" "Failed to discover Linux feature package hooks for deb"
+    assert_contains "$output_log" "packageHook 1 not found"
 }
 
 test_deb_builder_respects_package_identity() {
@@ -995,6 +1078,29 @@ test_setup_native_wizard_rejects_invalid_feature_ids() {
     assert_json_enabled_equals "$config" '[]'
 }
 
+test_setup_native_wizard_rejects_features_without_readme() {
+    info "Checking setup-native wizard rejects undocumented Linux features"
+    local workspace="$TMP_DIR/setup-native-missing-readme"
+    local features_root="$workspace/linux-features"
+    local config="$workspace/features.json"
+    local output_log="$workspace/output.log"
+
+    make_wizard_feature_root "$features_root"
+    rm -f "$features_root/read-aloud/README.md"
+    printf '%s\n' '{"enabled":[]}' > "$config"
+
+    if CODEX_BOOTSTRAP_NONINTERACTIVE=1 \
+        CODEX_LINUX_FEATURES_ROOT="$features_root" \
+        CODEX_LINUX_FEATURES_CONFIG="$config" \
+        CODEX_LINUX_FEATURES="read-aloud" \
+            bash "$REPO_DIR/scripts/bootstrap-wizard.sh" >"$output_log" 2>&1; then
+        fail "setup wizard should reject Linux features without README.md"
+    fi
+
+    assert_contains "$output_log" "must include README.md next to feature.json"
+    assert_json_enabled_equals "$config" '[]'
+}
+
 test_setup_native_wizard_rejects_conflicting_feature_ids() {
     info "Checking setup-native wizard conflicting feature validation"
     local workspace="$TMP_DIR/setup-native-conflicting-feature"
@@ -1139,6 +1245,31 @@ JSON
     assert_contains "$output_log" "Enabled Linux features: remote-mobile-control"
     assert_contains "$output_log" "Default native package mode includes codex-update-manager"
     assert_contains "$output_log" "make install-native"
+}
+
+test_setup_native_wizard_lists_local_features() {
+    info "Checking setup-native wizard discovers user-local Linux features"
+    local workspace="$TMP_DIR/setup-native-local-feature"
+    local features_root="$workspace/linux-features"
+    local config="$workspace/features.json"
+    local output_log="$workspace/output.log"
+
+    make_wizard_feature_root "$features_root"
+    mkdir -p "$features_root/local/local-tool"
+    printf '%s\n' '{"id":"local-tool","title":"Local Tool","description":"User-local integration."}' \
+        > "$features_root/local/local-tool/feature.json"
+    printf '%s\n' '# Local Tool' > "$features_root/local/local-tool/README.md"
+    printf '%s\n' '{"enabled":[]}' > "$config"
+
+    CODEX_BOOTSTRAP_NONINTERACTIVE=1 \
+    CODEX_LINUX_FEATURES_ROOT="$features_root" \
+    CODEX_LINUX_FEATURES_CONFIG="$config" \
+    CODEX_LINUX_FEATURES="local-tool" \
+        bash "$REPO_DIR/scripts/bootstrap-wizard.sh" >"$output_log"
+
+    assert_json_enabled_equals "$config" '["local-tool"]'
+    assert_contains "$output_log" "local-tool \\[local\\] - Local Tool"
+    assert_contains "$output_log" "Enabled Linux features: local-tool"
 }
 
 test_setup_native_wizard_uses_package_name_for_installed_state() {
@@ -3900,6 +4031,7 @@ detect_body = source.split("detect_warm_start() {", 1)[1].split("send_warm_start
 launch_body = source.split("launch_electron() {", 1)[1].split("load_packaged_runtime_helper", 1)[0]
 runtime_body = source.split("trap cleanup_launcher EXIT", 1)[1].split("launch_electron", 1)[0]
 webview_probe_body = source.split("webview_port_is_open() {", 1)[1].split("wait_for_webview_server() {", 1)[0]
+prelaunch_hooks_body = source.split("run_feature_prelaunch_hooks() {", 1)[1].split("bundled_plugin_version() {", 1)[0]
 cold_start_hooks_body = source.split("run_cold_start_hooks() {", 1)[1].split("run_cli_preflight() {", 1)[0]
 stop_body = source.split("stop_owned_webview_server() {", 1)[1].split("owned_webview_server_pid() {", 1)[0]
 stale_body = source.split("pid_is_stale_webview_server() {", 1)[1].split("stop_owned_webview_server() {", 1)[0]
@@ -3909,6 +4041,10 @@ ensure_body = source.split("ensure_webview_server() {", 1)[1].split("wait_for_we
 reconcile_body = source.split("reconcile_runtime_state() {", 1)[1].split("set_electron_defaults() {", 1)[0]
 if 'LAUNCHER_ARGS=()' not in source:
     raise SystemExit("launcher must keep a sanitized argv for launcher-only flags")
+if 'CODEX_LINUX_FEATURES_DIR="$SCRIPT_DIR/.codex-linux/features"' not in source:
+    raise SystemExit("launcher must expose the app-local Linux feature resource directory")
+if 'export CODEX_HOME CODEX_LINUX_APP_ID CODEX_LINUX_APP_DISPLAY_NAME CODEX_LINUX_WEBVIEW_PORT CODEX_LINUX_SETTINGS_FILE CODEX_LINUX_FEATURES_DIR' not in source:
+    raise SystemExit("launcher must export CODEX_HOME and Linux feature resource directory")
 if 'configure_multi_launch_instance "$@"' not in source:
     raise SystemExit("launcher must configure multi-launch before deriving WEBVIEW_ORIGIN")
 if 'unset CODEX_LINUX_MULTI_LAUNCH' not in source.split('parse_launcher_args() {', 1)[0]:
@@ -3978,6 +4114,11 @@ if "if needs_cold_start;" not in runtime_body:
     raise SystemExit("second-instance handoff must skip CLI preflight")
 if 'run_cold_start_hooks' not in runtime_body:
     raise SystemExit("cold start must run feature-staged hooks before Electron launches")
+for name, body in (("prelaunch", prelaunch_hooks_body), ("cold-start", cold_start_hooks_body)):
+    if 'CODEX_HOME="$CODEX_HOME"' not in body:
+        raise SystemExit(f"launcher {name} hooks must receive resolved CODEX_HOME")
+    if 'CODEX_LINUX_FEATURES_DIR="$CODEX_LINUX_FEATURES_DIR"' not in body:
+        raise SystemExit(f"launcher {name} hooks must receive the app-local Linux feature resource directory")
 if 'COLD_START_HOOK_DIR' not in cold_start_hooks_body or '"$hook" "$SCRIPT_DIR" "$APP_STATE_DIR" "$LOG_DIR"' not in cold_start_hooks_body:
     raise SystemExit("launcher cold-start hook runner must be generic and pass standard paths")
 if '>>"$LOG_FILE" 2>&1 &' not in cold_start_hooks_body:
@@ -4309,7 +4450,7 @@ test_side_by_side_launcher_identity() {
     assert_contains "$app_dir/start.sh" "CODEX_LINUX_APP_DISPLAY_NAME=Codex\\\\ CUA\\\\ Lab"
     assert_contains "$app_dir/start.sh" 'CODEX_LINUX_WEBVIEW_PORT=${CODEX_WEBVIEW_PORT:-5176}'
     assert_contains "$app_dir/start.sh" 'CODEX_LINUX_SETTINGS_FILE="$APP_SETTINGS_FILE"'
-    assert_contains "$app_dir/start.sh" 'export CODEX_LINUX_APP_ID CODEX_LINUX_APP_DISPLAY_NAME CODEX_LINUX_WEBVIEW_PORT CODEX_LINUX_SETTINGS_FILE'
+    assert_contains "$app_dir/start.sh" 'export CODEX_HOME CODEX_LINUX_APP_ID CODEX_LINUX_APP_DISPLAY_NAME CODEX_LINUX_WEBVIEW_PORT CODEX_LINUX_SETTINGS_FILE CODEX_LINUX_FEATURES_DIR'
     assert_contains "$app_dir/start.sh" 'WEBVIEW_ORIGIN="http://127.0.0.1:$CODEX_LINUX_WEBVIEW_PORT"'
     assert_contains "$app_dir/start.sh" 'ELECTRON_RENDERER_URL="${ELECTRON_RENDERER_URL:-$WEBVIEW_ORIGIN/}"'
     assert_contains "$app_dir/start.sh" "resolve_script_dir"
@@ -6740,6 +6881,7 @@ main() {
     test_package_payload_permission_normalization
     test_deb_builder_smoke
     test_update_builder_preserves_enabled_linux_features_config
+    test_linux_feature_package_hook_discovery_failure_blocks_build
     test_deb_builder_respects_package_identity
     test_deb_builder_without_updater
     test_no_updater_cleanup_helper_removes_inactive_user_enablement
@@ -6754,11 +6896,13 @@ main() {
     test_fedora_dependency_bootstrap_installs_rpmbuild
     test_setup_native_wizard_noninteractive_feature_writer
     test_setup_native_wizard_rejects_invalid_feature_ids
+    test_setup_native_wizard_rejects_features_without_readme
     test_setup_native_wizard_rejects_conflicting_feature_ids
     test_setup_native_wizard_disable_is_non_destructive
     test_setup_native_wizard_accepts_numbered_feature_selection
     test_setup_native_wizard_rejects_out_of_range_feature_numbers
     test_setup_native_wizard_summary_keeps_existing_config
+    test_setup_native_wizard_lists_local_features
     test_setup_native_wizard_uses_package_name_for_installed_state
     test_setup_native_wizard_portal_summary_survives_busctl_sigpipe
     test_setup_native_wizard_warns_when_conversation_mode_lacks_read_aloud

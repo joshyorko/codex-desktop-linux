@@ -77,6 +77,64 @@ fs.writeFileSync(targetPath, `${JSON.stringify({ enabled }, null, 2)}\n`);
 NODE
 }
 
+linux_features_root_path() {
+    local helper="$REPO_DIR/scripts/lib/linux-features.js"
+    local node_bin
+
+    [ -f "$helper" ] || error "Missing Linux features helper: $helper"
+
+    node_bin="$(package_node_binary)"
+    "$node_bin" "$helper" --features-root
+}
+
+stage_update_builder_linux_features_tree() {
+    local update_builder_root="$1"
+    local source_root
+    local target="$update_builder_root/linux-features"
+
+    source_root="$(linux_features_root_path)"
+    [ -d "$source_root" ] || error "Missing Linux features root: $source_root"
+
+    mkdir -p "$target"
+    cp -a "$source_root/." "$target/"
+}
+
+run_linux_feature_package_hooks() {
+    local staging_root="$1"
+    local package_format="$2"
+    local helper="$REPO_DIR/scripts/lib/linux-features.js"
+    local node_bin
+    local feature_id
+    local hook_path
+    local hooks_output
+    local app_dir="$staging_root/opt/$PACKAGE_NAME"
+
+    [ -d "$staging_root" ] || error "Missing package staging root: $staging_root"
+    [ -f "$helper" ] || error "Missing Linux features helper: $helper"
+
+    node_bin="$(package_node_binary)"
+    if ! hooks_output="$("$node_bin" "$helper" --package-hooks "$package_format")"; then
+        error "Failed to discover Linux feature package hooks for $package_format"
+    fi
+
+    while IFS=$'\t' read -r feature_id hook_path; do
+        [ -n "${feature_id:-}" ] || continue
+        [ -f "$hook_path" ] || error "Missing Linux feature package hook for $feature_id: $hook_path"
+
+        info "Running Linux feature package hook ($package_format): $feature_id"
+        REPO_DIR="$REPO_DIR" \
+            SCRIPT_DIR="$REPO_DIR" \
+            APP_DIR="$app_dir" \
+            PACKAGE_APP_DIR="$app_dir" \
+            PACKAGE_NAME="$PACKAGE_NAME" \
+            PACKAGE_VERSION="$PACKAGE_VERSION" \
+            PACKAGE_FORMAT="$package_format" \
+            PACKAGE_ROOT="$staging_root" \
+            PACKAGE_STAGING_ROOT="$staging_root" \
+            bash "$hook_path"
+    done <<< "$hooks_output"
+}
+
 render_desktop_entry() {
     local target="$1"
     local package_name
@@ -601,7 +659,7 @@ stage_update_builder_bundle() {
     cp "$UPDATER_SERVICE_SOURCE" "$update_builder_root/packaging/linux/codex-update-manager.service"
     cp "$REPO_DIR/packaging/linux/codex-update-manager.postinst" "$update_builder_root/packaging/linux/codex-update-manager.postinst"
     cp "$REPO_DIR/packaging/linux/codex-update-manager.prerm" "$update_builder_root/packaging/linux/codex-update-manager.prerm"
-    cp -r "$REPO_DIR/linux-features/." "$update_builder_root/linux-features/"
+    stage_update_builder_linux_features_tree "$update_builder_root"
     stage_update_builder_linux_features_config "$update_builder_root"
     cp "$REPO_DIR/packaging/linux/codex-update-manager.postrm" "$update_builder_root/packaging/linux/codex-update-manager.postrm"
     cp "$REPO_DIR/assets/codex.png" "$update_builder_root/assets/codex.png"
@@ -618,6 +676,68 @@ stage_optional_update_builder_bundle() {
         stage_update_builder_bundle "$@"
     else
         info "Skipping update-builder bundle (PACKAGE_WITH_UPDATER=0)"
+    fi
+}
+
+restore_linux_feature_payload_permissions() {
+    local root="$1"
+    local helper="$REPO_DIR/scripts/lib/linux-features.js"
+    local app_root="$root/opt/$PACKAGE_NAME"
+    local node_bin
+    local staged_files_json
+
+    [ -d "$root" ] || error "Missing package root: $root"
+    [ -d "$app_root" ] || error "Missing package app root: $app_root"
+    [ -f "$helper" ] || error "Missing Linux features helper: $helper"
+
+    node_bin="$(package_node_binary)"
+    if ! staged_files_json="$("$node_bin" "$helper" --staged-files-json "$app_root")"; then
+        error "Failed to read Linux feature staged file manifest"
+    fi
+
+    if ! "$node_bin" - "$app_root" "$staged_files_json" <<'NODE'
+const fs = require("node:fs");
+const path = require("node:path");
+
+const [appRoot, rawJson] = process.argv.slice(2);
+const entries = JSON.parse(rawJson);
+
+if (!Array.isArray(entries)) {
+  throw new Error("Linux feature staged files payload must be an array");
+}
+
+function assertRelativeTarget(target) {
+  if (typeof target !== "string" || target.length === 0) {
+    throw new Error("Linux feature staged file target must be a relative path");
+  }
+  const parts = target.split(/[\\/]+/).filter(Boolean);
+  if (path.isAbsolute(target) || parts.includes("..")) {
+    throw new Error(`Unsafe Linux feature staged file target: ${target}`);
+  }
+  const resolved = path.resolve(appRoot, ...parts);
+  const relative = path.relative(appRoot, resolved);
+  if (relative.startsWith("..") || path.isAbsolute(relative)) {
+    throw new Error(`Unsafe Linux feature staged file target: ${target}`);
+  }
+  return resolved;
+}
+
+for (const entry of entries) {
+  if (entry == null || typeof entry !== "object") {
+    throw new Error("Linux feature staged file entry must be an object");
+  }
+  if (typeof entry.mode !== "string" || !/^[0-7]{3,4}$/.test(entry.mode)) {
+    throw new Error(`Invalid Linux feature staged file mode for ${entry.target}: ${entry.mode}`);
+  }
+  const target = assertRelativeTarget(entry.target);
+  if (!fs.existsSync(target)) {
+    throw new Error(`Linux feature staged file is missing from package payload: ${entry.target}`);
+  }
+  fs.chmodSync(target, Number.parseInt(entry.mode, 8));
+}
+NODE
+    then
+        error "Failed to restore Linux feature staged file permissions"
     fi
 }
 

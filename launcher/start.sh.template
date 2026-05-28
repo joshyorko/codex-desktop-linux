@@ -15,13 +15,21 @@ resolve_script_dir() {
 }
 
 SCRIPT_DIR="$(resolve_script_dir)"
+if [ -z "${CODEX_HOME:-}" ]; then
+    if [ -n "${HOME:-}" ]; then
+        CODEX_HOME="$HOME/.codex"
+    else
+        CODEX_HOME=""
+    fi
+fi
 WEBVIEW_DIR="$SCRIPT_DIR/content/webview"
 LOG_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/$CODEX_LINUX_APP_ID"
 LOG_FILE="$LOG_DIR/launcher.log"
 APP_CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/$CODEX_LINUX_APP_ID"
 APP_SETTINGS_FILE="$APP_CONFIG_DIR/settings.json"
 CODEX_LINUX_SETTINGS_FILE="$APP_SETTINGS_FILE"
-export CODEX_LINUX_APP_ID CODEX_LINUX_APP_DISPLAY_NAME CODEX_LINUX_WEBVIEW_PORT CODEX_LINUX_SETTINGS_FILE
+CODEX_LINUX_FEATURES_DIR="$SCRIPT_DIR/.codex-linux/features"
+export CODEX_HOME CODEX_LINUX_APP_ID CODEX_LINUX_APP_DISPLAY_NAME CODEX_LINUX_WEBVIEW_PORT CODEX_LINUX_SETTINGS_FILE CODEX_LINUX_FEATURES_DIR
 APP_STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/$CODEX_LINUX_APP_ID"
 APP_PID_FILE="$APP_STATE_DIR/app.pid"
 WEBVIEW_PID_FILE="$APP_STATE_DIR/webview.pid"
@@ -29,6 +37,9 @@ LAUNCH_ACTION_RUNTIME_DIR="${XDG_RUNTIME_DIR:-$APP_STATE_DIR}/$CODEX_LINUX_APP_I
 LAUNCH_ACTION_SOCKET="$LAUNCH_ACTION_RUNTIME_DIR/launch-action.sock"
 PACKAGED_RUNTIME_HELPER="$SCRIPT_DIR/.codex-linux/codex-packaged-runtime.sh"
 COLD_START_HOOK_DIR="$SCRIPT_DIR/.codex-linux/cold-start.d"
+FEATURE_ENV_DIR="$SCRIPT_DIR/.codex-linux/env.d"
+FEATURE_PRELAUNCH_HOOK_DIR="$SCRIPT_DIR/.codex-linux/prelaunch.d"
+FEATURE_ELECTRON_ARGS_DIR="$SCRIPT_DIR/.codex-linux/electron-args.d"
 MANAGED_NODE_BIN_DIR="$SCRIPT_DIR/resources/node-runtime/bin"
 APP_NOTIFICATION_ICON_NAME="$CODEX_LINUX_APP_ID"
 APP_NOTIFICATION_ICON_BUNDLE="$SCRIPT_DIR/.codex-linux/$APP_NOTIFICATION_ICON_NAME.png"
@@ -567,6 +578,58 @@ prepend_managed_node_runtime_to_path() {
         *) export PATH="$MANAGED_NODE_BIN_DIR:$PATH" ;;
     esac
     export CODEX_MANAGED_NODE_RUNTIME_DIR="$SCRIPT_DIR/resources/node-runtime"
+}
+
+source_feature_env_files() {
+    [ -n "${FEATURE_ENV_DIR:-}" ] || return 0
+    [ -d "$FEATURE_ENV_DIR" ] || return 0
+
+    local env_file
+    local line
+    local name
+    local value
+    for env_file in "$FEATURE_ENV_DIR"/*; do
+        [ -f "$env_file" ] || continue
+        echo "Loading Linux feature environment: $env_file"
+        while IFS= read -r line || [ -n "$line" ]; do
+            line="${line%$'\r'}"
+            case "$line" in
+                ""|\#*) continue ;;
+                *=*) ;;
+                *)
+                    echo "Ignoring Linux feature env line without KEY=VALUE in $env_file"
+                    continue
+                    ;;
+            esac
+            name="${line%%=*}"
+            value="${line#*=}"
+            case "$name" in
+                ""|[!A-Za-z_]*|*[!A-Za-z0-9_]*)
+                    echo "Ignoring Linux feature env line with invalid key '$name' in $env_file"
+                    continue
+                    ;;
+            esac
+            export "$name=$value"
+        done < "$env_file"
+    done
+}
+
+run_feature_prelaunch_hooks() {
+    [ -n "${FEATURE_PRELAUNCH_HOOK_DIR:-}" ] || return 0
+    [ -d "$FEATURE_PRELAUNCH_HOOK_DIR" ] || return 0
+
+    local hook
+    for hook in "$FEATURE_PRELAUNCH_HOOK_DIR"/*; do
+        [ -f "$hook" ] || continue
+        [ -x "$hook" ] || continue
+        echo "Running Linux feature prelaunch hook: $hook"
+        CODEX_HOME="$CODEX_HOME" \
+        CODEX_LINUX_APP_DIR="$SCRIPT_DIR" \
+        CODEX_LINUX_APP_STATE_DIR="$APP_STATE_DIR" \
+        CODEX_LINUX_FEATURES_DIR="$CODEX_LINUX_FEATURES_DIR" \
+        CODEX_LINUX_LAUNCHER_LOG="$LOG_FILE" \
+            "$hook" "$SCRIPT_DIR" "$APP_STATE_DIR" "$LOG_DIR"
+    done
 }
 
 bundled_plugin_version() {
@@ -1112,8 +1175,10 @@ run_cold_start_hooks() {
         [ -x "$hook" ] || continue
         echo "Starting cold-start hook: $hook"
         (
+            CODEX_HOME="$CODEX_HOME" \
             CODEX_LINUX_APP_DIR="$SCRIPT_DIR" \
             CODEX_LINUX_APP_STATE_DIR="$APP_STATE_DIR" \
+            CODEX_LINUX_FEATURES_DIR="$CODEX_LINUX_FEATURES_DIR" \
             CODEX_LINUX_LAUNCHER_LOG="$LOG_FILE" \
             "$hook" "$SCRIPT_DIR" "$APP_STATE_DIR" "$LOG_DIR"
         ) >>"$LOG_FILE" 2>&1 &
@@ -2085,6 +2150,25 @@ set_electron_defaults() {
     apply_electron_rendering_profile
 }
 
+append_feature_electron_args() {
+    [ -n "${FEATURE_ELECTRON_ARGS_DIR:-}" ] || return 0
+    [ -d "$FEATURE_ELECTRON_ARGS_DIR" ] || return 0
+
+    local args_file
+    local line
+    for args_file in "$FEATURE_ELECTRON_ARGS_DIR"/*; do
+        [ -f "$args_file" ] || continue
+        echo "Loading Linux feature Electron args: $args_file"
+        while IFS= read -r line || [ -n "$line" ]; do
+            line="${line%$'\r'}"
+            case "$line" in
+                ""|\#*) continue ;;
+            esac
+            ELECTRON_LAUNCH_ARGS+=("$line")
+        done < "$args_file"
+    done
+}
+
 build_electron_launch_args() {
     ELECTRON_LAUNCH_ARGS=(
         --no-sandbox
@@ -2127,6 +2211,8 @@ build_electron_launch_args() {
     if [ "$ELECTRON_OZONE_PLATFORM" = "wayland" ]; then
         ELECTRON_LAUNCH_ARGS+=(--enable-features=WaylandWindowDecorations)
     fi
+
+    append_feature_electron_args
 }
 
 configure_side_by_side_app_env() {
@@ -2190,6 +2276,7 @@ hydrate_graphical_session_env
 configure_side_by_side_app_env
 load_packaged_runtime_helper
 prepend_managed_node_runtime_to_path
+source_feature_env_files
 register_url_scheme_handlers
 reconcile_runtime_state
 detect_warm_start
@@ -2207,6 +2294,8 @@ if using_second_instance_handoff; then
     echo "Detected running Codex Desktop pid=$RUNNING_APP_PID; using Electron second-instance handoff"
     log_phase "second_instance_handoff_ready"
 elif needs_cold_start; then
+    run_feature_prelaunch_hooks
+    log_phase "feature_prelaunch"
     run_packaged_runtime_prelaunch
     log_phase "packaged_prelaunch"
     ensure_webview_server

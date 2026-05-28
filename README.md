@@ -6,7 +6,7 @@ Before opening a pull request, please read [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Linux features
 
-Optional Linux-only additions live in `linux-features/`. Use them for integrations that are useful for some users but should not become mandatory core patches. Copy `linux-features/features.example.json` to the git-ignored `linux-features/features.json` before building; enabled features are applied during the install/build pipeline. See [`linux-features/README.md`](linux-features/README.md) for the feature contract.
+Optional Linux-only additions live in `linux-features/`. Use them for integrations that are useful for some users but should not become mandatory core patches. Copy `linux-features/features.example.json` to the git-ignored `linux-features/features.json` before building; enabled features are applied during the install/build pipeline. User-local features can live under the git-ignored `linux-features/local/<feature-id>/` directory. See [`linux-features/README.md`](linux-features/README.md) and [`docs/linux-features-architecture.md`](docs/linux-features-architecture.md) for the feature contract.
 
 ## Supported platforms
 
@@ -85,7 +85,7 @@ make setup-native
 
 `make setup-native` is intentionally separate from `make bootstrap-native`, `make install-native`, `make package`, and `make install`, which remain non-interactive for scripts and CI. The guided helper detects your distro, package manager, native package format, desktop session, GUI prompt helpers, `pkexec`, portal status, and Computer Use readiness signals such as `ydotool`, `ydotoold` / `ydotool.service`, the ydotool socket, `/dev/uinput`, input-group membership, desktop window backend hints, and portal package hints. It also reports Read Aloud Kokoro paths, plugin cache paths, settings paths, and doctor commands when available.
 
-It also discovers optional Linux features from `linux-features/*/feature.json` and can write the git-ignored `linux-features/features.json` file for the next build. Interactive prompts show a numbered feature list, so you can enter stable feature ids (`remote-mobile-control`), numbers (`3`), or ranges (`2-4`). The output uses section headings and ANSI color when the terminal supports it; set `CODEX_BOOTSTRAP_COLOR=0` to disable color or `CODEX_BOOTSTRAP_COLOR=1` to force it. Re-running it shows the currently enabled features and installed package/updater hints, then skips changes unless you ask for them. Non-interactive setup edits feature config and prints or runs explicitly requested next steps; it does not implicitly run build/package/install.
+It also discovers optional Linux features from `linux-features/*/feature.json` and private `linux-features/local/*/feature.json` manifests, then can write the git-ignored `linux-features/features.json` file for the next build. Interactive prompts show a numbered feature list, so you can enter stable feature ids (`remote-mobile-control`), numbers (`3`), or ranges (`2-4`). The output uses section headings and ANSI color when the terminal supports it; set `CODEX_BOOTSTRAP_COLOR=0` to disable color or `CODEX_BOOTSTRAP_COLOR=1` to force it. Re-running it shows the currently enabled features and installed package/updater hints, then skips changes unless you ask for them. Non-interactive setup edits feature config and prints or runs explicitly requested next steps; it does not implicitly run build/package/install.
 
 For repeatable setup docs or automation, pass feature choices through the environment:
 

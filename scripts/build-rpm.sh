@@ -101,7 +101,9 @@ main() {
 exec /opt/$PACKAGE_NAME/start.sh "\$@"
 SCRIPT
     chmod 0755 "$staging_root/usr/bin/$PACKAGE_NAME"
+    run_linux_feature_package_hooks "$staging_root" "rpm"
     normalize_package_payload_permissions "$staging_root"
+    restore_linux_feature_payload_permissions "$staging_root"
 
     local spec_file="$build_root/codex-desktop.spec"
     sed \
