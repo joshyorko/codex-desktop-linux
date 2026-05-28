@@ -1515,6 +1515,13 @@ wait_for_webview_server() {
         sleep 0.05
     done
 
+    # The fast probe caps curl at 0.2s; a valid local webview can answer a little
+    # slower during cold start. Confirm with the full 2s origin check before failing.
+    if webview_origin_is_reachable; then
+        echo "Webview server is ready"
+        return 0
+    fi
+
     return 1
 }
 

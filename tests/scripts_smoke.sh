@@ -2367,6 +2367,8 @@ if '( trap - EXIT\n      sleep 0.2' not in webview_probe_body:
     raise SystemExit("webview port probe watchdog must not inherit the launcher EXIT cleanup trap")
 if "webview_origin_is_reachable_fast" not in wait_body or "webview_port_is_open" in wait_body:
     raise SystemExit("wait_for_webview_server must use the HTTP origin as the readiness signal")
+if "if webview_origin_is_reachable;" not in wait_body:
+    raise SystemExit("wait_for_webview_server must fall back to full origin verification before failing")
 if 'CODEX_LINUX_INSTANCE_ID="port-$CODEX_LINUX_WEBVIEW_PORT"' not in multi_body:
     raise SystemExit("multi-launch must derive a stable instance id from the allocated port")
 if 'CODEX_LINUX_MULTI_LAUNCH=1' not in multi_body:
