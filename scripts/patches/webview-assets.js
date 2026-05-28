@@ -638,27 +638,18 @@ function applyPersistentRateLimitFooterPatch(currentSource) {
 }
 
 function applyLinuxFastModeModelGuardPatch(currentSource) {
-  const exactNeedle =
-    "function m(e){return e.serviceTiers.length>0||e.additionalSpeedTiers?.includes(u)===!0}";
-  const exactPatch =
-    "function m(e){return(e?.serviceTiers?.length??0)>0||e?.additionalSpeedTiers?.includes(u)===!0}";
-  if (currentSource.includes(exactPatch)) {
-    return currentSource;
-  }
-  if (currentSource.includes(exactNeedle)) {
-    return currentSource.replace(exactNeedle, exactPatch);
-  }
-
-  const driftedNeedle = /function ([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*)\)\{return \2\.serviceTiers\.length>0\|\|\2\.additionalSpeedTiers\?\.includes\(([A-Za-z_$][\w$]*)\)===!0\}/u;
-  if (driftedNeedle.test(currentSource)) {
-    return currentSource.replace(
-      driftedNeedle,
-      (match, fnName, modelVar, fastTierVar) =>
-        `function ${fnName}(${modelVar}){return(${modelVar}?.serviceTiers?.length??0)>0||${modelVar}?.additionalSpeedTiers?.includes(${fastTierVar})===!0}`,
-    );
+  const tierLookupNeedle =
+    /([A-Za-z_$][\w$]*)\.serviceTiers\.length\s*>\s*0\s*\|\|\s*\1\.additionalSpeedTiers(?:\?\.|\.)includes\(([^()]*)\)(?:\s*===\s*!0)?/gu;
+  const patchedSource = currentSource.replace(
+    tierLookupNeedle,
+    (match, modelVar, fastTierExpr) =>
+      `(${modelVar}?.serviceTiers?.length??0)>0||${modelVar}?.additionalSpeedTiers?.includes(${fastTierExpr})===!0`,
+  );
+  if (patchedSource !== currentSource) {
+    return patchedSource;
   }
 
-  if (currentSource.includes("serviceTiers.length>0") && currentSource.includes("additionalSpeedTiers")) {
+  if (/serviceTiers\.length\s*>\s*0/u.test(currentSource) && currentSource.includes("additionalSpeedTiers")) {
     console.warn(
       "WARN: Could not find fast-mode model guard insertion point — skipping fast-mode crash guard patch",
     );

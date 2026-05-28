@@ -1178,6 +1178,35 @@ test("guards fast-mode model tier lookup when serviceTiers is missing", () => {
   assert.doesNotMatch(patched, /e\.serviceTiers\.length/);
 });
 
+test("guards drifted fast-mode tier lookup shapes", () => {
+  const source = [
+    "function y(t){return t.serviceTiers.length > 0 || t.additionalSpeedTiers?.includes(`fast`)}",
+    "const z=e=>e.serviceTiers.length>0||e.additionalSpeedTiers.includes(\"fast\")===!0;",
+  ].join(";");
+
+  const patched = applyPatchTwice(applyLinuxFastModeModelGuardPatch, source);
+
+  assert.match(patched, /\(t\?\.serviceTiers\?\.length\?\?0\)>0\|\|t\?\.additionalSpeedTiers\?\.includes\(`fast`\)===!0/);
+  assert.match(patched, /\(e\?\.serviceTiers\?\.length\?\?0\)>0\|\|e\?\.additionalSpeedTiers\?\.includes\("fast"\)===!0/);
+  assert.doesNotMatch(patched, /[te]\.serviceTiers\.length/);
+});
+
+test("warns when the fast-mode tier lookup is recognizable but unpatchable", () => {
+  const { value, warnings } = captureWarns(() =>
+    applyLinuxFastModeModelGuardPatch(
+      "function m(e){return currentModel().serviceTiers.length > 0 || e.additionalSpeedTiers?.includes(u)===!0}",
+    ),
+  );
+
+  assert.equal(
+    value,
+    "function m(e){return currentModel().serviceTiers.length > 0 || e.additionalSpeedTiers?.includes(u)===!0}",
+  );
+  assert.deepEqual(warnings, [
+    "WARN: Could not find fast-mode model guard insertion point — skipping fast-mode crash guard patch",
+  ]);
+});
+
 test("warns when a matched webview opaque bundle has no known insertion point", () => {
   const { warnings } = captureWarns(() =>
     applyLinuxOpaqueWindowsDefaultPatch("function runtime(){let C=theme;if(C.opaqueWindows&&!ba()){}}"),

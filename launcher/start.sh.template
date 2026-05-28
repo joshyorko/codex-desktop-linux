@@ -1244,8 +1244,16 @@ find_codex_cli() {
         return 0
     fi
 
-    if [ -s "${NVM_DIR:-$HOME/.nvm}/nvm.sh" ]; then
-        export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
+    local nvm_dir="${NVM_DIR:-}"
+    if [ -z "$nvm_dir" ]; then
+        if [ -s "${XDG_CONFIG_HOME:-$HOME/.config}/nvm/nvm.sh" ]; then
+            nvm_dir="${XDG_CONFIG_HOME:-$HOME/.config}/nvm"
+        else
+            nvm_dir="$HOME/.nvm"
+        fi
+    fi
+    if [ -s "$nvm_dir/nvm.sh" ]; then
+        export NVM_DIR="$nvm_dir"
         # shellcheck disable=SC1090
         . "$NVM_DIR/nvm.sh" >/dev/null 2>&1 || true
         if command -v codex >/dev/null 2>&1; then
@@ -1258,6 +1266,8 @@ find_codex_cli() {
     for candidate in \
         "$HOME/.bun/bin/codex" \
         "$HOME/.npm-global/bin/codex" \
+        "${XDG_CONFIG_HOME:-$HOME/.config}/nvm/versions/node/current/bin/codex" \
+        "${XDG_CONFIG_HOME:-$HOME/.config}/nvm/versions/node"/*/bin/codex \
         "$HOME/.nvm/versions/node/current/bin/codex" \
         "$HOME/.nvm/versions/node"/*/bin/codex \
         "$HOME/.local/share/pnpm/codex" \

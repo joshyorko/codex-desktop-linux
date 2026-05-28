@@ -189,7 +189,14 @@ pub fn doctor_report() -> DoctorReport {
     let accessibility = accessibility_report();
     let windowing = windowing_report(&platform);
     let input = input_report();
-    let readiness = readiness_report(&platform, &accessibility, &windowing, &input, &bluefin);
+    let readiness = readiness_report(
+        &platform,
+        &portals,
+        &accessibility,
+        &windowing,
+        &input,
+        &bluefin,
+    );
 
     let capabilities = capability_map(&platform, &portals, &accessibility, &windowing, &input);
 
@@ -842,6 +849,7 @@ fn input_report() -> InputReport {
 
 fn readiness_report(
     platform: &PlatformReport,
+    portals: &PortalReport,
     accessibility: &AccessibilityReport,
     windowing: &WindowingReport,
     input: &InputReport,
@@ -852,8 +860,7 @@ fn readiness_report(
     let can_query_windows = windowing.can_list_windows;
     let can_focus_apps = windowing.can_focus_apps;
     let can_focus_windows = windowing.can_focus_windows;
-    let can_send_development_input =
-        input.ydotool.ok && input.ydotoold.ok && input.ydotool_socket.ok;
+    let can_send_development_input = can_send_development_input(portals, input);
 
     if !can_build_accessibility_tree {
         blockers.push(
@@ -880,7 +887,7 @@ fn readiness_report(
 
     if !can_send_development_input {
         blockers.push(
-            "Development input fallback is unavailable; ydotool needs a running ydotoold daemon with a connectable ydotoold socket."
+            "Development input is unavailable; enable read/write /dev/uinput, XDG RemoteDesktop portal input, or ydotool with a connectable ydotoold socket."
                 .to_string(),
         );
     }
@@ -901,14 +908,14 @@ fn readiness_report(
         "Enable an exact-focus window backend before using window_id, title, or terminal-targeted input.".to_string()
     } else if !can_send_development_input {
         if bluefin.detected {
-            "Bluefin host detected: fix ydotool input access through a Homebrew or user-scoped helper path, then start ydotoold with a socket accessible to this desktop user. Keep project build tools in the devcontainer and avoid base-image mutation for this check."
+            "Bluefin host detected: enable a supported input backend without mutating the base image: grant read/write /dev/uinput, enable the XDG RemoteDesktop portal, or start ydotoold from a Homebrew or user-scoped helper with a socket accessible to this desktop user."
                 .to_string()
         } else {
-            "Fix ydotool input access: start ydotoold with a socket accessible to this desktop user."
+            "Enable a supported input backend: grant read/write /dev/uinput, enable the XDG RemoteDesktop portal, or start ydotoold with a socket accessible to this desktop user."
                 .to_string()
         }
     } else {
-        "Computer Use is ready: AT-SPI tree support, window targeting, and ydotool input fallback are available."
+        "Computer Use is ready: AT-SPI tree support, window targeting, and a Linux input backend are available."
             .to_string()
     };
 
@@ -922,6 +929,12 @@ fn readiness_report(
         recommended_next_step,
         blockers,
     }
+}
+
+fn can_send_development_input(portals: &PortalReport, input: &InputReport) -> bool {
+    input.uinput.ok
+        || portals.remote_desktop.ok
+        || input.ydotool.ok && input.ydotoold.ok && input.ydotool_socket.ok
 }
 
 fn is_cosmic_wayland_platform(platform: &PlatformReport) -> bool {
@@ -1195,6 +1208,18 @@ mod tests {
         }
     }
 
+    fn portal_report(remote_desktop: Check) -> PortalReport {
+        PortalReport {
+            desktop_portal: Check::ok("ok"),
+            remote_desktop,
+            screencast: Check::fail("missing"),
+            screenshot: Check::fail("missing"),
+            input_capture: Check::fail("missing"),
+            mutter_remote_desktop: Check::fail("missing"),
+            mutter_screencast: Check::fail("missing"),
+        }
+    }
+
     fn accessibility_report(
         at_spi_bus: Check,
         toolkit_accessibility: Check,
@@ -1351,6 +1376,7 @@ mod tests {
 
         let readiness = readiness_report(
             &platform,
+            &portal_report(Check::fail("missing")),
             &accessibility,
             &windowing,
             &input,
@@ -1381,6 +1407,7 @@ mod tests {
 
         let readiness = readiness_report(
             &platform,
+            &portal_report(Check::fail("missing")),
             &accessibility,
             &windowing,
             &input,
@@ -1402,6 +1429,7 @@ mod tests {
 
         let readiness = readiness_report(
             &platform,
+            &portal_report(Check::fail("missing")),
             &accessibility,
             &windowing,
             &input,
@@ -1432,6 +1460,7 @@ mod tests {
 
         let readiness = readiness_report(
             &platform,
+            &portal_report(Check::fail("missing")),
             &accessibility,
             &windowing,
             &input,
@@ -1443,7 +1472,7 @@ mod tests {
     }
 
     #[test]
-    fn readiness_rejects_direct_uinput_without_connectable_ydotool_socket() {
+    fn readiness_accepts_direct_uinput_without_connectable_ydotool_socket() {
         let platform = platform_report();
         let accessibility = accessibility_report(Check::ok("bus"), Check::ok("true"));
         let windowing = windowing_report(true, true);
@@ -1456,17 +1485,40 @@ mod tests {
 
         let readiness = readiness_report(
             &platform,
+            &portal_report(Check::fail("missing")),
             &accessibility,
             &windowing,
             &input,
             &default_bluefin_report(),
         );
 
-        assert!(!readiness.can_send_development_input);
-        assert!(readiness
-            .blockers
-            .iter()
-            .any(|blocker| blocker.contains("connectable ydotoold socket")));
+        assert!(readiness.can_send_development_input);
+        assert!(readiness.blockers.is_empty());
+    }
+
+    #[test]
+    fn readiness_accepts_remote_desktop_portal_without_local_input_backend() {
+        let platform = platform_report();
+        let accessibility = accessibility_report(Check::ok("bus"), Check::ok("true"));
+        let windowing = windowing_report(true, true);
+        let input = input_report_parts(
+            Check::fail("missing ydotool"),
+            Check::fail("ydotoold not running"),
+            Check::fail("no connectable ydotool socket"),
+            Check::fail("/dev/uinput: Permission denied"),
+        );
+
+        let readiness = readiness_report(
+            &platform,
+            &portal_report(Check::ok("org.freedesktop.portal.RemoteDesktop")),
+            &accessibility,
+            &windowing,
+            &input,
+            &default_bluefin_report(),
+        );
+
+        assert!(readiness.can_send_development_input);
+        assert!(readiness.blockers.is_empty());
     }
 
     #[test]
@@ -1483,6 +1535,7 @@ mod tests {
 
         let readiness = readiness_report(
             &platform,
+            &portal_report(Check::fail("missing")),
             &accessibility,
             &windowing,
             &input,
@@ -1492,11 +1545,11 @@ mod tests {
         assert!(!readiness.can_send_development_input);
         assert!(readiness
             .recommended_next_step
-            .contains("Fix ydotool input access"));
+            .contains("Enable a supported input backend"));
         assert!(readiness
             .blockers
             .iter()
-            .any(|blocker| blocker.contains("connectable ydotoold socket")));
+            .any(|blocker| blocker.contains("Development input is unavailable")));
     }
 
     #[test]
@@ -1547,6 +1600,7 @@ mod tests {
 
         let readiness = readiness_report(
             &platform,
+            &portal_report(Check::fail("missing")),
             &accessibility,
             &windowing,
             &input,
@@ -1630,7 +1684,14 @@ ID_LIKE="rhel fedora"
             brew: Check::ok("/home/linuxbrew/.linuxbrew/bin/brew"),
         };
 
-        let readiness = readiness_report(&platform, &accessibility, &windowing, &input, &bluefin);
+        let readiness = readiness_report(
+            &platform,
+            &portal_report(Check::fail("missing")),
+            &accessibility,
+            &windowing,
+            &input,
+            &bluefin,
+        );
 
         assert!(readiness.recommended_next_step.contains("Bluefin host"));
         assert!(readiness

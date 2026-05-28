@@ -85,7 +85,7 @@ make setup-native
 
 `make setup-native` is intentionally separate from `make bootstrap-native`, `make install-native`, `make package`, and `make install`, which remain non-interactive for scripts and CI. The guided helper detects your distro, package manager, native package format, desktop session, GUI prompt helpers, `pkexec`, portal status, and Computer Use readiness signals such as `ydotool`, `ydotoold` / `ydotool.service`, the ydotool socket, `/dev/uinput`, input-group membership, desktop window backend hints, and portal package hints. It also reports Read Aloud Kokoro paths, plugin cache paths, settings paths, and doctor commands when available.
 
-It also discovers optional Linux features from `linux-features/*/feature.json` and can write the git-ignored `linux-features/features.json` file for the next build. Re-running it shows the currently enabled features and installed package/updater hints, then skips changes unless you ask for them. Non-interactive setup edits feature config and prints or runs explicitly requested next steps; it does not implicitly run build/package/install.
+It also discovers optional Linux features from `linux-features/*/feature.json` and can write the git-ignored `linux-features/features.json` file for the next build. Interactive prompts show a numbered feature list, so you can enter stable feature ids (`remote-mobile-control`), numbers (`3`), or ranges (`2-4`). The output uses section headings and ANSI color when the terminal supports it; set `CODEX_BOOTSTRAP_COLOR=0` to disable color or `CODEX_BOOTSTRAP_COLOR=1` to force it. Re-running it shows the currently enabled features and installed package/updater hints, then skips changes unless you ask for them. Non-interactive setup edits feature config and prints or runs explicitly requested next steps; it does not implicitly run build/package/install.
 
 For repeatable setup docs or automation, pass feature choices through the environment:
 
@@ -232,7 +232,7 @@ sudo pacman -S ydotool
 sudo zypper install ydotool
 ```
 
-`ydotool` needs `/dev/uinput` access. The usual setup is to run `ydotoold`, add your user to the `input` group, then re-login:
+The preferred coordinate input path opens `/dev/uinput` directly. The XDG RemoteDesktop portal can also provide input on desktops that expose it. `ydotool` remains the fallback path; when you need it, run `ydotoold`, add your user to the `input` group, then re-login:
 
 ```bash
 sudo systemctl enable --now ydotoold
@@ -499,6 +499,16 @@ After `make build-app` or `make build-app-fresh`, build a native package from `c
 
 Override the package version with `PACKAGE_VERSION=YYYY.MM.DD.HHMMSS+commitish ./scripts/build-*.sh`. AppImage builds require `appimagetool` on `PATH`, or `APPIMAGETOOL=/path/to/appimagetool`.
 
+Tune local build parallelism with one Make variable:
+
+```bash
+MAX_BUILD_THREADS=8 make build-app-fresh
+MAX_BUILD_THREADS=8 make package
+MAX_BUILD_THREADS=8 make install-native
+```
+
+`MAX_BUILD_THREADS=0` is the default, which preserves each tool's automatic/default behavior and existing user config such as `MAKEFLAGS`, makepkg config, and RPM macros. Set a nonzero value to opt in to one repo-level requested worker count for supported build steps. When nonzero, `MAX_BUILD_THREADS` is authoritative for the phases it controls and overrides inherited `MAKEFLAGS` for make-backed subprocesses. Supported phases use the value for Cargo `--jobs`, native module rebuild jobs, Debian package compression, pacman package compression, and RPM zstd payload compression (`w19T<threads>.zstdio`). RPM builders can still set `RPM_BINARY_PAYLOAD=w19.zstdio make rpm` for exact payload flags when needed.
+
 The packaging scripts only repackage what's already in `codex-app/`. They do not download or extract the DMG themselves.
 
 Native packages bundle the managed Node.js runtime and do not hard-depend on distro `nodejs` / `npm`. Packages built with the default updater pull in `polkit` (or `policykit-1` on older Debian/Ubuntu) plus `pkexec` for privileged update installs; `PACKAGE_WITH_UPDATER=0` packages do not install those updater-specific artifacts.
@@ -558,7 +568,7 @@ make clean-state
 | Sandbox errors | The launcher already sets `--no-sandbox` |
 | Stale install / cached DMG | `make build-app-fresh` removes the existing install dir and cached DMG, then re-downloads |
 | Computer Use plugin invisible in UI | Ensure you enabled the Computer Use UI. If it is enabled and still hidden, the OpenAI per-account rollout may not be available |
-| Computer Use `doctor` reports `ydotool not running` | Start the distro-provided daemon unit (`ydotoold` or `ydotool`), or use a user-session `ydotoold` service, then add your user to the `input` group |
+| Computer Use `doctor` reports no input backend | Grant read/write `/dev/uinput`, enable the XDG RemoteDesktop portal, or start the distro-provided `ydotoold` / `ydotool` daemon with a socket accessible to your user |
 | Computer Use `doctor` reports `ydotool_socket: Permission denied` | The daemon socket is root-only. Adjust the `ydotoold` service so `/tmp/.ydotool_socket` becomes `root:input` with `0660` permissions |
 | `ConnectTimeoutError` for `www.electronjs.org` during `@electron/rebuild` | Re-run `make build-app`; the installer now uses `https://artifacts.electronjs.org/headers/dist` for Electron headers by default |
 | Computer Use AT-SPI tree empty | Run `codex-computer-use-linux setup` to flip GNOME accessibility on, then restart the target app |

@@ -9,7 +9,49 @@
   outputs = { self, nixpkgs, flake-utils }:
     flake-utils.lib.eachSystem [ "x86_64-linux" "aarch64-linux" ] (system:
       let
-        pkgs = import nixpkgs { inherit system; };
+        rewriteCratesIoDownloadUrl = url:
+          if ! builtins.isString url then
+            url
+          else
+            let
+              match = builtins.match
+                "https://crates[.]io/api/v1/crates/([^/]+)/([^/]+)/download"
+                url;
+            in
+            if match == null then
+              url
+            else
+              let
+                crateName = builtins.elemAt match 0;
+                version = builtins.elemAt match 1;
+              in
+              "https://static.crates.io/crates/${crateName}/${crateName}-${version}.crate";
+
+        rewriteCratesIoFetchurlArgs = lib: args:
+          if ! builtins.isAttrs args then
+            args
+          else
+            args
+            // lib.optionalAttrs (args ? url) {
+              url =
+                if builtins.isList args.url then
+                  map rewriteCratesIoDownloadUrl args.url
+                else
+                  rewriteCratesIoDownloadUrl args.url;
+            }
+            // lib.optionalAttrs (args ? urls) {
+              urls = map rewriteCratesIoDownloadUrl args.urls;
+            };
+
+        pkgs = import nixpkgs {
+          inherit system;
+          overlays = [
+            (_final: prev: {
+              fetchurl = args:
+                prev.fetchurl (rewriteCratesIoFetchurlArgs prev.lib args);
+            })
+          ];
+        };
         flakeSourceCommit = self.rev or (self.dirtyRev or "");
         flakeSourceDateEpoch = toString (self.lastModified or 1);
         sourceRoot = pkgs.lib.cleanSourceWith {

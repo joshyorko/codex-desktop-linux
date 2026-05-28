@@ -22,6 +22,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- Nix builds now rewrite crates.io API crate download URLs to the static
+  crates.io CDN path, avoiding PR-only CI failures from crates.io API 403s
+  while preserving the same lockfile checksums.
 - Bundled Browser plugin staging now preserves local `file://` target support
   advertised by the Browser plugin while keeping remote file hosts and `data:`
   URLs blocked by the URL policy.
@@ -32,6 +35,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 - Codex Desktop no longer removes user-enabled `remote_control = true` from the local Linux config before starting the app server.
 - Linux webview bundles no longer ask current Codex CLI app servers to enable unsupported feature flags, avoiding connector authentication sync errors.
 - Native Linux launches now keep GPU compositing enabled by default, avoiding sustained Electron GPU-process CPU usage on some X11/NVIDIA desktops. Users who still need the old flicker workaround can opt in with `CODEX_ELECTRON_DISABLE_GPU_COMPOSITING=1`.
+- Linux Keybinds settings now show current upstream shortcut defaults for Quick Chat, alternate New Chat, search, terminal, browser, and thread actions, and no longer lists non-dispatchable runtime rows.
 
 ## [0.8.0] - 2026-05-16
 

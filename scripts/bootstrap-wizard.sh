@@ -6,19 +6,44 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 FEATURES_ROOT="${CODEX_LINUX_FEATURES_ROOT:-$REPO_DIR/linux-features}"
 PACKAGE_NAME="${PACKAGE_NAME:-codex-desktop}"
+SETUP_ERROR_REPORTED=0
+COLOR_RESET=""
+COLOR_BOLD=""
+COLOR_DIM=""
+COLOR_RED=""
+COLOR_YELLOW=""
+COLOR_CYAN=""
+COLOR_GREEN=""
 
 info() {
-    echo "[setup] $*"
+    echo "${COLOR_DIM}[setup]${COLOR_RESET} $*"
 }
 
 warn() {
-    echo "[setup][WARN] $*" >&2
+    echo "${COLOR_YELLOW}[setup][WARN]${COLOR_RESET} $*" >&2
 }
 
 error() {
-    echo "[setup][ERROR] $*" >&2
+    SETUP_ERROR_REPORTED=1
+    echo "${COLOR_RED}[setup][ERROR]${COLOR_RESET} $*" >&2
     exit 1
 }
+
+section() {
+    echo
+    echo "${COLOR_CYAN}${COLOR_BOLD}[setup] == $* ==${COLOR_RESET}"
+}
+
+unexpected_error() {
+    local status=$?
+    [ "$status" = "0" ] && return 0
+    [ "${SETUP_ERROR_REPORTED:-0}" = "1" ] && return "$status"
+    echo "${COLOR_RED}[setup][ERROR]${COLOR_RESET} setup-native stopped unexpectedly near line ${BASH_LINENO[0]:-unknown} (exit $status)." >&2
+    echo "${COLOR_RED}[setup][ERROR]${COLOR_RESET} Review the last [setup] lines above. You can rerun with CODEX_BOOTSTRAP_DRY_RUN=1 for a read-only preview." >&2
+    return "$status"
+}
+
+trap unexpected_error ERR
 
 usage() {
     cat <<'EOF'
@@ -30,6 +55,7 @@ Environment:
   CODEX_BOOTSTRAP_INSTALL_DEPS=1       run bash scripts/install-deps.sh after checks
   CODEX_BOOTSTRAP_INSTALL_NATIVE=1     run make install-native after checks
   CODEX_BOOTSTRAP_CLEANUP_FEATURES=a,b cleanup feature-owned data with confirmation
+  CODEX_BOOTSTRAP_COLOR=auto|1|0       enable ANSI color automatically, force it, or disable it
   CODEX_LINUX_FEATURES=a,b             enable build-time Linux features
   CODEX_LINUX_DISABLE_FEATURES=a,b     disable build-time Linux features
   CODEX_LINUX_FEATURES_ROOT=/path      override linux-features root
@@ -77,6 +103,34 @@ falsy() {
             ;;
     esac
 }
+
+init_colors() {
+    case "${CODEX_BOOTSTRAP_COLOR:-auto}" in
+        1|true|True|TRUE|yes|Yes|YES|on|On|ON|always)
+            ;;
+        0|false|False|FALSE|no|No|NO|off|Off|OFF|never)
+            return 0
+            ;;
+        auto|"")
+            [ -z "${NO_COLOR:-}" ] || return 0
+            [ -t 1 ] || return 0
+            [ "${TERM:-}" != "dumb" ] || return 0
+            ;;
+        *)
+            error "CODEX_BOOTSTRAP_COLOR must be auto, 1, or 0"
+            ;;
+    esac
+
+    COLOR_RESET=$'\033[0m'
+    COLOR_BOLD=$'\033[1m'
+    COLOR_DIM=$'\033[2m'
+    COLOR_RED=$'\033[31m'
+    COLOR_YELLOW=$'\033[33m'
+    COLOR_CYAN=$'\033[36m'
+    COLOR_GREEN=$'\033[32m'
+}
+
+init_colors
 
 noninteractive_mode() {
     truthy "${CODEX_BOOTSTRAP_NONINTERACTIVE:-0}" || ! [ -t 0 ]
@@ -421,8 +475,8 @@ json_setting_value() {
     local key="$1"
     local settings_path
     settings_path="$(settings_file_path)"
-    [ -r "$settings_path" ] || return 1
-    command -v python3 >/dev/null 2>&1 || return 1
+    [ -r "$settings_path" ] || return 0
+    command -v python3 >/dev/null 2>&1 || return 0
     python3 - "$settings_path" "$key" <<'PY' 2>/dev/null || true
 import json
 import sys
@@ -603,7 +657,7 @@ run_feature_config_python() {
         return
     fi
 
-    python3 - "$FEATURES_ROOT" "$config_path" "$enable_raw" "$disable_raw" "$apply_changes" <<'PY'
+    if ! python3 - "$FEATURES_ROOT" "$config_path" "$enable_raw" "$disable_raw" "$apply_changes" <<'PY'
 import json
 import pathlib
 import re
@@ -624,15 +678,38 @@ def die(message):
 def warn(message):
     print(f"[setup][WARN] {message}", file=sys.stderr)
 
-def split_ids(raw):
+def split_selectors(raw, features, label):
     if not raw.strip():
         return []
-    ids = [item for item in re.split(r"[,\s]+", raw.strip()) if item]
+    items = [item for item in re.split(r"[,\s]+", raw.strip()) if item]
+    feature_ids = list(features)
     seen = set()
     result = []
-    for item in ids:
+    def add_feature_number(raw_number):
+        number = int(raw_number)
+        if number < 1 or number > len(feature_ids):
+            maximum = len(feature_ids)
+            hint = f"1-{maximum}" if maximum else "none available"
+            die(f"Feature number {number} is out of range for {label} (available: {hint}). Use feature ids, numbers, or ranges like 1,3-4.")
+        feature_id = feature_ids[number - 1]
+        if feature_id not in seen:
+            seen.add(feature_id)
+            result.append(feature_id)
+    for item in items:
+        if re.match(r"^[0-9]+-[0-9]+$", item):
+            start_raw, end_raw = item.split("-", 1)
+            start = int(start_raw)
+            end = int(end_raw)
+            if start > end:
+                die(f"Feature range {item} is invalid for {label}. Use ascending ranges like 2-4.")
+            for number in range(start, end + 1):
+                add_feature_number(str(number))
+            continue
+        if re.match(r"^[0-9]+$", item):
+            add_feature_number(item)
+            continue
         if not id_re.match(item):
-            die(f"Invalid Linux feature id: {item}")
+            die(f"Invalid Linux feature selector for {label}: {item}. Use feature ids, numbers, or ranges like 1,3-4.")
         if item not in seen:
             seen.add(item)
             result.append(item)
@@ -696,8 +773,8 @@ def csv(ids):
 
 features = discover_features(features_root)
 current = read_enabled_ids(config_path)
-enable = split_ids(enable_raw)
-disable = split_ids(disable_raw)
+enable = split_selectors(enable_raw, features, "enable")
+disable = split_selectors(disable_raw, features, "disable")
 conflicting = sorted(set(enable) & set(disable))
 if conflicting:
     die(f"Linux feature ids cannot be both enabled and disabled: {csv(conflicting)}")
@@ -734,16 +811,21 @@ if "conversation-mode" in final and "read-aloud" not in final:
 
 if features:
     print("[setup] Available Linux features:")
-    for feature_id, feature in features.items():
+    for index, (feature_id, feature) in enumerate(features.items(), start=1):
         state = "enabled" if feature_id in final else "available"
         sample = " (developer sample)" if feature_id == "example-feature" else ""
-        print(f"[setup]   [{state}] {feature_id}{sample} - {feature['title']}")
+        print(f"[setup]   {index}. [{state}] {feature_id}{sample} - {feature['title']}")
 else:
     print("[setup] Available Linux features: none found")
 
 if apply_changes and (enable or disable):
     print("[setup] Feature changes apply after rebuilding and reinstalling Codex Desktop Linux.")
 PY
+    then
+        SETUP_ERROR_REPORTED=1
+        echo "${COLOR_RED}[setup][ERROR]${COLOR_RESET} Could not update Linux feature config; review the message above." >&2
+        return 1
+    fi
 }
 
 list_includes_id() {
@@ -855,6 +937,7 @@ run_feature_cleanup() {
         if noninteractive_mode; then
             return
         fi
+        section "Cleanup"
         local wants_cleanup=""
         prompt_read wants_cleanup "[setup] Clean up feature-owned local data now? [y/N]: " || true
         case "$wants_cleanup" in
@@ -863,11 +946,16 @@ run_feature_cleanup() {
                 ;;
             *)
                 return
-                ;;
+            ;;
         esac
+    else
+        section "Cleanup"
     fi
 
-    [ -n "$cleanup_raw" ] || return
+    if [ -z "$cleanup_raw" ]; then
+        info "No cleanup feature ids provided; skipping feature cleanup."
+        return 0
+    fi
     validate_cleanup_feature_ids "$cleanup_raw"
 
     if noninteractive_mode && ! dry_run_enabled; then
@@ -1009,8 +1097,8 @@ prompt_for_feature_changes() {
 
     run_feature_config_python "" "" "0"
     echo
-    prompt_read enable_raw "[setup] Enable feature ids for the next build (comma-separated, blank keeps current): " || true
-    prompt_read disable_raw "[setup] Disable feature ids for the next build (comma-separated, blank disables none): " || true
+    prompt_read enable_raw "[setup] Enable feature ids or numbers for the next build (comma-separated, blank keeps current): " || true
+    prompt_read disable_raw "[setup] Disable feature ids or numbers for the next build (comma-separated, blank disables none): " || true
     if [ -n "$enable_raw$disable_raw" ]; then
         run_feature_config_python "$enable_raw" "$disable_raw" "1"
         print_safe_disable_guidance "$disable_raw"
@@ -1037,11 +1125,15 @@ prompt_for_feature_changes() {
 }
 
 main() {
+    section "System"
     print_system_summary
+    section "Linux Features"
     prompt_for_feature_changes
+    section "Readiness"
     print_computer_use_details
     print_read_aloud_details
     run_feature_cleanup
+    section "Next Steps"
     print_package_mode_guidance
     maybe_run_install_steps
     if dry_run_enabled; then
