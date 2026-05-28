@@ -28,6 +28,8 @@ The current working flow is:
   Workspace root. Members: `computer-use-linux`, `updater`.
 - `flake.nix` / `flake.lock`
   Nix flake that pins upstream DMG hash, Cargo deps hash, and Node deps hash so `nix build` can reproduce the install end-to-end. `scripts/ci/update-nix-hashes.sh` is the maintained way to refresh the pinned hashes.
+- `.devcontainer/devcontainer.json` / `.devcontainer/Dockerfile`
+  Preferred Linux development environment for agents on Bluefin/Universal Blue hosts. Use this container for Rust and patcher validation before suggesting host Rust/toolchain installs. It intentionally stays a generic repo build/test container (`rust:1-bookworm`, Node/npm, packaging tools, `rustfmt`, `clippy`) and does not bake in `codex-desktop serve`, web-mode profiles, Codex auth state, or host desktop control assumptions.
 
 ### Launcher
 

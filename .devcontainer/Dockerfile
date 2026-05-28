@@ -5,6 +5,7 @@ ARG USER_UID=1000
 ARG USER_GID=$USER_UID
 
 ENV DEBIAN_FRONTEND=noninteractive
+ENV PATH="/usr/local/cargo/bin:${PATH}"
 
 RUN apt-get update -qq \
     && apt-get install -y --no-install-recommends \
@@ -38,6 +39,7 @@ RUN if ! getent group "$USER_GID" >/dev/null; then groupadd --gid "$USER_GID" "$
 
 RUN rustup component add rustfmt clippy
 
+RUN printf '%s\n' 'export PATH="/usr/local/cargo/bin:${PATH}"' > /etc/profile.d/rust-cargo-path.sh
+
 USER $USERNAME
 WORKDIR /workspaces/codex-desktop-linux
-
