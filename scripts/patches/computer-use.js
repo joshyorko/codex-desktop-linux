@@ -213,6 +213,7 @@ function applyLinuxComputerUseRendererAvailabilityPatch(currentSource) {
     (currentSource.includes("isComputerUseAvailable") || currentSource.includes("1506311413"));
   const availabilityAlreadyPatched = () =>
     /featureName:`computer_use`[\s\S]{0,1200}?let ([A-Za-z_$][\w$]*)=[A-Za-z_$][\w$]*&&[A-Za-z_$][\w$]*&&\([A-Za-z_$][\w$]*===`linux`\|\|[A-Za-z_$][\w$]*&&\([A-Za-z_$][\w$]*\|\|[A-Za-z_$][\w$]*\)\),[A-Za-z_$][\w$]*=\1&&![A-Za-z_$][\w$]*&&\([A-Za-z_$][\w$]*===`linux`\|\|[A-Za-z_$][\w$]*\.enabled\)&&![A-Za-z_$][\w$]*\.isLoading/.test(patchedSource) ||
+    /featureName:`computer_use`[\s\S]{0,1800}?isComputerUseFeatureEnabled:([A-Za-z_$][\w$]*)===`linux`\|\|[A-Za-z_$][\w$]*\.enabled,isComputerUseFeatureLoading:\1!==`linux`&&[A-Za-z_$][\w$]*\.isLoading,isComputerUseGateEnabled:\1===`linux`\|\|[A-Za-z_$][\w$]*,isHostCompatiblePlatform:\1===`linux`\|\|[A-Za-z_$][\w$]*\(\1\),isHostLocal:/.test(patchedSource) ||
     patchedSource.includes(availabilityPatch) ||
     patchedSource.includes(currentAvailabilityPatch);
 
@@ -320,7 +321,7 @@ function applyLinuxComputerUseRendererAvailabilityPatch(currentSource) {
       }
       availabilityGateFound = true;
       availabilityChanged = true;
-      return `${resultVar}=${helperVar}({enabled:${enabledVar},isComputerUseFeatureEnabled:${platformVar}===\`linux\`||${featureQueryVar}.enabled,isComputerUseFeatureLoading:${platformVar}!==\`linux\`&&${featureQueryVar}.isLoading,isComputerUseGateEnabled:${platformVar}===\`linux\`||${rolloutVar},isHostCompatiblePlatform:${platformPredicateVar}(${platformVar}),isHostLocal:${isHostLocalVar},isPlatformLoading:${platformLoadingVar},windowType:\`electron\`})`;
+      return `${resultVar}=${helperVar}({enabled:${enabledVar},isComputerUseFeatureEnabled:${platformVar}===\`linux\`||${featureQueryVar}.enabled,isComputerUseFeatureLoading:${platformVar}!==\`linux\`&&${featureQueryVar}.isLoading,isComputerUseGateEnabled:${platformVar}===\`linux\`||${rolloutVar},isHostCompatiblePlatform:${platformVar}===\`linux\`||${platformPredicateVar}(${platformVar}),isHostLocal:${isHostLocalVar},isPlatformLoading:${platformLoadingVar},windowType:\`electron\`})`;
     },
   );
 

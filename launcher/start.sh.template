@@ -1523,6 +1523,21 @@ webview_origin_is_reachable() {
     verify_webview_origin "$WEBVIEW_ORIGIN/index.html" >/dev/null 2>&1
 }
 
+webview_origin_is_reachable_fast() {
+    local url="$WEBVIEW_ORIGIN/index.html"
+    local body err
+
+    err=$(mktemp 2>/dev/null) || err="${TMPDIR:-/tmp}/codex-curl-err.$$"
+    if ! body="$(curl --disable --noproxy 127.0.0.1,localhost --silent --show-error --fail --max-time 0.2 "$url" 2>"$err")"; then
+        rm -f "$err"
+        return 1
+    fi
+    rm -f "$err"
+
+    [[ "$body" == *"<title>Codex</title>"* ]] || return 1
+    [[ "$body" == *"startup-loader"* ]] || return 1
+}
+
 webview_port_is_open() {
     # bash /dev/tcp connect, capped at 0.2 s by a watchdog kill.
     # Replaces python3 socket.connect heredoc (~3 ms vs 13–60 ms here).
@@ -1562,17 +1577,24 @@ webview_port_is_open() {
 wait_for_webview_server() {
     echo "Waiting for webview server on :$CODEX_LINUX_WEBVIEW_PORT"
 
-    # 250 × 20 ms = same 5 s overall budget as 50 × 100 ms, but with 5× tighter
-    # polling cadence so the typical case detects readiness within one cycle
-    # of the server actually binding instead of within the next 100 ms tick.
+    # Treat the actual localhost webview response as the readiness signal.
+    # Under cold-login load the shell /dev/tcp probe can be a little too brittle,
+    # while a short curl against index.html matches what Electron needs next.
     local attempt
-    for attempt in $(seq 1 250); do
-        if webview_port_is_open; then
+    for attempt in $(seq 1 20); do
+        if webview_origin_is_reachable_fast; then
             echo "Webview server is ready"
             return 0
         fi
-        sleep 0.02
+        sleep 0.05
     done
+
+    # The fast probe caps curl at 0.2s; a valid local webview can answer a little
+    # slower during cold start. Confirm with the full 2s origin check before failing.
+    if webview_origin_is_reachable; then
+        echo "Webview server is ready"
+        return 0
+    fi
 
     return 1
 }
@@ -1836,6 +1858,12 @@ ensure_webview_server() {
     fi
 
     if ! kill -0 "$STARTED_WEBVIEW_PID" 2>/dev/null; then
+        if webview_origin_is_reachable && adopt_discovered_webview_server; then
+            echo "Adopted concurrently-started verified webview server on :$CODEX_LINUX_WEBVIEW_PORT"
+            log_phase "webview_reused"
+            return 0
+        fi
+
         notify_error "$CODEX_LINUX_APP_DISPLAY_NAME webview server exited before Electron launch. Another process may already be using port $CODEX_LINUX_WEBVIEW_PORT."
         exit 1
     fi
@@ -2310,7 +2338,14 @@ if needs_cold_start && [ -z "${CODEX_CLI_PATH:-}" ]; then
     log_phase "cli_lookup"
 fi
 export CHROME_DESKTOP="${CHROME_DESKTOP:-$CODEX_LINUX_APP_ID.desktop}"
-export ELECTRON_RENDERER_URL="${ELECTRON_RENDERER_URL:-$WEBVIEW_ORIGIN/}"
+if truthy_env_value "${CODEX_LINUX_PIN_RENDERER_URL:-}" && ! truthy_env_value "${CODEX_LINUX_ALLOW_RENDERER_URL_OVERRIDE:-}"; then
+    if [ -n "${ELECTRON_RENDERER_URL:-}" ] && [ "$ELECTRON_RENDERER_URL" != "$WEBVIEW_ORIGIN/" ]; then
+        echo "Ignoring inherited ELECTRON_RENDERER_URL; set CODEX_LINUX_ALLOW_RENDERER_URL_OVERRIDE=1 to allow overrides"
+    fi
+    export ELECTRON_RENDERER_URL="$WEBVIEW_ORIGIN/"
+else
+    export ELECTRON_RENDERER_URL="${ELECTRON_RENDERER_URL:-$WEBVIEW_ORIGIN/}"
+fi
 
 if needs_cold_start && [ -z "$CODEX_CLI_PATH" ]; then
     if is_interactive_terminal; then

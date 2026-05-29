@@ -78,6 +78,7 @@ const {
   applyBrowserAnnotationScreenshotPatch,
   applyPersistentRateLimitFooterPatch,
   applyLinuxAppServerFeatureEnablementPatch,
+  applyLinuxConfigWriteVersionConflictPatch,
 } = require("./patches/webview-assets.js");
 const { patchAssetFiles } = require("./patches/shared.js");
 
@@ -515,6 +516,7 @@ test("default core patch descriptors are grouped and unique", () => {
     "automation-schedule-multi-time-rrule",
     "linux-app-sunset-gate",
     "linux-app-server-feature-enablement",
+    "linux-config-write-version-conflict",
     "opaque-window-default-general-settings",
     "opaque-window-default-webview-index",
     "opaque-window-default-resolved-theme",
@@ -1961,6 +1963,28 @@ test("warns when app-server feature sync still has unsupported features but the 
   ]);
 });
 
+test("drops stale expectedVersion from Linux webview config writes", () => {
+  const source = [
+    "async function X(e,t,n){await o(`write-config-value`,{hostId:r,keyPath:t,value:n,mergeStrategy:`upsert`,filePath:B.filePath,expectedVersion:B.expectedVersion})}",
+    "async function Y(e){await qn(`batch-write-config-value`,{hostId:h,edits:e,filePath:v?.configWriteTarget?.filePath??null,expectedVersion:v?.configWriteTarget?.expectedVersion??null,reloadUserConfig:!0})}",
+  ].join("");
+
+  const patched = applyPatchTwice(applyLinuxConfigWriteVersionConflictPatch, source);
+
+  assert.match(patched, /write-config-value/);
+  assert.equal((patched.match(/expectedVersion:null/g) || []).length, 2);
+  assert.equal(patched.includes("expectedVersion:B.expectedVersion"), false);
+  assert.equal(patched.includes("expectedVersion:v?.configWriteTarget?.expectedVersion??null"), false);
+});
+
+test("leaves already-null config write versions unchanged", () => {
+  const source = "async function X(){await o(`write-config-value`,{expectedVersion:null})}";
+
+  const patched = applyPatchTwice(applyLinuxConfigWriteVersionConflictPatch, source);
+
+  assert.equal(patched, source);
+});
+
 test("adds Linux package updater behind the existing app updater manager", () => {
   const patched = applyPatchTwice(applyLinuxAppUpdaterBridgePatch, appUpdaterBundleFixture());
 
@@ -2566,7 +2590,21 @@ test("shows object-helper Computer Use plugin UI on Linux", () => {
   assert.match(patched, /function m\(e\)\{return e===`macOS`\|\|e===`windows`\|\|e===`linux`\}/);
   assert.match(
     patched,
-    /v=g\(\{enabled:a,isComputerUseFeatureEnabled:s===`linux`\|\|_\.enabled,isComputerUseFeatureLoading:s!==`linux`&&_\.isLoading,isComputerUseGateEnabled:s===`linux`\|\|d,isHostCompatiblePlatform:m\(s\),isHostLocal:c,isPlatformLoading:o,windowType:`electron`\}\)/,
+    /v=g\(\{enabled:a,isComputerUseFeatureEnabled:s===`linux`\|\|_\.enabled,isComputerUseFeatureLoading:s!==`linux`&&_\.isLoading,isComputerUseGateEnabled:s===`linux`\|\|d,isHostCompatiblePlatform:s===`linux`\|\|m\(s\),isHostLocal:c,isPlatformLoading:o,windowType:`electron`\}\)/,
+  );
+});
+
+test("keeps object-helper Computer Use host compatibility on Linux when platform predicate drifts", () => {
+  const source =
+    "function m(e){return e===`macOS`||e===`windows`||q(e)}" +
+    "function h(e){let n=(0,f.c)(15),{enabled:r,hostId:i}=e,a=r===void 0?!0:r,{isLoading:o,platform:s}=u(),c=t(i).kind===`local`,d=l(`1506311413`),h;n[0]===i?h=n[1]:(h={featureName:`computer_use`,hostId:i},n[0]=i,n[1]=h);let _=p(h),v;n[2]!==_.enabled||n[3]!==_.isLoading||n[4]!==a||n[5]!==d||n[6]!==c||n[7]!==o||n[8]!==s?(v=g({enabled:a,isComputerUseFeatureEnabled:_.enabled,isComputerUseFeatureLoading:_.isLoading,isComputerUseGateEnabled:d,isHostCompatiblePlatform:m(s),isHostLocal:c,isPlatformLoading:o,windowType:`electron`}),n[2]=_.enabled,n[3]=_.isLoading,n[4]=a,n[5]=d,n[6]=c,n[7]=o,n[8]=s,n[9]=v):v=n[9];return v}";
+
+  const patched = applyPatchTwice(applyLinuxComputerUseRendererAvailabilityPatch, source);
+
+  assert.match(patched, /function m\(e\)\{return e===`macOS`\|\|e===`windows`\|\|q\(e\)\}/);
+  assert.match(
+    patched,
+    /v=g\(\{enabled:a,isComputerUseFeatureEnabled:s===`linux`\|\|_\.enabled,isComputerUseFeatureLoading:s!==`linux`&&_\.isLoading,isComputerUseGateEnabled:s===`linux`\|\|d,isHostCompatiblePlatform:s===`linux`\|\|m\(s\),isHostLocal:c,isPlatformLoading:o,windowType:`electron`\}\)/,
   );
 });
 
@@ -3104,7 +3142,7 @@ test("patchExtractedApp scans apps bundles for Computer Use availability when UI
       );
       assert.match(
         fs.readFileSync(path.join(assetsDir, "use-is-plugins-enabled-current.js"), "utf8"),
-        /v=g\(\{enabled:a,isComputerUseFeatureEnabled:s===`linux`\|\|_\.enabled,isComputerUseFeatureLoading:s!==`linux`&&_\.isLoading,isComputerUseGateEnabled:s===`linux`\|\|d,isHostCompatiblePlatform:p\(s\),isHostLocal:c,isPlatformLoading:o,windowType:`electron`\}\)/,
+        /v=g\(\{enabled:a,isComputerUseFeatureEnabled:s===`linux`\|\|_\.enabled,isComputerUseFeatureLoading:s!==`linux`&&_\.isLoading,isComputerUseGateEnabled:s===`linux`\|\|d,isHostCompatiblePlatform:s===`linux`\|\|p\(s\),isHostLocal:c,isPlatformLoading:o,windowType:`electron`\}\)/,
       );
     } finally {
       fs.rmSync(tempRoot, { recursive: true, force: true });

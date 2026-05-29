@@ -4,9 +4,6 @@
     "dockerfile": "Dockerfile",
     "context": ".."
   },
-  "runArgs": [
-    "--userns=keep-id"
-  ],
   "remoteUser": "vscode",
   "workspaceFolder": "/workspaces/codex-desktop-linux",
   "customizations": {
@@ -17,5 +14,5 @@
       ]
     }
   },
-  "postCreateCommand": "cargo --version && rustc --version"
+  "postCreateCommand": "cargo --version && rustc --version && node --version && npm --version"
 }

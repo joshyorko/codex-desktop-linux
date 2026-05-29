@@ -7,6 +7,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
+- The `make setup-native` Linux feature picker can now present a GUI checklist
+  (zenity or kdialog) instead of the terminal-only numbered prompt, pre-checked
+  with the currently-enabled features. It falls back to the terminal picker when
+  no dialog tool or display is available (headless/SSH/CI) or when
+  `CODEX_BOOTSTRAP_NO_GUI=1` is set. The existing Python discovery/validation/
+  write path is reused unchanged.
 - Launcher rendering mode `CODEX_LINUX_RENDERING_MODE=wayland-gpu`, which
   forces native Wayland with GPU compositing enabled and skips forced renderer
   accessibility by default for Wayland desktops where XWayland or software

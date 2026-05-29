@@ -98,6 +98,7 @@ const {
 const {
   applyBrowserAnnotationScreenshotPatch,
   applyLinuxAppSunsetPatch,
+  applyLinuxConfigWriteVersionConflictPatch,
   applyLinuxOpaqueWindowsDefaultPatch,
   applyLinuxFastModeModelGuardPatch,
   applySubagentNicknameMetadataPatch,
@@ -165,6 +166,7 @@ module.exports = {
   applyLinuxChromeExtensionStatusPatch,
   applyLinuxChromePluginAutoInstallPatch,
   applyLinuxCodeEditorOpenTargetPatch,
+  applyLinuxConfigWriteVersionConflictPatch,
   applyLinuxComputerUseFeaturePatch,
   applyLinuxComputerUseInstallFlowPatch,
   applyLinuxComputerUsePluginGatePatch,

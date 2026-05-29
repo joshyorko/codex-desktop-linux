@@ -647,6 +647,7 @@ run_feature_config_python() {
     local enable_raw="$1"
     local disable_raw="$2"
     local apply_changes="$3"
+    local output_mode="${4:-}"
     local config_path
     config_path="$(feature_config_path)"
 
@@ -658,7 +659,7 @@ run_feature_config_python() {
         return
     fi
 
-    if ! python3 - "$FEATURES_ROOT" "$config_path" "$enable_raw" "$disable_raw" "$apply_changes" <<'PY'
+    if ! python3 - "$FEATURES_ROOT" "$config_path" "$enable_raw" "$disable_raw" "$apply_changes" "$output_mode" <<'PY'
 import json
 import pathlib
 import re
@@ -669,6 +670,7 @@ config_path = pathlib.Path(sys.argv[2])
 enable_raw = sys.argv[3]
 disable_raw = sys.argv[4]
 apply_changes = sys.argv[5] == "1"
+output_mode = sys.argv[6] if len(sys.argv) > 6 else ""
 
 id_re = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 
@@ -818,6 +820,17 @@ def csv(ids):
 
 features = discover_features(features_root)
 current = read_enabled_ids(config_path)
+
+if output_mode == "tsv":
+    # Machine-readable discovery for the GUI feature picker: one
+    # id<TAB>title<TAB>enabled_flag line per feature. No side effects.
+    current_set = set(current)
+    for feature_id, feature in features.items():
+        title = feature["title"].replace("\t", " ").replace("\n", " ")
+        flag = "1" if feature_id in current_set else "0"
+        print(f"{feature_id}\t{title}\t{flag}")
+    sys.exit(0)
+
 enable = split_selectors(enable_raw, features, "enable")
 disable = split_selectors(disable_raw, features, "disable")
 conflicting = sorted(set(enable) & set(disable))
@@ -1143,6 +1156,102 @@ maybe_run_install_steps() {
     fi
 }
 
+# True when an interactive GUI checklist can be shown: a graphical session,
+# a dialog helper (zenity/kdialog), python3 for feature discovery, and the user
+# has not opted out via CODEX_BOOTSTRAP_NO_GUI.
+gui_feature_picker_available() {
+    truthy "${CODEX_BOOTSTRAP_NO_GUI:-0}" && return 1
+    [ -t 0 ] || return 1
+    [ -n "${DISPLAY:-}" ] || [ -n "${WAYLAND_DISPLAY:-}" ] || return 1
+    command -v python3 >/dev/null 2>&1 || return 1
+    command -v zenity >/dev/null 2>&1 || command -v kdialog >/dev/null 2>&1
+}
+
+# Shows a zenity/kdialog checklist of discovered features (pre-checked = current),
+# then applies the selection through the existing Python config writer. Returns
+# non-zero when the GUI path could not run so the caller falls back to the
+# terminal prompt. A cancelled dialog leaves the config unchanged and returns 0.
+prompt_for_feature_changes_gui() {
+    local feature_lines
+    feature_lines="$(run_feature_config_python "" "" "0" "tsv")" || return 1
+    [ -n "$feature_lines" ] || return 1
+
+    local -a all_ids=()
+    declare -A enabled_now=()
+    declare -A title_of=()
+    local id title flag
+    while IFS=$'\t' read -r id title flag; do
+        [ -n "$id" ] || continue
+        all_ids+=("$id")
+        title_of["$id"]="$title"
+        [ "$flag" = "1" ] && enabled_now["$id"]=1
+    done <<< "$feature_lines"
+
+    [ "${#all_ids[@]}" -gt 0 ] || return 1
+
+    local selected="" status=0
+    if command -v zenity >/dev/null 2>&1; then
+        # Columns: [Enable checkbox] [feature id] [title]. Print the id column
+        # (2) one per line. `--separate-output` was removed in zenity 4.x, so we
+        # pin the row separator with `--separator` instead for both 3.x and 4.x.
+        local -a rows=()
+        for id in "${all_ids[@]}"; do
+            if [ -n "${enabled_now[$id]:-}" ]; then rows+=("TRUE"); else rows+=("FALSE"); fi
+            rows+=("$id" "${title_of[$id]}")
+        done
+        selected="$(zenity --list --checklist \
+            --title="Codex Desktop Linux features" \
+            --text="Select the optional Linux features to enable for the next build." \
+            --column="Enable" --column="Feature" --column="Description" \
+            --print-column=2 --separator=$'\n' \
+            "${rows[@]}" 2>/dev/null)" || status=$?
+    else
+        local -a rows=()
+        for id in "${all_ids[@]}"; do
+            if [ -n "${enabled_now[$id]:-}" ]; then
+                rows+=("$id" "${title_of[$id]}" "on")
+            else
+                rows+=("$id" "${title_of[$id]}" "off")
+            fi
+        done
+        selected="$(kdialog --separate-output --checklist \
+            "Select the optional Linux features to enable for the next build." \
+            "${rows[@]}" 2>/dev/null)" || status=$?
+    fi
+
+    if [ "$status" -ne 0 ]; then
+        info "Feature selection cancelled; config unchanged."
+        return 0
+    fi
+
+    declare -A selected_set=()
+    while IFS= read -r id; do
+        id="${id//\"/}"
+        [ -n "$id" ] && selected_set["$id"]=1
+    done <<< "$selected"
+
+    local -a enable_ids=() disable_ids=()
+    for id in "${all_ids[@]}"; do
+        if [ -n "${selected_set[$id]:-}" ]; then
+            [ -z "${enabled_now[$id]:-}" ] && enable_ids+=("$id")
+        else
+            [ -n "${enabled_now[$id]:-}" ] && disable_ids+=("$id")
+        fi
+    done
+
+    if [ "${#enable_ids[@]}" -eq 0 ] && [ "${#disable_ids[@]}" -eq 0 ]; then
+        info "Feature config unchanged."
+        return 0
+    fi
+
+    local enable_csv disable_csv
+    enable_csv="$(IFS=,; echo "${enable_ids[*]}")"
+    disable_csv="$(IFS=,; echo "${disable_ids[*]}")"
+    run_feature_config_python "$enable_csv" "$disable_csv" "1"
+    print_safe_disable_guidance "$disable_csv"
+    return 0
+}
+
 prompt_for_feature_changes() {
     local enable_raw="${CODEX_LINUX_FEATURES:-}"
     local disable_raw="${CODEX_LINUX_DISABLE_FEATURES:-}"
@@ -1151,6 +1260,16 @@ prompt_for_feature_changes() {
         run_feature_config_python "$enable_raw" "$disable_raw" "1"
         print_safe_disable_guidance "$disable_raw"
         return
+    fi
+
+    # Prefer a graphical checklist when the environment supports it; the explicit
+    # CODEX_LINUX_FEATURES / CODEX_LINUX_DISABLE_FEATURES env selectors and the
+    # terminal prompt remain the fallback for headless or no-GUI sessions.
+    if [ -z "$enable_raw$disable_raw" ] && gui_feature_picker_available; then
+        if prompt_for_feature_changes_gui; then
+            prompt_package_updater_mode
+            return
+        fi
     fi
 
     run_feature_config_python "" "" "0"
@@ -1164,6 +1283,10 @@ prompt_for_feature_changes() {
         info "Feature config unchanged."
     fi
 
+    prompt_package_updater_mode
+}
+
+prompt_package_updater_mode() {
     local answer
     if package_with_updater_enabled; then
         prompt_read answer "[setup] Keep codex-update-manager in the next native package? [Y/n]: " || true
