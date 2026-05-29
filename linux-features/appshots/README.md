@@ -1,8 +1,8 @@
 # Linux AppShots
 
-`linux-features/appshots` exposes the upstream AppShots UI on Linux. It routes
-capture requests to the bundled Linux Computer Use backend and attaches the
-focused window screenshot plus AT-SPI text to the composer.
+`linux-features/appshots` exposes the upstream AppShots composer entry on
+Linux. It attaches the focused window screenshot plus best-effort AT-SPI text
+to the composer.
 
 This feature is disabled by default. Enable it before building:
 
@@ -14,17 +14,38 @@ This feature is disabled by default. Enable it before building:
 }
 ```
 
-The backend refuses to create an AppShot when it cannot identify focused-window
-bounds, when the window bounds do not intersect the screenshot, or when GNOME
-Shell / XDG Desktop Portal screenshot capture fails. It does not use the CLI
-screenshot fallback used by the standalone `screenshot` command.
+The feature is self-contained. It patches only the optional AppShots webview
+availability gate, the Electron main-process AppShots handlers, and the
+upstream AppShots hotkey settings row. It does not add AppShots-specific code
+to `computer-use-linux`, core patch modules, default patch flow, or packaged
+runtime hooks.
 
-Global hotkeys are disabled by default on Linux. After opting into the feature,
-use the AppShots settings page to configure a hotkey such as both Shift keys,
-both Alt keys, or `Ctrl+Alt+A`.
+For window metadata and AT-SPI text, the feature shells out to the bundled
+Linux Computer Use backend's existing `windows` and `state` commands. For the
+screenshot, it uses an available desktop screenshot CLI such as `grim`,
+`spectacle`, `gnome-screenshot`, `maim`, `scrot`, or ImageMagick `import`, then
+crops the image to the focused window bounds in Electron.
 
-Backend-only test:
+Privacy and correctness constraints:
+
+- The feature may briefly create a full-screen temporary screenshot before
+  cropping it to the focused window.
+- Capture fails closed when no focused window or usable bounds are available.
+- Capture fails closed when no screenshot tool is available or the crop does not
+  intersect the captured image.
+- Global hotkeys are disabled by default on Linux until the user chooses one in
+  AppShots settings. The dropdown includes upstream-style `Shift + Shift` plus
+  ordinary Electron accelerators such as `Ctrl+Super+A`, `Alt+Super+A`, and
+  `Ctrl+Alt+A`.
+- `Shift + Shift` is backed by a feature-local `bare-modifier-monitor` helper
+  staged into `resources/native/`. It uses `xinput` and `xmodmap`, so it is
+  expected to work on X11 sessions and fail closed elsewhere.
+
+Run the feature self-test:
 
 ```bash
-./codex-app/resources/plugins/openai-bundled/plugins/computer-use/bin/codex-computer-use-linux appshot
+node --test linux-features/appshots/test.js
 ```
+
+To test in the app, enable the feature, rebuild the dev app, open a chat, open
+the composer attachment/context menu, and use the AppShot entry.
