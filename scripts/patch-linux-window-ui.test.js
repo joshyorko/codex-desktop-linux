@@ -670,6 +670,17 @@ function currentChromeExtensionStatusBundleFixture() {
   ].join("");
 }
 
+function currentChromeExtensionStatusAliasCollisionBundleFixture() {
+  return [
+    "let a=require(`node:os`),t=require(`node:path`),o=require(`node:fs`);",
+    "var nm=`com.google.Chrome`,rm=`/usr/bin/open`,im=/^[a-p]{32}$/;",
+    "function am(e){return`chrome://extensions/?id=${um(e)}`}",
+    "function om({extensionId:e,homeDir:n=(0,a.homedir)(),localAppDataDir:r=process.env.LOCALAPPDATA,platform:a=process.platform}){let s=um(e),c=dm({homeDir:n,localAppDataDir:r,platform:a});return c==null||!(0,o.existsSync)(c)?!1:(0,o.readdirSync)(c,{withFileTypes:!0}).some(e=>e.isDirectory()&&(0,o.existsSync)((0,t.join)(c,e.name,`Extensions`,s)))}async function sm({extensionId:e,platform:t=process.platform,detectChromeCommand:n=cm,runCommand:r=zp}){if(t===`darwin`){await r(rm,[`-b`,nm,am(e)]);return}if(t===`win32`){let t=n();if(t==null)throw Error(`Google Chrome is not installed`);await r(t,[am(e)]);return}throw Error(`Opening Chrome extension settings is only supported on macOS and Windows`)}function cm(){return Fp(`chrome.exe`)}",
+    "function lm(){return null}function um(e){let t=e.trim();if(!im.test(t))throw Error(`Invalid Chrome extension id`);return t}function dm({homeDir:e,localAppDataDir:n,platform:r}){return r===`darwin`?(0,t.join)(e,`Library`,`Application Support`,`Google`,`Chrome`):r===`win32`?(0,t.join)(n??(0,t.join)(e,`AppData`,`Local`),`Google`,`Chrome`,`User Data`):null}",
+    "function Fp(e){return e}async function zp(){}",
+  ].join("");
+}
+
 function currentLaunchActionBundleFixture() {
   return [
     "const e={gr:e=>({default:e,...e})};let n=require(`electron`);let i=require(`node:path`);i=e.gr(i);let o=require(`node:fs`);o=e.gr(o);let f=require(`node:net`);f=e.gr(f);",
@@ -2899,11 +2910,11 @@ test("detects Chrome extension installation from Linux browser profiles", () => 
   assert.match(patched, /`google-chrome-unstable`/);
   assert.match(
     patched,
-    /if\(a===`linux`\)return codexLinuxChromeHasExtension\(\{extensionId:e,homeDir:t,platform:a\}\)/,
+    /if\(__codexPlatform===`linux`\)return codexLinuxChromeHasExtension\(\{extensionId:__codexExtensionId,homeDir:__codexHomeDir,platform:__codexPlatform\}\)/,
   );
   assert.match(
     patched,
-    /if\(t===`linux`\)\{let t=codexLinuxChromeCommand\(\)\?\?n\(\);if\(t==null\)throw Error\(`Google Chrome, Brave, or Chromium is not installed`\);await r\(t,\[cm\(e\)\]\);return\}/,
+    /if\(__codexPlatform===`linux`\)\{let __codexChromeCommand=codexLinuxChromeCommand\(\)\?\?__codexDetectChromeCommand\(\);if\(__codexChromeCommand==null\)throw Error\(`Google Chrome, Brave, or Chromium is not installed`\);await __codexRunCommand\(__codexChromeCommand,\[cm\(__codexExtensionId\)\]\);return\}/,
   );
   assert.match(patched, /process\.env\.PATH\?\?``/);
   assert.doesNotMatch(patched, /function codexLinuxChromeCommand\(\)\{for\(let e of\[[^\]]+\]\)\{let t=Rp/);
@@ -2916,17 +2927,26 @@ test("detects Chrome extension installation after upstream minifier renames", ()
   );
 
   assert.match(patched, /function codexLinuxChromeProfileRoots/);
-  assert.match(patched, /let r=um\(e\);for\(let e of codexLinuxChromeProfileRoots/);
-  assert.match(patched, /function om\(\{extensionId:e,homeDir:t=\(0,r\.homedir\)\(\)/);
-  assert.match(patched, /c=dm\(\{homeDir:t,localAppDataDir:n,platform:a\}\)/);
   assert.match(
     patched,
-    /async function sm\(\{extensionId:e,platform:t=process\.platform,detectChromeCommand:n=cm,runCommand:r=zp\}\)/,
+    /let __codexValidatedExtensionId=um\(__codexExtensionId\);for\(let __codexProfileRoot of codexLinuxChromeProfileRoots/,
   );
-  assert.match(patched, /await r\(rm,\[`-b`,nm,am\(e\)\]\)/);
   assert.match(
     patched,
-    /if\(t===`linux`\)\{let t=codexLinuxChromeCommand\(\)\?\?n\(\);if\(t==null\)throw Error\(`Google Chrome, Brave, or Chromium is not installed`\);await r\(t,\[am\(e\)\]\);return\}/,
+    /function om\(\{extensionId:__codexExtensionId,homeDir:__codexHomeDir=\(0,r\.homedir\)\(\)/,
+  );
+  assert.match(
+    patched,
+    /__codexProfileDir=dm\(\{homeDir:__codexHomeDir,localAppDataDir:__codexLocalAppDataDir,platform:__codexPlatform\}\)/,
+  );
+  assert.match(
+    patched,
+    /async function sm\(\{extensionId:__codexExtensionId,platform:__codexPlatform=process\.platform,detectChromeCommand:__codexDetectChromeCommand=cm,runCommand:__codexRunCommand=zp\}\)/,
+  );
+  assert.match(patched, /await __codexRunCommand\(rm,\[`-b`,nm,am\(__codexExtensionId\)\]\)/);
+  assert.match(
+    patched,
+    /if\(__codexPlatform===`linux`\)\{let __codexChromeCommand=codexLinuxChromeCommand\(\)\?\?__codexDetectChromeCommand\(\);if\(__codexChromeCommand==null\)throw Error\(`Google Chrome, Brave, or Chromium is not installed`\);await __codexRunCommand\(__codexChromeCommand,\[am\(__codexExtensionId\)\]\);return\}/,
   );
 });
 
@@ -2972,6 +2992,40 @@ test("opens Linux Chrome extension settings without command helper TDZ", async (
   assert.deepEqual(JSON.parse(JSON.stringify(commands)), [
     ["/opt/bin/brave-browser", ["chrome://extensions/?id=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]],
   ]);
+});
+
+test("checks Linux Chrome extension status when minifier aliases collide", () => {
+  const patched = applyPatchTwice(
+    applyLinuxChromeExtensionStatusPatch,
+    currentChromeExtensionStatusAliasCollisionBundleFixture(),
+  );
+
+  const result = vm.runInNewContext(
+    `${patched};om({extensionId:"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",platform:"linux"});`,
+    {
+      require(moduleName) {
+        if (moduleName === "node:os") {
+          return { homedir: () => "/home/josh" };
+        }
+        if (moduleName === "node:path") {
+          return path;
+        }
+        if (moduleName === "node:fs") {
+          return {
+            existsSync: () => false,
+            readdirSync: () => [],
+          };
+        }
+        return require(moduleName);
+      },
+      process: {
+        platform: "linux",
+        env: {},
+      },
+    },
+  );
+
+  assert.equal(result, false);
 });
 
 function withIsolatedHome(body) {
