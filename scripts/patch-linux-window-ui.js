@@ -31,7 +31,9 @@ const {
   patchAutomationScheduleAssets,
 } = require("./patches/automation-schedule.js");
 const {
+  applyLinuxChromeNativeHostRuntimePatch,
   applyLinuxChromePluginAutoInstallPatch,
+  patchLinuxChromeNativeHostRuntimeAssets,
 } = require("./patches/chrome-plugin.js");
 const {
   COMPUTER_USE_UI_ENV_VAR,
@@ -164,6 +166,7 @@ module.exports = {
   applyLinuxBrowserUseIabVisibleOnCreatePatch,
   applyLinuxBuildInfoTrayPatch,
   applyLinuxChromeExtensionStatusPatch,
+  applyLinuxChromeNativeHostRuntimePatch,
   applyLinuxChromePluginAutoInstallPatch,
   applyLinuxCodeEditorOpenTargetPatch,
   applyLinuxConfigWriteVersionConflictPatch,
@@ -216,6 +219,7 @@ module.exports = {
   patchKeybindsSettingsAssets,
   patchLinuxMultiInstanceBootstrap,
   patchLinuxAppUpdaterBridge,
+  patchLinuxChromeNativeHostRuntimeAssets,
   patchMainBundleSource,
   patchPackageJson,
   resolveDesktopName,

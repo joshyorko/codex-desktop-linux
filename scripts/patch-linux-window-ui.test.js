@@ -22,6 +22,7 @@ const {
   applyBrowserUseNodeReplApprovalPatch,
   applyLinuxBrowserUseIabVisibleOnCreatePatch,
   applyLinuxChromeExtensionStatusPatch,
+  applyLinuxChromeNativeHostRuntimePatch,
   applyLinuxChromePluginAutoInstallPatch,
   applyLinuxCodeEditorOpenTargetPatch,
   applyLinuxAppUpdaterBridgePatch,
@@ -505,6 +506,7 @@ test("default core patch descriptors are grouped and unique", () => {
     "linux-computer-use-ui-feature",
     "linux-computer-use-plugin-gate",
     "linux-chrome-plugin-auto-install",
+    "linux-chrome-native-host-runtime",
     "browser-use-node-repl-approval",
     "linux-chrome-extension-status",
     "linux-remote-control-config-preservation",
@@ -610,6 +612,18 @@ function currentChromeSyncPluginGateBundleFixture() {
   return [
     "var ke=`chrome`,Ae=`chrome-dev`,Ti=e=>t.O.isInternal(e);",
     "var Ei=[{autoInstallOptOutKey:e.Jn(e.Kn),installWhenMissing:!0,name:e.Kn,isAvailable:({buildFlavor:e})=>Ti(e)},{autoInstallOptOutKey:e.Jn(e.Hn),forceReload:!0,installWhenMissing:!0,name:e.Hn,isAvailable:({features:e})=>e.inAppBrowserUseAllowed,migrate:Ir},{forceReload:!0,name:Ae,syncInstallStateWithChromeExtension:!0,isAvailable:({buildFlavor:e,env:t,features:n})=>Ar(e,t)&&n.externalBrowserUseAllowed},{forceReload:!0,name:e.Un,syncInstallStateWithChromeExtension:!0,isAvailable:({buildFlavor:e,env:t,features:n})=>jr(e,t)&&n.externalBrowserUseAllowed},{forceReload:!0,name:ke,syncInstallStateWithChromeExtension:!0,isAvailable:({buildFlavor:e,features:t})=>t.externalBrowserUseAllowed&&Mr(e)},{name:e.Wn,isAvailable:({features:e,platform:t})=>t===`darwin`&&e.computerUse,migrate:Zr},{forceReload:!0,installWhenMissing:!0,name:e.Wn,isAvailable:({buildFlavor:e,features:n,platform:r})=>t.O.isInternal(e)&&r===`win32`&&n.computerUse},{name:e.Gn,isAvailable:()=>!0}];",
+  ].join("");
+}
+
+function chromeNativeHostRuntimeBundleFixture() {
+  return [
+    "let r=require(`node:path`),o=require(`node:fs`);",
+    "function Mc({resourcesPath:e,executableName:t}){if(!e)return null;let n=(0,r.join)(e,t);try{return(0,o.statSync)(n).isFile()?n:null}catch{return null}}",
+    "function Pc(e){return Mc({resourcesPath:e,executableName:process.platform===`win32`?`node_repl.exe`:`node_repl`})}",
+    "function Fc(e){return Mc({resourcesPath:e,executableName:process.platform===`win32`?`node.exe`:`node`})}",
+    "function Ic(e){return Mc({resourcesPath:e,executableName:process.platform===`win32`?`codex.exe`:`codex`})}",
+    "function Qp(e){let t=Ic(e.resourcesPath)??$p(e.devRuntimeRepoRoot,[`extension`,`bin`,process.platform===`win32`?`codex.exe`:`codex`]),n=Fc(e.resourcesPath)??$p(e.devRuntimeRepoRoot,[`electron`,`bin`,process.platform===`win32`?`node.exe`:`node`]),r=Pc(e.resourcesPath)??$p(e.devRuntimeRepoRoot,[`electron`,`bin`,process.platform===`win32`?`node_repl.exe`:`node_repl`]),i=[t==null?`codex`:null,n==null?`node`:null,r==null?`node_repl`:null].filter(e=>e!=null);if(i.length>0)throw Error(`Missing bundled Electron runtime required to sync Chrome native host resources for ${e.nativeHostName}: ${i.join(`, `)} (resourcesPath: ${e.resourcesPath}).`);if(t==null||n==null||r==null)throw Error(`Missing bundled Electron runtime required to sync Chrome native host resources for ${e.nativeHostName}.`);return{codexCliPath:t,nodePath:n,nodeReplPath:r}}",
+    "function $p(e,t){if(e==null)return null;let n=(0,r.join)(e,...t);try{return(0,o.statSync)(n).isFile()?n:null}catch{return null}}",
   ].join("");
 }
 
@@ -2450,6 +2464,52 @@ test("auto-installs Chrome plugin gates with sync-to-extension fields", () => {
   assert.equal((patched.match(/installWhenMissing:!0,name:Ae/g) || []).length, 0);
 });
 
+test("uses Linux managed runtime paths for Chrome native host sync", () => {
+  const patched = applyPatchTwice(
+    applyLinuxChromeNativeHostRuntimePatch,
+    chromeNativeHostRuntimeBundleFixture(),
+  );
+  const files = new Set([
+    "/opt/codex/resources/node-runtime/bin/node",
+    "/opt/codex/resources/node_repl",
+    "/home/josh/.local/bin/codex",
+  ]);
+
+  const result = vm.runInNewContext(
+    `${patched};Qp({resourcesPath:"/opt/codex/resources",devRuntimeRepoRoot:null,nativeHostName:"com.openai.codexextension"});`,
+    {
+      require(moduleName) {
+        if (moduleName === "node:path") {
+          return path;
+        }
+        if (moduleName === "node:fs") {
+          return {
+            statSync(filePath) {
+              if (!files.has(filePath)) {
+                throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+              }
+              return { isFile: () => true };
+            },
+          };
+        }
+        return require(moduleName);
+      },
+      process: {
+        platform: "linux",
+        env: {
+          CODEX_CLI_PATH: "/home/josh/.local/bin/codex",
+        },
+      },
+    },
+  );
+
+  assert.deepEqual(JSON.parse(JSON.stringify(result)), {
+    codexCliPath: "/home/josh/.local/bin/codex",
+    nodePath: "/opt/codex/resources/node-runtime/bin/node",
+    nodeReplPath: "/opt/codex/resources/node_repl",
+  });
+});
+
 test("keeps an already auto-installed Chrome plugin gate unchanged", () => {
   const source = currentPluginGateBundleFixture().replace(
     "{forceReload:!0,name:ut,syncInstallStateWithChromeExtension:!0,isAvailable:",
@@ -2868,6 +2928,50 @@ test("detects Chrome extension installation after upstream minifier renames", ()
     patched,
     /if\(t===`linux`\)\{let t=codexLinuxChromeCommand\(\)\?\?n\(\);if\(t==null\)throw Error\(`Google Chrome, Brave, or Chromium is not installed`\);await r\(t,\[am\(e\)\]\);return\}/,
   );
+});
+
+test("opens Linux Chrome extension settings without command helper TDZ", async () => {
+  const patched = applyPatchTwice(
+    applyLinuxChromeExtensionStatusPatch,
+    currentChromeExtensionStatusBundleFixture(),
+  );
+  const commands = [];
+
+  await vm.runInNewContext(
+    `${patched};sm({extensionId:"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",platform:"linux",detectChromeCommand:()=>null,runCommand:async(e,t)=>commands.push([e,t])});`,
+    {
+      commands,
+      require(moduleName) {
+        if (moduleName === "node:os") {
+          return { homedir: () => "/home/josh" };
+        }
+        if (moduleName === "node:path") {
+          return path;
+        }
+        if (moduleName === "node:fs") {
+          return {
+            existsSync: (filePath) => filePath === "/opt/bin/brave-browser",
+            statSync: (filePath) => {
+              if (filePath !== "/opt/bin/brave-browser") {
+                throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+              }
+              return { isFile: () => true };
+            },
+            readdirSync: () => [],
+          };
+        }
+        return require(moduleName);
+      },
+      process: {
+        platform: "linux",
+        env: { PATH: "/opt/bin" },
+      },
+    },
+  );
+
+  assert.deepEqual(JSON.parse(JSON.stringify(commands)), [
+    ["/opt/bin/brave-browser", ["chrome://extensions/?id=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]],
+  ]);
 });
 
 function withIsolatedHome(body) {
