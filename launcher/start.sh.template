@@ -40,6 +40,7 @@ COLD_START_HOOK_DIR="$SCRIPT_DIR/.codex-linux/cold-start.d"
 FEATURE_ENV_DIR="$SCRIPT_DIR/.codex-linux/env.d"
 FEATURE_PRELAUNCH_HOOK_DIR="$SCRIPT_DIR/.codex-linux/prelaunch.d"
 FEATURE_ELECTRON_ARGS_DIR="$SCRIPT_DIR/.codex-linux/electron-args.d"
+FEATURE_AFTER_EXIT_HOOK_DIR="$SCRIPT_DIR/.codex-linux/after-exit.d"
 MANAGED_NODE_BIN_DIR="$SCRIPT_DIR/resources/node-runtime/bin"
 APP_NOTIFICATION_ICON_NAME="$CODEX_LINUX_APP_ID"
 APP_NOTIFICATION_ICON_BUNDLE="$SCRIPT_DIR/.codex-linux/$APP_NOTIFICATION_ICON_NAME.png"
@@ -628,6 +629,9 @@ run_feature_prelaunch_hooks() {
         CODEX_LINUX_APP_STATE_DIR="$APP_STATE_DIR" \
         CODEX_LINUX_FEATURES_DIR="$CODEX_LINUX_FEATURES_DIR" \
         CODEX_LINUX_LAUNCHER_LOG="$LOG_FILE" \
+        CODEX_LINUX_LAUNCHER_CMD="${CODEX_LINUX_LAUNCHER_CMD:-$SCRIPT_DIR/start.sh}" \
+        CODEX_LINUX_FEATURE_HOOK_PHASE="prelaunch" \
+        CODEX_UPDATE_MANAGER_PATH="${CODEX_UPDATE_MANAGER_PATH:-}" \
             "$hook" "$SCRIPT_DIR" "$APP_STATE_DIR" "$LOG_DIR"
     done
 }
@@ -1180,8 +1184,40 @@ run_cold_start_hooks() {
             CODEX_LINUX_APP_STATE_DIR="$APP_STATE_DIR" \
             CODEX_LINUX_FEATURES_DIR="$CODEX_LINUX_FEATURES_DIR" \
             CODEX_LINUX_LAUNCHER_LOG="$LOG_FILE" \
+            CODEX_LINUX_LAUNCHER_CMD="${CODEX_LINUX_LAUNCHER_CMD:-$SCRIPT_DIR/start.sh}" \
+            CODEX_LINUX_FEATURE_HOOK_PHASE="cold-start" \
+            CODEX_UPDATE_MANAGER_PATH="${CODEX_UPDATE_MANAGER_PATH:-}" \
             "$hook" "$SCRIPT_DIR" "$APP_STATE_DIR" "$LOG_DIR"
         ) >>"$LOG_FILE" 2>&1 &
+    done
+}
+
+run_feature_after_exit_hooks() {
+    [ -n "${FEATURE_AFTER_EXIT_HOOK_DIR:-}" ] || return 0
+    [ -d "$FEATURE_AFTER_EXIT_HOOK_DIR" ] || return 0
+
+    local electron_status="${1:-0}"
+    local hook hook_status
+    for hook in "$FEATURE_AFTER_EXIT_HOOK_DIR"/*; do
+        [ -f "$hook" ] || continue
+        [ -x "$hook" ] || continue
+        echo "Running Linux feature after-exit hook: $hook"
+        set +e
+        CODEX_HOME="$CODEX_HOME" \
+        CODEX_LINUX_APP_DIR="$SCRIPT_DIR" \
+        CODEX_LINUX_APP_STATE_DIR="$APP_STATE_DIR" \
+        CODEX_LINUX_FEATURES_DIR="$CODEX_LINUX_FEATURES_DIR" \
+        CODEX_LINUX_LAUNCHER_LOG="$LOG_FILE" \
+        CODEX_LINUX_LAUNCHER_CMD="${CODEX_LINUX_LAUNCHER_CMD:-$SCRIPT_DIR/start.sh}" \
+        CODEX_LINUX_FEATURE_HOOK_PHASE="after-exit" \
+        CODEX_LINUX_ELECTRON_EXIT_STATUS="$electron_status" \
+        CODEX_UPDATE_MANAGER_PATH="${CODEX_UPDATE_MANAGER_PATH:-}" \
+            "$hook" "$SCRIPT_DIR" "$APP_STATE_DIR" "$LOG_DIR" "$electron_status"
+        hook_status=$?
+        set -e
+        if [ "$hook_status" -ne 0 ]; then
+            echo "Linux feature after-exit hook failed with status $hook_status: $hook"
+        fi
     done
 }
 
@@ -1398,6 +1434,14 @@ resolve_update_manager_path() {
 
 has_update_manager() {
     resolve_update_manager_path >/dev/null 2>&1
+}
+
+export_feature_runtime_env() {
+    CODEX_LINUX_APP_DIR="$SCRIPT_DIR"
+    CODEX_LINUX_APP_STATE_DIR="$APP_STATE_DIR"
+    CODEX_LINUX_LAUNCHER_CMD="$SCRIPT_DIR/start.sh"
+    export CODEX_LINUX_APP_DIR CODEX_LINUX_APP_STATE_DIR CODEX_LINUX_LAUNCHER_CMD
+    resolve_update_manager_path >/dev/null 2>&1 || true
 }
 
 run_update_manager() {
@@ -2297,11 +2341,13 @@ launch_electron() {
     wait "$ELECTRON_PID"
     local status=$?
     set -e
+    run_feature_after_exit_hooks "$status"
     return "$status"
 }
 
 hydrate_graphical_session_env
 configure_side_by_side_app_env
+export_feature_runtime_env
 load_packaged_runtime_helper
 prepend_managed_node_runtime_to_path
 source_feature_env_files

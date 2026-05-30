@@ -128,7 +128,8 @@ Use `runtimeHooks` for launcher-visible hooks:
     "env": "env",
     "prelaunch": "prelaunch.sh",
     "electronArgs": "electron-args",
-    "coldStart": "cold-start.sh"
+    "coldStart": "cold-start.sh",
+    "afterExit": "after-exit.sh"
   }
 }
 ```
@@ -143,11 +144,16 @@ The runtime hook types map to:
   line is appended as one Electron argument.
 - `coldStart`: copied to `.codex-linux/cold-start.d/`; executable hooks run in
   the background during cold start, after bundled plugin cache sync.
+- `afterExit`: copied to `.codex-linux/after-exit.d/`; executable hooks run
+  after Electron exits. Hook failures are logged and the launcher preserves
+  Electron's original exit status.
 
 Runtime hooks receive `CODEX_HOME`, `CODEX_LINUX_APP_DIR`,
 `CODEX_LINUX_APP_STATE_DIR`, `CODEX_LINUX_FEATURES_DIR`, and
-`CODEX_LINUX_LAUNCHER_LOG`. Use this pattern for user-home artifacts such as
-Codex skills: stage the source file with `resources` under
+`CODEX_LINUX_LAUNCHER_LOG`. Executable hooks also receive
+`CODEX_LINUX_FEATURE_HOOK_PHASE`; `afterExit` additionally receives
+`CODEX_LINUX_ELECTRON_EXIT_STATUS`. Use this pattern for user-home artifacts
+such as Codex skills: stage the source file with `resources` under
 `.codex-linux/features/<feature-id>/...`, then copy it from
 `$CODEX_LINUX_FEATURES_DIR/<feature-id>/...` to `$CODEX_HOME/skills/...` in a
 `runtimeHooks.prelaunch` script. Do not write user-home files from `stage.sh`;

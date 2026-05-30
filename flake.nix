@@ -63,13 +63,28 @@
             in
               !(pkgs.lib.hasSuffix "/.codex" pathStr || pkgs.lib.hasInfix "/.codex/" pathStr));
         };
+        computerUseBuildSource = pkgs.runCommandLocal "codex-computer-use-linux-source" { } ''
+          mkdir -p "$out"
+          cp ${./Cargo.lock} "$out/Cargo.lock"
+          cat > "$out/Cargo.toml" <<'EOF'
+          [workspace]
+          members = ["computer-use-linux"]
+          resolver = "2"
+          EOF
+          cp -R ${./computer-use-linux} "$out/computer-use-linux"
+          chmod -R u+w "$out"
+        '';
+        nativeModulesBuildSupport = pkgs.runCommandLocal "codex-native-modules-build-support" { } ''
+          mkdir -p "$out/scripts/lib"
+          cp ${./scripts/lib/native-modules.sh} "$out/scripts/lib/native-modules.sh"
+        '';
 
         codexDmg = pkgs.fetchurl {
           url = "https://persistent.oaistatic.com/codex-app-prod/Codex.dmg";
-          hash = "sha256-yanuEZhqD4gBWLgeRZtktoRkI5b0nq9/oOAY9KjDe0I=";
+          hash = "sha256-smhl7TqwSYqLigb9lBfS2wOKLA8oUI+QHjnOzNTCZSk=";
         };
 
-        codexVersion = "26.519.81530";
+        codexVersion = "26.527.31326";
         electronVersion = "42.1.0";
         electronPlatform =
           {
@@ -118,7 +133,7 @@
         codexComputerUseBinaries = pkgs.rustPlatform.buildRustPackage {
           pname = "codex-computer-use-linux-binaries";
           version = "0.1.2-linux-alpha1";
-          src = sourceRoot;
+          src = computerUseBuildSource;
 
           cargoLock = {
             lockFile = ./Cargo.lock;
@@ -180,7 +195,7 @@
             mkdir -p "$TMPDIR/electron-headers"
             tar -xzf ${electronHeaders} -C "$TMPDIR/electron-headers" --strip-components=1
 
-            export SCRIPT_DIR=${sourceRoot}
+            export SCRIPT_DIR=${nativeModulesBuildSupport}
             export WORK_DIR="$TMPDIR"
             export ARCH="${pkgs.stdenv.hostPlatform.uname.processor}"
             export ELECTRON_VERSION=${electronVersion}
@@ -193,7 +208,7 @@
             info() { echo "[INFO] $*" >&2; }
             warn() { echo "[WARN] $*" >&2; }
             error() { echo "[ERROR] $*" >&2; exit 1; }
-            source ${sourceRoot}/scripts/lib/native-modules.sh
+            source ${nativeModulesBuildSupport}/scripts/lib/native-modules.sh
             patch_better_sqlite3_for_v8_external_pointer_api "$PWD/node_modules/better-sqlite3"
             apply_v8_nullptr_t_workaround_if_needed "$TMPDIR/native-nullptr-workaround"
 

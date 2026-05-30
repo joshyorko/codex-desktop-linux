@@ -77,6 +77,8 @@ Declarative runtime hooks are staged under `codex-app/.codex-linux/`:
 - `runtimeHooks.prelaunch` runs synchronously before webview setup
 - `runtimeHooks.electronArgs` appends one Electron argument per line
 - `runtimeHooks.coldStart` runs background hooks after bundled plugin cache sync
+- `runtimeHooks.afterExit` runs after Electron exits while preserving the
+  original Electron exit status
 
 Declarative resource targets must point to a file or subdirectory inside the app
 directory, not to the app root itself. Declarative `mode` fields must be quoted
@@ -89,8 +91,10 @@ the owning feature is disabled. Legacy `stage.sh` hooks own their own cleanup.
 
 Runtime hooks receive `CODEX_HOME`, `CODEX_LINUX_APP_DIR`,
 `CODEX_LINUX_APP_STATE_DIR`, `CODEX_LINUX_FEATURES_DIR`, and
-`CODEX_LINUX_LAUNCHER_LOG`. If a feature needs to install a Codex skill or
-other user-home artifact, stage the source with `resources` and copy it from
+`CODEX_LINUX_LAUNCHER_LOG`. Executable hooks also receive
+`CODEX_LINUX_FEATURE_HOOK_PHASE`; after-exit hooks receive
+`CODEX_LINUX_ELECTRON_EXIT_STATUS`. If a feature needs to install a Codex skill
+or other user-home artifact, stage the source with `resources` and copy it from
 `$CODEX_LINUX_FEATURES_DIR/<feature-id>/...` in `runtimeHooks.prelaunch`.
 Avoid writing user-home files from `stage.sh`, because install/package/update
 rebuilds may run outside the real user's session.

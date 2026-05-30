@@ -121,6 +121,12 @@ jobs:
 
       - uses: cachix/install-nix-action@v27
 
+      - name: Configure Cachix for Nix build substitutions
+        uses: cachix/cachix-action@v17
+        with:
+          name: codex-desktop-linux
+          skipPush: true
+
       - name: Install validation dependencies
         run: |
           set -euo pipefail

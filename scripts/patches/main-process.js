@@ -557,6 +557,7 @@ function applyLinuxExplicitIpcQuitPatch(currentSource) {
 
 function applyLinuxTrayPatch(currentSource, iconPathExpression) {
   let patchedSource = currentSource;
+  const electronVar = requireName(currentSource, "electron") ?? "n";
 
   const trayGuardNeedle =
     "process.platform!==`win32`&&process.platform!==`darwin`?null:";
@@ -567,7 +568,9 @@ function applyLinuxTrayPatch(currentSource, iconPathExpression) {
     // Already patched.
   } else if (
     trayGuardIndex !== -1 &&
-    patchedSource.slice(trayGuardIndex, trayGuardIndex + TRAY_GUARD_LOOKAHEAD).includes("new n.Tray")
+    /new [A-Za-z_$][\w$]*\.Tray\(/.test(
+      patchedSource.slice(trayGuardIndex, trayGuardIndex + TRAY_GUARD_LOOKAHEAD),
+    )
   ) {
     patchedSource = patchedSource.replace(trayGuardNeedle, trayGuardPatch);
   } else {
@@ -576,13 +579,21 @@ function applyLinuxTrayPatch(currentSource, iconPathExpression) {
 
   if (iconPathExpression != null) {
     const trayIconNeedle =
-      "for(let e of o){let t=n.nativeImage.createFromPath(e);if(!t.isEmpty())return{defaultIcon:t,chronicleRunningIcon:null}}return{defaultIcon:await n.app.getFileIcon(process.execPath,{size:process.platform===`win32`?`small`:`normal`}),chronicleRunningIcon:null}}";
+      `for(let e of o){let t=${electronVar}.nativeImage.createFromPath(e);if(!t.isEmpty())return{defaultIcon:t,chronicleRunningIcon:null}}return{defaultIcon:await ${electronVar}.app.getFileIcon(process.execPath,{size:process.platform===\`win32\`?\`small\`:\`normal\`}),chronicleRunningIcon:null}}`;
     const trayIconPatch =
-      `for(let e of o){let t=n.nativeImage.createFromPath(e);if(!t.isEmpty())return{defaultIcon:t,chronicleRunningIcon:null}}if(process.platform===\`linux\`){let e=n.nativeImage.createFromPath(${iconPathExpression});if(!e.isEmpty())return{defaultIcon:e,chronicleRunningIcon:null}}return{defaultIcon:await n.app.getFileIcon(process.execPath,{size:process.platform===\`win32\`?\`small\`:\`normal\`}),chronicleRunningIcon:null}}`;
+      `for(let e of o){let t=${electronVar}.nativeImage.createFromPath(e);if(!t.isEmpty())return{defaultIcon:t,chronicleRunningIcon:null}}if(process.platform===\`linux\`){let e=${electronVar}.nativeImage.createFromPath(${iconPathExpression});if(!e.isEmpty())return{defaultIcon:e,chronicleRunningIcon:null}}return{defaultIcon:await ${electronVar}.app.getFileIcon(process.execPath,{size:process.platform===\`win32\`?\`small\`:\`normal\`}),chronicleRunningIcon:null}}`;
     if (patchedSource.includes(`nativeImage.createFromPath(${iconPathExpression})`)) {
       // Already patched.
     } else if (patchedSource.includes(trayIconNeedle)) {
       patchedSource = patchedSource.replace(trayIconNeedle, trayIconPatch);
+    } else if (
+      /for\(let ([A-Za-z_$][\w$]*) of ([A-Za-z_$][\w$]*)\)\{let ([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)\.nativeImage\.createFromPath\(\1\);if\(!\3\.isEmpty\(\)\)return\{defaultIcon:\3,chronicleRunningIcon:null\}\}return\{defaultIcon:await \4\.app\.getFileIcon\(process\.execPath,\{size:process\.platform===`win32`\?`small`:`normal`\}\),chronicleRunningIcon:null\}\}/.test(patchedSource)
+    ) {
+      patchedSource = patchedSource.replace(
+        /for\(let ([A-Za-z_$][\w$]*) of ([A-Za-z_$][\w$]*)\)\{let ([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)\.nativeImage\.createFromPath\(\1\);if\(!\3\.isEmpty\(\)\)return\{defaultIcon:\3,chronicleRunningIcon:null\}\}return\{defaultIcon:await \4\.app\.getFileIcon\(process\.execPath,\{size:process\.platform===`win32`\?`small`:`normal`\}\),chronicleRunningIcon:null\}\}/,
+        (_match, iconPathVar, candidatesVar, imageVar, electronAlias) =>
+          `for(let ${iconPathVar} of ${candidatesVar}){let ${imageVar}=${electronAlias}.nativeImage.createFromPath(${iconPathVar});if(!${imageVar}.isEmpty())return{defaultIcon:${imageVar},chronicleRunningIcon:null}}if(process.platform===\`linux\`){let ${iconPathVar}=${electronAlias}.nativeImage.createFromPath(${iconPathExpression});if(!${iconPathVar}.isEmpty())return{defaultIcon:${iconPathVar},chronicleRunningIcon:null}}return{defaultIcon:await ${electronAlias}.app.getFileIcon(process.execPath,{size:process.platform===\`win32\`?\`small\`:\`normal\`}),chronicleRunningIcon:null}}`,
+      );
     } else {
       console.warn("WARN: Could not find tray icon fallback — skipping Linux tray icon patch");
     }
@@ -610,9 +621,12 @@ function applyLinuxTrayPatch(currentSource, iconPathExpression) {
   const trayContextMethodNeedle =
     "trayMenuThreads={runningThreads:[],unreadThreads:[],pinnedThreads:[],recentThreads:[],usageLimits:[]};constructor(";
   const trayContextMethodPatch =
-    "trayMenuThreads={runningThreads:[],unreadThreads:[],pinnedThreads:[],recentThreads:[],usageLimits:[]};setLinuxTrayContextMenu(){let e=n.Menu.buildFromTemplate(this.getNativeTrayMenuItems());this.tray.setContextMenu?.(e);return e}constructor(";
+    `trayMenuThreads={runningThreads:[],unreadThreads:[],pinnedThreads:[],recentThreads:[],usageLimits:[]};setLinuxTrayContextMenu(){let e=${electronVar}.Menu.buildFromTemplate(this.getNativeTrayMenuItems());this.tray.setContextMenu?.(e);return e}constructor(`;
   if (patchedSource.includes("setLinuxTrayContextMenu(){")) {
-    // Already patched.
+    patchedSource = patchedSource.replace(
+      /setLinuxTrayContextMenu\(\)\{let e=[A-Za-z_$][\w$]*\.Menu\.buildFromTemplate\(this\.getNativeTrayMenuItems\(\)\);/,
+      `setLinuxTrayContextMenu(){let e=${electronVar}.Menu.buildFromTemplate(this.getNativeTrayMenuItems());`,
+    );
   } else if (patchedSource.includes(trayContextMethodNeedle)) {
     patchedSource = patchedSource.replace(trayContextMethodNeedle, trayContextMethodPatch);
   } else {
@@ -640,17 +654,25 @@ function applyLinuxTrayPatch(currentSource, iconPathExpression) {
   }
 
   const trayMenuBuildNeedle =
-    "openNativeTrayMenu(){this.updateChronicleTrayIcon();let e=n.Menu.buildFromTemplate(this.getNativeTrayMenuItems());";
+    `openNativeTrayMenu(){this.updateChronicleTrayIcon();let e=${electronVar}.Menu.buildFromTemplate(this.getNativeTrayMenuItems());`;
   const trayMenuBuildExistingPatch =
-    "openNativeTrayMenu(){this.updateChronicleTrayIcon();let e=process.platform===`linux`&&this.setLinuxTrayContextMenu?this.setLinuxTrayContextMenu():n.Menu.buildFromTemplate(this.getNativeTrayMenuItems());";
+    `openNativeTrayMenu(){this.updateChronicleTrayIcon();let e=process.platform===\`linux\`&&this.setLinuxTrayContextMenu?this.setLinuxTrayContextMenu():${electronVar}.Menu.buildFromTemplate(this.getNativeTrayMenuItems());`;
   const trayMenuBuildPatch =
-    "openNativeTrayMenu(){if(process.platform===`linux`&&(typeof codexLinuxIsQuitInProgress===`function`&&codexLinuxIsQuitInProgress()))return;this.updateChronicleTrayIcon();let e=process.platform===`linux`&&this.setLinuxTrayContextMenu?this.setLinuxTrayContextMenu():n.Menu.buildFromTemplate(this.getNativeTrayMenuItems());";
+    `openNativeTrayMenu(){if(process.platform===\`linux\`&&(typeof codexLinuxIsQuitInProgress===\`function\`&&codexLinuxIsQuitInProgress()))return;this.updateChronicleTrayIcon();let e=process.platform===\`linux\`&&this.setLinuxTrayContextMenu?this.setLinuxTrayContextMenu():${electronVar}.Menu.buildFromTemplate(this.getNativeTrayMenuItems());`;
+  const trayMenuBuildAnyAliasRegex =
+    /openNativeTrayMenu\(\)\{this\.updateChronicleTrayIcon\(\);let e=([A-Za-z_$][\w$]*)\.Menu\.buildFromTemplate\(this\.getNativeTrayMenuItems\(\)\);/;
+  const trayMenuBuildExistingAnyAliasRegex =
+    /openNativeTrayMenu\(\)\{this\.updateChronicleTrayIcon\(\);let e=process\.platform===`linux`&&this\.setLinuxTrayContextMenu\?this\.setLinuxTrayContextMenu\(\):([A-Za-z_$][\w$]*)\.Menu\.buildFromTemplate\(this\.getNativeTrayMenuItems\(\)\);/;
   if (patchedSource.includes("openNativeTrayMenu(){if(process.platform===`linux`&&(typeof codexLinuxIsQuitInProgress===`function`&&codexLinuxIsQuitInProgress()))return;")) {
     // Already patched.
   } else if (patchedSource.includes(trayMenuBuildExistingPatch)) {
     patchedSource = patchedSource.replace(trayMenuBuildExistingPatch, trayMenuBuildPatch);
+  } else if (trayMenuBuildExistingAnyAliasRegex.test(patchedSource)) {
+    patchedSource = patchedSource.replace(trayMenuBuildExistingAnyAliasRegex, trayMenuBuildPatch);
   } else if (patchedSource.includes(trayMenuBuildNeedle)) {
     patchedSource = patchedSource.replace(trayMenuBuildNeedle, trayMenuBuildPatch);
+  } else if (trayMenuBuildAnyAliasRegex.test(patchedSource)) {
+    patchedSource = patchedSource.replace(trayMenuBuildAnyAliasRegex, trayMenuBuildPatch);
   } else {
     console.warn("WARN: Could not find tray native menu builder — skipping Linux tray context menu builder patch");
   }
@@ -758,10 +780,11 @@ function applyLinuxBuildInfoTrayPatch(currentSource) {
   const trayMenuRegex = /getNativeTrayMenuItems\(\)\{[^]*?return\[/g;
   const classRegex = /var [A-Za-z_$][\w$]*=class\{[^]*?getNativeTrayMenuItems\(\)\{[^]*?return\[/;
   const helpMenuPattern = /\{role:`help`,id:[A-Za-z_$][\w$]*\.bn\.help,submenu:\[/;
+  const currentHelpMenuPattern = /\{role:`help`,id:[A-Za-z_$][\w$]*\.[A-Za-z_$][\w$]*\.help,submenu:\[/;
   const helperInsertionIndex = findLinuxBuildInfoHelperInsertionIndex(
     currentSource,
     currentSource.match(classRegex),
-    currentSource.match(helpMenuPattern),
+    currentSource.match(helpMenuPattern) ?? currentSource.match(currentHelpMenuPattern),
   );
   const canInstallHelper = hasHelper || helperInsertionIndex != null;
   const trayMenuMatch = patchedSource.match(trayMenuRegex);
@@ -777,9 +800,9 @@ function applyLinuxBuildInfoTrayPatch(currentSource) {
     changed = true;
   }
 
-  const helpMenuRegex = /\{role:`help`,id:[A-Za-z_$][\w$]*\.bn\.help,submenu:\[/g;
+  const helpMenuRegex = /\{role:`help`,id:[A-Za-z_$][\w$]*\.[A-Za-z_$][\w$]*\.help,submenu:\[/g;
   if (
-    !/\{role:`help`,id:[A-Za-z_$][\w$]*\.bn\.help,submenu:\[\.\.\.process\.platform===`linux`\?\[\{label:`Build Information`,click:\(\)=>\{codexLinuxShowBuildInfo\(\)\}\},\{type:`separator`\}\]:\[\],/.test(patchedSource)
+    !/\{role:`help`,id:[A-Za-z_$][\w$]*\.[A-Za-z_$][\w$]*\.help,submenu:\[\.\.\.process\.platform===`linux`\?\[\{label:`Build Information`,click:\(\)=>\{codexLinuxShowBuildInfo\(\)\}\},\{type:`separator`\}\]:\[\],/.test(patchedSource)
   ) {
     if (canInstallHelper) {
       let patchedHelpMenu = false;
@@ -801,7 +824,7 @@ function applyLinuxBuildInfoTrayPatch(currentSource) {
   }
 
   const classMatch = patchedSource.match(classRegex);
-  const helpMenuMatch = patchedSource.match(helpMenuPattern);
+  const helpMenuMatch = patchedSource.match(helpMenuPattern) ?? patchedSource.match(currentHelpMenuPattern);
   const helperIndex = findLinuxBuildInfoHelperInsertionIndex(patchedSource, classMatch, helpMenuMatch);
   if (helperIndex == null) {
     console.warn("WARN: Could not find build info helper insertion point — skipping Linux build info patch");

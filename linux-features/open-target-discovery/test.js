@@ -28,6 +28,11 @@ const terminalOpenTargetBundle =
 const ideOpenTargetsBundle =
   "function ih({id:e,label:t,icon:n,darwinDetect:r,win32Detect:i,darwinEnv:a,darwinArgs:o,hidden:s}){return{id:e,platforms:{darwin:r?{label:t,icon:n,kind:`editor`,hidden:s,detect:r,env:a,args:o??ah,supportsSsh:!0}:void 0,win32:i?{label:t,icon:n,kind:`editor`,hidden:s,detect:i,args:ah,supportsSsh:!0}:void 0}}}var ah=(e,t)=>t?[`${e}:${t.line}:${t.column}`]:[e];var Og=ih({id:`vscode`,label:`VS Code`,icon:`apps/vscode.png`,darwinDetect:()=>`open`,win32Detect:()=>`Code.exe`});var jh=ih({id:`cursor`,label:`Cursor`,icon:`apps/cursor.png`,darwinDetect:()=>`open`,win32Detect:()=>`Cursor.exe`});function sg({id:e,label:t,icon:n,toolboxTarget:r,macExecutable:i,windowsPathCommands:a,windowsInstallDirPrefixes:o,windowsInstallExecutables:s}){return{id:e,platforms:{darwin:{label:t,icon:n,kind:`editor`,detect:()=>`open`,args:mg},win32:a&&o&&s?{label:t,icon:n,kind:`editor`,detect:()=>`idea.exe`,args:mg}:void 0}}}function mg(e,t){return t?[`--line`,t.line.toString(),`--column`,t.column.toString(),e]:[e]}var $h=sg({id:`intellij`,label:`IntelliJ IDEA`,icon:`apps/intellij.png`,toolboxTarget:`intellij`,macExecutable:`idea`,windowsPathCommands:[`idea`],windowsInstallDirPrefixes:[`idea`],windowsInstallExecutables:[`idea`]});var Wg={id:`zed`,platforms:{darwin:{label:`Zed`,icon:`apps/zed.png`,kind:`editor`,detect:Gg,args:hg},win32:{label:`Zed`,icon:`apps/zed.png`,kind:`editor`,detect:Kg,args:hg}}};function Gg(){}function Kg(){}function hg(e,t){return t?[`${e}:${t.line}:${t.column}`]:[e]}var Xg=[Og,jh,Wg,$h];";
 const openTargetsBundle = `${mainBundlePrefix}${fileManagerBundle}${terminalOpenTargetBundle}${ideOpenTargetsBundle}`;
+const collidingPathAliasBundle =
+  "let n=require(`electron`),o=require(`node:path`),c=require(`node:fs`),u=require(`node:child_process`);" +
+  fileManagerBundle +
+  terminalOpenTargetBundle +
+  ideOpenTargetsBundle;
 const iconResolverBundle =
   "async function c_(e,t,a){return e===`win32`?Promise.all(t.map(async e=>{let t=a?.get(e.id)??null,r=e.iconPath?e.iconPath(t):t;return{id:e.id,label:e.label,icon:await d_(r,e.icon),kind:e.kind,hidden:e.hidden,supportsSsh:e.supportsSsh}})):l_(t)}function l_(e){return e.map(({id:e,label:t,icon:n,kind:r,hidden:i,supportsSsh:a})=>({id:e,label:t,icon:n,kind:r,hidden:i,supportsSsh:a}))}async function d_(e,t){if(!e)return t;try{let r=e.toLowerCase().endsWith(`.lnk`)?await f_(e):await n.app.getFileIcon(e,{size:`normal`});return!r||r.isEmpty()?t:r.toDataURL()}catch(e){return t}}async function f_(e){return n.nativeImage.createFromPath(e)}";
 
@@ -381,6 +386,19 @@ test("open-target discovery evaluates TryExec parser", () => {
       "[codexLinuxDesktopTryExecAvailable(" + quoted + "),codexLinuxTerminalTryExecAvailable(" + quoted + ")]",
     );
     assert.deepEqual(result, [expected, expected], command);
+  });
+});
+
+test("open-target discovery tolerates path and fs aliases used by helper locals", () => {
+  withTempDir((tmp) => {
+    const command = "env /missing/Cursor.AppImage";
+    const result = evaluatePatched(
+      collidingPathAliasBundle,
+      tryExecEnv(tmp, { binNames: ["env"] }),
+      "[codexLinuxDesktopTryExecAvailable(" + JSON.stringify(command) + "),codexLinuxTerminalTryExecAvailable(" + JSON.stringify(command) + ")]",
+    );
+
+    assert.deepEqual(result, [false, false]);
   });
 });
 

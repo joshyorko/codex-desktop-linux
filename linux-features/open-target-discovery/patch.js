@@ -130,6 +130,8 @@ function insertOpenTargetHelpers(currentSource, insertionIndex, { fsVar, pathVar
   }
 
   const helpers =
+    `function codexLinuxNodeFs(){return require(\`node:fs\`)}` +
+    `function codexLinuxNodePath(){return require(\`node:path\`)}` +
     `function codexLinuxFindExecutable(e){if(process.platform!==\`linux\`||!e)return null;let t=process.env.PATH||\`\`;for(let n of t.split(\`:\`)){if(!n||!${pathVar}.isAbsolute(n))continue;let r=(0,${pathVar}.join)(n,e);try{if((0,${fsVar}.existsSync)(r)){let e=(0,${fsVar}.statSync)(r);if(e.isFile())try{(0,${fsVar}.accessSync)(r,${fsVar}.constants.X_OK);return r}catch{}}}catch{}}return null}` +
     `function codexLinuxResolveExistingTarget(e){if(typeof e!==\`string\`||e.length===0)return null;let t=e;for(;;){try{if((0,${fsVar}.existsSync)(t))return t}catch{}let n=(0,${pathVar}.dirname)(t);if(n===t)return null;t=n}}` +
     `function codexLinuxShouldDropXdgConfigHome(e){let t=e.XDG_CONFIG_HOME,n=e.CODEX_ELECTRON_USER_DATA_DIR;if(typeof t!==\`string\`)return!1;if(typeof n===\`string\`&&t===(0,${pathVar}.join)((0,${pathVar}.dirname)(n),\`xdg-config\`))return!0;let r=e.CODEX_LINUX_APP_ID;return!!(r&&t.endsWith(\`/\${r}/xdg-config\`))}` +
@@ -458,7 +460,11 @@ function applyMainBundlePatch(currentSource) {
     return currentSource;
   }
 
-  const deps = { electronVar, fsVar, pathVar };
+  const deps = {
+    electronVar,
+    fsVar: "codexLinuxNodeFs()",
+    pathVar: "codexLinuxNodePath()",
+  };
   let patchedSource = currentSource;
   if (electronVar != null) {
     patchedSource = applyFileManagerDiscoveryPatch(patchedSource, deps);

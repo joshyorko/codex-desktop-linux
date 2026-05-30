@@ -158,11 +158,20 @@ function applyAssistantRenderPatch(source) {
     return source;
   }
   const jsxCallPattern =
-    /\(0,([A-Za-z_$][\w$]*)\.jsx\)\(([A-Za-z_$][\w$]*),\{item:([A-Za-z_$][\w$]*),([^{}]*?)assistantCopyText:([A-Za-z_$][\w$]*),([^{}]*?)conversationId:([A-Za-z_$][\w$]*),([^{}]*?)renderCodeBlocksAsWritingBlocks:([A-Za-z_$][\w$]*)\}\)/g;
+    /\(0,([A-Za-z_$][\w$]*)\.jsx\)\(([A-Za-z_$][\w$]*),\{(?=[^{}]*\bitem:)(?=[^{}]*\bassistantCopyText:)(?=[^{}]*\bconversationId:)(?=[^{}]*\brenderCodeBlocksAsWritingBlocks:)([^{}]*)\}\)/g;
+  const readProp = (props, name) =>
+    new RegExp(`(?:^|,)${name}:([A-Za-z_$][\\w$]*)`).exec(props)?.[1] ?? null;
   const patched = source.replace(
     jsxCallPattern,
-    (match, jsxVar, _component, itemVar, _beforeCopy, copyVar, _beforeConversation, conversationVar) =>
-      `(0,${jsxVar}.jsxs)(${jsxVar}.Fragment,{children:[${match},${readAloudButtonRowSource(jsxVar, itemVar, copyVar, conversationVar, "e")}]})`,
+    (match, jsxVar, _component, props) => {
+      const itemVar = readProp(props, "item");
+      const copyVar = readProp(props, "assistantCopyText");
+      const conversationVar = readProp(props, "conversationId");
+      if (itemVar == null || copyVar == null || conversationVar == null) {
+        return match;
+      }
+      return `(0,${jsxVar}.jsxs)(${jsxVar}.Fragment,{children:[${match},${readAloudButtonRowSource(jsxVar, itemVar, copyVar, conversationVar, "e")}]})`;
+    },
   );
   if (patched !== source) {
     return patched;
@@ -264,13 +273,21 @@ function applyGeneralSettingsExportPatch(source) {
 }
 
 function applyGeneralSettingsWrapperPatch(source) {
-  if (!source.includes("GeneralSettings") || !source.includes("general-settings-") || source.includes("ReadAloudSettings")) {
+  if (!source.includes("GeneralSettings") || !source.includes("general-settings-")) {
     return source;
   }
+  const wrapperSource = (generalAlias, innerAsset) =>
+    `import{r as ${generalAlias}}from"${innerAsset}";export{${generalAlias} as GeneralSettings,${generalAlias} as ReadAloudSettings};`;
+  const brokenWrapperPattern =
+    /import\{r as ([A-Za-z_$][\w$]*),ReadAloudSettings as ([A-Za-z_$][\w$]*)\}from"(\.\/general-settings-[^"]+\.js)";export\{\1 as GeneralSettings,\2 as ReadAloudSettings\};/;
+  if (brokenWrapperPattern.test(source)) {
+    return source.replace(brokenWrapperPattern, (_match, generalAlias, _readAloudAlias, innerAsset) =>
+      wrapperSource(generalAlias, innerAsset),
+    );
+  }
   return source.replace(
-    /import\{r as ([A-Za-z_$][\w$]*)\}from"(\.\/general-settings-[^"]+\.js)";export\{\1 as GeneralSettings\};/,
-    (_match, generalAlias, innerAsset) =>
-      `import{r as ${generalAlias},ReadAloudSettings as t}from"${innerAsset}";export{${generalAlias} as GeneralSettings,t as ReadAloudSettings};`,
+    /import\{r as ([A-Za-z_$][\w$]*)\}from"(\.\/general-settings-[^"]+\.js)";export\{\1 as GeneralSettings(?:,\1 as ReadAloudSettings)?\};/,
+    (_match, generalAlias, innerAsset) => wrapperSource(generalAlias, innerAsset),
   );
 }
 
@@ -306,27 +323,43 @@ function applySettingsSharedNavPatch(source) {
   return patched;
 }
 
-function readAloudSettingsNavIconSource() {
-  return `codexLinuxReadAloudSettingsIcon=e=>(0,Z.jsxs)(\`svg\`,{width:16,height:16,viewBox:\`0 0 16 16\`,fill:\`none\`,xmlns:\`http://www.w3.org/2000/svg\`,...e,children:[(0,Z.jsx)(\`path\`,{d:\`M7.25 3.25 4.35 5.7H2.75A1.25 1.25 0 0 0 1.5 6.95v2.1c0 .69.56 1.25 1.25 1.25h1.6l2.9 2.45c.5.42 1.25.06 1.25-.59V3.84c0-.65-.75-1.01-1.25-.59Z\`,fill:\`currentColor\`}),(0,Z.jsx)(\`path\`,{d:\`M10.25 6.1a2.7 2.7 0 0 1 0 3.8\`,stroke:\`currentColor\`,strokeWidth:1.2,strokeLinecap:\`round\`}),(0,Z.jsx)(\`path\`,{d:\`M12.25 4.45a5.05 5.05 0 0 1 0 7.1\`,stroke:\`currentColor\`,strokeWidth:1.2,strokeLinecap:\`round\`})]})`;
+function detectSettingsPageJsxRuntime(source) {
+  const iconMatch = source.match(/[,(]([A-Za-z_$][\w$]*)=[A-Za-z_$][\w$]*=>\(0,([A-Za-z_$][\w$]*)\.jsxs\)\(\`svg\`,/);
+  return iconMatch?.[2] ?? "Z";
+}
+
+function readAloudSettingsNavIconSource(jsxVar = "Z") {
+  return `codexLinuxReadAloudSettingsIcon=e=>(0,${jsxVar}.jsxs)(\`svg\`,{width:16,height:16,viewBox:\`0 0 16 16\`,fill:\`none\`,xmlns:\`http://www.w3.org/2000/svg\`,...e,children:[(0,${jsxVar}.jsx)(\`path\`,{d:\`M7.25 3.25 4.35 5.7H2.75A1.25 1.25 0 0 0 1.5 6.95v2.1c0 .69.56 1.25 1.25 1.25h1.6l2.9 2.45c.5.42 1.25.06 1.25-.59V3.84c0-.65-.75-1.01-1.25-.59Z\`,fill:\`currentColor\`}),(0,${jsxVar}.jsx)(\`path\`,{d:\`M10.25 6.1a2.7 2.7 0 0 1 0 3.8\`,stroke:\`currentColor\`,strokeWidth:1.2,strokeLinecap:\`round\`}),(0,${jsxVar}.jsx)(\`path\`,{d:\`M12.25 4.45a5.05 5.05 0 0 1 0 7.1\`,stroke:\`currentColor\`,strokeWidth:1.2,strokeLinecap:\`round\`})]})`;
 }
 
 function applySettingsPageNavPatch(source) {
   let patched = source;
   if (!patched.includes("codexLinuxReadAloudSettingsIcon=e=>")) {
-    const iconSource = readAloudSettingsNavIconSource();
+    const iconSource = readAloudSettingsNavIconSource(detectSettingsPageJsxRuntime(patched));
     if (patched.includes(",pe={")) {
       patched = patched.replace(",pe={", `,${iconSource},pe={`);
+    } else {
+      patched = patched.replace(
+        /,([A-Za-z_$][\w$]*)=\{"general-settings":/,
+        `,${iconSource},$1={"general-settings":`,
+      );
     }
   }
   if (!patched.includes(`"read-aloud-settings":codexLinuxReadAloudSettingsIcon`)) {
-    patched = patched.replace(
-      `"computer-use":oe,"local-environments"`,
-      `"computer-use":oe,"read-aloud-settings":codexLinuxReadAloudSettingsIcon,"local-environments"`,
-    );
-    patched = patched.replace(
-      `"computer-use":oe,"read-aloud-settings":G,"local-environments"`,
-      `"computer-use":oe,"read-aloud-settings":codexLinuxReadAloudSettingsIcon,"local-environments"`,
-    );
+    const iconMapRegex =
+      /("browser-use":[A-Za-z_$][\w$]*,"computer-use":[A-Za-z_$][\w$]*,)(?!"read-aloud-settings":)/;
+    if (iconMapRegex.test(patched)) {
+      patched = patched.replace(iconMapRegex, '$1"read-aloud-settings":codexLinuxReadAloudSettingsIcon,');
+    } else {
+      patched = patched.replace(
+        `"computer-use":oe,"local-environments"`,
+        `"computer-use":oe,"read-aloud-settings":codexLinuxReadAloudSettingsIcon,"local-environments"`,
+      );
+      patched = patched.replace(
+        `"computer-use":oe,"read-aloud-settings":G,"local-environments"`,
+        `"computer-use":oe,"read-aloud-settings":codexLinuxReadAloudSettingsIcon,"local-environments"`,
+      );
+    }
   }
   if (!patched.includes("`computer-use`,`read-aloud-settings`,`data-controls`")) {
     patched = patched.replace(
@@ -346,7 +379,15 @@ function applySettingsPageNavPatch(source) {
       "case`read-aloud-settings`:return a;case`computer-use`:return A;",
     );
   }
-  if (!patched.includes("case`read-aloud-settings`:z=!1;break bb0;case`computer-use`")) {
+  if (!/case`read-aloud-settings`:[A-Za-z_$][\w$]*=!1;break bb0;case`computer-use`/.test(patched)) {
+    const currentLoadingCaseRegex =
+      /case`computer-use`:([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)\.isLoading\|\|([A-Za-z_$][\w$]*)\.isLoading;break bb0;/;
+    if (currentLoadingCaseRegex.test(patched)) {
+      patched = patched.replace(
+        currentLoadingCaseRegex,
+        "case`read-aloud-settings`:$1=!1;break bb0;case`computer-use`:$1=$2.isLoading||$3.isLoading;break bb0;",
+      );
+    }
     patched = patched.replace(
       "case`computer-use`:z=k.isLoading||m.isLoading;break bb0;",
       "case`read-aloud-settings`:z=!1;break bb0;case`computer-use`:z=k.isLoading||m.isLoading;break bb0;",

@@ -209,6 +209,7 @@ test("declarative Linux feature install plan stages resources and runtime hooks"
         prelaunch: "prelaunch.sh",
         electronArgs: "electron-args",
         coldStart: "cold-start.sh",
+        afterExit: "after-exit.sh",
       },
       packageHooks: [
         {
@@ -222,6 +223,7 @@ test("declarative Linux feature install plan stages resources and runtime hooks"
     fs.writeFileSync(path.join(localDir, "prelaunch.sh"), "#!/bin/bash\nexit 0\n");
     fs.writeFileSync(path.join(localDir, "electron-args"), "--local-tool\n");
     fs.writeFileSync(path.join(localDir, "cold-start.sh"), "#!/bin/bash\nexit 0\n");
+    fs.writeFileSync(path.join(localDir, "after-exit.sh"), "#!/bin/bash\nexit 0\n");
     fs.writeFileSync(path.join(localDir, "package.sh"), "#!/bin/bash\nexit 0\n");
 
     const plan = enabledLinuxFeatureInstallPlan({ featuresRoot: root });
@@ -233,6 +235,7 @@ test("declarative Linux feature install plan stages resources and runtime hooks"
       "prelaunch:local-tool-prelaunch.sh",
       "electronArgs:local-tool-electron-args",
       "coldStart:local-tool-cold-start.sh",
+      "afterExit:local-tool-after-exit.sh",
     ]);
 
     const appDir = path.join(root, "install");
@@ -266,6 +269,7 @@ test("declarative Linux feature install plan stages resources and runtime hooks"
         [".codex-linux/prelaunch.d/local-tool-prelaunch.sh", "0755"],
         [".codex-linux/electron-args.d/local-tool-electron-args", "0644"],
         [".codex-linux/cold-start.d/local-tool-cold-start.sh", "0755"],
+        [".codex-linux/after-exit.d/local-tool-after-exit.sh", "0755"],
       ],
     );
 
@@ -287,12 +291,14 @@ test("declarative Linux feature staging removes stale runtime hooks after opt-ou
         prelaunch: "prelaunch.sh",
         electronArgs: "electron-args",
         coldStart: "cold-start.sh",
+        afterExit: "after-exit.sh",
       },
     });
     fs.writeFileSync(path.join(localDir, "env"), "LOCAL_TOOL=1\n");
     fs.writeFileSync(path.join(localDir, "prelaunch.sh"), "#!/bin/bash\nexit 0\n");
     fs.writeFileSync(path.join(localDir, "electron-args"), "--local-tool\n");
     fs.writeFileSync(path.join(localDir, "cold-start.sh"), "#!/bin/bash\nexit 0\n");
+    fs.writeFileSync(path.join(localDir, "after-exit.sh"), "#!/bin/bash\nexit 0\n");
 
     const appDir = path.join(root, "install");
     stageEnabledLinuxFeatureInstall(appDir, { featuresRoot: root });
@@ -302,6 +308,7 @@ test("declarative Linux feature staging removes stale runtime hooks after opt-ou
       path.join(appDir, ".codex-linux", "prelaunch.d", "local-tool-prelaunch.sh"),
       path.join(appDir, ".codex-linux", "electron-args.d", "local-tool-electron-args"),
       path.join(appDir, ".codex-linux", "cold-start.d", "local-tool-cold-start.sh"),
+      path.join(appDir, ".codex-linux", "after-exit.d", "local-tool-after-exit.sh"),
     ];
     for (const hookPath of hookPaths) {
       assert.equal(fs.existsSync(hookPath), true);

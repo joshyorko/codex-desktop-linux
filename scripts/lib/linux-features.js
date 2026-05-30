@@ -17,6 +17,7 @@ const RUNTIME_HOOK_DIRS = {
   prelaunch: { dir: "prelaunch.d", executable: true },
   electronArgs: { dir: "electron-args.d", executable: false },
   coldStart: { dir: "cold-start.d", executable: true },
+  afterExit: { dir: "after-exit.d", executable: true },
 };
 const STAGED_FEATURE_MANIFEST_RELATIVE_PATH = ".codex-linux/linux-features-staged.json";
 

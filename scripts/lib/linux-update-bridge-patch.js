@@ -361,11 +361,21 @@ function patchLinuxAppUpdaterBridge(extractedDir) {
   for (const fileName of fs.readdirSync(buildDir).filter((name) => name.endsWith(".js")).sort()) {
     const filePath = path.join(buildDir, fileName);
     const source = fs.readFileSync(filePath, "utf8");
-    if (!source.includes("var tD=class{") && !source.includes("shouldIncludeSparkle")) {
+    const shouldPatchMenu = source.includes("shouldIncludeSparkle");
+    const shouldPatchBridge =
+      source.includes("exports.runMainAppStartup") ||
+      source.includes("var tD=class{");
+    if (!shouldPatchMenu && !shouldPatchBridge) {
       continue;
     }
     matched += 1;
-    const patched = applyLinuxAppUpdaterBridgePatch(applyLinuxAppUpdaterMenuPatch(source));
+    let patched = source;
+    if (shouldPatchMenu) {
+      patched = applyLinuxAppUpdaterMenuPatch(patched);
+    }
+    if (shouldPatchBridge) {
+      patched = applyLinuxAppUpdaterBridgePatch(patched);
+    }
     if (patched !== source) {
       fs.writeFileSync(filePath, patched, "utf8");
       changed += 1;

@@ -714,26 +714,39 @@ PY
 patch_browser_use_node_repl_env_guard() {
     local client="$1"
 
-    if grep -Fq 'globalThis.nodeRepl?.env?.[e]' "$client"; then
+    if grep -Eq 'globalThis\.nodeRepl\?\.env\?\.\[[^]]+\]' "$client"; then
         return 0
     fi
 
     python3 - "$client" <<'PY'
 from pathlib import Path
+import re
 import sys
 
 path = Path(sys.argv[1])
 source = path.read_text(encoding="utf-8")
-old = 'function lu(e){let t=globalThis.nodeRepl?.env[e];return typeof t=="string"?t:void 0}'
-new = 'function lu(e){let t=globalThis.nodeRepl?.env?.[e];return typeof t=="string"?t:void 0}'
-if old not in source:
+pattern = re.compile(
+    r'function (?P<helper>[A-Za-z_$][\w$]*)\((?P<key>[A-Za-z_$][\w$]*)\)\{'
+    r'let (?P<value>[A-Za-z_$][\w$]*)=globalThis\.nodeRepl\?\.env\[(?P=key)\];'
+    r'return typeof (?P=value)=="string"\?(?P=value):void 0\}'
+)
+match = pattern.search(source)
+if match is None:
     print(
         "WARN: Could not find Browser Use nodeRepl env guard insertion point — leaving browser-client.mjs unchanged",
         file=sys.stderr,
     )
     raise SystemExit(0)
 
-path.write_text(source.replace(old, new, 1), encoding="utf-8")
+helper = match.group("helper")
+key = match.group("key")
+value = match.group("value")
+replacement = (
+    f'function {helper}({key}){{'
+    f'let {value}=globalThis.nodeRepl?.env?.[{key}];'
+    f'return typeof {value}=="string"?{value}:void 0}}'
+)
+path.write_text(source[:match.start()] + replacement + source[match.end():], encoding="utf-8")
 PY
 }
 

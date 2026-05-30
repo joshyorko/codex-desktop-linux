@@ -275,6 +275,7 @@ SCRIPT
     assert_file_not_exists "$pkg_root/opt/codex-desktop/update-builder/linux-features/features.json"
     assert_file_exists "$pkg_root/opt/codex-desktop/update-builder/node-runtime/bin/node"
     assert_file_exists "$pkg_root/opt/codex-desktop/update-builder/Cargo.toml"
+    assert_file_exists "$pkg_root/opt/codex-desktop/update-builder/CHANGELOG.md"
     assert_file_exists "$pkg_root/opt/codex-desktop/update-builder/computer-use-linux/Cargo.toml"
     assert_file_exists "$pkg_root/opt/codex-desktop/update-builder/read-aloud-linux/Cargo.toml"
     assert_file_exists "$pkg_root/opt/codex-desktop/update-builder/updater/Cargo.toml"
@@ -357,6 +358,55 @@ if (info.remote !== "https://example.com/org/repo.git") {
 }
 if (info.capturedAt !== new Date(1710000000 * 1000).toISOString()) {
   throw new Error(`unexpected capturedAt: ${info.capturedAt}`);
+}
+NODE
+}
+
+test_update_builder_source_info_survives_without_git_checkout() {
+    info "Checking update-builder source info survives packaged no-git rebuild layout"
+    local workspace="$TMP_DIR/update-builder-source-info"
+    local update_builder="$workspace/update-builder"
+    local source_info="$update_builder/.codex-linux/source-info.json"
+
+    mkdir -p "$update_builder/.codex-linux" "$update_builder/updater"
+    cat > "$update_builder/updater/Cargo.toml" <<'TOML'
+[package]
+name = "codex-update-manager"
+version = "0.8.1"
+TOML
+    cat > "$source_info" <<'JSON'
+{
+  "commit": "0123456789012345678901234567890123456789",
+  "branch": "main",
+  "remote": "https://builder:secret-token@example.com/org/repo.git",
+  "provenance": "packaged-update-builder",
+  "capturedAt": "2026-05-29T00:00:00.000Z"
+}
+JSON
+
+    (
+        export REPO_DIR="$update_builder"
+        export SOURCE_DATE_EPOCH="1710000000"
+
+        # shellcheck disable=SC1091
+        source "$SCRIPT_DIR/../scripts/lib/package-common.sh"
+        stage_update_builder_source_info "$update_builder"
+    )
+
+    node - "$source_info" <<'NODE' || fail "Expected staged source info to preserve installed metadata"
+const fs = require("node:fs");
+const info = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+if (info.commit !== "0123456789012345678901234567890123456789") {
+  throw new Error(`unexpected commit: ${info.commit}`);
+}
+if (info.version !== "0.8.1") {
+  throw new Error(`unexpected version: ${info.version}`);
+}
+if (info.remote !== "https://example.com/org/repo.git") {
+  throw new Error(`unexpected remote: ${info.remote}`);
+}
+if (info.recapturedAt !== new Date(1710000000 * 1000).toISOString()) {
+  throw new Error(`unexpected recapturedAt: ${info.recapturedAt}`);
 }
 NODE
 }
@@ -6895,6 +6945,7 @@ main() {
     test_package_payload_permission_normalization
     test_deb_builder_smoke
     test_update_builder_preserves_enabled_linux_features_config
+    test_update_builder_source_info_survives_without_git_checkout
     test_linux_feature_package_hook_discovery_failure_blocks_build
     test_deb_builder_respects_package_identity
     test_deb_builder_without_updater

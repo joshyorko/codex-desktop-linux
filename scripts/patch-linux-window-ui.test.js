@@ -76,6 +76,7 @@ const {
 } = require("./lib/build-info.js");
 const {
   applyBrowserAnnotationScreenshotPatch,
+  applyLocalEnvironmentActionModalDraftPatch,
   applyPersistentRateLimitFooterPatch,
   applyLinuxAppServerFeatureEnablementPatch,
   applyLinuxConfigWriteVersionConflictPatch,
@@ -522,6 +523,7 @@ test("default core patch descriptors are grouped and unique", () => {
     "opaque-window-default-resolved-theme",
     "linux-fast-mode-model-guard",
     "subagent-nickname-metadata-shape",
+    "local-environment-action-modal-draft",
     "linux-computer-use-ui-availability",
     "linux-computer-use-install-flow",
     "linux-app-updater-bridge",
@@ -541,6 +543,10 @@ test("default core patch descriptors are grouped and unique", () => {
   assert.match(
     descriptors.find((descriptor) => descriptor.id === "linux-chrome-plugin-auto-install")?.sourcePath,
     /main-process[\\/]browser-integrations[\\/]patch\.js$/,
+  );
+  assert.equal(
+    descriptors.find((descriptor) => descriptor.id === "local-environment-action-modal-draft")?.ciPolicy,
+    "optional",
   );
 });
 
@@ -1879,6 +1885,37 @@ test("adds Keybinds settings route with current lazy and preload aliases", () =>
     /var i_e=\{keybinds:\(0,R\.lazy\)\(\(\)=>q\(\(\)=>import\(`\.\/keybinds-settings-linux\.js`\)/,
   );
   assert.doesNotMatch(patched, /keybinds:\(0,Z\.lazy\)\(\(\)=>s\(/);
+});
+
+test("keeps local environment action modal inputs editable inside stored modal content", () => {
+  const source =
+    "function Cl(e){let t=(0,Z.c)(101),{action:n,configPath:r,environment:i,hostConfig:a,onOpenSettings:o,onRunAction:s,onSaved:c,onUpdate:l,workspaceRoot:u}=e,d=zt(),f=Pt(),p=Jt(`local-environment-config-save`),m,h,g,_,v,y,b,x,S,C,w,T,E,D,O,k;if(t[0]!==n||t[1]!==r||t[2]!==i||t[3]!==a||t[4]!==d||t[5]!==s||t[6]!==c||t[7]!==l||t[8]!==f||t[9]!==p||t[10]!==u){let e;t[27]===d?e=t[28]:(e=e=>({ariaLabel:d.formatMessage(e.message),icon:(0,$.jsx)(Zs,{icon:e.value}),value:e.value}),t[27]=d,t[28]=e);let o=Js.map(e),A=o.find(e=>e.value===n.icon)??o[0],j;t[29]!==d||t[30]!==u?(j=po(u)??d.formatMessage({id:`settings.localEnvironments.environment.defaultName`,defaultMessage:`local`,description:`Fallback name for the local environment`}),t[29]=d,t[30]=u,t[31]=j):j=t[31];let M=j,N;t[32]===n.name?N=t[33]:(N=n.name.trim(),t[32]=n.name,t[33]=N);let P=N,F;t[34]===n.command?F=t[35]:(F=n.command.trim(),t[34]=n.command,t[35]=F);let I=F;v=P.length===0||I.length===0||p.isPending,g=`local-env-action-name-${n.id}`;let L;t[36]!==n||t[37]!==r||t[38]!==M||t[39]!==i||t[40]!==a||t[41]!==s||t[42]!==c||t[43]!==f||t[44]!==p||t[45]!==v||t[46]!==I||t[47]!==P||t[48]!==u?(L=e=>{if(e.preventDefault(),v)return;let t=i.environment,o={...n,command:I,name:P},l={command:I,icon:n.icon,name:P,...n.platform?{platform:n.platform}:{}},d=Ks({actions:[...Xs(t.actions??[]),o],cleanupPlatformScripts:qs(t.cleanup),cleanupScript:t.cleanup?.script??``,name:t.name||M,setupPlatformScripts:qs(t.setup),setupScript:t.setup.script??``,version:t.version??1});p.mutate({configPath:r,hostId:a.id,raw:d},{onSuccess:()=>{f.invalidateQueries({queryKey:Qt(`local-environment-config`,{configPath:r,hostId:a.id})}),f.invalidateQueries({queryKey:Qt(`local-environment`,{configPath:r,hostId:a.id})}),u!=null&&f.invalidateQueries({queryKey:Qt(`local-environments`,{hostId:a.id,workspaceRoot:u})}),c(),s(l)}})},t[36]=n,t[37]=r,t[38]=M,t[39]=i,t[40]=a,t[41]=s,t[42]=c,t[43]=f,t[44]=p,t[45]=v,t[46]=I,t[47]=P,t[48]=u,t[49]=L):L=t[49],_=L,h=Sl,O=n.command,t[50]===Symbol.for(`react.memo_cache_sentinel`)?(k=(0,$.jsx)(X,{id:`threadPage.runAction.setup.commandLabel`,defaultMessage:`Command to run`,description:`Label for run action command input`}),t[50]=k):k=t[50],t[51]===d?b=t[52]:(b=d.formatMessage({id:`threadPage.runAction.setup.placeholder`,defaultMessage:`eg:\\nnpm install\\nnpm run`,description:`Placeholder text for the run action command input`}),t[51]=d,t[52]=b),t[53]===Symbol.for(`react.memo_cache_sentinel`)?(x=(0,$.jsx)(X,{id:`settings.localEnvironments.actions.add.description`,defaultMessage:`Create a new command to run from the toolbar.`,description:`Description for adding a local environment action`}),t[53]=x):x=t[53],E=`flex w-full flex-col gap-2`;let R;t[54]===Symbol.for(`react.memo_cache_sentinel`)?(R=(0,$.jsx)(X,{id:`settings.localEnvironments.actions.item.name`,defaultMessage:`Name`,description:`Label for local environment action name`}),t[54]=R):R=t[54],t[55]===g?D=t[56]:(D=(0,$.jsx)(`label`,{className:`text-xs font-medium tracking-wide text-token-text-secondary uppercase`,htmlFor:g,children:R}),t[55]=g,t[56]=D),T=`flex items-center gap-2`,m=ua,y=`start`,S=`icon`,C=(0,$.jsx)(Pn,{id:`local-env-action-icon-${n.id}`,\"aria-label\":A.ariaLabel,className:`w-12 justify-center text-sm`,color:`secondary`,size:`toolbar`,children:A.icon});let z;t[57]===l?z=t[58]:(z=e=>(0,$.jsx)(la.Item,{tooltipText:e.ariaLabel,onSelect:()=>{l({icon:e.value})},children:e.icon},e.value),t[57]=l,t[58]=z),w=o.map(z),t[0]=n,t[1]=r,t[2]=i,t[3]=a,t[4]=d,t[5]=s,t[6]=c,t[7]=l,t[8]=f,t[9]=p,t[10]=u,t[11]=m,t[12]=h,t[13]=g,t[14]=_,t[15]=v,t[16]=y,t[17]=b,t[18]=x,t[19]=S,t[20]=C,t[21]=w,t[22]=T,t[23]=E,t[24]=D,t[25]=O,t[26]=k}else m=t[11],h=t[12],g=t[13],_=t[14],v=t[15],y=t[16],b=t[17],x=t[18],S=t[19],C=t[20],w=t[21],T=t[22],E=t[23],D=t[24],O=t[25],k=t[26];let A;t[59]!==m||t[60]!==y||t[61]!==S||t[62]!==C||t[63]!==w?(A=(0,$.jsx)(m,{align:y,contentWidth:S,triggerButton:C,children:w}),t[59]=m,t[60]=y,t[61]=S,t[62]=C,t[63]=w,t[64]=A):A=t[64];let j;t[65]===l?j=t[66]:(j=e=>{l({name:e.target.value})},t[65]=l,t[66]=j);let M;t[67]!==n.name||t[68]!==g||t[69]!==j?(M=(0,$.jsx)(`div`,{className:`flex-1`,children:(0,$.jsx)(`input`,{id:g,className:`w-full`,value:n.name,onChange:j})}),t[67]=n.name,t[68]=g,t[69]=j,t[70]=M):M=t[70];let V;t[86]===l?V=t[87]:(V=e=>{l({command:e})},t[86]=l,t[87]=V);return (0,$.jsx)(h,{command:O,onCommandChange:V})}var wl=_t(`local-env-recent-actions-by-key`,{});function Ml(){return n.name+n.command+n.icon}";
+
+  const patched = applyPatchTwice(applyLocalEnvironmentActionModalDraftPatch, source);
+
+  assert.match(patched, /\[codexLinuxActionDraft,codexLinuxSetActionDraft\]=\(0,Q\.useState\)\(\(\)=>n\)/);
+  assert.match(patched, /t\[0\]!==codexLinuxActionDraft\|\|t\[0\]!==n/);
+  assert.match(patched, /codexLinuxActionDraft\.name\.trim\(\)/);
+  assert.match(patched, /codexLinuxActionDraft\.command\.trim\(\)/);
+  assert.match(patched, /\{\.\.\.codexLinuxActionDraft,command:I,name:P\}/);
+  assert.match(patched, /codexLinuxUpdateActionDraft\(\{name:e\.target\.value\}\)/);
+  assert.match(patched, /codexLinuxUpdateActionDraft\(\{command:e\}\)/);
+  assert.match(patched, /t\[67\]!==codexLinuxActionDraft\.name/);
+  assert.match(patched, /var wl=_t\(`local-env-recent-actions-by-key`,\{\}\);function Ml\(\)\{return n\.name\+n\.command\+n\.icon\}/);
+});
+
+test("skips local environment action modal patch when a critical replacement needle drifts", () => {
+  const source =
+    "function Cl(e){let t=(0,Z.c)(101),{action:n,configPath:r,environment:i,hostConfig:a,onOpenSettings:o,onRunAction:s,onSaved:c,onUpdate:l,workspaceRoot:u}=e,d=zt(),f=Pt(),p=Jt(`local-environment-config-save`),m,h,g,_,v,y,b,x,S,C,w,T,E,D,O,k;if(t[0]!==n||t[1]!==r||t[2]!==i||t[3]!==a||t[4]!==d||t[5]!==s||t[6]!==c||t[7]!==l||t[8]!==f||t[9]!==p||t[10]!==u){let e;t[27]===d?e=t[28]:(e=e=>({ariaLabel:d.formatMessage(e.message),icon:(0,$.jsx)(Zs,{icon:e.value}),value:e.value}),t[27]=d,t[28]=e);let o=Js.map(e),A=o.find(e=>e.value===n.icon)??o[0],j;t[29]!==d||t[30]!==u?(j=po(u)??d.formatMessage({id:`settings.localEnvironments.environment.defaultName`,defaultMessage:`local`,description:`Fallback name for the local environment`}),t[29]=d,t[30]=u,t[31]=j):j=t[31];let M=j,N;t[32]===n.name?N=t[33]:(N=n.name.trim(),t[32]=n.name,t[33]=N);let P=N,F;t[34]===n.command?F=t[35]:(F=n.command.trim(),t[34]=n.command,t[35]=F);let I=F;v=P.length===0||I.length===0||p.isPending,g=`local-env-action-name-${n.id}`;let L;t[36]!==n||t[37]!==r||t[38]!==M||t[39]!==i||t[40]!==a||t[41]!==s||t[42]!==c||t[43]!==f||t[44]!==p||t[45]!==v||t[46]!==I||t[47]!==P||t[48]!==u?(L=e=>{if(e.preventDefault(),v)return;let t=i.environment,o={...n,command:I,name:P},l={command:I,icon:n.icon,name:P,...n.platform?{platform:n.platform}:{}},d=Ks({actions:[...Xs(t.actions??[]),o],cleanupPlatformScripts:qs(t.cleanup),cleanupScript:t.cleanup?.script??``,name:t.name||M,setupPlatformScripts:qs(t.setup),setupScript:t.setup.script??``,version:t.version??1});p.mutate({configPath:r,hostId:a.id,raw:d},{onSuccess:()=>{f.invalidateQueries({queryKey:Qt(`local-environment-config`,{configPath:r,hostId:a.id})}),f.invalidateQueries({queryKey:Qt(`local-environment`,{configPath:r,hostId:a.id})}),u!=null&&f.invalidateQueries({queryKey:Qt(`local-environments`,{hostId:a.id,workspaceRoot:u})}),c(),s(l)}})},t[36]=n,t[37]=r,t[38]=M,t[39]=i,t[40]=a,t[41]=s,t[42]=c,t[43]=f,t[44]=p,t[45]=v,t[46]=I,t[47]=P,t[48]=u,t[49]=L):L=t[49],_=L,h=Sl,O=n.command,t[50]===Symbol.for(`react.memo_cache_sentinel`)?(k=(0,$.jsx)(X,{id:`threadPage.runAction.setup.commandLabel`,defaultMessage:`Command to run`,description:`Label for run action command input`}),t[50]=k):k=t[50],t[51]===d?b=t[52]:(b=d.formatMessage({id:`threadPage.runAction.setup.placeholder`,defaultMessage:`eg:\\nnpm install\\nnpm run`,description:`Placeholder text for the run action command input`}),t[51]=d,t[52]=b),t[53]===Symbol.for(`react.memo_cache_sentinel`)?(x=(0,$.jsx)(X,{id:`settings.localEnvironments.actions.add.description`,defaultMessage:`Create a new command to run from the toolbar.`,description:`Description for adding a local environment action`}),t[53]=x):x=t[53],E=`flex w-full flex-col gap-2`;let R;t[54]===Symbol.for(`react.memo_cache_sentinel`)?(R=(0,$.jsx)(X,{id:`settings.localEnvironments.actions.item.name`,defaultMessage:`Name`,description:`Label for local environment action name`}),t[54]=R):R=t[54],t[55]===g?D=t[56]:(D=(0,$.jsx)(`label`,{className:`text-xs font-medium tracking-wide text-token-text-secondary uppercase`,htmlFor:g,children:R}),t[55]=g,t[56]=D),T=`flex items-center gap-2`,m=ua,y=`start`,S=`icon`,C=(0,$.jsx)(Pn,{id:`local-env-action-icon-${n.id}`,\"aria-label\":A.ariaLabel,className:`w-12 justify-center text-sm`,color:`secondary`,size:`toolbar`,children:A.icon});let z;t[57]===l?z=t[58]:(z=e=>(0,$.jsx)(la.Item,{tooltipText:e.ariaLabel,onSelect:()=>{l({icon:e.value})},children:e.icon},e.value),t[57]=l,t[58]=z),w=o.map(z),t[0]=n,t[1]=r,t[2]=i,t[3]=a,t[4]=d,t[5]=s,t[6]=c,t[7]=l,t[8]=f,t[9]=p,t[10]=u,t[11]=m,t[12]=h,t[13]=g,t[14]=_,t[15]=v,t[16]=y,t[17]=b,t[18]=x,t[19]=S,t[20]=C,t[21]=w,t[22]=T,t[23]=E,t[24]=D,t[25]=O,t[26]=k}else m=t[11],h=t[12],g=t[13],_=t[14],v=t[15],y=t[16],b=t[17],x=t[18],S=t[19],C=t[20],w=t[21],T=t[22],E=t[23],D=t[24],O=t[25],k=t[26];let A;t[59]!==m||t[60]!==y||t[61]!==S||t[62]!==C||t[63]!==w?(A=(0,$.jsx)(m,{align:y,contentWidth:S,triggerButton:C,children:w}),t[59]=m,t[60]=y,t[61]=S,t[62]=C,t[63]=w,t[64]=A):A=t[64];let j;t[65]===l?j=t[66]:(j=e=>{l({name:e.target.value})},t[65]=l,t[66]=j);let M;t[67]!==n.name||t[68]!==g||t[69]!==j?(M=(0,$.jsx)(`div`,{className:`flex-1`,children:(0,$.jsx)(`input`,{id:g,className:`w-full`,value:n.name,onChange:j})}),t[67]=n.name,t[68]=g,t[69]=j,t[70]=M):M=t[70];let V;t[86]===l?V=t[87]:(V=e=>{l({commandValue:e})},t[86]=l,t[87]=V);return (0,$.jsx)(h,{command:O,onCommandChange:V})}var wl=_t(`local-env-recent-actions-by-key`,{});";
+
+  const { value: patched, warnings } = captureWarns(() =>
+    applyLocalEnvironmentActionModalDraftPatch(source),
+  );
+
+  assert.equal(patched, source);
+  assert.deepEqual(warnings, [
+    "WARN: Could not find local environment action modal command update callback — skipping action input patch",
+  ]);
 });
 
 test("disables the upstream app sunset gate in the Linux wrapper webview", () => {

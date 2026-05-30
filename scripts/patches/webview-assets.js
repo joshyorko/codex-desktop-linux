@@ -18,6 +18,7 @@ function applyLinuxOpaqueWindowsDefaultPatch(currentSource) {
     patchedSource.includes("document.documentElement.dataset.codexOs===`linux`&&((o===`light`?l:f)?.opaqueWindows==null") ||
     patchedSource.includes("document.documentElement.dataset.codexOs===`linux`&&((s===`light`?u:p)?.opaqueWindows==null") ||
     patchedSource.includes("document.documentElement.dataset.codexOs===`linux`&&g.opaqueWindows==null&&(g={...g,opaqueWindows:!0})") ||
+    /useState\)\(document\.documentElement\.dataset\.codexOs===`linux`\)/.test(patchedSource) ||
     /document\.documentElement\.dataset\.codexOs===`linux`&&\(\([A-Za-z_$][\w$]*===`light`\?[A-Za-z_$][\w$]*:[A-Za-z_$][\w$]*\)\?\.opaqueWindows==null/u.test(patchedSource);
   const linuxDefaultPatched = () =>
     mergeDefaultPatched() || settingsDefaultPatched() || runtimeDefaultPatched();
@@ -103,6 +104,28 @@ function applyLinuxOpaqueWindowsDefaultPatch(currentSource) {
     // Already patched.
   } else if (patchedSource.includes(appMainRuntimeNeedle)) {
     patchedSource = patchedSource.replace(appMainRuntimeNeedle, appMainRuntimePatch);
+  }
+
+  const appMainStatePatched = () =>
+    /useState\)\(document\.documentElement\.dataset\.codexOs===`linux`\)/.test(patchedSource);
+  const appMainStateRegex =
+    /\[([A-Za-z_$][\w$]*),([A-Za-z_$][\w$]*)\]=\(0,([A-Za-z_$][\w$]*)\.useState\)\(!1\),([A-Za-z_$][\w$]*)=/;
+  if (!appMainStatePatched() && currentSource.includes("electron-window-opaque-surface-changed")) {
+    const eventIndex = patchedSource.indexOf("electron-window-opaque-surface-changed");
+    const prefixStart = Math.max(0, eventIndex - 2000);
+    const prefix = patchedSource.slice(prefixStart, eventIndex);
+    const stateMatches = [...prefix.matchAll(new RegExp(appMainStateRegex.source, "g"))];
+    const stateMatch = stateMatches[stateMatches.length - 1];
+    if (stateMatch?.index != null) {
+      const [match, stateVar, setterVar, reactVar, nextVar] = stateMatch;
+      const replacement =
+        `[${stateVar},${setterVar}]=(0,${reactVar}.useState)(document.documentElement.dataset.codexOs===\`linux\`),${nextVar}=`;
+      const matchStart = prefixStart + stateMatch.index;
+      patchedSource =
+        patchedSource.slice(0, matchStart) +
+        replacement +
+        patchedSource.slice(matchStart + match.length);
+    }
   }
 
   if (!runtimeDefaultPatched()) {
@@ -308,6 +331,106 @@ function applySubagentNicknameMetadataPatch(currentSource) {
   return patchedSource;
 }
 
+function applyLocalEnvironmentActionModalDraftPatch(currentSource) {
+  if (currentSource.includes("codexLinuxActionDraft")) {
+    return currentSource;
+  }
+
+  if (
+    !currentSource.includes("settings.localEnvironments.actions.add.description") ||
+    !currentSource.includes("threadPage.runAction.setup.commandLabel") ||
+    !currentSource.includes("onUpdate:")
+  ) {
+    return currentSource;
+  }
+
+  const functionStart = currentSource.indexOf("function Cl(e){");
+  if (functionStart === -1) {
+    console.warn(
+      "WARN: Could not find local environment action modal component — skipping action input patch",
+    );
+    return currentSource;
+  }
+
+  const functionEnd = currentSource.indexOf("var wl=", functionStart);
+  if (functionEnd === -1) {
+    console.warn(
+      "WARN: Could not find local environment action modal component boundary — skipping action input patch",
+    );
+    return currentSource;
+  }
+
+  const beforeFunction = currentSource.slice(0, functionStart);
+  const afterFunction = currentSource.slice(functionEnd);
+  let patchedFunction = currentSource.slice(functionStart, functionEnd);
+  const stateNeedle = "workspaceRoot:u}=e,d=zt()";
+  const statePatch =
+    "workspaceRoot:u}=e,[codexLinuxActionDraft,codexLinuxSetActionDraft]=(0,Q.useState)(()=>n),codexLinuxUpdateActionDraft=e=>(codexLinuxSetActionDraft(t=>({...t,...e})),l(e)),d=zt()";
+  const requiredReplacements = [
+    {
+      needle: stateNeedle,
+      replacement: statePatch,
+      description: "draft state insertion point",
+    },
+    {
+      needle: "if(t[0]!==n||",
+      replacement: "if(t[0]!==codexLinuxActionDraft||t[0]!==n||",
+      description: "modal memo guard",
+    },
+    {
+      needle: "{...n,command:I,name:P}",
+      replacement: "{...codexLinuxActionDraft,command:I,name:P}",
+      description: "saved action payload",
+    },
+    {
+      needle: "n.icon",
+      replacement: "codexLinuxActionDraft.icon",
+      description: "icon draft references",
+    },
+    {
+      needle: "n.name",
+      replacement: "codexLinuxActionDraft.name",
+      description: "name draft references",
+    },
+    {
+      needle: "n.command",
+      replacement: "codexLinuxActionDraft.command",
+      description: "command draft references",
+    },
+    {
+      needle: "l({icon:e.value})",
+      replacement: "codexLinuxUpdateActionDraft({icon:e.value})",
+      description: "icon update callback",
+    },
+    {
+      needle: "l({name:e.target.value})",
+      replacement: "codexLinuxUpdateActionDraft({name:e.target.value})",
+      description: "name update callback",
+    },
+    {
+      needle: "l({command:e})",
+      replacement: "codexLinuxUpdateActionDraft({command:e})",
+      description: "command update callback",
+    },
+  ];
+
+  const missingReplacement = requiredReplacements.find(
+    ({ needle }) => !patchedFunction.includes(needle),
+  );
+  if (missingReplacement != null) {
+    console.warn(
+      `WARN: Could not find local environment action modal ${missingReplacement.description} — skipping action input patch`,
+    );
+    return currentSource;
+  }
+
+  for (const { needle, replacement } of requiredReplacements) {
+    patchedFunction = patchedFunction.replaceAll(needle, replacement);
+  }
+
+  return `${beforeFunction}${patchedFunction}${afterFunction}`;
+}
+
 function applyBrowserAnnotationScreenshotPatch(currentSource) {
   let patchedSource = currentSource;
 
@@ -318,7 +441,8 @@ function applyBrowserAnnotationScreenshotPatch(currentSource) {
   if (patchedSource.includes(storedAnchorScreenshotPatch)) {
     // Already patched.
   } else if (
-    /if\([A-Za-z_$][\w$]*&&[A-Za-z_$][\w$]*\?\.anchor\.kind===`element`\)\{[A-Za-z_$][\w$]*=[A-Za-z_$][\w$]*\([A-Za-z_$][\w$]*\.anchor\),[A-Za-z_$][\w$]*=void 0\}/.test(patchedSource)
+    /if\([A-Za-z_$][\w$]*&&[A-Za-z_$][\w$]*\?\.anchor\.kind===`element`\)\{[A-Za-z_$][\w$]*=[A-Za-z_$][\w$]*\([A-Za-z_$][\w$]*\.anchor\),[A-Za-z_$][\w$]*=void 0\}/.test(patchedSource) ||
+    /if\([A-Za-z_$][\w$]*&&[A-Za-z_$][\w$]*\?\.annotation\.anchor\.kind===`element`\)\{[A-Za-z_$][\w$]*=[A-Za-z_$][\w$]*\([A-Za-z_$][\w$]*\.annotation\.anchor\),[A-Za-z_$][\w$]*=void 0,/.test(patchedSource)
   ) {
     // Already patched with the current upstream symbol names.
   } else if (patchedSource.includes(liveElementScreenshotNeedle)) {
@@ -392,11 +516,17 @@ function applyBrowserAnnotationScreenshotPatch(currentSource) {
       "Xe=(M?j?.kind===`comment`?ge:[]:Ye==null?ge:ge.filter(e=>e.id!==Ye.id)).flatMap";
     const currentCommentPreloadMarkersPatch =
       "Xe=(M?j?.kind===`comment`?ge.filter(e=>e.id===j.annotation.id):[]:Ye==null?ge:ge.filter(e=>e.id!==Ye.id)).flatMap";
+    const latestCommentPreloadMarkersNeedle =
+      "Je=(We?N?.kind===`comment`?me:[]:qe==null?me:me.filter(e=>e.id!==qe.id)).flatMap";
+    const latestCommentPreloadMarkersPatch =
+      "Je=(We?N?.kind===`comment`?Ue:[]:qe==null?me:me.filter(e=>e.id!==qe.id)).flatMap";
     if (patchedSource.includes(currentMarkersPatch)) {
       // Already patched.
     } else if (patchedSource.includes(currentSelectedMarkersPatch)) {
       // Already patched.
     } else if (patchedSource.includes(currentCommentPreloadMarkersPatch)) {
+      // Already patched.
+    } else if (patchedSource.includes(latestCommentPreloadMarkersPatch)) {
       // Already patched.
     } else if (patchedSource.includes(currentMarkersNeedle)) {
       patchedSource = patchedSource.replace(currentMarkersNeedle, currentMarkersPatch);
@@ -406,6 +536,11 @@ function applyBrowserAnnotationScreenshotPatch(currentSource) {
       patchedSource = patchedSource.replace(
         currentCommentPreloadMarkersNeedle,
         currentCommentPreloadMarkersPatch,
+      );
+    } else if (patchedSource.includes(latestCommentPreloadMarkersNeedle)) {
+      patchedSource = patchedSource.replace(
+        latestCommentPreloadMarkersNeedle,
+        latestCommentPreloadMarkersPatch,
       );
     } else {
       console.warn("WARN: Could not find browser annotation screenshot markers — skipping screenshot marker patch");
@@ -480,9 +615,28 @@ function detectComposerFooterConversationIdVar(source, footerNeedles) {
   return null;
 }
 
+function detectLatestComposerFooterControls(source) {
+  const controlsRegex =
+    /function ([A-Za-z_$][\w$]*)\(e\)\{[\s\S]{0,9000}?conversationId:([A-Za-z_$][\w$]*)[\s\S]{0,9000}?FooterInlineControls,\{gap:`normal`,children:\[([A-Za-z_$][\w$]*),([A-Za-z_$][\w$]*)\]\}/;
+  const match = source.match(controlsRegex);
+  if (match == null) {
+    return null;
+  }
+  const [, functionName, conversationIdVar, firstChildVar, secondChildVar] = match;
+  return {
+    insertionNeedle: `function ${functionName}(e){`,
+    conversationIdVar,
+    footerControlsNeedle:
+      `FooterInlineControls,{gap:\`normal\`,children:[${firstChildVar},${secondChildVar}]}`,
+    footerControlsPatch:
+      `FooterInlineControls,{gap:\`normal\`,children:[${firstChildVar},${conversationIdVar}==null?null:(0,Q.jsx)(codexLinuxRateLimitFooter,{conversationId:${conversationIdVar}}),${secondChildVar}]}`,
+  };
+}
+
 function applyPersistentRateLimitFooterPatch(currentSource) {
   let patchedSource = currentSource;
   const currentSymbols = detectCurrentRateLimitFooterSymbols(currentSource);
+  const latestFooterControls = detectLatestComposerFooterControls(currentSource);
   const currentComposerStatusNeedle =
     "function zg(e){";
   const currentComposerFooterFunction =
@@ -499,6 +653,7 @@ function applyPersistentRateLimitFooterPatch(currentSource) {
     currentSource.includes("children:[Ut,Wt,Gt]") ||
     currentSource.includes("(0,Q.jsx)(nz,{conversationId:f,hostId:C,cwdOverride:w})") ||
     currentPermissionsControlsNeedle.test(currentSource) ||
+    latestFooterControls != null ||
     (currentSource.includes(currentComposerStatusNeedle) &&
       currentSource.includes(currentComposerFooterCallNeedle));
   const homeFooterGroupNeedle =
@@ -527,10 +682,17 @@ function applyPersistentRateLimitFooterPatch(currentSource) {
   const currentFooterFunction = currentSymbols == null
     ? null
     : `function codexLinuxRateLimitFooter({conversationId:e}){try{let t=(0,Z.c)(22),{activeMode:n}=Bi(e),r=n?.settings.model??null,{data:i}=ci(${currentSymbols.accountSignalVar}),a=i===void 0?null:i,o=Ro(a),s=Zo(a),c=Xo(Jo(o,{activeLimitName:s,selectedModel:r})).slice(0,2);c.length===0&&(c=Xo(Jo(o,{activeLimitName:s,selectedModel:null})).slice(0,2));if(c.length===0)return null;let l;t[0]===Symbol.for(\`react.memo_cache_sentinel\`)?(l=(0,Q.jsx)(X,{id:\`composer.linuxRateLimitFooter.tooltip\`,defaultMessage:\`Rate limits remaining\`,description:\`Tooltip for compact footer rate limit status\`}),t[0]=l):l=t[0];let u;if(t[1]!==c){u=c.map((e,t)=>{let n=No(e.bucket.usedPercent??0);return(0,Q.jsxs)(\`span\`,{className:\`flex items-center gap-1 whitespace-nowrap\`,children:[t>0?(0,Q.jsx)(\`span\`,{className:\`text-token-input-placeholder-foreground\`,children:\`/\`}):null,(0,Q.jsx)(\`span\`,{children:(0,Q.jsx)(${currentSymbols.durationComponent},{minutes:e.bucket.windowDurationMins,variant:\`summary\`})}),(0,Q.jsx)(\`span\`,{className:\`font-medium text-token-text-primary\`,children:Do(n)})]},e.key)}),t[1]=c,t[2]=u}else u=t[2];let d;t[3]!==u?(d=(0,Q.jsx)(\`span\`,{className:\`composer-footer__label--sm inline-flex shrink-0 items-center gap-1.5 rounded-full border border-token-border-light bg-token-main-surface-primary/80 px-2 py-1 text-xs text-token-text-secondary shadow-sm dark:border-white/10\`,children:u}),t[3]=u,t[4]=d):d=t[4];let f;return t[5]!==l||t[6]!==d?(f=(0,Q.jsx)(nc,{tooltipContent:l,children:d}),t[5]=l,t[6]=d,t[7]=f):f=t[7],f}catch(e){return null}}`;
+  const latestFooterFunction =
+    "function codexLinuxRateLimitFooter({conversationId:e}){try{let t=(0,$.c)(8),{activeMode:n}=or(e),r=n?.settings.model??null,{data:i}=St(ue),a=ma(i),o=la(i),s=da(a,{activeLimitName:o,selectedModel:r}).filter(og).slice(0,2);if(s.length===0)return null;let c=ht(),l;if(t[0]!==s||t[1]!==c){l=s.map(e=>`${Xh(e.bucket.windowDurationMins??null,c)} ${c.formatNumber(Sa(e.bucket.usedPercent??0),{maximumFractionDigits:0})}%`).join(` / `),t[0]=s,t[1]=c,t[2]=l}else l=t[2];let u;return t[3]!==l?(u=(0,Q.jsx)(`span`,{className:`composer-footer__label--sm inline-flex shrink-0 items-center gap-1.5 rounded-full border border-token-border-light bg-token-main-surface-primary/80 px-2 py-1 text-xs text-token-text-secondary shadow-sm dark:border-white/10`,children:l}),t[3]=l,t[4]=u):u=t[4],u}catch(e){return null}}";
 
   if (!patchedSource.includes("function codexLinuxRateLimitFooter(")) {
     const legacyInsertionNeedle = "function TF(e){";
-    if (currentSymbols != null && currentFooterFunction != null) {
+    if (latestFooterControls != null) {
+      patchedSource = patchedSource.replace(
+        latestFooterControls.insertionNeedle,
+        `${latestFooterFunction}${latestFooterControls.insertionNeedle}`,
+      );
+    } else if (currentSymbols != null && currentFooterFunction != null) {
       patchedSource = patchedSource.replace(
         currentSymbols.insertionNeedle,
         `${currentFooterFunction}${currentSymbols.insertionNeedle}`,
@@ -579,6 +741,17 @@ function applyPersistentRateLimitFooterPatch(currentSource) {
       console.warn("WARN: Could not insert persistent rate limit footer helper — skipping composer footer limit patch");
     }
     return currentSource;
+  }
+
+  if (
+    latestFooterControls != null &&
+    !patchedSource.includes(`codexLinuxRateLimitFooter,{conversationId:${latestFooterControls.conversationIdVar}}`) &&
+    patchedSource.includes(latestFooterControls.footerControlsNeedle)
+  ) {
+    patchedSource = patchedSource.replace(
+      latestFooterControls.footerControlsNeedle,
+      latestFooterControls.footerControlsPatch,
+    );
   }
 
   const cacheNeedle = "function TF(e){let t=(0,Z.c)(148),";
@@ -710,6 +883,7 @@ module.exports = {
   applyLinuxAppSunsetPatch,
   applyLinuxOpaqueWindowsDefaultPatch,
   applyLinuxFastModeModelGuardPatch,
+  applyLocalEnvironmentActionModalDraftPatch,
   applySubagentNicknameMetadataPatch,
   patchCommentPreloadBundle,
 };

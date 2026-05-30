@@ -330,6 +330,14 @@ By default, the native package installs a companion `systemd --user` service nam
 - If Codex Desktop is open, the final install waits until Electron exits.
 - The updater runs unprivileged and uses `pkexec` only for the final package install.
 - Codex CLI checks are best-effort and launcher-scoped. Set `CODEX_SYNC_CLI_PREFLIGHT=1` when debugging launch-time CLI preflight.
+- Optional wrapper-update tracking can also watch this repository's own Linux
+  wrapper changes with `enable_wrapper_updates = true` in
+  `~/.config/codex-update-manager/config.toml`. This is intended for
+  git-checkout/dev update-builder installs; detection leaves the working tree
+  untouched but may fetch candidate objects into `.git/FETCH_HEAD`. Git checks
+  are timeout-bound and run with non-interactive prompt guards. Frozen
+  native-package builders without a `.git` directory report no wrapper
+  candidate and receive wrapper changes through normal package upgrades.
 
 Inspect the live service and runtime files with:
 

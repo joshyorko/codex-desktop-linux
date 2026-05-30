@@ -531,18 +531,59 @@ function sanitizeGitRemoteUrl(remote) {
   return value;
 }
 
+function readJsonFile(filePath) {
+  try {
+    const value = JSON.parse(fs.readFileSync(filePath, "utf8"));
+    return value != null && typeof value === "object" && !Array.isArray(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function parseWrapperVersion(content) {
+  for (const line of content.split(/\r?\n/)) {
+    const match = line.trim().match(/^version\s*=\s*"([^"]+)"/);
+    if (match) {
+      return match[1];
+    }
+  }
+  return null;
+}
+
+function readWrapperVersion(repoDir) {
+  try {
+    return parseWrapperVersion(fs.readFileSync(path.join(repoDir, "updater", "Cargo.toml"), "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function sanitizeSourceInfo(info) {
+  return {
+    ...info,
+    version: info.version ?? readWrapperVersion(repoDir),
+    remote: sanitizeGitRemoteUrl(info.remote),
+    provenance: info.provenance ?? "packaged-update-builder",
+    recapturedAt: isoTimestamp(),
+  };
+}
+
+const stagedInfo = readJsonFile(path.join(repoDir, ".codex-linux", "source-info.json"));
 const commit = process.env.CODEX_LINUX_SOURCE_COMMIT?.trim() || git(["rev-parse", "HEAD"]);
 const status = git(["status", "--porcelain"]);
-const info = {
-  commit,
-  shortCommit: commit == null ? null : commit.slice(0, 12),
-  branch: process.env.CODEX_LINUX_SOURCE_BRANCH?.trim() || git(["branch", "--show-current"]),
-  remote: sanitizeGitRemoteUrl(process.env.CODEX_LINUX_SOURCE_REMOTE?.trim() || git(["remote", "get-url", "origin"])),
-  describe: process.env.CODEX_LINUX_SOURCE_DESCRIBE?.trim() || git(["describe", "--always", "--dirty", "--tags"]),
-  dirty: status == null ? null : status.length > 0,
-  provenance: "packaged-update-builder",
-  capturedAt: isoTimestamp(),
-};
+const info = stagedInfo?.commit
+  ? sanitizeSourceInfo(stagedInfo)
+  : {
+      commit,
+      shortCommit: commit == null ? null : commit.slice(0, 12),
+      version: readWrapperVersion(repoDir),
+      branch: process.env.CODEX_LINUX_SOURCE_BRANCH?.trim() || git(["branch", "--show-current"]),
+      remote: sanitizeGitRemoteUrl(process.env.CODEX_LINUX_SOURCE_REMOTE?.trim() || git(["remote", "get-url", "origin"])),
+      describe: process.env.CODEX_LINUX_SOURCE_DESCRIBE?.trim() || git(["describe", "--always", "--dirty", "--tags"]),
+      dirty: status == null ? null : status.length > 0,
+      provenance: "packaged-update-builder",
+      capturedAt: isoTimestamp(),
+    };
 
 fs.mkdirSync(path.dirname(infoFile), { recursive: true });
 fs.writeFileSync(infoFile, `${JSON.stringify(info, null, 2)}\n`, "utf8");
@@ -605,6 +646,7 @@ stage_update_builder_bundle() {
         "$update_builder_root/assets"
 
     cp "$REPO_DIR/install.sh" "$update_builder_root/install.sh"
+    cp "$REPO_DIR/CHANGELOG.md" "$update_builder_root/CHANGELOG.md"
     cp "$REPO_DIR/launcher/start.sh.template" "$update_builder_root/launcher/start.sh.template"
     cp "$REPO_DIR/launcher/webview-server.py" "$update_builder_root/launcher/webview-server.py"
     cp "$REPO_DIR/launcher/web-mode-server.mjs" "$update_builder_root/launcher/web-mode-server.mjs"
