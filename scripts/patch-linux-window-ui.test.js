@@ -2521,6 +2521,35 @@ test("uses Linux managed runtime paths for Chrome native host sync", () => {
   });
 });
 
+test("reports drifted Chrome native host runtime resolver as required upstream failure", () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "codex-patch-report-chrome-runtime-drift-"));
+  try {
+    const buildDir = path.join(tempRoot, ".vite", "build");
+    fs.mkdirSync(buildDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(buildDir, "main.js"),
+      [
+        "let r=require(`node:path`),o=require(`node:fs`);",
+        "function Qp(e){throw Error(`Missing bundled Electron runtime required to sync Chrome native host resources for ${e.nativeHostName}.`)}",
+      ].join(""),
+    );
+
+    const report = createPatchReport();
+    captureWarns(() => patchExtractedApp(tempRoot, { report }));
+
+    const runtimePatch = report.patches.find((patch) => patch.name === "linux-chrome-native-host-runtime");
+    assert.equal(runtimePatch.status, "failed-required");
+    assert.match(runtimePatch.reason, /Could not identify Chrome native host runtime resolver shape/);
+    assert.ok(
+      validateReport(report, "upstream-build").some((failure) =>
+        failure.startsWith("linux-chrome-native-host-runtime: failed-required"),
+      ),
+    );
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
 test("keeps an already auto-installed Chrome plugin gate unchanged", () => {
   const source = currentPluginGateBundleFixture().replace(
     "{forceReload:!0,name:ut,syncInstallStateWithChromeExtension:!0,isAvailable:",

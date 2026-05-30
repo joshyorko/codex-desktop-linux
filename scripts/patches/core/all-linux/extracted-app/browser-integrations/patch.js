@@ -17,9 +17,16 @@ module.exports = [
         };
       }
 
+      if (warnings.length > 0) {
+        return {
+          status: "failed-required",
+          reason: warnings[0],
+        };
+      }
+
       return {
         status: result?.changed ? "applied" : "already-applied",
-        reason: warnings[0] ?? null,
+        reason: null,
       };
     },
   },
