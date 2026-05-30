@@ -52,6 +52,16 @@ function appshotHotkeyMainBundleFixture() {
   ].join("");
 }
 
+function appshotHotkeyStoredMainBundleFixture() {
+  return [
+    "var bX=`DoubleCommand`,xX=6e4;",
+    "function CE(e,t=process.platform){return t===`darwin`&&TE(e)!=null}",
+    "function vE(e,t,n=`press`){if(process.platform!==`darwin`)return null;let r=TE(e);return r==null?null:DE(r,t,n)}",
+    "function HE(e,t=process.platform){let n=GE(e);if(CE(e,t))return null;if(n.some(wE))return n.length===1?t===`darwin`?CE(e,t)?null:`This shortcut key is not supported.`:`Choose a shortcut with Ctrl or Alt plus another key.`:`Use Ctrl, Alt, or Command when combining with another key.`;return null}",
+    "function SX({globalState:e,windowManager:n,enabled:r}){let i=e.getStored(`appshotHotkey`),a=i===void 0?bX:i,o=null,s=()=>({supported:r&&process.platform===`darwin`,configuredHotkey:a,isActive:o!=null}),c=()=>{if(o?.unregister(),o=null,!r||process.platform!==`darwin`||a==null){t.Nr().info(`Appshot hotkey inactive`,{safe:{enabled:r,platform:process.platform,configured:a!=null},sensitive:{}});return}if(t.Nr().info(`Registering appshot hotkey`,{safe:{hotkey:a},sensitive:{}}),UE(a,{bareModifierTrigger:`immediatePress`}),o=BE(a,{onPressed:()=>{t.Nr().info(`Appshot hotkey pressed`,{safe:{hotkey:a},sensitive:{}});let e=n.getPrimaryWindow();if(e==null||e.isDestroyed()){return}let r=n.wasPrimaryWindowFocusedWithin(e,xX);r||n.sendMessageToWindow(e,{type:`navigate-to-route`,path:`/`,state:{focusComposerNonce:Date.now()}}),n.sendMessageToWindow(e,{type:`appshot-shortcut`})}},{bareModifierTrigger:`immediatePress`}),o==null)throw Error(`Unable to register shortcut: ${a}`);t.Nr().info(`Registered appshot hotkey`,{safe:{hotkey:a},sensitive:{}})},l=n=>{if(!r||process.platform!==`darwin`&&process.platform!==`linux`)return{success:!1,error:`Not supported.`,state:s()};if(n!=null){let e=HE(n);if(e!=null)return{success:!1,error:e,state:s()}}let i=a;a=n;try{c()}catch(e){a=i;return{success:!1,error:e instanceof Error?e.message:String(e),state:s()}}return e.set(`appshotHotkey`,a),{success:!0,state:s()}};try{c()}catch(e){}return{rpc:{getState:s,setHotkey:l},dispose:()=>{o?.unregister(),o=null}}}",
+  ].join("");
+}
+
 function appshotSettingsBundleFixture() {
   return [
     "var O=d(),A=e(t(),1),j=n(),M=[{hotkey:`DoubleCommand`,label:`\\u2318 + \\u2318`},{hotkey:`DoubleOption`,label:`\\u2325 + \\u2325`},{hotkey:`DoubleShift`,label:`\\u21e7 + \\u21e7`}];",
@@ -226,6 +236,38 @@ test("enables AppShots hotkeys and bare modifiers on Linux", () => {
   assert.doesNotMatch(patched, /codexLinuxAppshotRegisterBareModifierHotkey/);
 });
 
+test("enables Linux AppShots hotkeys for stored upstream controller shape", () => {
+  const patched = applyPatchTwice(
+    applyLinuxAppshotHotkeyPatch,
+    appshotHotkeyStoredMainBundleFixture(),
+  );
+
+  assert.match(
+    patched,
+    /function CE\(e,t=process\.platform\)\{return \(t===`darwin`\|\|t===`linux`\)&&TE\(e\)!=null\}/,
+  );
+  assert.match(
+    patched,
+    /function vE\(e,t,n=`press`\)\{if\(process\.platform!==`darwin`&&process\.platform!==`linux`\)return null;/,
+  );
+  assert.match(
+    patched,
+    /return n\.length===1\?\(t===`darwin`\|\|t===`linux`\)\?CE\(e,t\)\?null:`This shortcut key is not supported\.`:`Choose a shortcut with Ctrl or Alt plus another key\.`:`Use Ctrl, Alt, or Command when combining with another key\.`/,
+  );
+  assert.match(
+    patched,
+    /let i=e\.getStored\(`appshotHotkey`\),a=i===void 0\?\(process\.platform===`linux`\?null:bX\):i,o=null/,
+  );
+  assert.match(
+    patched,
+    /supported:r&&\(process\.platform===`darwin`\|\|process\.platform===`linux`\)/,
+  );
+  assert.match(
+    patched,
+    /!r\|\|process\.platform!==`darwin`&&process\.platform!==`linux`\|\|a==null/,
+  );
+});
+
 test("shows Linux AppShots accelerator choices in settings", () => {
   const patched = applyPatchTwice(
     applyLinuxAppshotSettingsHotkeyPatch,
@@ -233,10 +275,11 @@ test("shows Linux AppShots accelerator choices in settings", () => {
   );
 
   assert.match(patched, /navigator\.userAgent\.includes\(`Linux`\)/);
+  assert.match(patched, /hotkey:`DoubleOption`,label:`Alt \+ Alt`/);
   assert.match(patched, /hotkey:`DoubleShift`,label:`Shift \+ Shift`/);
   assert.match(patched, /hotkey:`Ctrl\+Super\+A`,label:`Ctrl \+ Super \+ A`/);
-  assert.match(patched, /hotkey:`Alt\+Super\+A`,label:`Alt \+ Super \+ A`/);
-  assert.match(patched, /hotkey:`Ctrl\+Alt\+A`,label:`Ctrl \+ Alt \+ A`/);
+  assert.doesNotMatch(patched, /hotkey:`Alt\+Super\+A`/);
+  assert.doesNotMatch(patched, /hotkey:`Ctrl\+Alt\+A`/);
   assert.match(patched, /hotkey:`DoubleCommand`,label:`\\u2318 \+ \\u2318`/);
   assert.match(patched, /hotkey:`DoubleShift`,label:`\\u21e7 \+ \\u21e7`/);
 });
@@ -247,9 +290,11 @@ test("upgrades stale Linux AppShots settings accelerators", () => {
     previouslyPatchedAppshotSettingsBundleFixture(),
   );
 
+  assert.match(patched, /hotkey:`DoubleOption`,label:`Alt \+ Alt`/);
   assert.match(patched, /hotkey:`DoubleShift`,label:`Shift \+ Shift`/);
   assert.match(patched, /hotkey:`Ctrl\+Super\+A`,label:`Ctrl \+ Super \+ A`/);
-  assert.match(patched, /hotkey:`Alt\+Super\+A`,label:`Alt \+ Super \+ A`/);
+  assert.doesNotMatch(patched, /Alt\+Super\+A/);
+  assert.doesNotMatch(patched, /Ctrl\+Alt\+A/);
   assert.doesNotMatch(patched, /Alt\+Shift\+A/);
   assert.doesNotMatch(patched, /Ctrl\+Shift\+A/);
 });

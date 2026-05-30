@@ -34,12 +34,13 @@ Privacy and correctness constraints:
 - Capture fails closed when no screenshot tool is available or the crop does not
   intersect the captured image.
 - Global hotkeys are disabled by default on Linux until the user chooses one in
-  AppShots settings. The dropdown includes upstream-style `Shift + Shift` plus
-  ordinary Electron accelerators such as `Ctrl+Super+A`, `Alt+Super+A`, and
-  `Ctrl+Alt+A`.
-- `Shift + Shift` is backed by a feature-local `bare-modifier-monitor` helper
-  staged into `resources/native/`. It uses `xinput` and `xmodmap`, so it is
-  expected to work on X11 sessions and fail closed elsewhere.
+  AppShots settings. The dropdown mirrors upstream's bare-modifier choices where
+  they are practical on Linux (`Alt + Alt` and `Shift + Shift`) and keeps
+  `Ctrl+Super+A` as a non-bare fallback.
+- `Alt + Alt` and `Shift + Shift` are backed by a feature-local
+  `bare-modifier-monitor` helper staged into `resources/native/`. It uses
+  `xinput` and `xmodmap`, so it is expected to work on X11 sessions and fail
+  closed elsewhere.
 
 Run the feature self-test:
 

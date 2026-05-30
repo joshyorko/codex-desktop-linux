@@ -2,10 +2,9 @@
 
 const APPSHOT_HELPER_MARKER = "codexLinuxAppshotStartCapture";
 const LINUX_APPSHOT_HOTKEYS = [
+  { hotkey: "DoubleOption", label: "Alt + Alt" },
   { hotkey: "DoubleShift", label: "Shift + Shift" },
   { hotkey: "Ctrl+Super+A", label: "Ctrl + Super + A" },
-  { hotkey: "Alt+Super+A", label: "Alt + Super + A" },
-  { hotkey: "Ctrl+Alt+A", label: "Ctrl + Alt + A" },
 ];
 
 function warn(message, patchName) {
@@ -77,19 +76,41 @@ function applyLinuxAppshotMainProcessPatch(currentSource) {
 
 function applyLinuxAppshotHotkeyPatch(currentSource) {
   currentSource = currentSource.replace(
-    /let ([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)\.get\(`appshotHotkey`\)\?\?\(process\.platform===`linux`\?`DoubleShift`:([A-Za-z_$][\w$]*)\);/g,
-    (match, configuredVar, globalStateVar, defaultHotkeyVar) =>
-      `let ${configuredVar}=${globalStateVar}.get(\`appshotHotkey\`)??(process.platform===\`linux\`?null:${defaultHotkeyVar});`,
+    /let ([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)\.(getStored|get)\(`appshotHotkey`\)\?\?\(process\.platform===`linux`\?`DoubleShift`:([A-Za-z_$][\w$]*)\);/g,
+    (match, configuredVar, globalStateVar, getterName, defaultHotkeyVar) =>
+      `let ${configuredVar}=${globalStateVar}.${getterName}(\`appshotHotkey\`)??(process.platform===\`linux\`?null:${defaultHotkeyVar});`,
   );
   currentSource = currentSource.replace(
-    /let ([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)\.get\(`appshotHotkey`\)\?\?\(process\.platform===`linux`\?null:([A-Za-z_$][\w$]*)\);/g,
-    (match, configuredVar, globalStateVar, defaultHotkeyVar) =>
-      `let ${configuredVar}=${globalStateVar}.get(\`appshotHotkey\`)??(process.platform===\`linux\`?null:${defaultHotkeyVar});`,
+    /let ([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)\.(getStored|get)\(`appshotHotkey`\)\?\?\(process\.platform===`linux`\?null:([A-Za-z_$][\w$]*)\);/g,
+    (match, configuredVar, globalStateVar, getterName, defaultHotkeyVar) =>
+      `let ${configuredVar}=${globalStateVar}.${getterName}(\`appshotHotkey\`)??(process.platform===\`linux\`?null:${defaultHotkeyVar});`,
   );
   currentSource = currentSource.replace(
-    /let ([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)\.get\(`appshotHotkey`\)\?\?([A-Za-z_$][\w$]*);let ([A-Za-z_$][\w$]*)=null,([A-Za-z_$][\w$]*)=\(\)=>\(\{supported:([A-Za-z_$][\w$]*)&&\(process\.platform===`darwin`\|\|process\.platform===`linux`\),configuredHotkey:\1,isActive:\4!=null\}\)/g,
-    (match, configuredVar, globalStateVar, defaultHotkeyVar, registrationVar, stateFnVar, enabledVar) =>
-      `let ${configuredVar}=${globalStateVar}.get(\`appshotHotkey\`)??(process.platform===\`linux\`?null:${defaultHotkeyVar});let ${registrationVar}=null,${stateFnVar}=()=>({supported:${enabledVar}&&(process.platform===\`darwin\`||process.platform===\`linux\`),configuredHotkey:${configuredVar},isActive:${registrationVar}!=null})`,
+    /let ([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)\.(getStored|get)\(`appshotHotkey`\)\?\?([A-Za-z_$][\w$]*);let ([A-Za-z_$][\w$]*)=null,([A-Za-z_$][\w$]*)=\(\)=>\(\{supported:([A-Za-z_$][\w$]*)&&\(process\.platform===`darwin`\|\|process\.platform===`linux`\),configuredHotkey:\1,isActive:\5!=null\}\)/g,
+    (match, configuredVar, globalStateVar, getterName, defaultHotkeyVar, registrationVar, stateFnVar, enabledVar) =>
+      `let ${configuredVar}=${globalStateVar}.${getterName}(\`appshotHotkey\`)??(process.platform===\`linux\`?null:${defaultHotkeyVar});let ${registrationVar}=null,${stateFnVar}=()=>({supported:${enabledVar}&&(process.platform===\`darwin\`||process.platform===\`linux\`),configuredHotkey:${configuredVar},isActive:${registrationVar}!=null})`,
+  );
+  currentSource = currentSource.replace(
+    /let ([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)\.(getStored|get)\(`appshotHotkey`\),([A-Za-z_$][\w$]*)=\1===void 0\?([A-Za-z_$][\w$]*):\1,([A-Za-z_$][\w$]*)=null,([A-Za-z_$][\w$]*)=\(\)=>\(\{supported:([A-Za-z_$][\w$]*)&&process\.platform===`darwin`,configuredHotkey:\4,isActive:\6!=null\}\),([A-Za-z_$][\w$]*)=\(\)=>\{if\(\6\?\.unregister\(\),\6=null,!\8\|\|process\.platform!==`darwin`\|\|\4==null\)\{/g,
+    (
+      match,
+      storedVar,
+      globalStateVar,
+      getterName,
+      configuredVar,
+      defaultHotkeyVar,
+      registrationVar,
+      stateFnVar,
+      enabledVar,
+      reconcileFnVar,
+    ) => {
+      return `let ${storedVar}=${globalStateVar}.${getterName}(\`appshotHotkey\`),${configuredVar}=${storedVar}===void 0?(process.platform===\`linux\`?null:${defaultHotkeyVar}):${storedVar},${registrationVar}=null,${stateFnVar}=()=>({supported:${enabledVar}&&(process.platform===\`darwin\`||process.platform===\`linux\`),configuredHotkey:${configuredVar},isActive:${registrationVar}!=null}),${reconcileFnVar}=()=>{if(${registrationVar}?.unregister(),${registrationVar}=null,!${enabledVar}||process.platform!==\`darwin\`&&process.platform!==\`linux\`||${configuredVar}==null){`;
+    },
+  );
+  currentSource = currentSource.replace(
+    /return ([A-Za-z_$][\w$]*)\.length===1\?([A-Za-z_$][\w$]*)===`darwin`\?([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*),\2\)\?null:`This shortcut key is not supported\.`:`Choose a shortcut with Ctrl or Alt plus another key\.`:`Use Ctrl, Alt, or Command when combining with another key\.`/g,
+    (match, partsVar, platformVar, supportedBareModifierFn, hotkeyVar) =>
+      `return ${partsVar}.length===1?(${platformVar}===\`darwin\`||${platformVar}===\`linux\`)?${supportedBareModifierFn}(${hotkeyVar},${platformVar})?null:\`This shortcut key is not supported.\`:\`Choose a shortcut with Ctrl or Alt plus another key.\`:\`Use Ctrl, Alt, or Command when combining with another key.\``,
   );
 
   if (
@@ -119,11 +140,12 @@ function applyLinuxAppshotHotkeyPatch(currentSource) {
   );
 
   patchedSource = patchedSource.replace(
-    /let ([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)\.get\(`appshotHotkey`\)\?\?([A-Za-z_$][\w$]*),([A-Za-z_$][\w$]*)=null,([A-Za-z_$][\w$]*)=\(\)=>\(\{supported:([A-Za-z_$][\w$]*)&&process\.platform===`darwin`,configuredHotkey:\1,isActive:\4!=null\}\),([A-Za-z_$][\w$]*)=\(\)=>\{if\(\4\?\.unregister\(\),\4=null,!\6\|\|process\.platform!==`darwin`\|\|\1==null\)\{/,
+    /let ([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)\.(getStored|get)\(`appshotHotkey`\)\?\?([A-Za-z_$][\w$]*),([A-Za-z_$][\w$]*)=null,([A-Za-z_$][\w$]*)=\(\)=>\(\{supported:([A-Za-z_$][\w$]*)&&process\.platform===`darwin`,configuredHotkey:\1,isActive:\5!=null\}\),([A-Za-z_$][\w$]*)=\(\)=>\{if\(\5\?\.unregister\(\),\5=null,!\7\|\|process\.platform!==`darwin`\|\|\1==null\)\{/,
     (
       match,
       configuredVar,
       globalStateVar,
+      getterName,
       defaultHotkeyVar,
       registrationVar,
       stateFnVar,
@@ -131,7 +153,7 @@ function applyLinuxAppshotHotkeyPatch(currentSource) {
       reconcileFnVar,
     ) => {
       changed = true;
-      return `let ${configuredVar}=${globalStateVar}.get(\`appshotHotkey\`)??(process.platform===\`linux\`?null:${defaultHotkeyVar});let ${registrationVar}=null,${stateFnVar}=()=>({supported:${enabledVar}&&(process.platform===\`darwin\`||process.platform===\`linux\`),configuredHotkey:${configuredVar},isActive:${registrationVar}!=null}),${reconcileFnVar}=()=>{if(${registrationVar}?.unregister(),${registrationVar}=null,!${enabledVar}||process.platform!==\`darwin\`&&process.platform!==\`linux\`||${configuredVar}==null){`;
+      return `let ${configuredVar}=${globalStateVar}.${getterName}(\`appshotHotkey\`)??(process.platform===\`linux\`?null:${defaultHotkeyVar});let ${registrationVar}=null,${stateFnVar}=()=>({supported:${enabledVar}&&(process.platform===\`darwin\`||process.platform===\`linux\`),configuredHotkey:${configuredVar},isActive:${registrationVar}!=null}),${reconcileFnVar}=()=>{if(${registrationVar}?.unregister(),${registrationVar}=null,!${enabledVar}||process.platform!==\`darwin\`&&process.platform!==\`linux\`||${configuredVar}==null){`;
     },
   );
 
