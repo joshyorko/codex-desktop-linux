@@ -209,6 +209,26 @@ function applyLinuxAppServerFeatureEnablementPatch(currentSource) {
   const featureArrayMatch = currentSource.match(featureArrayRegex);
 
   if (featureArrayMatch == null) {
+    // 26.527.x replaced the static default-enable array with a dynamic builder
+    // that copies supported defaults, then adds a gated extra. The copied
+    // defaults are Linux-safe; the trailing extra is not.
+    const dynamicBuilderExtraRegex =
+      /(for\(let ([A-Za-z_$][\w$]*) of [A-Za-z_$][\w$]*\)\{let ([A-Za-z_$][\w$]*)=[A-Za-z_$][\w$]*\[\2\];\3!=null&&\(([A-Za-z_$][\w$]*)\[\2\]=\3\)\})return \4\[([A-Za-z_$][\w$]*)\]=([A-Za-z_$][\w$]*),\4\}/u;
+    const dynamicBuilderExtraMatch = currentSource.match(dynamicBuilderExtraRegex);
+    if (dynamicBuilderExtraMatch != null) {
+      const [, loopBlock, , , enablementVar] = dynamicBuilderExtraMatch;
+      return currentSource.replace(
+        dynamicBuilderExtraRegex,
+        `${loopBlock}return ${enablementVar}}`,
+      );
+    }
+
+    const dynamicBuilderSanitizedRegex =
+      /for\(let ([A-Za-z_$][\w$]*) of [A-Za-z_$][\w$]*\)\{let ([A-Za-z_$][\w$]*)=[A-Za-z_$][\w$]*\[\1\];\2!=null&&\(([A-Za-z_$][\w$]*)\[\1\]=\2\)\}return \3\}/u;
+    if (dynamicBuilderSanitizedRegex.test(currentSource)) {
+      return currentSource;
+    }
+
     console.warn(
       "WARN: Could not find app-server feature enablement list — skipping unsupported feature compatibility patch",
     );
@@ -344,7 +364,7 @@ function applyLocalEnvironmentActionModalDraftPatch(currentSource) {
     return currentSource;
   }
 
-  const functionStart = currentSource.indexOf("function Cl(e){");
+  const functionStart = currentSource.indexOf("function gd(e){");
   if (functionStart === -1) {
     console.warn(
       "WARN: Could not find local environment action modal component — skipping action input patch",
@@ -352,7 +372,7 @@ function applyLocalEnvironmentActionModalDraftPatch(currentSource) {
     return currentSource;
   }
 
-  const functionEnd = currentSource.indexOf("var wl=", functionStart);
+  const functionEnd = currentSource.indexOf("var _d=", functionStart);
   if (functionEnd === -1) {
     console.warn(
       "WARN: Could not find local environment action modal component boundary — skipping action input patch",
@@ -363,9 +383,9 @@ function applyLocalEnvironmentActionModalDraftPatch(currentSource) {
   const beforeFunction = currentSource.slice(0, functionStart);
   const afterFunction = currentSource.slice(functionEnd);
   let patchedFunction = currentSource.slice(functionStart, functionEnd);
-  const stateNeedle = "workspaceRoot:u}=e,d=zt()";
+  const stateNeedle = "workspaceRoot:u}=e,d=Gt()";
   const statePatch =
-    "workspaceRoot:u}=e,[codexLinuxActionDraft,codexLinuxSetActionDraft]=(0,Q.useState)(()=>n),codexLinuxUpdateActionDraft=e=>(codexLinuxSetActionDraft(t=>({...t,...e})),l(e)),d=zt()";
+    "workspaceRoot:u}=e,[codexLinuxActionDraft,codexLinuxSetActionDraft]=(0,Q.useState)(()=>n),codexLinuxUpdateActionDraft=e=>(codexLinuxSetActionDraft(t=>({...t,...e})),l(e)),d=Gt()";
   const requiredReplacements = [
     {
       needle: stateNeedle,
