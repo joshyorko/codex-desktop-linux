@@ -288,6 +288,60 @@ SCRIPT
     assert_file_exists "$pkg_root/opt/codex-desktop/resources/node-runtime/bin/node"
 }
 
+test_deb_builder_rebuilds_deleted_updater_source() {
+    info "Checking package builder recovers from deleted updater binary source"
+    local workspace="$TMP_DIR/deb-deleted-updater-source"
+    local bin_dir="$workspace/bin"
+    local app_dir="$workspace/app"
+    local dist_dir="$workspace/dist"
+    local pkg_root="$workspace/deb-root"
+    local cargo_target_dir="$workspace/cargo-target"
+
+    mkdir -p "$workspace" "$dist_dir"
+    make_stub_bin_dir "$bin_dir"
+    make_fake_app "$app_dir"
+
+    cat > "$bin_dir/dpkg" <<'SCRIPT'
+#!/usr/bin/env bash
+if [ "$1" = "--print-architecture" ]; then
+    echo amd64
+    exit 0
+fi
+exit 0
+SCRIPT
+    cat > "$bin_dir/dpkg-deb" <<'SCRIPT'
+#!/usr/bin/env bash
+output="${@: -1}"
+mkdir -p "$(dirname "$output")"
+touch "$output"
+SCRIPT
+    cat > "$bin_dir/cargo" <<'SCRIPT'
+#!/usr/bin/env bash
+set -euo pipefail
+target_dir="${CARGO_TARGET_DIR:-target}"
+mkdir -p "$target_dir/release"
+cat > "$target_dir/release/codex-update-manager" <<'BIN'
+#!/usr/bin/env bash
+echo rebuilt updater
+BIN
+chmod +x "$target_dir/release/codex-update-manager"
+SCRIPT
+    chmod +x "$bin_dir/dpkg" "$bin_dir/dpkg-deb" "$bin_dir/cargo"
+
+    PATH="$bin_dir:$PATH" \
+    APP_DIR_OVERRIDE="$app_dir" \
+    PKG_ROOT_OVERRIDE="$pkg_root" \
+    DIST_DIR_OVERRIDE="$dist_dir" \
+    CARGO_TARGET_DIR="$cargo_target_dir" \
+    UPDATER_BINARY_SOURCE="$workspace/codex-update-manager (deleted)" \
+    PACKAGE_VERSION="2026.03.24.120000+rebuilt" \
+    bash "$REPO_DIR/scripts/build-deb.sh"
+
+    assert_file_exists "$dist_dir/codex-desktop_2026.03.24.120000+rebuilt_amd64.deb"
+    assert_file_exists "$pkg_root/usr/bin/codex-update-manager"
+    assert_contains "$pkg_root/usr/bin/codex-update-manager" "rebuilt updater"
+}
+
 test_update_builder_preserves_enabled_linux_features_config() {
     info "Checking update-builder preserves sanitized enabled Linux feature config"
     local workspace="$TMP_DIR/update-builder-linux-features"
@@ -5250,6 +5304,7 @@ main() {
     test_common_helper_sourcing
     test_package_payload_permission_normalization
     test_deb_builder_smoke
+    test_deb_builder_rebuilds_deleted_updater_source
     test_update_builder_preserves_enabled_linux_features_config
     test_update_builder_source_info_survives_without_git_checkout
     test_linux_feature_package_hook_discovery_failure_blocks_build

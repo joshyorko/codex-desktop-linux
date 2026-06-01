@@ -447,8 +447,18 @@ find_cargo_command() {
     return 1
 }
 
+updater_build_output_binary() {
+    local target_dir="${CARGO_TARGET_DIR:-$REPO_DIR/target}"
+    case "$target_dir" in
+        /*) ;;
+        *) target_dir="$REPO_DIR/$target_dir" ;;
+    esac
+    printf '%s\n' "$target_dir/release/codex-update-manager"
+}
+
 ensure_updater_binary() {
     local cargo_cmd=""
+    local built_binary=""
 
     if ! package_with_updater_enabled; then
         return
@@ -466,6 +476,10 @@ Install the Rust toolchain:
 
     info "Building codex-update-manager release binary"
     "$cargo_cmd" build --release -p codex-update-manager >&2
+    built_binary="$(updater_build_output_binary)"
+    if [ -x "$built_binary" ]; then
+        UPDATER_BINARY_SOURCE="$built_binary"
+    fi
     [ -x "$UPDATER_BINARY_SOURCE" ] || error "Failed to build updater binary: $UPDATER_BINARY_SOURCE"
 }
 
