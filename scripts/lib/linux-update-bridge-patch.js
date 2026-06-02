@@ -190,10 +190,10 @@ function applyCurrentBootstrapUpdaterBridgePatch(currentSource) {
   const bridgeHandlersStart = setSparkleBridgeHandlersVar == null
     ? -1
     : patchedSource.indexOf(`${setSparkleBridgeHandlersVar}({`, destructureMatch.index ?? 0);
-  const bridgeHandlersSlice = bridgeHandlersStart === -1
+  const bridgeHandlersSearchSource = bridgeHandlersStart === -1
     ? ""
-    : patchedSource.slice(bridgeHandlersStart, bridgeHandlersStart + 1500);
-  const messageDispatcherVar = bridgeHandlersSlice.match(
+    : patchedSource.slice(bridgeHandlersStart);
+  const messageDispatcherVar = bridgeHandlersSearchSource.match(
     /([A-Za-z_$][\w$]*)\.sendMessageToAllRegisteredWindows\(\{type:`app-update-ready-changed`/,
   )?.[1] ?? null;
   if (messageDispatcherVar == null) {

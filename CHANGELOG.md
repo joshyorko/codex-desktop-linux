@@ -56,6 +56,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- The opt-in Linux AppShots bare-modifier shortcuts now require left and right
+  modifier keycodes, preventing a fast double-tap on one physical Alt or Shift
+  key from opening AppShots.
 - The wrapper updater no longer offers a "downgrade as update" when the
   installed build is ahead of the tracked remote. Detection records dev mode
   when the candidate does not descend from the installed commit, clears stale

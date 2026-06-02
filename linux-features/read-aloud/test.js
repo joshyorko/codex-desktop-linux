@@ -829,21 +829,35 @@ test("general settings patch exports a dedicated read aloud settings page", () =
   assert.match(patched, /settings\.readAloud\.voice\.title/);
 });
 
+test("general settings patch exports read aloud from the current inner chunk", () => {
+  const source = [
+    "function $n(){return (0,$.jsxs)(vt,{children:[]})}",
+    "export{ir as i,rr as n,$n as r,Cr as t};",
+  ].join("");
+  const patched = twice(applyGeneralSettingsPatch, source);
+  assert.match(patched, /function codexLinuxReadAloudSettingsPage/);
+  assert.match(patched, /codexLinuxReadAloudSettingsPage as ReadAloudSettings/);
+  assert.match(patched, /export\{ir as i,rr as n,\$n as r,Cr as t,codexLinuxReadAloudSettingsPage as ReadAloudSettings\}/);
+});
+
 test("general settings wrapper re-exports the read aloud settings page", () => {
   const source = 'import{r as e}from"./general-settings-Bvwhh0-i.js";export{e as GeneralSettings};';
   const patched = twice(applyGeneralSettingsWrapperPatch, source);
-  assert.match(patched, /import\{r as e\}from"\.\/general-settings-Bvwhh0-i\.js"/);
-  assert.match(patched, /export\{e as GeneralSettings,e as ReadAloudSettings\}/);
-  assert.doesNotMatch(patched, /ReadAloudSettings as t/);
+  assert.match(
+    patched,
+    /import\{r as e,ReadAloudSettings as codexLinuxReadAloudSettings\}from"\.\/general-settings-Bvwhh0-i\.js"/,
+  );
+  assert.match(patched, /export\{e as GeneralSettings,codexLinuxReadAloudSettings as ReadAloudSettings\}/);
+  assert.doesNotMatch(patched, /e as GeneralSettings,e as ReadAloudSettings/);
 });
 
-test("general settings wrapper removes a stale read aloud import", () => {
+test("general settings wrapper preserves an existing read aloud import", () => {
   const source =
     'import{r as e,ReadAloudSettings as t}from"./general-settings-CV9Safs7.js";export{e as GeneralSettings,t as ReadAloudSettings};';
   const patched = twice(applyGeneralSettingsWrapperPatch, source);
-  assert.match(patched, /import\{r as e\}from"\.\/general-settings-CV9Safs7\.js"/);
-  assert.match(patched, /export\{e as GeneralSettings,e as ReadAloudSettings\}/);
-  assert.doesNotMatch(patched, /ReadAloudSettings as t/);
+  assert.equal(patched, source);
+  assert.match(patched, /ReadAloudSettings as t/);
+  assert.doesNotMatch(patched, /e as GeneralSettings,e as ReadAloudSettings/);
 });
 
 test("settings nav patches add a visible read aloud section after computer use", () => {
@@ -1057,7 +1071,7 @@ test("settings asset patch creates a first-class read aloud settings section", (
     );
     assert.match(
       fs.readFileSync(path.join(assets, "general-settings-wrapper.js"), "utf8"),
-      /export\{e as GeneralSettings,e as ReadAloudSettings\}/,
+      /export\{e as GeneralSettings,codexLinuxReadAloudSettings as ReadAloudSettings\}/,
     );
   } finally {
     fs.rmSync(root, { recursive: true, force: true });

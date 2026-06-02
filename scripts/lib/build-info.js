@@ -72,7 +72,42 @@ function sanitizeSourceInfo(info) {
   const { sourceInfoPath, ...sanitized } = info;
   void sourceInfoPath;
   sanitized.remote = sanitizeGitRemoteUrl(sanitized.remote);
+  sanitized.commitUrl = githubCommitUrl(sanitized.remote, sanitized.commit);
   return sanitized;
+}
+
+function githubCommitUrl(remote, commit) {
+  const sha = typeof commit === "string" ? commit.trim() : "";
+  if (!/^[0-9a-f]{7,40}$/i.test(sha)) {
+    return null;
+  }
+  const value = sanitizeGitRemoteUrl(remote);
+  if (value == null) {
+    return null;
+  }
+
+  let ownerAndRepo = null;
+  try {
+    const url = new URL(value);
+    if (url.hostname.toLowerCase() !== "github.com") {
+      return null;
+    }
+    ownerAndRepo = url.pathname.replace(/^\/+/, "");
+  } catch {
+    const scpMatch = value.match(/^(?:[^@]+@)?github\.com:([^/]+\/[^/]+?)(?:\.git)?$/i);
+    if (scpMatch) {
+      ownerAndRepo = scpMatch[1];
+    }
+  }
+
+  if (ownerAndRepo == null) {
+    return null;
+  }
+  ownerAndRepo = ownerAndRepo.replace(/\/+$/, "").replace(/\.git$/i, "");
+  if (!/^[^/\s]+\/[^/\s]+$/.test(ownerAndRepo)) {
+    return null;
+  }
+  return `https://github.com/${ownerAndRepo}/commit/${sha}`;
 }
 
 function parseWrapperVersion(content) {
@@ -102,12 +137,14 @@ function sourceInfoFromGit(repoDir, env = process.env) {
 
   const commit = overrideCommit || runGit(repoDir, ["rev-parse", "HEAD"]);
   const status = runGit(repoDir, ["status", "--porcelain"]);
+  const remote = sanitizeGitRemoteUrl(env.CODEX_LINUX_SOURCE_REMOTE?.trim() || runGit(repoDir, ["remote", "get-url", "origin"]));
   return {
     commit,
     shortCommit: commit == null ? null : commit.slice(0, 12),
     version: readWrapperVersion(repoDir),
     branch: env.CODEX_LINUX_SOURCE_BRANCH?.trim() || runGit(repoDir, ["branch", "--show-current"]),
-    remote: sanitizeGitRemoteUrl(env.CODEX_LINUX_SOURCE_REMOTE?.trim() || runGit(repoDir, ["remote", "get-url", "origin"])),
+    remote,
+    commitUrl: githubCommitUrl(remote, commit),
     describe: env.CODEX_LINUX_SOURCE_DESCRIBE?.trim() || runGit(repoDir, ["describe", "--always", "--dirty", "--tags"]),
     dirty: status != null && status.length > 0,
   };
@@ -133,6 +170,7 @@ function sourceInfo(repoDir, env = process.env) {
     version: readWrapperVersion(repoDir),
     branch: env.CODEX_LINUX_SOURCE_BRANCH?.trim() || null,
     remote: sanitizeGitRemoteUrl(env.CODEX_LINUX_SOURCE_REMOTE?.trim() || null),
+    commitUrl: githubCommitUrl(env.CODEX_LINUX_SOURCE_REMOTE?.trim() || null, env.CODEX_LINUX_SOURCE_COMMIT?.trim() || null),
     describe: env.CODEX_LINUX_SOURCE_DESCRIBE?.trim() || null,
     dirty: null,
     provenance: "unknown",
@@ -309,6 +347,7 @@ if (require.main === module) {
 
 module.exports = {
   buildInfo,
+  githubCommitUrl,
   isoTimestamp,
   packageProfile,
   sanitizeGitRemoteUrl,

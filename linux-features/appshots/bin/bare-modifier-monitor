@@ -137,6 +137,7 @@ now_ms() {
 }
 
 last_tap_ms=0
+last_tap_code=""
 active=0
 
 keyboard_ids="$(
@@ -209,19 +210,27 @@ while read -r pending code <&3; do
     code="${code//[[:space:]]/}"
     [ -n "$code" ] || continue
 
-    is_target_keycode "$code" || continue
+    if ! is_target_keycode "$code"; then
+        if [ "$pending" = "press" ]; then
+            last_tap_ms=0
+            last_tap_code=""
+        fi
+        continue
+    fi
 
     if [ "$pending" = "press" ]; then
         current_ms="$(now_ms)"
         elapsed_ms=$((current_ms - last_tap_ms))
-        if [ "$last_tap_ms" -gt 0 ] && [ "$elapsed_ms" -le "$double_tap_ms" ]; then
+        if [ "$last_tap_ms" -gt 0 ] && [ "$elapsed_ms" -le "$double_tap_ms" ] && [ "$code" != "$last_tap_code" ]; then
             active=1
             last_tap_ms=0
+            last_tap_code=""
             if [ "$trigger_mode" = "press" ]; then
                 echo "down"
             fi
         else
             last_tap_ms="$current_ms"
+            last_tap_code="$code"
         fi
         continue
     fi

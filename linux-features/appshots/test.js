@@ -136,6 +136,11 @@ test("stages the Linux bare modifier monitor helper", () => {
   assert.match(helperSource, /pkill -TERM -P "\$pid"/);
   assert.match(helperSource, /while read -r pending code <&3; do/);
   assert.match(helperSource, /\) >"\$event_fifo" 2>\/dev\/null &/);
+  assert.match(helperSource, /doublealt\|doubleoption\|alt\+alt/);
+  assert.match(helperSource, /doubleshift\|shift\+shift\|leftshift\+rightshift/);
+  assert.match(helperSource, /Shift_L Shift_R/);
+  assert.match(helperSource, /last_tap_code=""/);
+  assert.match(helperSource, /\[ "\$code" != "\$last_tap_code" \]/);
   assert.doesNotMatch(helperSource, /while IFS= read -r pending code/);
   assert.doesNotMatch(helperSource, /test-xi2 --root/);
   execFileSync("bash", ["-n", path.join(__dirname, "bin", "bare-modifier-monitor")]);
@@ -217,6 +222,7 @@ test("enables AppShots hotkeys and bare modifiers on Linux", () => {
     /function QC\(e,t,r=`press`\)\{if\(process\.platform!==`darwin`&&process\.platform!==`linux`\)return null;/,
   );
   assert.match(patched, /appshotHotkey`\)\?\?\(process\.platform===`linux`\?null:uG\)/);
+  assert.doesNotMatch(patched, /process\.platform===`linux`\?`DoubleShift`/);
   assert.doesNotMatch(patched, /process\.platform===`linux`&&i!=null&&iw\(i\)&&\(i=null\)/);
   assert.match(
     patched,
