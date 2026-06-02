@@ -37,6 +37,7 @@ const REMOTE_CONTROL_STALE_SELECTION_EFFECT_MARKER = "codexLinuxRemoteControlRec
 const REMOTE_MOBILE_CHROME_BRIDGE_MARKER = "codexLinuxRemoteMobileBrowserBackends";
 const REMOTE_CONTROL_LOAD_GATE_MARKER = "codexLinuxRemoteControlLoadGateEnabled";
 const REMOTE_CONTROL_FEATURE_SYNC_MARKER = "codexLinuxRemoteControlFeatureSyncEnabled";
+const REMOTE_CONTROL_FEATURE_SYNC_HOST_SCOPE_MARKER = "codexLinuxRemoteControlFeatureSyncHostScoped";
 const REMOTE_CONTROL_LOAD_GATE_NEEDLE =
   /function ([A-Za-z_$][\w$]*)\(\)\{return ([A-Za-z_$][\w$]*)\(`1042620455`\)\}/u;
 const REMOTE_MOBILE_THREAD_RUNTIME_MARKER = "codexLinuxRemoteMobileThreadRuntimeStatus";
@@ -590,10 +591,6 @@ function applyLinuxRemoteControlLoadGatePatch(source) {
 }
 
 function applyLinuxRemoteControlFeatureSyncPatch(source) {
-  if (source.includes(REMOTE_CONTROL_FEATURE_SYNC_MARKER)) {
-    return source;
-  }
-
   if (!source.includes("set-experimental-feature-enablement-for-host")) {
     return source;
   }
@@ -604,32 +601,95 @@ function applyLinuxRemoteControlFeatureSyncPatch(source) {
   // remote_control on and drop the unsupported remote_plugin entry before sync.
   // The core Linux patch may already have removed the remote_plugin tail; compose
   // with that sanitized shape instead of treating it as drift.
+  let patched = source;
+  let changed = false;
   const enablementRegex =
     /(for\(let ([A-Za-z_$][\w$]*) of [A-Za-z_$][\w$]*\)\{let ([A-Za-z_$][\w$]*)=[A-Za-z_$][\w$]*\[\2\];\3!=null&&\(([A-Za-z_$][\w$]*)\[\2\]=\3\)\})return \4\[([A-Za-z_$][\w$]*)\]=([A-Za-z_$][\w$]*),\4\}/u;
-  const match = source.match(enablementRegex);
-  if (match != null) {
-    const [, loopBlock, , , enablementVar, remotePluginVar, remotePluginValue] = match;
-    const replacement =
-      `${loopBlock}return typeof navigator!=\`undefined\`&&navigator.userAgent.includes(\`Linux\`)` +
-      `?(${enablementVar}.remote_control=!0,/*${REMOTE_CONTROL_FEATURE_SYNC_MARKER}*/${enablementVar})` +
-      `:(${enablementVar}[${remotePluginVar}]=${remotePluginValue},${enablementVar})}`;
-    return source.replace(enablementRegex, replacement);
+  if (!patched.includes(REMOTE_CONTROL_FEATURE_SYNC_MARKER)) {
+    const match = patched.match(enablementRegex);
+    if (match != null) {
+      const [, loopBlock, , , enablementVar, remotePluginVar, remotePluginValue] = match;
+      const replacement =
+        `${loopBlock}return typeof navigator!=\`undefined\`&&navigator.userAgent.includes(\`Linux\`)` +
+        `?(${REMOTE_CONTROL_FEATURE_SYNC_MARKER}(arguments[2],arguments[3])&&(${enablementVar}.remote_control=!0),${enablementVar})` +
+        `:(${enablementVar}[${remotePluginVar}]=${remotePluginValue},${enablementVar})}` +
+        `function ${REMOTE_CONTROL_FEATURE_SYNC_MARKER}(e,t){return e==null||t==null||e===t}`;
+      patched = patched.replace(enablementRegex, replacement);
+      changed = true;
+    } else {
+      const sanitizedEnablementRegex =
+        /(for\(let ([A-Za-z_$][\w$]*) of [A-Za-z_$][\w$]*\)\{let ([A-Za-z_$][\w$]*)=[A-Za-z_$][\w$]*\[\2\];\3!=null&&\(([A-Za-z_$][\w$]*)\[\2\]=\3\)\})return \4\}/u;
+      const sanitizedMatch = patched.match(sanitizedEnablementRegex);
+      if (sanitizedMatch != null) {
+        const [, loopBlock, , , enablementVar] = sanitizedMatch;
+        const replacement =
+          `${loopBlock}return typeof navigator!=\`undefined\`&&navigator.userAgent.includes(\`Linux\`)` +
+          `?(${REMOTE_CONTROL_FEATURE_SYNC_MARKER}(arguments[2],arguments[3])&&(${enablementVar}.remote_control=!0),${enablementVar})` +
+          `:${enablementVar}}function ${REMOTE_CONTROL_FEATURE_SYNC_MARKER}(e,t){return e==null||t==null||e===t}`;
+        patched = patched.replace(sanitizedEnablementRegex, replacement);
+        changed = true;
+      }
+    }
   }
 
-  const sanitizedEnablementRegex =
-    /(for\(let ([A-Za-z_$][\w$]*) of [A-Za-z_$][\w$]*\)\{let ([A-Za-z_$][\w$]*)=[A-Za-z_$][\w$]*\[\2\];\3!=null&&\(([A-Za-z_$][\w$]*)\[\2\]=\3\)\})return \4\}/u;
-  const sanitizedMatch = source.match(sanitizedEnablementRegex);
-  if (sanitizedMatch != null) {
-    const [, loopBlock, , , enablementVar] = sanitizedMatch;
-    const replacement =
-      `${loopBlock}return typeof navigator!=\`undefined\`&&navigator.userAgent.includes(\`Linux\`)` +
-      `?(${enablementVar}.remote_control=!0,/*${REMOTE_CONTROL_FEATURE_SYNC_MARKER}*/${enablementVar})` +
-      `:${enablementVar}}`;
-    return source.replace(sanitizedEnablementRegex, replacement);
+  const scoped = applyLinuxRemoteControlFeatureSyncHostScopePatch(patched);
+  if (scoped !== patched) {
+    patched = scoped;
+    changed = true;
+  }
+
+  if (changed || patched.includes(REMOTE_CONTROL_FEATURE_SYNC_MARKER)) {
+    return patched;
   }
 
   console.warn("WARN: Could not find app-server feature sync list - skipping Linux remote-control feature sync patch");
   return source;
+}
+
+function applyLinuxRemoteControlFeatureSyncHostScopePatch(source) {
+  if (source.includes(REMOTE_CONTROL_FEATURE_SYNC_HOST_SCOPE_MARKER)) {
+    return source;
+  }
+
+  const builderCallRegex =
+    /let ([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*),([A-Za-z_$][\w$]*|![01])\),([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)\.get\(([A-Za-z_$][\w$]*)\),/u;
+  const builderCallMatch = source.match(builderCallRegex);
+  if (builderCallMatch == null) {
+    return source;
+  }
+
+  const [
+    ,
+    enablementVar,
+    builderFn,
+    featureConfigVar,
+    remotePluginValueVar,
+    localHostVar,
+  ] = builderCallMatch;
+  const id = "[A-Za-z_$][\\w$]*";
+  const flatMapRegex = new RegExp(
+    `\\(0,(${id})\\.(${id})\\)\\((${id})\\.get\\((${id})\\),${enablementVar}\\)\\?\\[\\]:` +
+      `\\(\\3\\.set\\(\\4,${enablementVar}\\),\\[(${id})\\(\\x60set-experimental-feature-enablement-for-host\\x60,` +
+      `\\{hostId:\\4,enablement:${enablementVar}\\}\\)`,
+    "u",
+  );
+  const match = source.match(flatMapRegex);
+  if (match == null) {
+    return source;
+  }
+
+  const [needle, compareNamespaceVar, compareFnVar, cacheMapVar, hostVar, requestFnVar] = match;
+  const helperName = "codexLinuxRemoteControlFeatureSyncForHost";
+  const scopedEnablement =
+    `${helperName}(${builderFn},${featureConfigVar},${remotePluginValueVar},${hostVar},${localHostVar})`;
+  const replacement =
+    `(0,${compareNamespaceVar}.${compareFnVar})(${cacheMapVar}.get(${hostVar}),${scopedEnablement})?[]:` +
+    `(${cacheMapVar}.set(${hostVar},${scopedEnablement}),[${requestFnVar}(\`set-experimental-feature-enablement-for-host\`,` +
+    `{hostId:${hostVar},enablement:${scopedEnablement}})/*${REMOTE_CONTROL_FEATURE_SYNC_HOST_SCOPE_MARKER}*/`;
+  const helper =
+    `function ${helperName}(e,t,n,r,i){return e(t,n,r,i)}`;
+
+  return `${source.replace(needle, replacement)}\n${helper}`;
 }
 
 function applyLinuxRemoteControlVisibilityPatch(source) {
