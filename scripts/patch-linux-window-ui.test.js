@@ -72,6 +72,8 @@ const {
 const {
   keybindsSettingsAsset,
   linuxDesktopSettingsAsset,
+  applyKeybindsSettingsSharedPatch,
+  applyLinuxDesktopSettingsSharedPatch,
 } = require("./patches/keybinds-settings.js");
 const {
   validateReport,
@@ -792,14 +794,6 @@ function legacySettingsPersistenceBundleFixture() {
   ].join("");
 }
 
-function currentSettingsPersistenceBundleFixture() {
-  return [
-    "let i=require(`node:path`),o=require(`node:fs`);",
-    "var sG=`.codex-global-state.json`,cG=`config.toml`;",
-    "class AppServer{setGlobalStateValue(e,t,n){this.globalState.set(e,t,n)} handlers={\"set-global-state\":async({key:e,value:t,origin:n})=>(this.setGlobalStateValue(e,t,n),{success:!0})}}",
-  ].join("");
-}
-
 function runSettingsPersistence(patchedSource, env, key, value) {
   vm.runInNewContext(
     `${patchedSource};codexLinuxPersistSettingsState(${JSON.stringify(key)},${JSON.stringify(value)});`,
@@ -835,6 +829,17 @@ function settingsSharedBundleFixture() {
   return [
     '"general-settings":{id:`settings.nav.general-settings`,defaultMessage:`General`,description:`Title for general settings section`},appearance:{id:`settings.nav.appearance`,defaultMessage:`Appearance`,description:`Title for appearance settings section`},',
     "function titleForSection(e){switch(e){case`general-settings`:{let e;return t[2]===Symbol.for(`react.memo_cache_sentinel`)?(e=(0,d.jsx)(n,{id:`settings.section.general-settings`,defaultMessage:`General`,description:`Title for general settings section`}),t[2]=e):e=t[2],e}case`appearance`:return (0,d.jsx)(n,{id:`settings.section.appearance`,defaultMessage:`Appearance`,description:`Title for appearance settings section`})}}",
+  ].join("");
+}
+
+// Same bundle as settingsSharedBundleFixture() but with the minified JSX message
+// component bound to `r` instead of `n` (and the memo cache as `o[5]`), mirroring
+// the identifiers shipped in Codex 26.601.21317 (settings-shared-BibDzP9i.js).
+// The minifier picks these letters arbitrarily, so the patch must not hardcode them.
+function settingsSharedBundleWithDriftingJsxAliasFixture() {
+  return [
+    '"general-settings":{id:`settings.nav.general-settings`,defaultMessage:`General`,description:`Title for general settings section`},appearance:{id:`settings.nav.appearance`,defaultMessage:`Appearance`,description:`Title for appearance settings section`},',
+    "function titleForSection(e){switch(e){case`general-settings`:{let e;return o[5]===Symbol.for(`react.memo_cache_sentinel`)?(e=(0,d.jsx)(r,{id:`settings.section.general-settings`,defaultMessage:`General`,description:`Title for general settings section`}),o[5]=e):e=o[5],e}case`appearance`:return (0,d.jsx)(r,{id:`settings.section.appearance`,defaultMessage:`Appearance`,description:`Title for appearance settings section`})}}",
   ].join("");
 }
 
@@ -1786,9 +1791,9 @@ test("persists Linux settings with current setGlobalStateValue handler shape", (
     const settingsFile = path.join(tempRoot, "config", "codex-desktop", "settings.json");
     const patched = applyPatchTwice(applyLinuxSettingsPersistencePatch, currentSettingsPersistenceBundleFixture());
 
-    assert.match(patched, /var sG=`\.codex-global-state\.json`;function codexLinuxSettingsAppId/);
-    assert.match(patched, /var cG=`config\.toml`/);
-    assert.match(patched, /this\.setGlobalStateValue\(e,t,n\),codexLinuxPersistSettingsState\(e,t\)/);
+    assert.match(patched, /var s=`\.codex-global-state\.json`;function codexLinuxSettingsAppId/);
+    assert.match(patched, /var c=`config\.toml`/);
+    assert.match(patched, /this\.setGlobalStateValue\(a,b,c\),codexLinuxPersistSettingsState\(a,b\)/);
     runSettingsPersistence(
       patched,
       {
@@ -1879,10 +1884,10 @@ test("adds Linux settings persistence after current global-state handler drift",
   );
 
   assert.match(patched, /function codexLinuxSettingsAppId\(\)/);
-  assert.match(patched, /var cG=`config\.toml`;/);
+  assert.match(patched, /var c=`config\.toml`;/);
   assert.match(
     patched,
-    /"set-global-state":async\(\{key:e,value:t,origin:n\}\)=>\(this\.setGlobalStateValue\(e,t,n\),codexLinuxPersistSettingsState\(e,t\),\{success:!0\}\)/,
+    /"set-global-state":async\(\{key:a,value:b,origin:c\}\)=>\(this\.setGlobalStateValue\(a,b,c\),codexLinuxPersistSettingsState\(a,b\),\{success:!0\}\)/,
   );
 });
 
@@ -2165,6 +2170,32 @@ test("keeps Linux desktop toggles visible with native Keyboard Shortcuts", () =>
   } finally {
     fs.rmSync(extractedDir, { recursive: true, force: true });
   }
+});
+
+test("adds the Linux desktop section title when the JSX message component identifier drifts", () => {
+  const patched = applyLinuxDesktopSettingsSharedPatch(
+    settingsSharedBundleWithDriftingJsxAliasFixture(),
+  );
+
+  // The injected case must reuse the bundle's actual identifiers (r / o[5]),
+  // not a hardcoded `n`, otherwise the section title renders blank.
+  assert.match(
+    patched,
+    /case`linux-desktop`:\{return \(0,d\.jsx\)\(r,\{id:`settings\.section\.linux-desktop`,defaultMessage:`Linux desktop`,description:`Title for Linux desktop settings section`\}\)\}/,
+  );
+  // The original general-settings case is preserved untouched.
+  assert.match(patched, /case`general-settings`:\{let e;return o\[5\]===Symbol\.for\(`react\.memo_cache_sentinel`\)/);
+});
+
+test("adds the keybinds section title when the JSX message component identifier drifts", () => {
+  const patched = applyKeybindsSettingsSharedPatch(
+    settingsSharedBundleWithDriftingJsxAliasFixture(),
+  );
+
+  assert.match(
+    patched,
+    /case`keybinds`:\{return \(0,d\.jsx\)\(r,\{id:`settings\.section\.keybinds`,defaultMessage:`Keybinds`,description:`Title for keybinds settings section`\}\)\}/,
+  );
 });
 
 test("keeps local environment action modal inputs editable inside stored modal content", () => {
