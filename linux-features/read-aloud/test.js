@@ -860,6 +860,18 @@ test("general settings wrapper preserves an existing read aloud import", () => {
   assert.doesNotMatch(patched, /e as GeneralSettings,e as ReadAloudSettings/);
 });
 
+test("general settings wrapper re-exports read aloud when side-effect imports split the wrapper", () => {
+  const source =
+    'import"./src-BRBmN298.js";import{r as e}from"./general-settings-DobuGNrH.js";import"./general-settings.search-BiUmOZih.js";export{e as GeneralSettings};';
+  const patched = twice(applyGeneralSettingsWrapperPatch, source);
+  assert.match(
+    patched,
+    /import\{r as e,ReadAloudSettings as codexLinuxReadAloudSettings\}from"\.\/general-settings-DobuGNrH\.js"/,
+  );
+  assert.match(patched, /import"\.\/general-settings\.search-BiUmOZih\.js";/);
+  assert.match(patched, /export\{e as GeneralSettings,codexLinuxReadAloudSettings as ReadAloudSettings\}/);
+});
+
 test("settings nav patches add a visible read aloud section after computer use", () => {
   const sections = "var n=[{slug:`browser-use`},{slug:`computer-use`},{slug:`mcp-settings`}];";
   const patchedSections = twice(applySettingsSectionsNavPatch, sections);

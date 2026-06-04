@@ -308,11 +308,23 @@ function applyGeneralSettingsWrapperPatch(source) {
   if (correctWrapperPattern.test(source)) {
     return source;
   }
-  return source.replace(
-    /import\{r as ([A-Za-z_$][\w$]*)\}from"(\.\/general-settings-[^"]+\.js)";export\{\1 as GeneralSettings(?:,\1 as ReadAloudSettings)?\};/,
-    (_match, generalAlias, innerAsset) =>
-      wrapperSource(generalAlias, "codexLinuxReadAloudSettings", innerAsset),
+  const wrapperRegex =
+    /import\{r as ([A-Za-z_$][\w$]*)\}from"(\.\/general-settings-[^"]+\.js)";/;
+  const wrapperMatch = source.match(wrapperRegex);
+  if (wrapperMatch == null) {
+    return source;
+  }
+  const [, generalAlias, innerAsset] = wrapperMatch;
+  const readAloudAlias = "codexLinuxReadAloudSettings";
+  const exportRegex = new RegExp(
+    `export\\{${generalAlias} as GeneralSettings(?:,${generalAlias} as ReadAloudSettings)?\\};`,
   );
+  if (!exportRegex.test(source)) {
+    return source;
+  }
+  return source
+    .replace(wrapperRegex, `import{r as ${generalAlias},ReadAloudSettings as ${readAloudAlias}}from"${innerAsset}";`)
+    .replace(exportRegex, `export{${generalAlias} as GeneralSettings,${readAloudAlias} as ReadAloudSettings};`);
 }
 
 function applySettingsSectionsNavPatch(source) {
