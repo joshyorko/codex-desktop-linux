@@ -852,8 +852,12 @@ test("general settings patch follows current export map instead of stale Gn alia
   assert.match(patched, /q\.Header/);
   assert.match(patched, /q\.Content/);
   assert.match(patched, /\(0,\$\.jsx\)\(wt,\{children:\(0,\$\.jsx\)\(codexLinuxReadAloudSettingsRow,\{\}\)\}/);
-  assert.match(patched, /let e=S\(D\),t=F\(\),n=\{key:"codex-linux-read-aloud-enabled",default:!1\}/);
-  assert.match(patched, /U\(e,n,t\)/);
+  assert.match(patched, /k\(`get-global-state`,\{params:\{key:"codex-linux-read-aloud-enabled"\}\}\)/);
+  assert.match(patched, /k\(`set-global-state`,\{params:\{key:"codex-linux-read-aloud-enabled",value:n\}\}\)/);
+  assert.match(patched, /k\(`set-global-state`,\{params:\{key:"codex-linux-read-aloud-kokoro-speed",value:t\}\}\)/);
+  assert.doesNotMatch(patched, /set-setting|get-setting/);
+  assert.doesNotMatch(patched, /let e=S\(D\),t=F\(\),n=\{key:"codex-linux-read-aloud-enabled",default:!1\}/);
+  assert.doesNotMatch(patched, /U\(e,n,t\)/);
   assert.doesNotMatch(patched, /function codexLinuxReadAloudSettingsPage\(\)\{return\(0,\$\.jsx\)\(pt/);
   assert.doesNotMatch(patched, /\(0,\$\.jsx\)\(ht,\{children:\(0,\$\.jsx\)\(codexLinuxReadAloudSettingsRow/);
   assert.ok(patched.indexOf("function codexLinuxReadAloudSettingsRow") > patched.indexOf("function Gn(){"));
