@@ -10,6 +10,8 @@ const CLOSE_GATE_PREFIX_LOOKBACK = 8000;
 const HANDLER_PREFIX_LOOKBACK = 12000;
 
 const linuxSettingsKeys = {
+  readAloud: "codex-linux-read-aloud-enabled",
+  readAloudKokoroSpeed: "codex-linux-read-aloud-kokoro-speed",
   promptWindow: "codex-linux-prompt-window-enabled",
   systemTray: "codex-linux-system-tray-enabled",
   warmStart: "codex-linux-warm-start-enabled",

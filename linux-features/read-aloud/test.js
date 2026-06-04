@@ -840,6 +840,30 @@ test("general settings patch exports read aloud from the current inner chunk", (
   assert.match(patched, /export\{ir as i,rr as n,\$n as r,Cr as t,codexLinuxReadAloudSettingsPage as ReadAloudSettings\}/);
 });
 
+test("general settings patch follows current export map instead of stale Gn aliases", () => {
+  const source = [
+    "function Gn(){return (0,$.jsx)(K,{label:`Service tier`})}",
+    "function nr(){return (0,$.jsxs)(q,{className:`gap-2`,children:[x,(0,$.jsx)(q.Content,{children:(0,$.jsxs)(wt,{children:[v,y,b]})})]})}",
+    "export{or as i,ar as n,nr as r,Tr as t};",
+  ].join("");
+  const patched = twice(applyGeneralSettingsPatch, source);
+  assert.match(patched, /function codexLinuxReadAloudSettingsPage\(\)\{return\(0,\$\.jsx\)\(St/);
+  assert.match(patched, /\(0,\$\.jsx\)\(W,\{electron:!0/);
+  assert.match(patched, /q\.Header/);
+  assert.match(patched, /q\.Content/);
+  assert.match(patched, /\(0,\$\.jsx\)\(wt,\{children:\(0,\$\.jsx\)\(codexLinuxReadAloudSettingsRow,\{\}\)\}/);
+  assert.match(patched, /k\(`get-global-state`,\{params:\{key:"codex-linux-read-aloud-enabled"\}\}\)/);
+  assert.match(patched, /k\(`set-global-state`,\{params:\{key:"codex-linux-read-aloud-enabled",value:n\}\}\)/);
+  assert.match(patched, /k\(`set-global-state`,\{params:\{key:"codex-linux-read-aloud-kokoro-speed",value:t\}\}\)/);
+  assert.doesNotMatch(patched, /set-setting|get-setting/);
+  assert.doesNotMatch(patched, /let e=S\(D\),t=F\(\),n=\{key:"codex-linux-read-aloud-enabled",default:!1\}/);
+  assert.doesNotMatch(patched, /U\(e,n,t\)/);
+  assert.doesNotMatch(patched, /function codexLinuxReadAloudSettingsPage\(\)\{return\(0,\$\.jsx\)\(pt/);
+  assert.doesNotMatch(patched, /\(0,\$\.jsx\)\(ht,\{children:\(0,\$\.jsx\)\(codexLinuxReadAloudSettingsRow/);
+  assert.ok(patched.indexOf("function codexLinuxReadAloudSettingsRow") > patched.indexOf("function Gn(){"));
+  assert.ok(patched.indexOf("function codexLinuxReadAloudSettingsRow") < patched.indexOf("function nr(){"));
+});
+
 test("general settings wrapper re-exports the read aloud settings page", () => {
   const source = 'import{r as e}from"./general-settings-Bvwhh0-i.js";export{e as GeneralSettings};';
   const patched = twice(applyGeneralSettingsWrapperPatch, source);
@@ -858,6 +882,18 @@ test("general settings wrapper preserves an existing read aloud import", () => {
   assert.equal(patched, source);
   assert.match(patched, /ReadAloudSettings as t/);
   assert.doesNotMatch(patched, /e as GeneralSettings,e as ReadAloudSettings/);
+});
+
+test("general settings wrapper re-exports read aloud when side-effect imports split the wrapper", () => {
+  const source =
+    'import"./src-BRBmN298.js";import{r as e}from"./general-settings-DobuGNrH.js";import"./general-settings.search-BiUmOZih.js";export{e as GeneralSettings};';
+  const patched = twice(applyGeneralSettingsWrapperPatch, source);
+  assert.match(
+    patched,
+    /import\{r as e,ReadAloudSettings as codexLinuxReadAloudSettings\}from"\.\/general-settings-DobuGNrH\.js"/,
+  );
+  assert.match(patched, /import"\.\/general-settings\.search-BiUmOZih\.js";/);
+  assert.match(patched, /export\{e as GeneralSettings,codexLinuxReadAloudSettings as ReadAloudSettings\}/);
 });
 
 test("settings nav patches add a visible read aloud section after computer use", () => {
