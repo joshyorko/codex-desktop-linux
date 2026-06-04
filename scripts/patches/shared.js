@@ -14,6 +14,8 @@ const COMPUTER_USE_UI_SETTINGS_KEY = "codex-linux-computer-use-ui-enabled";
 
 const linuxSettingsKeys = {
   computerUseUi: COMPUTER_USE_UI_SETTINGS_KEY,
+  readAloud: "codex-linux-read-aloud-enabled",
+  readAloudKokoroSpeed: "codex-linux-read-aloud-kokoro-speed",
   promptWindow: "codex-linux-prompt-window-enabled",
   systemTray: "codex-linux-system-tray-enabled",
   warmStart: "codex-linux-warm-start-enabled",

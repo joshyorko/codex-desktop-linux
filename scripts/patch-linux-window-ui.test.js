@@ -1803,6 +1803,28 @@ test("persists Linux settings with current setGlobalStateValue handler shape", (
       JSON.parse(fs.readFileSync(settingsFile, "utf8"))["codex-linux-computer-use-ui-enabled"],
       true,
     );
+    runSettingsPersistence(
+      patched,
+      {
+        CODEX_LINUX_SETTINGS_FILE: settingsFile,
+        HOME: path.join(tempRoot, "home"),
+      },
+      "codex-linux-read-aloud-enabled",
+      true,
+    );
+    runSettingsPersistence(
+      patched,
+      {
+        CODEX_LINUX_SETTINGS_FILE: settingsFile,
+        HOME: path.join(tempRoot, "home"),
+      },
+      "codex-linux-read-aloud-kokoro-speed",
+      1.15,
+    );
+
+    const settings = JSON.parse(fs.readFileSync(settingsFile, "utf8"));
+    assert.equal(settings["codex-linux-read-aloud-enabled"], true);
+    assert.equal(settings["codex-linux-read-aloud-kokoro-speed"], 1.15);
   } finally {
     fs.rmSync(tempRoot, { recursive: true, force: true });
   }
@@ -1829,6 +1851,20 @@ test("migrates already-patched Linux settings persistence away from codex-deskto
     assert.equal(
       JSON.parse(fs.readFileSync(path.join(xdgConfig, "codex-cua-lab", "settings.json"), "utf8"))["codex-linux-prompt-window-enabled"],
       false,
+    );
+    runSettingsPersistence(
+      patched,
+      {
+        CODEX_LINUX_APP_ID: "codex-cua-lab",
+        XDG_CONFIG_HOME: xdgConfig,
+      },
+      "codex-linux-read-aloud-enabled",
+      true,
+    );
+
+    assert.equal(
+      JSON.parse(fs.readFileSync(path.join(xdgConfig, "codex-cua-lab", "settings.json"), "utf8"))["codex-linux-read-aloud-enabled"],
+      true,
     );
     assert.equal(fs.existsSync(path.join(xdgConfig, "codex-desktop", "settings.json")), false);
   } finally {
