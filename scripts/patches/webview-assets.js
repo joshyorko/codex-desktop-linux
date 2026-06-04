@@ -5,6 +5,33 @@ const path = require("node:path");
 
 // Webview asset patches target hashed browser chunks copied out of app.asar.
 // They stay fail-soft because upstream chunk names and minified symbols drift.
+const LINUX_SAFE_MONOSPACE_FONT_STACK =
+  "\"Noto Sans Mono\", \"DejaVu Sans Mono\", \"Liberation Mono\", \"Ubuntu Mono\", ui-monospace, \"SFMono-Regular\", \"SF Mono\", Menlo, Consolas, monospace";
+
+function applyLinuxSafeMonospaceFontStackPatch(currentSource) {
+  const safeLinuxMonoFontPattern =
+    /`[^`]*(?:Noto Sans Mono|DejaVu Sans Mono|Liberation Mono|Ubuntu Mono)[^`]*monospace[^`]*`/u;
+  if (safeLinuxMonoFontPattern.test(currentSource)) {
+    return currentSource;
+  }
+
+  const unsafeDefaultStack = "`ui-monospace, \"SFMono-Regular\", Menlo, Consolas, monospace`";
+  if (currentSource.includes(unsafeDefaultStack)) {
+    return currentSource.replace(
+      unsafeDefaultStack,
+      `\`${LINUX_SAFE_MONOSPACE_FONT_STACK}\``,
+    );
+  }
+
+  if (currentSource.includes("ui-monospace") && currentSource.includes("monospace")) {
+    console.warn(
+      "WARN: Could not find Linux monospace font stack insertion point — skipping default font stack patch",
+    );
+  }
+
+  return currentSource;
+}
+
 function applyLinuxOpaqueWindowsDefaultPatch(currentSource) {
   let patchedSource = currentSource;
   let warnedMissingNeedle = false;
@@ -266,6 +293,82 @@ function applyLinuxAppServerFeatureEnablementPatch(currentSource) {
     featureArrayPatch,
     currentSource.slice(featureArrayIndex + featureArrayNeedle.length),
   ].join("");
+}
+
+function applyLinuxI18nGatePatch(currentSource) {
+  let patchedSource = currentSource.replace(
+    /([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*\?\.get\(`enable_i18n`,!1\)(?:,[^;]+?)?);let ([A-Za-z_$][\w$]*)=\1,([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*\?\.get\(`locale_source`,`IDE`\)),([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*)\.localeOverride\)/g,
+    (
+      _match,
+      gateVar,
+      gateExpression,
+      enabledVar,
+      localeSourceVar,
+      localeSourceExpression,
+      localeOverrideVar,
+      readLocaleOverrideVar,
+      settingsVar,
+    ) =>
+      `${gateVar}=${gateExpression};let ${localeSourceVar}=${localeSourceExpression},${localeOverrideVar}=${readLocaleOverrideVar}(${settingsVar}.localeOverride),${enabledVar}=${gateVar}||${localeOverrideVar}!=null`,
+  );
+
+  patchedSource = patchedSource.replace(
+    /([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*\([^)]*\)\?\.get\(`enable_i18n`,!0\))((?:,\[[^\]]+\]=[^;]+?)),([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*)\.localeOverride\),([A-Za-z_$][\w$]*);/g,
+    (
+      _match,
+      gateVar,
+      gateExpression,
+      betweenGateAndOverride,
+      localeOverrideVar,
+      readLocaleOverrideVar,
+      settingsVar,
+      nextVar,
+    ) =>
+      `${gateVar}=${gateExpression}${betweenGateAndOverride},${localeOverrideVar}=${readLocaleOverrideVar}(${settingsVar}.localeOverride);${gateVar}=${gateVar}||${localeOverrideVar}!=null;let ${nextVar};`,
+  );
+
+  patchedSource = patchedSource.replace(
+    /([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*\([^)]*\)\?\.get\(`enable_i18n`,!0\)),([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*)\.localeOverride\);/g,
+    (
+      match,
+      gateVar,
+      gateExpression,
+      localeOverrideVar,
+      readLocaleOverrideVar,
+      settingsVar,
+      offset,
+      source,
+    ) => {
+      const appliedMarker = `${gateVar}=${gateVar}||${localeOverrideVar}!=null;`;
+      if (source.startsWith(appliedMarker, offset + match.length)) {
+        return match;
+      }
+      return `${gateVar}=${gateExpression},${localeOverrideVar}=${readLocaleOverrideVar}(${settingsVar}.localeOverride);${appliedMarker}`;
+    },
+  );
+
+  if (currentSource.includes("enable_i18n") && patchedSource === currentSource) {
+    console.warn("WARN: Could not find i18n gate needle — skipping Linux i18n gate patch");
+  }
+
+  return patchedSource;
+}
+
+function applyLinuxProfileSettingsMenuPatch(currentSource) {
+  if (!currentSource.includes("codex.profileDropdown.settingsPage")) {
+    return currentSource;
+  }
+
+  const patchedSource = currentSource.replace(
+    /([A-Za-z_$][\w$]*)=[A-Za-z_$][\w$]*\(`4166894088`\)/g,
+    "$1=!0",
+  );
+
+  if (currentSource.includes("4166894088") && patchedSource === currentSource) {
+    console.warn("WARN: Could not find profile settings menu gate needle — skipping Linux settings menu patch");
+  }
+
+  return patchedSource;
 }
 
 function applyLinuxConfigWriteVersionConflictPatch(currentSource) {
@@ -908,7 +1011,7 @@ function applyLinuxFastModeModelGuardPatch(currentSource) {
     return patchedSource;
   }
 
-  if (/serviceTiers\.length\s*>\s*0/u.test(currentSource) && currentSource.includes("additionalSpeedTiers")) {
+  if (/\bserviceTiers\.length\s*>\s*0/u.test(currentSource)) {
     console.warn(
       "WARN: Could not find fast-mode model guard insertion point — skipping fast-mode crash guard patch",
     );
@@ -939,9 +1042,12 @@ module.exports = {
   applyBrowserAnnotationScreenshotPatch,
   applyLinuxAppServerFeatureEnablementPatch,
   applyLinuxConfigWriteVersionConflictPatch,
+  applyLinuxI18nGatePatch,
+  applyLinuxProfileSettingsMenuPatch,
   applyPersistentRateLimitFooterPatch,
   applyLinuxAppSunsetPatch,
   applyLinuxOpaqueWindowsDefaultPatch,
+  applyLinuxSafeMonospaceFontStackPatch,
   applyLinuxFastModeModelGuardPatch,
   applyLocalEnvironmentActionModalDraftPatch,
   applySubagentNicknameMetadataPatch,

@@ -18,6 +18,7 @@ const {
   applyLinuxComputerUseInstallFlowPatch,
   applyLinuxComputerUsePluginGatePatch,
   applyLinuxComputerUseRendererAvailabilityPatch,
+  applyLinuxDesktopSettingsIndexPatch,
   applyLinuxAvatarOverlayMousePassthroughPatch,
   applyBrowserUseNodeReplApprovalPatch,
   applyLinuxBrowserUseIabVisibleOnCreatePatch,
@@ -57,6 +58,7 @@ const {
   patchExtractedApp,
   patchPackageJson,
   patchLinuxAppUpdaterBridge,
+  patchKeybindsSettingsAssets,
   patchAutomationScheduleAssets,
   createPatchReport,
   corePatchDescriptors,
@@ -67,6 +69,10 @@ const {
   parseOsRelease,
   resolveDesktopName,
 } = require("./patch-linux-window-ui.js");
+const {
+  keybindsSettingsAsset,
+  linuxDesktopSettingsAsset,
+} = require("./patches/keybinds-settings.js");
 const {
   validateReport,
 } = require("./ci/validate-patch-report.js");
@@ -82,6 +88,9 @@ const {
   applyPersistentRateLimitFooterPatch,
   applyLinuxAppServerFeatureEnablementPatch,
   applyLinuxConfigWriteVersionConflictPatch,
+  applyLinuxI18nGatePatch,
+  applyLinuxProfileSettingsMenuPatch,
+  applyLinuxSafeMonospaceFontStackPatch,
 } = require("./patches/webview-assets.js");
 const { patchAssetFiles } = require("./patches/shared.js");
 
@@ -205,6 +214,39 @@ test("asset patch helpers match every file when passed a global regex", () => {
   } finally {
     fs.rmSync(tempRoot, { recursive: true, force: true });
   }
+});
+
+test("Linux safe monospace font stack patch prioritizes Linux mono families", () => {
+  const source = "var e=`ui-monospace, \"SFMono-Regular\", Menlo, Consolas, monospace`;export{e as t};";
+  const patched = applyPatchTwice(applyLinuxSafeMonospaceFontStackPatch, source);
+
+  assert.match(
+    patched,
+    /`"Noto Sans Mono", "DejaVu Sans Mono", "Liberation Mono", "Ubuntu Mono", ui-monospace,/,
+  );
+  assert.doesNotMatch(patched, /var e=`ui-monospace, "SFMono-Regular"/);
+});
+
+test("Linux safe monospace font stack patch accepts upstream-safe stacks", () => {
+  const source =
+    "var e=`DejaVu Sans Mono, ui-monospace, \"SFMono-Regular\", Menlo, Consolas, monospace`;export{e as t};";
+  const { value, warnings } = captureWarns(() =>
+    applyLinuxSafeMonospaceFontStackPatch(source),
+  );
+
+  assert.equal(value, source);
+  assert.deepEqual(warnings, []);
+});
+
+test("Linux safe monospace font stack patch warns when the unsafe stack drifts", () => {
+  const source = "var e=buildFontStack(`ui-monospace`,`monospace`);export{e as t};";
+  const { value, warnings } = captureWarns(() =>
+    applyLinuxSafeMonospaceFontStackPatch(source),
+  );
+
+  assert.equal(value, source);
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /Could not find Linux monospace font stack insertion point/);
 });
 
 test("subagent nickname metadata patch accepts session metadata shape", () => {
@@ -532,6 +574,8 @@ test("default core patch descriptors are grouped and unique", () => {
     "linux-launch-actions",
     "linux-hotkey-window-prewarm",
     "linux-git-origins-source-fallback",
+    "linux-i18n-gate",
+    "linux-profile-settings-menu",
     "automation-schedule-multi-time-rrule",
     "linux-app-sunset-gate",
     "linux-app-server-feature-enablement",
@@ -540,6 +584,7 @@ test("default core patch descriptors are grouped and unique", () => {
     "opaque-window-default-webview-index",
     "opaque-window-default-resolved-theme",
     "linux-fast-mode-model-guard",
+    "linux-safe-monospace-font-stack",
     "subagent-nickname-metadata-shape",
     "local-environment-action-modal-draft",
     "linux-computer-use-ui-availability",
@@ -566,6 +611,18 @@ test("default core patch descriptors are grouped and unique", () => {
     descriptors.find((descriptor) => descriptor.id === "local-environment-action-modal-draft")?.ciPolicy,
     "optional",
   );
+});
+
+test("fast-mode guard descriptor follows upstream service-tier bundle names", () => {
+  const descriptor = corePatchDescriptors().find((descriptor) =>
+    descriptor.id === "linux-fast-mode-model-guard",
+  );
+
+  assert.ok(descriptor.pattern.test("use-is-fast-mode-enabled-abc.js"));
+  assert.ok(descriptor.pattern.test("read-service-tier-for-request-BJ8QN0Q7.js"));
+  assert.ok(descriptor.pattern.test("use-service-tier-settings-DFXPADNF.js"));
+  assert.ok(descriptor.pattern.test("app-server-manager-signals-BOGyjFm3.js"));
+  assert.equal(descriptor.pattern.test("service-tier-icons-CsNhab5W.js"), false);
 });
 
 function trayBundleFixture() {
@@ -772,6 +829,70 @@ function keybindsIndexBundleWithLazyAliasDriftFixture() {
     "(0,Z.lazy)(()=>s(",
     "(0,R.lazy)(()=>q(",
   );
+}
+
+function settingsSharedBundleFixture() {
+  return [
+    '"general-settings":{id:`settings.nav.general-settings`,defaultMessage:`General`,description:`Title for general settings section`},appearance:{id:`settings.nav.appearance`,defaultMessage:`Appearance`,description:`Title for appearance settings section`},',
+    "function titleForSection(e){switch(e){case`general-settings`:{let e;return t[2]===Symbol.for(`react.memo_cache_sentinel`)?(e=(0,d.jsx)(n,{id:`settings.section.general-settings`,defaultMessage:`General`,description:`Title for general settings section`}),t[2]=e):e=t[2],e}case`appearance`:return (0,d.jsx)(n,{id:`settings.section.appearance`,defaultMessage:`Appearance`,description:`Title for appearance settings section`})}}",
+  ].join("");
+}
+
+function linuxDesktopRouteBundleFixture() {
+  return [
+    "var DE={",
+    '"read-aloud-settings":(0,$.lazy)(()=>Xr(()=>import(`./general-settings-read.js`),[],import.meta.url)),',
+    '"general-settings":(0,$.lazy)(()=>Xr(()=>import(`./general-settings-A.js`),[],import.meta.url)),',
+    "profile:(0,$.lazy)(()=>Xr(()=>import(`./profile-A.js`),[],import.meta.url)),",
+    '"keyboard-shortcuts":(0,$.lazy)(()=>Xr(()=>import(`./keyboard-shortcuts-settings-A.js`),[],import.meta.url))',
+    "};",
+  ].join("");
+}
+
+function linuxDesktopNavigationBundleFixture() {
+  return [
+    'var ye={"general-settings":q,profile:ee,"keyboard-shortcuts":ve,appearance:le};',
+    "var xe=[`general-settings`,`profile`,`appearance`,`keyboard-shortcuts`];",
+    "var Se=[{key:`app`,slugs:[`general-settings`,`profile`,`appearance`]},{key:`connection`,slugs:[`agent`,`keyboard-shortcuts`}]}];",
+    "function visible(e){switch(e.slug){case`appearance`:return!0;case`general-settings`:case`agent`:case`personalization`:return!0;case`keyboard-shortcuts`:return!0}}",
+    "function loading(H){let W=!1;if(H)bb0:switch(H.slug){case`appearance`:case`general-settings`:case`agent`:case`git-settings`:case`data-controls`:case`personalization`:W=!1;break bb0;case`keyboard-shortcuts`:W=!1;break bb0}return W}",
+  ].join("");
+}
+
+function createNativeKeyboardShortcutsSettingsFixture() {
+  const extractedDir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-native-shortcuts-"));
+  const assetsDir = path.join(extractedDir, "webview", "assets");
+  fs.mkdirSync(assetsDir, { recursive: true });
+
+  const writeAsset = (name, source = "") => {
+    fs.writeFileSync(path.join(assetsDir, name), source, "utf8");
+  };
+
+  writeAsset("chunk-A.js", "");
+  writeAsset(
+    "jsx-runtime-A.js",
+    'import{s as s}from"./chunk-A.js";function n(){return{}}function t(){return{jsx(){},jsxs(){},Fragment:"Fragment"}}react.transitional.element;export{n,t};',
+  );
+  writeAsset(
+    "setting-storage-A.js",
+    'async function requestCodex(...args){let[request]=args,{params:params,source:source}=request;return send("vscode://codex/",params)}export{requestCodex as z};',
+  );
+  writeAsset("general-settings-A.js", "hotkey-window-hotkey-state");
+  writeAsset("toggle-A.js", "export{t};");
+  writeAsset("settings-row-A.js", "export{n};");
+  writeAsset("settings-content-layout-A.js", "export{n,r,t};");
+  writeAsset("settings-group-A.js", "export{n,t};");
+  writeAsset("settings-surface-A.js", "export{t};");
+  writeAsset(
+    "settings-sections-A.js",
+    "var e=`general-settings`,t=`mcp-settings`,n=[{slug:e},{slug:`appearance`},{slug:`keyboard-shortcuts`}];",
+  );
+  writeAsset("settings-shared-A.js", settingsSharedBundleFixture());
+  writeAsset("app-main-A.js", linuxDesktopRouteBundleFixture());
+  writeAsset("settings-page-A.js", linuxDesktopNavigationBundleFixture());
+  writeAsset("keyboard-shortcuts-settings-A.js", "export default function KeyboardShortcutsSettings(){}");
+
+  return { extractedDir, assetsDir };
 }
 
 function appSunsetBundleFixture() {
@@ -1254,6 +1375,19 @@ test("warns when the fast-mode tier lookup is recognizable but unpatchable", () 
   assert.deepEqual(warnings, [
     "WARN: Could not find fast-mode model guard insertion point — skipping fast-mode crash guard patch",
   ]);
+});
+
+test("treats current service-tier helper bundles as already guarded", () => {
+  const source = [
+    "function sA(e,t){return t==null?null:t===`fast`?uA(e):e?.serviceTiers?.find(e=>e.id===t)??null}",
+    "function cA(e){return[{description:tA.standardDescription},...(e?.serviceTiers??[]).map(e=>({tier:e,value:e.id}))]}",
+    "function uA(e){return e?.serviceTiers?.find(e=>rA(e.id,e.name)===`fast`)??null}",
+  ].join("");
+
+  const { value, warnings } = captureWarns(() => applyLinuxFastModeModelGuardPatch(source));
+
+  assert.equal(value, source);
+  assert.deepEqual(warnings, []);
 });
 
 test("warns when a matched webview opaque bundle has no known insertion point", () => {
@@ -1931,6 +2065,72 @@ test("adds Keybinds settings route with current lazy and preload aliases", () =>
   assert.doesNotMatch(patched, /keybinds:\(0,Z\.lazy\)\(\(\)=>s\(/);
 });
 
+test("adds Linux desktop settings route when upstream owns Keyboard Shortcuts", () => {
+  const patched = applyPatchTwice(
+    applyLinuxDesktopSettingsIndexPatch,
+    keybindsIndexBundleFixture(),
+  );
+
+  assert.match(
+    patched,
+    /var i_e=\{"linux-desktop":\(0,Z\.lazy\)\(\(\)=>s\(\(\)=>import\(`\.\/linux-desktop-settings-linux\.js`\)/,
+  );
+  assert.match(patched, /var Kge=\{"linux-desktop":xh,"general-settings":xh,/);
+  assert.match(patched, /qge=\[`general-settings`,`linux-desktop`,`appearance`/);
+  assert.match(patched, /slugs:\[`general-settings`,`linux-desktop`,`appearance`/);
+  assert.match(patched, /case`linux-desktop`:return l===`electron`/);
+  assert.match(patched, /case`linux-desktop`:k=!1;break bb0;/);
+  assert.doesNotMatch(patched, /codexLinuxKeybindOverridesRuntime/);
+});
+
+test("keeps Linux desktop toggles visible with native Keyboard Shortcuts", () => {
+  const { extractedDir, assetsDir } = createNativeKeyboardShortcutsSettingsFixture();
+  try {
+    const result = patchKeybindsSettingsAssets(extractedDir);
+
+    assert.equal(result.matched, true);
+    assert.ok(result.changed >= 4);
+    assert.match(result.reason, /upstream keyboard shortcuts settings are present/);
+    assert.equal(fs.existsSync(path.join(assetsDir, keybindsSettingsAsset)), false);
+    assert.equal(fs.existsSync(path.join(assetsDir, linuxDesktopSettingsAsset)), true);
+
+    const linuxDesktopSource = fs.readFileSync(
+      path.join(assetsDir, linuxDesktopSettingsAsset),
+      "utf8",
+    );
+    assert.match(linuxDesktopSource, /Linux desktop/);
+    assert.match(linuxDesktopSource, /Compact prompt window/);
+    assert.match(linuxDesktopSource, /System tray/);
+    assert.match(linuxDesktopSource, /Warm start/);
+    assert.match(linuxDesktopSource, /Install updates when you close Codex/);
+    assert.match(linuxDesktopSource, /codex-linux-system-tray-enabled/);
+    assert.match(linuxDesktopSource, /codex-linux-auto-update-on-exit/);
+    assert.match(linuxDesktopSource, /import\{z as __post\}from"\.\/setting-storage-A\.js"/);
+
+    assert.match(
+      fs.readFileSync(path.join(assetsDir, "settings-sections-A.js"), "utf8"),
+      /slug:`linux-desktop`/,
+    );
+    assert.match(
+      fs.readFileSync(path.join(assetsDir, "settings-shared-A.js"), "utf8"),
+      /settings\.nav\.linux-desktop/,
+    );
+    const appMainSource = fs.readFileSync(path.join(assetsDir, "app-main-A.js"), "utf8");
+    assert.match(appMainSource, /linux-desktop-settings-linux\.js/);
+    assert.doesNotMatch(appMainSource, /keybinds-settings-linux\.js/);
+    const settingsPageSource = fs.readFileSync(path.join(assetsDir, "settings-page-A.js"), "utf8");
+    assert.match(settingsPageSource, /"linux-desktop":q,"general-settings":q/);
+    assert.match(settingsPageSource, /slugs:\[`general-settings`,`linux-desktop`,`profile`/);
+    assert.match(settingsPageSource, /case`linux-desktop`:case`general-settings`/);
+
+    const secondResult = patchKeybindsSettingsAssets(extractedDir);
+    assert.equal(secondResult.matched, true);
+    assert.equal(secondResult.changed, 0);
+  } finally {
+    fs.rmSync(extractedDir, { recursive: true, force: true });
+  }
+});
+
 test("keeps local environment action modal inputs editable inside stored modal content", () => {
   const source =
     "function gd(e){let t=(0,Z.c)(101),{action:n,configPath:r,environment:i,hostConfig:a,onOpenSettings:o,onRunAction:s,onSaved:c,onUpdate:l,workspaceRoot:u}=e,d=Gt(),f=Pt(),p=Jt(`local-environment-config-save`),m,h,g,_,v,y,b,x,S,C,w,T,E,D,O,k;if(t[0]!==n||t[1]!==r||t[2]!==i||t[3]!==a||t[4]!==d||t[5]!==s||t[6]!==c||t[7]!==l||t[8]!==f||t[9]!==p||t[10]!==u){let e;t[27]===d?e=t[28]:(e=e=>({ariaLabel:d.formatMessage(e.message),icon:(0,$.jsx)(Zs,{icon:e.value}),value:e.value}),t[27]=d,t[28]=e);let o=Js.map(e),A=o.find(e=>e.value===n.icon)??o[0],j;t[29]!==d||t[30]!==u?(j=po(u)??d.formatMessage({id:`settings.localEnvironments.environment.defaultName`,defaultMessage:`local`,description:`Fallback name for the local environment`}),t[29]=d,t[30]=u,t[31]=j):j=t[31];let M=j,N;t[32]===n.name?N=t[33]:(N=n.name.trim(),t[32]=n.name,t[33]=N);let P=N,F;t[34]===n.command?F=t[35]:(F=n.command.trim(),t[34]=n.command,t[35]=F);let I=F;v=P.length===0||I.length===0||p.isPending,g=`local-env-action-name-${n.id}`;let L;t[36]!==n||t[37]!==r||t[38]!==M||t[39]!==i||t[40]!==a||t[41]!==s||t[42]!==c||t[43]!==f||t[44]!==p||t[45]!==v||t[46]!==I||t[47]!==P||t[48]!==u?(L=e=>{if(e.preventDefault(),v)return;let t=i.environment,o={...n,command:I,name:P},l={command:I,icon:n.icon,name:P,...n.platform?{platform:n.platform}:{}},d=Ks({actions:[...Xs(t.actions??[]),o],cleanupPlatformScripts:qs(t.cleanup),cleanupScript:t.cleanup?.script??``,name:t.name||M,setupPlatformScripts:qs(t.setup),setupScript:t.setup.script??``,version:t.version??1});p.mutate({configPath:r,hostId:a.id,raw:d},{onSuccess:()=>{f.invalidateQueries({queryKey:Qt(`local-environment-config`,{configPath:r,hostId:a.id})}),f.invalidateQueries({queryKey:Qt(`local-environment`,{configPath:r,hostId:a.id})}),u!=null&&f.invalidateQueries({queryKey:Qt(`local-environments`,{hostId:a.id,workspaceRoot:u})}),c(),s(l)}})},t[36]=n,t[37]=r,t[38]=M,t[39]=i,t[40]=a,t[41]=s,t[42]=c,t[43]=f,t[44]=p,t[45]=v,t[46]=I,t[47]=P,t[48]=u,t[49]=L):L=t[49],_=L,h=Sl,O=n.command,t[50]===Symbol.for(`react.memo_cache_sentinel`)?(k=(0,$.jsx)(X,{id:`threadPage.runAction.setup.commandLabel`,defaultMessage:`Command to run`,description:`Label for run action command input`}),t[50]=k):k=t[50],t[51]===d?b=t[52]:(b=d.formatMessage({id:`threadPage.runAction.setup.placeholder`,defaultMessage:`eg:\\nnpm install\\nnpm run`,description:`Placeholder text for the run action command input`}),t[51]=d,t[52]=b),t[53]===Symbol.for(`react.memo_cache_sentinel`)?(x=(0,$.jsx)(X,{id:`settings.localEnvironments.actions.add.description`,defaultMessage:`Create a new command to run from the toolbar.`,description:`Description for adding a local environment action`}),t[53]=x):x=t[53],E=`flex w-full flex-col gap-2`;let R;t[54]===Symbol.for(`react.memo_cache_sentinel`)?(R=(0,$.jsx)(X,{id:`settings.localEnvironments.actions.item.name`,defaultMessage:`Name`,description:`Label for local environment action name`}),t[54]=R):R=t[54],t[55]===g?D=t[56]:(D=(0,$.jsx)(`label`,{className:`text-xs font-medium tracking-wide text-token-text-secondary uppercase`,htmlFor:g,children:R}),t[55]=g,t[56]=D),T=`flex items-center gap-2`,m=ua,y=`start`,S=`icon`,C=(0,$.jsx)(Pn,{id:`local-env-action-icon-${n.id}`,\"aria-label\":A.ariaLabel,className:`w-12 justify-center text-sm`,color:`secondary`,size:`toolbar`,children:A.icon});let z;t[57]===l?z=t[58]:(z=e=>(0,$.jsx)(la.Item,{tooltipText:e.ariaLabel,onSelect:()=>{l({icon:e.value})},children:e.icon},e.value),t[57]=l,t[58]=z),w=o.map(z),t[0]=n,t[1]=r,t[2]=i,t[3]=a,t[4]=d,t[5]=s,t[6]=c,t[7]=l,t[8]=f,t[9]=p,t[10]=u,t[11]=m,t[12]=h,t[13]=g,t[14]=_,t[15]=v,t[16]=y,t[17]=b,t[18]=x,t[19]=S,t[20]=C,t[21]=w,t[22]=T,t[23]=E,t[24]=D,t[25]=O,t[26]=k}else m=t[11],h=t[12],g=t[13],_=t[14],v=t[15],y=t[16],b=t[17],x=t[18],S=t[19],C=t[20],w=t[21],T=t[22],E=t[23],D=t[24],O=t[25],k=t[26];let A;t[59]!==m||t[60]!==y||t[61]!==S||t[62]!==C||t[63]!==w?(A=(0,$.jsx)(m,{align:y,contentWidth:S,triggerButton:C,children:w}),t[59]=m,t[60]=y,t[61]=S,t[62]=C,t[63]=w,t[64]=A):A=t[64];let j;t[65]===l?j=t[66]:(j=e=>{l({name:e.target.value})},t[65]=l,t[66]=j);let M;t[67]!==n.name||t[68]!==g||t[69]!==j?(M=(0,$.jsx)(`div`,{className:`flex-1`,children:(0,$.jsx)(`input`,{id:g,className:`w-full`,value:n.name,onChange:j})}),t[67]=n.name,t[68]=g,t[69]=j,t[70]=M):M=t[70];let V;t[86]===l?V=t[87]:(V=e=>{l({command:e})},t[86]=l,t[87]=V);return (0,$.jsx)(h,{command:O,onCommandChange:V})}var _d=_t(`local-env-recent-actions-by-key`,{});function Ml(){return n.name+n.command+n.icon}";
@@ -1985,6 +2185,54 @@ test("warns when the app sunset key is present but the gate shape drifts", () =>
   assert.deepEqual(warnings, [
     "WARN: Could not find app sunset gate needle — skipping Linux app sunset patch",
   ]);
+});
+
+test("allows explicit locale overrides through the webview i18n provider gate on Linux", () => {
+  const source =
+    "function eP(e){let a=Ma(`72216192`),o;o=a?.get(`enable_i18n`,!1);let c=o,l=a?.get(`locale_source`,`IDE`),u=js(s.localeOverride);return c?u:null}";
+
+  const patched = applyPatchTwice(applyLinuxI18nGatePatch, source);
+
+  assert.match(patched, /o=a\?\.get\(`enable_i18n`,!1\);let l=a\?\.get\(`locale_source`,`IDE`\),u=js\(s\.localeOverride\),c=o\|\|u!=null/);
+  assert.equal((patched.match(/js\(s\.localeOverride\)/g) ?? []).length, 1);
+  assert.match(patched, /localeOverride/);
+});
+
+test("keeps React compiler cache hook order in the webview i18n provider gate patch", () => {
+  const source =
+    "function eP(e){let t=(0,Z.c)(21),a=Ma(`72216192`),o;t[0]===a?o=t[1]:(o=a?.get(`enable_i18n`,!1),t[0]=a,t[1]=o);let c=o,l=a?.get(`locale_source`,`IDE`),u=js(s.localeOverride),d=r?.ideLocale;return c?u:d}";
+
+  const patched = applyPatchTwice(applyLinuxI18nGatePatch, source);
+
+  assert.match(
+    patched,
+    /o=a\?\.get\(`enable_i18n`,!1\),t\[0\]=a,t\[1\]=o\);let l=a\?\.get\(`locale_source`,`IDE`\),u=js\(s\.localeOverride\),c=o\|\|u!=null/,
+  );
+  assert.equal((patched.match(/js\(s\.localeOverride\)/g) ?? []).length, 1);
+});
+
+test("allows explicit locale overrides through the settings language row i18n gate on Linux", () => {
+  const source =
+    "function Or(){let r=F(),i=re(`72216192`)?.get(`enable_i18n`,!0),s=H(t.localeOverride);if(!i)return null;return r.locale+s}";
+
+  const patched = applyPatchTwice(applyLinuxI18nGatePatch, source);
+
+  assert.match(
+    patched,
+    /i=re\(`72216192`\)\?\.get\(`enable_i18n`,!0\),s=H\(t\.localeOverride\);i=i\|\|s!=null;if\(!i\)/,
+  );
+  assert.equal((patched.match(/H\(t\.localeOverride\)/g) ?? []).length, 1);
+});
+
+test("shows the profile dropdown settings route on Linux", () => {
+  const source =
+    "function E(){let Ct=se(`4166894088`),Pt=Ct,Ft=f(De,`settings`),U=Pt&&(0,C.jsx)(S,{LeftIcon:ye,keyboardShortcut:Ft,onClick:()=>{v(`/settings/general-settings`)},children:(0,C.jsx)(g,{id:`codex.profileDropdown.settingsPage`,defaultMessage:`Settings`})});return U}";
+
+  const patched = applyPatchTwice(applyLinuxProfileSettingsMenuPatch, source);
+
+  assert.match(patched, /let Ct=!0,Pt=Ct,Ft=f\(De,`settings`\)/);
+  assert.match(patched, /\/settings\/general-settings/);
+  assert.match(patched, /codex\.profileDropdown\.settingsPage/);
 });
 
 test("removes unsupported features from default app-server feature sync", () => {
@@ -2187,6 +2435,7 @@ test("adds Linux package updater to current bootstrap updater wiring", () => {
   assert.match(patched, /getIsUpdateReady:\(\)=>s&&t/);
   assert.match(patched, /checkForUpdates:async\(\)=>\{if\(!await c\)return;n=`checking`/);
   assert.match(patched, /installUpdatesIfAvailable:async\(\)=>\{if\(!await c\)\{a\(\);return\}i\(\);if\(!t\)\{a\(\);return\}/);
+  assert.match(patched, /e\.stdout\?\.includes\(`Manual install required:`\)\?await codexLinuxShowUpdateMessage/);
   assert.match(patched, /refresh:async\(\)=>\{if\(await c\)\{try\{await codexLinuxRefreshUpdateState\(\)\}/);
   assert.doesNotMatch(patched, /codexLinuxRunUpdateManager\(\[`status`,`--json`\]\)/);
 });
