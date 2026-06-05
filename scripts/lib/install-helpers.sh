@@ -36,6 +36,7 @@ trap cleanup EXIT
 trap 'error "Failed at line $LINENO (exit code $?)"' ERR
 
 CACHED_DMG_PATH="$SCRIPT_DIR/Codex.dmg"
+CACHED_DMG_METADATA_PATH="$CACHED_DMG_PATH.metadata"
 FRESH_INSTALL=0
 REUSE_CACHED_DMG=1
 PROVIDED_DMG_PATH=""
@@ -51,7 +52,7 @@ Converts the official macOS Codex Desktop app to run on Linux.
 Options:
   -h, --help     Show this help message and exit
   --fresh        Remove existing install directory and cached DMG before building
-  --reuse-dmg    Reuse cached Codex.dmg if present (default)
+  --reuse-dmg    Reuse cached Codex.dmg when upstream metadata still matches (default)
   --inspect      Inspect the DMG and write patch/rebuild reports without installing
   --report-dir DIR
                  Directory for --inspect reports (default: ./dist-next/rebuild)
@@ -64,11 +65,6 @@ Environment variables:
   CODEX_APP_DISPLAY_NAME
                       Override display name (default: Codex Desktop)
   CODEX_WEBVIEW_PORT  Override webview HTTP port (default: 5175, or 5176 for non-default app ids)
-  CODEX_DMG_URL       Override the Codex DMG download URL
-  CODEX_DMG_CACHE_BUST
-                      Add a cache-busting query value to DMG downloads. Set to
-                      0/false/no/off to disable. Defaults to a timestamp for
-                      --fresh downloads that remove the cached DMG.
   ELECTRON_HEADERS_URL
                       Override the Electron headers URL used by @electron/rebuild
                       (default: https://artifacts.electronjs.org/headers/dist)
@@ -151,9 +147,11 @@ prepare_install() {
         rm -rf "$INSTALL_DIR"
     fi
 
-    if [ "$FRESH_INSTALL" -eq 1 ] && [ "$REUSE_CACHED_DMG" -ne 1 ] && [ -f "$CACHED_DMG_PATH" ]; then
-        info "Removing cached DMG: $CACHED_DMG_PATH"
+    if [ "$FRESH_INSTALL" -eq 1 ] && [ "$REUSE_CACHED_DMG" -ne 1 ] \
+            && { [ -e "$CACHED_DMG_PATH" ] || [ -e "$CACHED_DMG_METADATA_PATH" ]; }; then
+        info "Removing cached DMG and metadata: $CACHED_DMG_PATH"
         rm -f "$CACHED_DMG_PATH"
+        rm -f "$CACHED_DMG_METADATA_PATH"
     fi
 }
 

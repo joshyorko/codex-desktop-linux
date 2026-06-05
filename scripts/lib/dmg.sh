@@ -4,72 +4,214 @@
 # Sourced by install.sh. Do not run directly.
 # shellcheck shell=bash
 
-append_query_param() {
-    local url="$1"
-    local key="$2"
-    local value="$3"
-
-    case "$url" in
-        *\?*) printf '%s&%s=%s\n' "$url" "$key" "$value" ;;
-        *) printf '%s?%s=%s\n' "$url" "$key" "$value" ;;
-    esac
-}
-
-cache_bust_disabled() {
-    case "${1:-}" in
-        0|false|FALSE|no|NO|off|OFF) return 0 ;;
-        *) return 1 ;;
-    esac
-}
-
-codex_dmg_download_url() {
-    local dmg_url="${CODEX_DMG_URL:-https://persistent.oaistatic.com/codex-app-prod/Codex.dmg}"
-    local cache_bust="${CODEX_DMG_CACHE_BUST:-}"
-
-    if cache_bust_disabled "$cache_bust"; then
-        printf '%s\n' "$dmg_url"
-        return
-    fi
-
-    if [ -z "$cache_bust" ] && [ "$FRESH_INSTALL" -eq 1 ] && [ "$REUSE_CACHED_DMG" -ne 1 ]; then
-        cache_bust="$(date -u '+%Y%m%dT%H%M%SZ')"
-    fi
-
-    if [ -n "$cache_bust" ]; then
-        append_query_param "$dmg_url" "codex_cache_bust" "$cache_bust"
-        return
-    fi
-
-    printf '%s\n' "$dmg_url"
-}
-
 # ---- Download or find Codex DMG ----
+DEFAULT_DMG_URL="https://persistent.oaistatic.com/codex-app-prod/Codex.dmg"
+DMG_URL="${CODEX_UPSTREAM_DMG_URL:-$DEFAULT_DMG_URL}"
+DMG_REMOTE_FINGERPRINT=""
+
+redact_dmg_url() {
+    local dmg_url="$1"
+    local scheme="${dmg_url%%://*}"
+    local remainder="${dmg_url#*://}"
+
+    # Authority ends at the first '/', '?', or '#', whichever comes first.
+    local authority="${remainder%%[/?#]*}"
+    local path=""
+
+    if [ "$remainder" != "$authority" ]; then
+        path="${remainder#"$authority"}"
+    fi
+
+    if [[ "$authority" == *@* ]]; then
+        authority="redacted@${authority##*@}"
+    fi
+
+    if [[ "$path" == *\?* ]]; then
+        path="${path%%\?*}?REDACTED"
+    elif [[ "$path" == *\#* ]]; then
+        path="${path%%\#*}#REDACTED"
+    fi
+
+    printf '%s://%s%s\n' "$scheme" "$authority" "$path"
+}
+
+validate_dmg_url() {
+    local dmg_url="$1"
+
+    case "$dmg_url" in
+        https://*)
+            ;;
+        "")
+            error "Upstream DMG URL must not be empty"
+            ;;
+        *)
+            error "Upstream DMG URL must be an HTTPS URL: $(redact_dmg_url "$dmg_url")"
+            ;;
+    esac
+}
+
+dmg_url_cache_key() {
+    printf '%s' "$1" | sha256sum | awk '{print $1}'
+}
+
+cached_dmg_metadata_url_sha256() {
+    local metadata_path="$1"
+
+    awk -F= '$1 == "url_sha256" { print $2; exit }' "$metadata_path" 2>/dev/null || true
+}
+
+cached_dmg_metadata_matches_url() {
+    local metadata_path="$1"
+    local dmg_url="$2"
+    local cached_url_sha256
+    local expected_url_sha256
+
+    [ -s "$metadata_path" ] || return 1
+
+    cached_url_sha256="$(cached_dmg_metadata_url_sha256 "$metadata_path")"
+    expected_url_sha256="$(dmg_url_cache_key "$dmg_url")"
+
+    [ -n "$cached_url_sha256" ] && [ "$cached_url_sha256" = "$expected_url_sha256" ]
+}
+
+fetch_dmg_remote_fingerprint() {
+    local dmg_url="$1"
+    local headers_file="$WORK_DIR/dmg-headers.txt"
+    local url_sha256
+
+    url_sha256="$(dmg_url_cache_key "$dmg_url")"
+
+    if ! curl -fsSLI --max-time 10 --connect-timeout 5 -- "$dmg_url" >"$headers_file"; then
+        return 1
+    fi
+
+    awk -v url_sha256="$url_sha256" '
+        {
+            line = $0
+            sub(/\r$/, "", line)
+            key = line
+            sub(/:.*/, "", key)
+            key = tolower(key)
+            value = line
+            sub(/^[^:]+:[[:space:]]*/, "", value)
+        }
+        key ~ /^http\// {
+            etag = ""
+            last_modified = ""
+            content_length = ""
+            next
+        }
+        key == "etag" {
+            etag = value
+            next
+        }
+        key == "last-modified" {
+            last_modified = value
+            next
+        }
+        key == "content-length" {
+            content_length = value
+            next
+        }
+        END {
+            if (etag == "" && last_modified == "" && content_length == "") {
+                exit 1
+            }
+            print "url_sha256=" url_sha256
+            print "etag=" etag
+            print "last_modified=" last_modified
+            print "content_length=" content_length
+        }
+    ' "$headers_file"
+}
+
+cached_dmg_is_fresh() {
+    local dmg_dest="$1"
+    local metadata_path="$2"
+    local dmg_url="$3"
+    local remote_fingerprint
+
+    if ! remote_fingerprint="$(fetch_dmg_remote_fingerprint "$dmg_url")"; then
+        if cached_dmg_metadata_matches_url "$metadata_path" "$dmg_url"; then
+            warn "Could not check upstream DMG metadata; using cached DMG for matching URL"
+            return 0
+        fi
+
+        warn "Could not check upstream DMG metadata; cached DMG URL metadata does not match current URL"
+        return 1
+    fi
+    DMG_REMOTE_FINGERPRINT="$remote_fingerprint"
+
+    if [ ! -s "$metadata_path" ]; then
+        warn "Cached DMG has no upstream metadata; refreshing once to seed the cache"
+        return 1
+    fi
+
+    if [ "$(cat "$metadata_path")" = "$remote_fingerprint" ]; then
+        return 0
+    fi
+
+    warn "Cached DMG metadata differs from upstream; refreshing"
+    return 1
+}
+
+write_cached_dmg_metadata() {
+    local metadata_path="$1"
+    local remote_fingerprint="$2"
+
+    if [ -n "$remote_fingerprint" ]; then
+        printf '%s\n' "$remote_fingerprint" >"$metadata_path"
+    else
+        rm -f "$metadata_path"
+        warn "Could not record upstream DMG metadata"
+    fi
+}
+
 get_dmg() {
     local dmg_dest="$CACHED_DMG_PATH"
+    local metadata_path="$CACHED_DMG_METADATA_PATH"
+    local download_fingerprint=""
+    local tmp_dest="$dmg_dest.part"
 
-    # Reuse existing DMG
+    validate_dmg_url "$DMG_URL"
+
+    # Reuse existing DMG only when it still matches upstream metadata.
     if [ -s "$dmg_dest" ]; then
-        info "Using cached DMG: $dmg_dest ($(du -h "$dmg_dest" | cut -f1))"
-        echo "$dmg_dest"
-        return
+        DMG_REMOTE_FINGERPRINT=""
+        if cached_dmg_is_fresh "$dmg_dest" "$metadata_path" "$DMG_URL"; then
+            info "Using cached DMG: $dmg_dest ($(du -h "$dmg_dest" | cut -f1))"
+            echo "$dmg_dest"
+            return
+        fi
+
+        download_fingerprint="$DMG_REMOTE_FINGERPRINT"
+        info "Refreshing stale cached DMG: $dmg_dest"
+    fi
+
+    if [ -z "$download_fingerprint" ]; then
+        if ! download_fingerprint="$(fetch_dmg_remote_fingerprint "$DMG_URL")"; then
+            warn "Could not record upstream DMG metadata"
+            download_fingerprint=""
+        fi
     fi
 
     info "Downloading Codex Desktop DMG..."
-    local dmg_url
-    dmg_url="$(codex_dmg_download_url)"
-    info "URL: $dmg_url"
+    info "URL: $(redact_dmg_url "$DMG_URL")"
 
+    rm -f "$tmp_dest"
     if ! curl -L --progress-bar --max-time 600 --connect-timeout 30 \
-            -o "$dmg_dest" "$dmg_url"; then
-        rm -f "$dmg_dest"
+            -o "$tmp_dest" -- "$DMG_URL"; then
+        rm -f "$tmp_dest"
         error "Download failed. Download manually and place as: $dmg_dest"
     fi
 
-    if [ ! -s "$dmg_dest" ]; then
-        rm -f "$dmg_dest"
+    if [ ! -s "$tmp_dest" ]; then
+        rm -f "$tmp_dest"
         error "Download produced empty file. Download manually and place as: $dmg_dest"
     fi
 
+    mv "$tmp_dest" "$dmg_dest"
+    write_cached_dmg_metadata "$metadata_path" "$download_fingerprint"
     info "Saved: $dmg_dest ($(du -h "$dmg_dest" | cut -f1))"
     echo "$dmg_dest"
 }
