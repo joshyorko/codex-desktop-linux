@@ -2,6 +2,7 @@
 
 const {
   applyLinuxWindowOptionsPatch,
+  applyLinuxNativeTitlebarPatch,
   applyLinuxMenuPatch,
   applyLinuxSetIconPatch,
   applyLinuxReadyToShowWindowStatePatch,
@@ -29,6 +30,13 @@ module.exports = [
     order: 60,
     ciPolicy: "optional",
     apply: applyLinuxMenuPatch,
+  },
+  {
+    id: "linux-native-titlebar",
+    phase: "main-bundle",
+    order: 85,
+    ciPolicy: "optional",
+    apply: applyLinuxNativeTitlebarPatch,
   },
   {
     id: "linux-set-icon",
