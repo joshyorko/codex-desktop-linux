@@ -17,12 +17,23 @@ function isChromeNameExpr(nameExpr, chromeNameVar) {
     nameExpr === chromeNameVar;
 }
 
-function hasChromeAutoInstall(source, chromeNameVar) {
+function chromeNamePatterns(chromeNameVar) {
   const namePatterns = [String.raw`\`chrome\``, "\"chrome\"", "'chrome'"];
   if (chromeNameVar != null) {
     namePatterns.push(chromeNameVar);
   }
-  return new RegExp(String.raw`installWhenMissing:!0,name:(?:${namePatterns.join("|")})`).test(source);
+  return namePatterns;
+}
+
+function hasLinuxChromeAvailability(source) {
+  return source.includes("process.platform===`linux`");
+}
+
+function hasChromeAutoInstallWithLinuxAvailability(source, chromeNameVar) {
+  const namePatterns = chromeNamePatterns(chromeNameVar);
+  return new RegExp(
+    String.raw`\{(?=[^{}]*installWhenMissing:!0)(?=[^{}]*name:(?:${namePatterns.join("|")}))(?=[^{}]*process\.platform===\`linux\`)[^{}]*(?:isEnabled|isAvailable):[^{}]*\}`,
+  ).test(source);
 }
 
 function applyLinuxChromePluginAutoInstallPatch(currentSource) {
@@ -62,12 +73,19 @@ function applyLinuxChromePluginAutoInstallPatch(currentSource) {
       }
 
       sawChromeGate = true;
-      if (installWhenMissing != null || prefix.includes("installWhenMissing:!0")) {
+      const hasInstallWhenMissing = installWhenMissing != null ||
+        prefix.includes("installWhenMissing:!0");
+      const hasLinuxAvailability = hasLinuxChromeAvailability(expression);
+      if (hasInstallWhenMissing && hasLinuxAvailability) {
         sawAlreadyInstalledGate = true;
         return gateSource;
       }
 
-      return `{${prefix}installWhenMissing:!0,name:${nameExpr},${middleFields}${availabilityProp}:({${paramsText}})=>${expression}${migrateSuffix}}`;
+      const installWhenMissingField = hasInstallWhenMissing ? (installWhenMissing ?? "") : "installWhenMissing:!0,";
+      const availabilityExpression = hasLinuxAvailability
+        ? expression
+        : `process.platform===\`linux\`||(${expression})`;
+      return `{${prefix}${installWhenMissingField}name:${nameExpr},${middleFields}${availabilityProp}:({${paramsText}})=>${availabilityExpression}${migrateSuffix}}`;
     },
   );
 
@@ -75,7 +93,7 @@ function applyLinuxChromePluginAutoInstallPatch(currentSource) {
     return patched;
   }
 
-  if (hasChromeAutoInstall(currentSource, chromeNameVar)) {
+  if (hasChromeAutoInstallWithLinuxAvailability(currentSource, chromeNameVar)) {
     return currentSource;
   }
 
