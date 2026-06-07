@@ -43,6 +43,7 @@ const {
   applyLinuxMultiInstanceBootstrapPatch,
   applyLinuxAppSunsetPatch,
   applyLinuxBrowserUseAvailabilityPatch,
+  applyLinuxBrowserUseExternalAvailabilityPatch,
   applyLinuxBrowserUseNonLocalNavigationPatch,
   applyLinuxOpaqueBackgroundPatch,
   applyLinuxFastModeModelGuardPatch,
@@ -567,6 +568,7 @@ test("default core patch descriptors are grouped and unique", () => {
     "linux-avatar-overlay-mouse-passthrough",
     "linux-browser-use-availability",
     "linux-browser-use-non-local-navigation",
+    "linux-browser-use-external-availability",
     "linux-file-manager",
     "linux-code-editor-open-targets",
     "linux-tray",
@@ -3281,6 +3283,31 @@ test("enables Browser Use availability on Linux when only the Statsig gate is di
   );
   assert.match(patched, /isBrowserUseEnabled:h/);
   assert.match(patched, /featureName:`browser_use`/);
+});
+
+test("enables external Browser Use availability on Linux without the upstream rollout flag", () => {
+  const source =
+    "function m(e){let t=(0,l.c)(5),{hostId:n,windowType:r}=e,a=r===void 0?`electron`:r,o=i(`410065390`),s;t[0]===n?s=t[1]:(s={featureName:`browser_use_external`,hostId:n},t[0]=n,t[1]=s);let c=u(s),d=a===`chrome-extension`||o&&c.enabled&&!c.isLoading,f=a===`chrome-extension`?!1:c.isLoading,p;return t[2]!==d||t[3]!==f?(p={allowed:d,available:d,isLoading:f},t[2]=d,t[3]=f,t[4]=p):p=t[4],p}";
+
+  const patched = applyPatchTwice(applyLinuxBrowserUseExternalAvailabilityPatch, source);
+
+  assert.match(
+    patched,
+    /d=a===`chrome-extension`\|\|navigator\.userAgent\.includes\(`Linux`\)\|\|o&&c\.enabled&&!c\.isLoading/,
+  );
+  assert.match(
+    patched,
+    /f=a===`chrome-extension`\|\|navigator\.userAgent\.includes\(`Linux`\)\?!1:c\.isLoading/,
+  );
+  assert.match(patched, /featureName:`browser_use_external`/);
+  assert.match(patched, /i\(`410065390`\)/);
+});
+
+test("keeps already patched external Browser Use availability unchanged", () => {
+  const source =
+    "function m(e){let t=(0,l.c)(5),{hostId:n,windowType:r}=e,a=r===void 0?`electron`:r,o=i(`410065390`),s;t[0]===n?s=t[1]:(s={featureName:`browser_use_external`,hostId:n},t[0]=n,t[1]=s);let c=u(s),d=a===`chrome-extension`||navigator.userAgent.includes(`Linux`)||o&&c.enabled&&!c.isLoading,f=a===`chrome-extension`||navigator.userAgent.includes(`Linux`)?!1:c.isLoading,p;return p}";
+
+  assert.equal(applyPatchTwice(applyLinuxBrowserUseExternalAvailabilityPatch, source), source);
 });
 
 test("allows Browser Use non-local navigation on Linux without the upstream rollout flag", () => {
