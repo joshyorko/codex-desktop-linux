@@ -194,6 +194,85 @@ JSON
     assert_mode "$private_file" "600"
 }
 
+test_stage_common_package_files_resolves_tray_icon_deterministically() {
+    info "Checking stage_common_package_files tray icon resolution"
+    local workspace="$TMP_DIR/package-common-tray"
+    local app_dir="$workspace/app"
+    local root="$workspace/root"
+    local output_log="$workspace/output.log"
+    local icon_source="$workspace/icon-source.png"
+    local tray_output="$root/opt/codex-desktop/.codex-linux/codex-desktop-tray.png"
+    local package_icon="$root/opt/codex-desktop/.codex-linux/codex-desktop.png"
+
+    mkdir -p "$workspace" "$root"
+    make_fake_app "$app_dir"
+    mkdir -p "$app_dir/content/webview/assets"
+    printf '%s\n' 'package-icon' > "$icon_source"
+    printf '%s\n' 'upstream-tray' > "$app_dir/content/webview/assets/app-main.png"
+
+    (
+        export APP_DIR="$app_dir"
+        export PACKAGE_NAME="codex-desktop"
+        export PACKAGE_WITH_UPDATER=0
+        export ICON_SOURCE="$icon_source"
+        export DESKTOP_TEMPLATE="$REPO_DIR/packaging/linux/codex-desktop.desktop"
+        export PACKAGED_RUNTIME_SOURCE="$REPO_DIR/packaging/linux/codex-packaged-runtime.sh"
+        # shellcheck disable=SC1091
+        source "$REPO_DIR/scripts/lib/package-common.sh"
+        stage_common_package_files "$root"
+    ) >"$output_log" 2>&1
+
+    assert_file_exists "$package_icon"
+    assert_file_exists "$tray_output"
+    cmp -s "$icon_source" "$package_icon" || fail "Expected package icon copy to come from ICON_SOURCE"
+    cmp -s "$app_dir/content/webview/assets/app-main.png" "$tray_output" \
+        || fail "Expected tray icon copy to come from the unique upstream asset"
+    assert_not_contains "$output_log" "falling back to package icon"
+}
+
+test_stage_common_package_files_tray_icon_fallbacks_when_ambiguous_or_missing() {
+    info "Checking stage_common_package_files tray icon fallback behavior"
+    local workspace="$TMP_DIR/package-common-tray-fallback"
+    local icon_source="$workspace/icon-source.png"
+    local output_log="$workspace/output.log"
+
+    mkdir -p "$workspace"
+    printf '%s\n' 'package-icon' > "$icon_source"
+
+    for scenario in ambiguous missing; do
+        local app_dir="$workspace/$scenario-app"
+        local root="$workspace/$scenario-root"
+        local tray_output="$root/opt/codex-desktop/.codex-linux/codex-desktop-tray.png"
+
+        mkdir -p "$root"
+        make_fake_app "$app_dir"
+        mkdir -p "$app_dir/content/webview/assets"
+        if [ "$scenario" = "ambiguous" ]; then
+            printf '%s\n' 'upstream-a' > "$app_dir/content/webview/assets/app-alpha.png"
+            printf '%s\n' 'upstream-b' > "$app_dir/content/webview/assets/app-beta.png"
+        fi
+
+        (
+            export APP_DIR="$app_dir"
+            export PACKAGE_NAME="codex-desktop"
+            export PACKAGE_WITH_UPDATER=0
+            export ICON_SOURCE="$icon_source"
+            export DESKTOP_TEMPLATE="$REPO_DIR/packaging/linux/codex-desktop.desktop"
+            export PACKAGED_RUNTIME_SOURCE="$REPO_DIR/packaging/linux/codex-packaged-runtime.sh"
+            # shellcheck disable=SC1091
+            source "$REPO_DIR/scripts/lib/package-common.sh"
+            stage_common_package_files "$root"
+        ) >>"$output_log" 2>&1
+
+        assert_file_exists "$tray_output"
+        cmp -s "$icon_source" "$tray_output" \
+            || fail "Expected tray icon fallback to come from ICON_SOURCE for $scenario"
+    done
+
+    assert_contains "$output_log" "Multiple tray icon candidates found"
+    assert_contains "$output_log" "Could not resolve a unique tray icon"
+}
+
 test_deb_builder_smoke() {
     info "Running Debian packaging smoke test"
     local workspace="$TMP_DIR/deb"
@@ -5727,7 +5806,10 @@ NODE
 
     node "$REPO_DIR/scripts/patch-linux-window-ui.js" "$extracted" >"$output_log" 2>&1
     assert_occurrence_count "$extracted/.vite/build/main-test.js" 'process.platform!==`linux`' '1'
-    assert_occurrence_count "$extracted/.vite/build/main-test.js" 'nativeImage.createFromPath(process.resourcesPath' '1'
+    assert_occurrence_count "$extracted/.vite/build/main-test.js" 'nativeImage.createFromPath(process.resourcesPath' '3'
+    assert_occurrence_count "$extracted/.vite/build/main-test.js" 'nativeImage.createFromPath(process.resourcesPath+`/../.codex-linux/codex-desktop-tray.png`)' '1'
+    assert_occurrence_count "$extracted/.vite/build/main-test.js" 'nativeImage.createFromPath(process.resourcesPath+`/../.codex-linux/codex-desktop.png`)' '1'
+    assert_occurrence_count "$extracted/.vite/build/main-test.js" 'nativeImage.createFromPath(process.resourcesPath+`/../content/webview/assets/app-test.png`)' '1'
     assert_occurrence_count "$extracted/.vite/build/main-test.js" 'process.platform===`linux`)&&!this.isAppQuitting' '1'
     assert_occurrence_count "$extracted/.vite/build/main-test.js" 'setLinuxTrayContextMenu(){' '1'
     assert_occurrence_count "$extracted/.vite/build/main-test.js" 'process.platform===`linux`&&this.setLinuxTrayContextMenu(),this.tray.on(`click`' '1'

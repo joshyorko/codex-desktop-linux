@@ -32,6 +32,7 @@ const PROMPT_INSTALL_CLI_NO_BACKEND_EXIT_CODE: i32 = 11;
 const POLKIT_AUTH_AGENT_PROCESS_TOKENS: &[&str] = &[
     "budgie-polkit",
     "cinnamon-polkit",
+    "cosmic-osd",
     "gnome-shell",
     "hyprpolkitagent",
     "io.elementary.desktop.agent-polkit",
@@ -2581,6 +2582,7 @@ mod tests {
         assert!(process_text_matches_polkit_auth_agent(
             "/usr/lib/polkit-gnome-authentication-agent-1"
         ));
+        assert!(process_text_matches_polkit_auth_agent("cosmic-osd"));
         assert!(process_text_matches_polkit_auth_agent(
             "gnome-shell --wayland"
         ));

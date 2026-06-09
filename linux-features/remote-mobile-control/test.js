@@ -1367,6 +1367,18 @@ test("Linux remote mobile conversation hydration skips non-persisted path-null t
   assert.ok(!warnings.some(({ message }) => message === "Skipping hydration for missing conversation"));
 });
 
+test("Linux remote mobile conversation hydration patch warns when only part of the queue drifted", () => {
+  const source = syntheticAppServerManagerSignalsBundle().replace(
+    "if(!this.conversations.get(r)){z.error(`Received turn/completed for unknown conversation`,{safe:{conversationId:r},sensitive:{}});break}",
+    "if(!this.conversations.get(r)){z.error(`Received turn/completed for unknown conversation`,{safe:{id:r},sensitive:{}});break}",
+  );
+  const { result, warnings } = captureWarnings(() => applyLinuxRemoteMobileConversationHydrationPatch(source));
+
+  assert.notEqual(result, source);
+  assert.match(result, /codexLinuxRemoteMobileHydrateUnknownTurn/);
+  assert.ok(warnings.some((warning) => warning.includes("unknown turn/completed needle")));
+});
+
 test("Linux remote-control status guard skips slow remote SSH status reads", async () => {
   const source = syntheticAppServerManagerStatusBundle();
   const patched = applyLinuxRemoteControlStatusReadGuardPatch(source);
@@ -1430,6 +1442,73 @@ test("Linux remote-control status guard skips slow remote SSH status reads", asy
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(localRequests, 1);
   assert.equal(values.get("local").status, "enabled");
+});
+
+test("Linux remote-control settings UX patch warns when SSH release handling drifts after partial patching", () => {
+  const source = (syntheticSettingsBundle() + syntheticSshInstallSettingsBundle()).replace(
+    "installedCodexVersion:h",
+    "installedVersion:h",
+  );
+  const { result, warnings } = captureWarnings(() => applyLinuxRemoteControlSettingsUxPatch(source));
+
+  assert.notEqual(result, source);
+  assert.match(result, /codexLinuxRemoteControlSettingsTabs/);
+  assert.ok(warnings.some((warning) => warning.includes("SSH install release needles")));
+});
+
+test("remote mobile feature patch report records feature metadata and partial warnings", () => {
+  withTempFeatureRoot(["remote-mobile-control"], (root) => {
+    const tempApp = fs.mkdtempSync(path.join(os.tmpdir(), "codex-remote-mobile-report-"));
+    try {
+      const buildDir = path.join(tempApp, ".vite", "build");
+      const assetsDir = path.join(tempApp, "webview", "assets");
+      fs.mkdirSync(buildDir, { recursive: true });
+      fs.mkdirSync(assetsDir, { recursive: true });
+      fs.writeFileSync(path.join(buildDir, "main.js"), syntheticCurrentMainBundle());
+      fs.writeFileSync(path.join(tempApp, "package.json"), JSON.stringify({ name: "codex" }));
+      fs.writeFileSync(path.join(assetsDir, "app-test.png"), "");
+      fs.writeFileSync(path.join(assetsDir, "remote-connection-visibility-test.js"), syntheticRemoteConnectionVisibilityBundle());
+      fs.writeFileSync(path.join(assetsDir, "app-main-test.js"), syntheticAppMainFeatureSyncBundle() + syntheticAppMainEnablementBridgeBundle() + syntheticAppMainActiveStatusBundle());
+      fs.writeFileSync(
+        path.join(assetsDir, "remote-connections-settings-test.js"),
+        (syntheticSettingsBundle() + syntheticSshInstallSettingsBundle()).replace(
+          "installedCodexVersion:h",
+          "installedVersion:h",
+        ),
+      );
+      fs.writeFileSync(
+        path.join(assetsDir, "app-server-manager-signals-test.js"),
+        syntheticAppServerManagerSignalsBundle().replace(
+          "if(!this.conversations.get(r)){z.error(`Received turn/completed for unknown conversation`,{safe:{conversationId:r},sensitive:{}});break}",
+          "if(!this.conversations.get(r)){z.error(`Received turn/completed for unknown conversation`,{safe:{id:r},sensitive:{}});break}",
+        ) + syntheticAppServerManagerStatusBundle(),
+      );
+      fs.writeFileSync(path.join(assetsDir, "sidebar-project-groups-test.js"), syntheticSidebarProjectGroupsBundle());
+      fs.writeFileSync(path.join(assetsDir, "codex-mobile-setup-flow-test.js"), syntheticMobileSetupFlowCopyBundle());
+      fs.writeFileSync(path.join(assetsDir, "use-codex-mobile-connected-settings-test.js"), syntheticMobileConnectedSettingsBundle());
+
+      const report = createPatchReport();
+      withFeatureRootEnv(root, () => patchExtractedApp(tempApp, { report }));
+
+      assert.deepEqual(report.enabledFeatures, ["remote-mobile-control"]);
+      const settingsPatch = report.patches.find(
+        (patch) => patch.name === "feature:remote-mobile-control:linux-remote-control-settings-ux",
+      );
+      assert.equal(settingsPatch.sourceKind, "feature");
+      assert.equal(settingsPatch.featureId, "remote-mobile-control");
+      assert.equal(settingsPatch.status, "applied-with-warnings");
+      assert.ok(settingsPatch.warnings.some((warning) => warning.includes("SSH install release needles")));
+
+      const hydrationPatch = report.patches.find(
+        (patch) => patch.name === "feature:remote-mobile-control:linux-remote-mobile-conversation-hydration",
+      );
+      assert.equal(hydrationPatch.sourceKind, "feature");
+      assert.equal(hydrationPatch.status, "applied-with-warnings");
+      assert.ok(hydrationPatch.warnings.some((warning) => warning.includes("unknown turn/completed needle")));
+    } finally {
+      fs.rmSync(tempApp, { recursive: true, force: true });
+    }
+  });
 });
 
 test("Linux remote mobile projectless remote task patch groups tasks without owner repo metadata", () => {

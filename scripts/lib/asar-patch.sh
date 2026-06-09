@@ -4,6 +4,40 @@
 # Sourced by install.sh. Do not run directly.
 # shellcheck shell=bash
 
+print_patch_report_summary() {
+    local patch_report="$1"
+    [ -f "$patch_report" ] || return 0
+
+    node - "$patch_report" "$SCRIPT_DIR/scripts/lib/patch-report.js" <<'NODE'
+const fs = require("node:fs");
+const reportPath = process.argv[2];
+const helperPath = process.argv[3];
+const { summarizePatchReport } = require(helperPath);
+
+const report = JSON.parse(fs.readFileSync(reportPath, "utf8"));
+const summary = summarizePatchReport(report);
+const fmt = (counts) => Object.entries(counts).map(([k, v]) => `${k}=${v}`).join(", ") || "none";
+
+console.error("[INFO] inspect-upstream summary:");
+console.error(`  required core: ${fmt(summary.groups.requiredCore.statusCounts)}`);
+console.error(`  optional core: ${fmt(summary.groups.optionalCore.statusCounts)}`);
+
+if (summary.enabledFeatures.length === 0) {
+  console.error("  optional features: none enabled");
+} else {
+  console.error(`  enabled features: ${summary.enabledFeatures.join(", ")}`);
+  const featureEntries = Object.entries(summary.groups.optionalFeatures.byFeature);
+  if (featureEntries.length === 0) {
+    console.error("  optional feature drift: none");
+  } else {
+    for (const [featureId, featureSummary] of featureEntries) {
+      console.error(`  feature ${featureId}: ${fmt(featureSummary.statusCounts)}`);
+    }
+  }
+}
+NODE
+}
+
 # ---- Extract and patch app.asar ----
 patch_asar() {
     local app_dir="$1"
@@ -72,4 +106,5 @@ inspect_rebuild_candidate() {
 
     info "Patch report: $patch_report"
     info "Rebuild report: $rebuild_report"
+    print_patch_report_summary "$patch_report"
 }

@@ -35,7 +35,10 @@ function linuxFeaturesRoot(options = {}) {
   return defaultLinuxFeaturesRoot();
 }
 
-function linuxFeaturesConfigPath(featuresRoot) {
+function linuxFeaturesConfigPath(featuresRoot, options = {}) {
+  if (options.featuresConfigPath != null) {
+    return path.resolve(options.featuresConfigPath);
+  }
   if (process.env.CODEX_LINUX_FEATURES_CONFIG?.trim()) {
     return path.resolve(process.env.CODEX_LINUX_FEATURES_CONFIG.trim());
   }
@@ -105,7 +108,7 @@ function normalizeEnabledFeatureIds(value, sourcePath) {
 
 function enabledLinuxFeatureIds(options = {}) {
   const featuresRoot = linuxFeaturesRoot(options);
-  const configPath = linuxFeaturesConfigPath(featuresRoot);
+  const configPath = linuxFeaturesConfigPath(featuresRoot, options);
   if (!fs.existsSync(configPath)) {
     return [];
   }
@@ -365,6 +368,8 @@ function wrapFeaturePatchDescriptor(feature, descriptor, sourcePath, index, feat
     id: wrappedId,
     name: descriptor.name ?? wrappedId,
     ciPolicy: descriptor.ciPolicy ?? "optional",
+    sourceKind: "feature",
+    featureId: feature.id,
     order: descriptor.order ?? 20_000 + featureIndex * 100 + index * 10,
     sourcePath,
     apply: (target, context) => descriptor.apply(target, featureContext(context, feature)),

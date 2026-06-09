@@ -11,6 +11,7 @@ function createPatchReport() {
     iconAsset: null,
     desktopName: null,
     linuxTarget: null,
+    enabledFeatures: [],
     patches: [],
   };
 }
@@ -53,14 +54,52 @@ function writePatchReport(reportPath, report) {
   fs.writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`, "utf8");
 }
 
-function patchStatusFromChange(changed, warnings) {
+function patchStatusFromChange(changed, warnings, ciPolicy = "optional") {
+  const required = ciPolicy === "required-upstream";
   if (changed) {
+    if (warnings.length > 0) {
+      return required ? "failed-required" : "applied-with-warnings";
+    }
     return "applied";
   }
   if (warnings.length > 0) {
-    return "skipped-optional";
+    return required ? "failed-required" : "skipped-optional";
   }
   return "already-applied";
+}
+
+function patchGroupForEntry(entry) {
+  if (entry.ciPolicy === "required-upstream") {
+    return "requiredCore";
+  }
+  return entry.sourceKind === "feature" ? "optionalFeatures" : "optionalCore";
+}
+
+function summarizePatchReport(report) {
+  const groups = {
+    requiredCore: { count: 0, statusCounts: {} },
+    optionalCore: { count: 0, statusCounts: {} },
+    optionalFeatures: { count: 0, statusCounts: {}, byFeature: {} },
+  };
+
+  for (const patch of report?.patches ?? []) {
+    const groupName = patchGroupForEntry(patch);
+    const group = groups[groupName];
+    group.count += 1;
+    group.statusCounts[patch.status] = (group.statusCounts[patch.status] ?? 0) + 1;
+
+    if (groupName === "optionalFeatures") {
+      const featureId = patch.featureId ?? "unknown-feature";
+      const featureGroup = group.byFeature[featureId] ??= { count: 0, statusCounts: {} };
+      featureGroup.count += 1;
+      featureGroup.statusCounts[patch.status] = (featureGroup.statusCounts[patch.status] ?? 0) + 1;
+    }
+  }
+
+  return {
+    enabledFeatures: Array.isArray(report?.enabledFeatures) ? [...report.enabledFeatures] : [],
+    groups,
+  };
 }
 
 module.exports = {
@@ -68,5 +107,6 @@ module.exports = {
   createPatchReport,
   patchStatusFromChange,
   recordPatch,
+  summarizePatchReport,
   writePatchReport,
 };

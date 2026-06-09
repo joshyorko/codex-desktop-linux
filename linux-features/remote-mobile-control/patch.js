@@ -804,7 +804,7 @@ function applyLinuxRemoteControlSshInstallReleasePatch(source) {
   const mutationRegex =
     /([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)=>\{([A-Za-z_$][\w$]*)\.mutate\(\{hostId:\2\},\{onSuccess:\(\{state:([A-Za-z_$][\w$]*),error:([A-Za-z_$][\w$]*)\}\)=>\{([A-Za-z_$][\w$]*)\(\2,\4,\5\)\}\}\)\}/u;
   const localVersionRegex =
-    /function ([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*)\)\{let ([A-Za-z_$][\w$]*)=\(0,([A-Za-z_$][\w$]*)\.c\)\((\d+)\),\{connection:([A-Za-z_$][\w$]*),disabled:([A-Za-z_$][\w$]*),installCodexPending:([A-Za-z_$][\w$]*),onAuthenticate:([A-Za-z_$][\w$]*),onEdit:([A-Za-z_$][\w$]*),onInstallCodex:([A-Za-z_$][\w$]*),onLogoutConnection:([A-Za-z_$][\w$]*),onRemove:([A-Za-z_$][\w$]*),onShowDetails:([A-Za-z_$][\w$]*),onToggleConnection:([A-Za-z_$][\w$]*)\}=\2,([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)\(\),\{appServerVersion:([A-Za-z_$][\w$]*),error:([A-Za-z_$][\w$]*),installedCodexVersion:([A-Za-z_$][\w$]*),state:([A-Za-z_$][\w$]*)\}=([A-Za-z_$][\w$]*)\(\6\.hostId\),([A-Za-z_$][\w$]*)=\6\.displayName/u;
+    /function ([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*)\)\{let ([A-Za-z_$][\w$]*)=\(0,([A-Za-z_$][\w$]*)\.c\)\((\d+)\),\{connection:([A-Za-z_$][\w$]*),disabled:([A-Za-z_$][\w$]*),installCodexPending:([A-Za-z_$][\w$]*),([\s\S]*?)onAuthenticate:([A-Za-z_$][\w$]*),([\s\S]*?)onInstallCodex:([A-Za-z_$][\w$]*),([\s\S]*?)\}=\2,([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)\(\),\{appServerVersion:([A-Za-z_$][\w$]*),error:([A-Za-z_$][\w$]*),installedCodexVersion:([A-Za-z_$][\w$]*),state:([A-Za-z_$][\w$]*)\}=([A-Za-z_$][\w$]*)\(\6\.hostId\),([A-Za-z_$][\w$]*)=\6\.displayName/u;
 
   const actionBuilderMatch = source.match(actionBuilderRegex);
   const actionCallMatch = source.match(actionCallRegex);
@@ -830,13 +830,11 @@ function applyLinuxRemoteControlSshInstallReleasePatch(source) {
     rowConnectionVar,
     rowDisabledVar,
     rowInstallPendingVar,
+    rowBetweenPendingAndAuth,
     rowAuthenticateVar,
-    rowEditVar,
+    rowBetweenAuthAndInstall,
     rowInstallVar,
-    rowLogoutVar,
-    rowRemoveVar,
-    rowShowDetailsVar,
-    rowToggleVar,
+    rowTrailingProps,
     rowFormatVar,
     rowFormatFn,
     rowAppServerVersionVar,
@@ -849,9 +847,8 @@ function applyLinuxRemoteControlSshInstallReleasePatch(source) {
   const localVersionReplacement =
     `function ${rowComponentFn}(${rowPropsVar}){let ${rowCacheVar}=(0,${rowCompilerVar}.c)(${rowCacheSize}),` +
     `{connection:${rowConnectionVar},disabled:${rowDisabledVar},installCodexPending:${rowInstallPendingVar},` +
-    `onAuthenticate:${rowAuthenticateVar},onEdit:${rowEditVar},onInstallCodex:${rowInstallVar},` +
-    `onLogoutConnection:${rowLogoutVar},onRemove:${rowRemoveVar},onShowDetails:${rowShowDetailsVar},` +
-    `onToggleConnection:${rowToggleVar}}=${rowPropsVar},${rowFormatVar}=${rowFormatFn}(),` +
+    `${rowBetweenPendingAndAuth}onAuthenticate:${rowAuthenticateVar},${rowBetweenAuthAndInstall}` +
+    `onInstallCodex:${rowInstallVar},${rowTrailingProps}}=${rowPropsVar},${rowFormatVar}=${rowFormatFn}(),` +
     `{appServerVersion:${rowAppServerVersionVar},error:${rowErrorVar},installedCodexVersion:${rowInstalledVersionVar},state:${rowStateVar}}=${rowConnectionStateFn}(${rowConnectionVar}.hostId),` +
     `{appServerVersion:codexLinuxRemoteControlSshInstallLocalVersion}=${rowConnectionStateFn}(\`local\`);` +
     `codexLinuxRemoteControlSshInstallDefaultRelease=codexLinuxRemoteControlValidRelease(codexLinuxRemoteControlSshInstallLocalVersion)??codexLinuxRemoteControlSshInstallDefaultRelease;` +
@@ -1193,10 +1190,12 @@ function applyLinuxRemoteMobileConversationHydrationPatch(source) {
   let patched = source;
 
   if (!patched.includes(REMOTE_MOBILE_THREAD_RUNTIME_MARKER)) {
-    const runtimeNeedle = "e.resumeState===`needs_resume`&&(e.threadRuntimeStatus=h)";
     const runtimeReplacement =
-      `/*${REMOTE_MOBILE_THREAD_RUNTIME_MARKER}*/(e.resumeState===\`needs_resume\`||h?.type===\`active\`||h?.type===\`idle\`)&&(e.threadRuntimeStatus=h)`;
-    if (patched.includes(runtimeNeedle)) {
+      (_needle, conversationVar, runtimeVar) =>
+        `/*${REMOTE_MOBILE_THREAD_RUNTIME_MARKER}*/(${conversationVar}.resumeState===\`needs_resume\`||${runtimeVar}?.type===\`active\`||${runtimeVar}?.type===\`idle\`)&&(${conversationVar}.threadRuntimeStatus=${runtimeVar})`;
+    const runtimeNeedle =
+      /([A-Za-z_$][\w$]*)\.resumeState===`needs_resume`&&\(\1\.threadRuntimeStatus=([A-Za-z_$][\w$]*)\)/u;
+    if (runtimeNeedle.test(patched)) {
       patched = patched.replace(runtimeNeedle, runtimeReplacement);
     } else if (patched.includes("threadRuntimeStatus") && patched.includes("resumeState")) {
       console.warn("WARN: Could not find thread/list runtime-status needle - skipping remote mobile runtime-status patch");
@@ -1208,10 +1207,11 @@ function applyLinuxRemoteMobileConversationHydrationPatch(source) {
   // Re-implement hydrate-on-turn/started + queue-while-hydrating without the deleted routes.
   if (!patched.includes(REMOTE_MOBILE_NOTIFICATION_QUEUE_MARKER)) {
     const unknownTurnNeedle =
-      "if(!this.conversations.get(r)){z.error(`Received turn/started for unknown conversation`,{safe:{conversationId:r},sensitive:{}});break}";
+      /if\(!this\.conversations\.get\(([A-Za-z_$][\w$]*)\)\)\{z\.error\(`Received turn\/started for unknown conversation`,\{safe:\{conversationId:\1\},sensitive:\{\}\}\);break\}/u;
     const unknownTurnReplacement =
-      `if(!this.conversations.get(r)){/*${REMOTE_MOBILE_UNKNOWN_TURN_MARKER}*//*${REMOTE_MOBILE_NOTIFICATION_QUEUE_MARKER}*/let i=this.codexLinuxRemoteMobilePendingNotifications??=new Map,a=i.get(r);a||(a=[],i.set(r,a)),a.push(n),z.warning(\`Hydrating conversation for turn/started\`,{safe:{conversationId:r,queuedNotificationCount:a.length},sensitive:{}});function codexLinuxRemoteMobileThreadHydratable(e){return typeof e?.path==\`string\`&&e.path.endsWith(\`.jsonl\`)}let o=(s=0)=>this.readThread(r,{includeTurns:!1}).then(e=>{let t=e?.thread??e,c=this.codexLinuxRemoteMobilePendingNotifications?.get(r)??[];if(!t){if(s<12){z.warning(\`Retrying hydration for missing conversation\`,{safe:{conversationId:r,queuedNotificationCount:c.length,attempt:s+1},sensitive:{}}),setTimeout(()=>o(s+1),250);return}this.codexLinuxRemoteMobilePendingNotifications?.delete(r),z.warning(\`Skipping hydration for missing conversation\`,{safe:{conversationId:r,queuedNotificationCount:c.length},sensitive:{}});return}z.warning(\`Remote mobile hydration readThread shape\`,{safe:{conversationId:r,hasThread:!!t,path:t?.path??null,hasTurns:Array.isArray(t?.turns),turnCount:Array.isArray(t?.turns)?t.turns.length:null,projectId:t?.projectId??t?.project_id??null,source:t?.source??null,kind:t?.kind??null,taskId:t?.task?.id??t?.task_id??null},sensitive:{}});if(!codexLinuxRemoteMobileThreadHydratable(t)){if(s<12){z.warning(\`Retrying hydration for non-persisted conversation\`,{safe:{conversationId:r,path:t?.path??null,queuedNotificationCount:c.length,attempt:s+1},sensitive:{}}),setTimeout(()=>o(s+1),250);return}this.codexLinuxRemoteMobilePendingNotifications?.delete(r),z.warning(\`Skipping hydration for non-persisted conversation\`,{safe:{conversationId:r,path:t?.path??null,queuedNotificationCount:c.length},sensitive:{}});return}this.upsertConversationFromThread(t),this.codexLinuxRemoteMobilePendingNotifications?.delete(r);for(let e of c)this.onNotification(e.method,e.params)}).catch(e=>{if(s<12){z.warning(\`Retrying hydration for turn/started\`,{safe:{conversationId:r,attempt:s+1},sensitive:{error:e}}),setTimeout(()=>o(s+1),250);return}this.codexLinuxRemoteMobilePendingNotifications?.delete(r),z.error(\`Failed to hydrate conversation for turn/started\`,{safe:{conversationId:r},sensitive:{error:e}})});o();break}`;
-    if (patched.includes(unknownTurnNeedle)) {
+      (_needle, conversationIdVar) =>
+        `if(!this.conversations.get(${conversationIdVar})){/*${REMOTE_MOBILE_UNKNOWN_TURN_MARKER}*//*${REMOTE_MOBILE_NOTIFICATION_QUEUE_MARKER}*/let i=this.codexLinuxRemoteMobilePendingNotifications??=new Map,a=i.get(${conversationIdVar});a||(a=[],i.set(${conversationIdVar},a)),a.push(n),z.warning(\`Hydrating conversation for turn/started\`,{safe:{conversationId:${conversationIdVar},queuedNotificationCount:a.length},sensitive:{}});function codexLinuxRemoteMobileThreadHydratable(e){return typeof e?.path==\`string\`&&e.path.endsWith(\`.jsonl\`)}let o=(s=0)=>this.readThread(${conversationIdVar},{includeTurns:!1}).then(e=>{let t=e?.thread??e,c=this.codexLinuxRemoteMobilePendingNotifications?.get(${conversationIdVar})??[];if(!t){if(s<12){z.warning(\`Retrying hydration for missing conversation\`,{safe:{conversationId:${conversationIdVar},queuedNotificationCount:c.length,attempt:s+1},sensitive:{}}),setTimeout(()=>o(s+1),250);return}this.codexLinuxRemoteMobilePendingNotifications?.delete(${conversationIdVar}),z.warning(\`Skipping hydration for missing conversation\`,{safe:{conversationId:${conversationIdVar},queuedNotificationCount:c.length},sensitive:{}});return}z.warning(\`Remote mobile hydration readThread shape\`,{safe:{conversationId:${conversationIdVar},hasThread:!!t,path:t?.path??null,hasTurns:Array.isArray(t?.turns),turnCount:Array.isArray(t?.turns)?t.turns.length:null,projectId:t?.projectId??t?.project_id??null,source:t?.source??null,kind:t?.kind??null,taskId:t?.task?.id??t?.task_id??null},sensitive:{}});if(!codexLinuxRemoteMobileThreadHydratable(t)){if(s<12){z.warning(\`Retrying hydration for non-persisted conversation\`,{safe:{conversationId:${conversationIdVar},path:t?.path??null,queuedNotificationCount:c.length,attempt:s+1},sensitive:{}}),setTimeout(()=>o(s+1),250);return}this.codexLinuxRemoteMobilePendingNotifications?.delete(${conversationIdVar}),z.warning(\`Skipping hydration for non-persisted conversation\`,{safe:{conversationId:${conversationIdVar},path:t?.path??null,queuedNotificationCount:c.length},sensitive:{}});return}this.upsertConversationFromThread(t),this.codexLinuxRemoteMobilePendingNotifications?.delete(${conversationIdVar});for(let e of c)this.onNotification(e.method,e.params)}).catch(e=>{if(s<12){z.warning(\`Retrying hydration for turn/started\`,{safe:{conversationId:${conversationIdVar},attempt:s+1},sensitive:{error:e}}),setTimeout(()=>o(s+1),250);return}this.codexLinuxRemoteMobilePendingNotifications?.delete(${conversationIdVar}),z.error(\`Failed to hydrate conversation for turn/started\`,{safe:{conversationId:${conversationIdVar}},sensitive:{error:e}})});o();break}`;
+    if (unknownTurnNeedle.test(patched)) {
       patched = patched.replace(unknownTurnNeedle, unknownTurnReplacement);
     } else if (patched.includes("Received turn/started for unknown conversation")) {
       console.warn("WARN: Could not find unknown turn/started needle - skipping remote mobile hydration patch");
@@ -1238,10 +1238,11 @@ function applyLinuxRemoteMobileConversationHydrationPatch(source) {
     }
 
     const turnCompletedNeedle =
-      "if(!this.conversations.get(r)){z.error(`Received turn/completed for unknown conversation`,{safe:{conversationId:r},sensitive:{}});break}";
+      /if\(!this\.conversations\.get\(([A-Za-z_$][\w$]*)\)\)\{z\.error\(`Received turn\/completed for unknown conversation`,\{safe:\{conversationId:\1\},sensitive:\{\}\}\);break\}/u;
     const turnCompletedReplacement =
-      "if(!this.conversations.get(r)){let o=this.codexLinuxRemoteMobilePendingNotifications?.get(r);if(o){o.push(n),z.warning(`Queueing turn/completed for hydrating conversation`,{safe:{conversationId:r,queuedNotificationCount:o.length},sensitive:{}});break}z.error(`Received turn/completed for unknown conversation`,{safe:{conversationId:r},sensitive:{}});break}";
-    if (patched.includes(turnCompletedNeedle)) {
+      (_needle, conversationIdVar) =>
+        `if(!this.conversations.get(${conversationIdVar})){let o=this.codexLinuxRemoteMobilePendingNotifications?.get(${conversationIdVar});if(o){o.push(n),z.warning(\`Queueing turn/completed for hydrating conversation\`,{safe:{conversationId:${conversationIdVar},queuedNotificationCount:o.length},sensitive:{}});break}z.error(\`Received turn/completed for unknown conversation\`,{safe:{conversationId:${conversationIdVar}},sensitive:{}});break}`;
+    if (turnCompletedNeedle.test(patched)) {
       patched = patched.replace(turnCompletedNeedle, turnCompletedReplacement);
     } else if (patched.includes("Received turn/completed for unknown conversation")) {
       console.warn("WARN: Could not find unknown turn/completed needle - skipping remote mobile turn queue patch");

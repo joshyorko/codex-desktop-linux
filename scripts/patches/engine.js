@@ -39,6 +39,7 @@ function normalizeDescriptor(descriptor, sourcePath = null, index = 0) {
     id,
     name: descriptor.name ?? id,
     phase: descriptor.phase ?? "main-bundle",
+    sourceKind: descriptor.sourceKind ?? (descriptor.featureId != null ? "feature" : "core"),
     order: descriptor.order ?? 10_000 + index,
     sourcePath,
   };
@@ -131,13 +132,7 @@ function descriptorFailureStatus(descriptor) {
 }
 
 function patchStatusFromDescriptorChange(descriptor, changed, warnings) {
-  if (changed) {
-    return "applied";
-  }
-  if (warnings.length > 0) {
-    return descriptorFailureStatus(descriptor);
-  }
-  return "already-applied";
+  return patchStatusFromChange(changed, warnings, descriptor.ciPolicy);
 }
 
 function normalizeDescriptorStatus(descriptor, status) {
@@ -148,9 +143,16 @@ function normalizeDescriptorStatus(descriptor, status) {
 }
 
 function recordDescriptorPatch(report, descriptor, status, reason, context) {
+  const warnings = Array.isArray(context?.reportWarnings) && context.reportWarnings.length > 0
+    ? { warnings: [...context.reportWarnings] }
+    : {};
   recordPatch(report, descriptor.id, normalizeDescriptorStatus(descriptor, status), reason, {
     phase: descriptor.phase,
     targetSummary: patchTargetSummary(descriptor, context),
+    ciPolicy: descriptor.ciPolicy ?? "optional",
+    sourceKind: descriptor.sourceKind ?? "core",
+    ...(descriptor.featureId != null ? { featureId: descriptor.featureId } : {}),
+    ...warnings,
   });
 }
 
@@ -171,6 +173,7 @@ function descriptorEnabled(descriptor, context) {
 function applyMainBundlePatchDescriptors(source, descriptors, context, report) {
   let patched = source;
   const warnings = [];
+  const coreWarnings = [];
   for (const descriptor of descriptors.filter((patch) => patch.phase === "main-bundle")) {
     if (!descriptorAppliesTo(descriptor, context)) {
       recordDescriptorPatch(report, descriptor, SKIPPED_TARGET, null, context);
@@ -184,6 +187,10 @@ function applyMainBundlePatchDescriptors(source, descriptors, context, report) {
     const result = captureWarnings(() => descriptor.apply(patched, context));
     patched = result.value;
     warnings.push(...result.warnings);
+    if ((descriptor.sourceKind ?? "core") === "core") {
+      coreWarnings.push(...result.warnings);
+    }
+    context.reportWarnings = result.warnings;
     recordDescriptorPatch(
       report,
       descriptor,
@@ -191,8 +198,9 @@ function applyMainBundlePatchDescriptors(source, descriptors, context, report) {
       result.warnings[0] ?? null,
       context,
     );
+    delete context.reportWarnings;
   }
-  return { patchedSource: patched, warnings };
+  return { patchedSource: patched, warnings, coreWarnings };
 }
 
 function defaultWebviewMissingWarning(extractedDir, descriptor) {
@@ -234,7 +242,9 @@ function applyWebviewAssetPatchDescriptors(extractedDir, descriptors, context, r
     const { value: result, warnings } = captureWarnings(() =>
       patchAssetFiles(extractedDir, pattern, (source) => descriptor.apply(source, context), missingWarning),
     );
+    context.reportWarnings = warnings;
     recordAssetDescriptorPatch(report, descriptor, result, warnings, context);
+    delete context.reportWarnings;
   }
 }
 
@@ -249,10 +259,11 @@ function applyExtractedAppPatchDescriptors(extractedDir, descriptors, context, r
     }
 
     const { value: result, warnings } = captureWarnings(() => descriptor.apply(extractedDir, context));
+    context.reportWarnings = warnings;
     const statusResult = typeof descriptor.status === "function"
       ? descriptor.status(result, warnings, context)
       : result?.changed != null
-        ? patchStatusFromChange(Boolean(result.changed), warnings)
+        ? patchStatusFromChange(Boolean(result.changed), warnings, descriptor.ciPolicy)
         : "applied";
     const status = typeof statusResult === "object" && statusResult != null
       ? statusResult.status
@@ -261,6 +272,7 @@ function applyExtractedAppPatchDescriptors(extractedDir, descriptors, context, r
       ? statusResult.reason
       : result?.reason ?? warnings[0] ?? null;
     recordDescriptorPatch(report, descriptor, status, reason, context);
+    delete context.reportWarnings;
   }
 }
 
