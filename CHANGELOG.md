@@ -56,6 +56,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- Plugin marketplace browsing now preserves upstream's `remote_plugin`
+  feature sync on Linux, so current app servers can load the remote OpenAI
+  curated catalog instead of falling back to only locally installed plugins.
 - The in-app updater no longer quits into a broken `pkexec` install path when a
   minimal window-manager session has no graphical polkit authentication agent;
   it keeps the rebuilt package ready and reports a terminal `sudo

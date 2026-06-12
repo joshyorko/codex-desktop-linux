@@ -2875,7 +2875,7 @@ test("shows the profile dropdown settings route on Linux", () => {
 
 test("removes unsupported features from default app-server feature sync", () => {
   const source = [
-    "var GF=[`apps`,`auth_elicitation`,`enable_mcp_apps`,`memories`,`mentions_v2`,`plugins`,`remote_control`,`tool_call_mcp_elicitation`,`tool_search`,`tool_suggest`,te];",
+    "var GF=[`apps`,`auth_elicitation`,`enable_mcp_apps`,`memories`,`mentions_v2`,`plugins`,`remote_control`,`remote_plugin`,`tool_call_mcp_elicitation`,`tool_search`,`tool_suggest`,te];",
     "function KF(){let e=(0,Z.c)(6),t=K(G),[n]=ts(`statsig_default_enable_features`),r=Lc(),i=Io(),a,o;",
     "return e[0]!==r?(a=()=>{let r=qF(n);qn(`set-experimental-feature-enablement-for-host`,{hostId:t,enablement:r}).catch(n=>{q.error(`Failed to sync experimental feature enablement`,{sensitive:{error:n}})})},o=[r],e[0]=r,e[1]=a,e[2]=o):(a=e[1],o=e[2]),null}",
     "function qF(e){let t={};for(let n of GF){let r=e[n];r!=null&&(t[n]=r)}return t}",
@@ -2885,7 +2885,7 @@ test("removes unsupported features from default app-server feature sync", () => 
 
   assert.match(
     patched,
-    /var GF=\[`apps`,`memories`,`mentions_v2`,`plugins`,`remote_control`,`tool_call_mcp_elicitation`,`tool_suggest`\];/,
+    /var GF=\[`apps`,`memories`,`mentions_v2`,`plugins`,`remote_control`,`remote_plugin`,`tool_call_mcp_elicitation`,`tool_suggest`\];/,
   );
   assert.doesNotMatch(patched, /`auth_elicitation`/);
   assert.doesNotMatch(patched, /`enable_mcp_apps`/);
@@ -2913,7 +2913,7 @@ test("patches the matched app-server feature sync array when an identical array 
   assert.match(patched, new RegExp(`function OF\\(\\)\\{return GF\\}${escapeRegExp(supportedFeatureArray)}function KF`));
 });
 
-test("removes unsupported dynamic extra from current app-server feature sync", () => {
+test("preserves supported dynamic remote_plugin in current app-server feature sync", () => {
   const source = [
     "var GF=[`apps`,`memories`,`plugins`,`tool_call_mcp_elicitation`,`tool_suggest`],vI=`remote_plugin`;",
     "function KF(){let e=(0,Z.c)(6),t=K(G),[n]=ts(`statsig_default_enable_features`),r=Lc(),i=Io(),a,o;",
@@ -2923,9 +2923,8 @@ test("removes unsupported dynamic extra from current app-server feature sync", (
 
   const patched = applyPatchTwice(applyLinuxAppServerFeatureEnablementPatch, source);
 
-  assert.notEqual(patched, source);
-  assert.match(patched, /function qF\(e,t\)\{let n=\{\};for\(let r of GF\)\{let i=e\[r\];i!=null&&\(n\[r\]=i\)\}return n\}/);
-  assert.doesNotMatch(patched, /n\[vI\]=t/);
+  assert.equal(patched, source);
+  assert.match(patched, /n\[vI\]=t/);
 });
 
 test("keeps already-sanitized dynamic app-server feature sync quiet", () => {

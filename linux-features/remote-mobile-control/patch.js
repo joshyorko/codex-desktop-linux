@@ -607,11 +607,11 @@ function applyLinuxRemoteControlFeatureSyncPatch(source) {
   }
 
   // 26.527.x builds the per-host feature enablement in a helper that copies the
-  // supported defaults, then unconditionally adds remote_plugin (n[vI]=t) — which
-  // the app-server rejects — and never includes remote_control. On Linux, force
-  // remote_control on and drop the unsupported remote_plugin entry before sync.
-  // The core Linux patch may already have removed the remote_plugin tail; compose
-  // with that sanitized shape instead of treating it as drift.
+  // supported defaults, then unconditionally adds remote_plugin (n[vI]=t), and
+  // never includes remote_control. Current app servers support remote_plugin and
+  // use it for remote marketplace data, so Linux only adds remote_control.
+  // Older core Linux patches may already have removed the remote_plugin tail;
+  // compose with that sanitized shape instead of treating it as drift.
   let patched = source;
   let changed = false;
   const enablementRegex =
@@ -622,7 +622,7 @@ function applyLinuxRemoteControlFeatureSyncPatch(source) {
       const [, loopBlock, , , enablementVar, remotePluginVar, remotePluginValue] = match;
       const replacement =
         `${loopBlock}return typeof navigator!=\`undefined\`&&navigator.userAgent.includes(\`Linux\`)` +
-        `?(${REMOTE_CONTROL_FEATURE_SYNC_MARKER}(arguments[2],arguments[3])&&(${enablementVar}.remote_control=!0),${enablementVar})` +
+        `?(${REMOTE_CONTROL_FEATURE_SYNC_MARKER}(arguments[2],arguments[3])&&(${enablementVar}.remote_control=!0),${enablementVar}[${remotePluginVar}]=${remotePluginValue},${enablementVar})` +
         `:(${enablementVar}[${remotePluginVar}]=${remotePluginValue},${enablementVar})}` +
         `function ${REMOTE_CONTROL_FEATURE_SYNC_MARKER}(e,t){return e==null||t==null||e===t}`;
       patched = patched.replace(enablementRegex, replacement);

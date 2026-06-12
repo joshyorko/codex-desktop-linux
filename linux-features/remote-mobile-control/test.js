@@ -871,14 +871,16 @@ test("Linux remote-control load gate enables remote-control environment loading"
   assert.equal(applyLinuxRemoteControlLoadGatePatch(patched), patched);
 });
 
-test("Linux remote-control feature sync forces remote_control and drops remote_plugin on Linux", () => {
+test("Linux remote-control feature sync forces remote_control and preserves remote_plugin on Linux", () => {
   const source = syntheticAppMainFeatureSyncBundle();
   const patched = applyLinuxRemoteControlFeatureSyncPatch(source);
 
   assert.notEqual(patched, source);
   assert.match(patched, /\.remote_control=!0/);
+  assert.match(patched, /n\[vI\]=t/);
   assert.match(patched, /codexLinuxRemoteControlFeatureSyncEnabled/);
   assert.match(patched, /navigator\.userAgent\.includes\(`Linux`\)\?\(/);
+  assert.match(patched, /\?\(codexLinuxRemoteControlFeatureSyncEnabled\(arguments\[2\],arguments\[3\]\)&&\(n\.remote_control=!0\),n\[vI\]=t,n\)/);
   assert.match(patched, /:\(n\[vI\]=t,n\)\}/);
   assert.equal(applyLinuxRemoteControlFeatureSyncPatch(patched), patched);
 });
