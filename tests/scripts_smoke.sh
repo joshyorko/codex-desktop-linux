@@ -3450,6 +3450,80 @@ for (const [key, value] of Object.entries(expected)) {
 NODE
 }
 
+test_browser_use_node_repl_config_shim_patch_behavior() {
+    info "Checking Browser Use nodeRepl config shim patch behavior"
+    local workspace="$TMP_DIR/browser-node-repl-config-shim"
+    local client="$workspace/browser-client.mjs"
+    local output_log="$workspace/output.log"
+
+    mkdir -p "$workspace"
+    cat > "$client" <<'JS'
+function Me(){let e=globalThis.nodeRepl;return e?.config==null?void 0:e}
+JS
+
+    (
+        warn() { echo "[WARN] $*" >&2; }
+        info() { echo "[INFO] $*" >&2; }
+        # shellcheck disable=SC1091
+        source "$REPO_DIR/scripts/lib/bundled-plugins.sh"
+        patch_browser_use_node_repl_config_shim "$client"
+        patch_browser_use_node_repl_config_shim "$client"
+    ) >"$output_log" 2>&1
+
+    assert_contains "$client" "codexLinuxBrowserUseConfigShim"
+    assert_contains "$client" "readToml: async"
+    assert_contains "$client" "readRequirements: async"
+    assert_contains "$client" "writeToml: async"
+    assert_contains "$client" "function Me(){codexLinuxBrowserUseConfigShim()"
+    assert_not_contains "$output_log" "Could not find Browser Use nodeRepl config shim insertion point"
+    [ "$(grep -o "codexLinuxBrowserUseConfigShim" "$client" | wc -l)" -eq 2 ] \
+        || fail "Expected nodeRepl config shim patch to be idempotent"
+
+    mkdir -p "$workspace/.codex/browser"
+    cat > "$workspace/.codex/browser/config.toml" <<'TOML'
+full_cdp_access_enabled = true
+
+[origins]
+allowed = ["https://example.com"]
+TOML
+
+    node - "$client" "$workspace" <<'NODE'
+const fs = require("node:fs");
+const client = process.argv[2];
+const homeDir = process.argv[3];
+
+global.nodeRepl = { homeDir };
+eval(fs.readFileSync(client, "utf8"));
+
+(async () => {
+  const config = await Me().config.readToml("browser/config.toml");
+  if (config.full_cdp_access_enabled !== true) {
+    throw new Error("full CDP flag was not parsed");
+  }
+  if (config.origins.allowed[0] !== "https://example.com") {
+    throw new Error("origin array was not parsed");
+  }
+
+  const requirements = await Me().config.readRequirements();
+  if (requirements.requirements !== null) {
+    throw new Error("requirements fallback changed");
+  }
+
+  await Me().config.writeToml("browser/generated.toml", {
+    enabled: true,
+    origins: { allowed: ["https://example.com"] },
+  });
+  const generated = await Me().config.readToml("browser/generated.toml");
+  if (generated.enabled !== true || generated.origins.allowed[0] !== "https://example.com") {
+    throw new Error("TOML write/read round trip failed");
+  }
+})().catch((error) => {
+  console.error(error);
+  process.exit(1);
+});
+NODE
+}
+
 test_browser_plugin_renamed_upstream_staging() {
     info "Checking Browser plugin staging from renamed upstream resources"
     local workspace="$TMP_DIR/browser-plugin-renamed"
@@ -3735,6 +3809,8 @@ test_chrome_plugin_staging() {
     assert_contains "$chrome_dir/scripts/browser-client.mjs" "instanceId:await IS(o.id,t,r)"
     assert_contains "$chrome_dir/scripts/browser-client.mjs" "codexLinuxRankBrowserBackends"
     assert_contains "$chrome_dir/scripts/browser-client.mjs" "codexLinuxFilterBrowserBackends"
+    assert_contains "$chrome_dir/scripts/browser-client.mjs" "codexLinuxCloseDiscardedBrowserBackends"
+    assert_contains "$chrome_dir/scripts/browser-client.mjs" "await codexLinuxFilterBrowserBackends"
     assert_contains "$chrome_dir/scripts/browser-client.mjs" "getUserTabs()"
     assert_contains "$chrome_dir/scripts/browser-client.mjs" 'globalThis.nodeRepl?.env?.\[e\]'
     assert_not_contains "$chrome_dir/scripts/browser-client.mjs" 'globalThis.nodeRepl?.env\[e\]'
@@ -3748,6 +3824,8 @@ test_chrome_plugin_staging() {
     assert_contains "$chrome_dir/skills/control-chrome/SKILL.md" "browser.tabs.new()"
     assert_contains "$chrome_dir/skills/control-chrome/SKILL.md" "tabs: Array.isArray(tabs) ? tabs : \\[\\]"
     assert_contains "$chrome_dir/skills/control-chrome/SKILL.md" "...(error ? { error } : {})"
+    assert_contains "$chrome_dir/skills/control-chrome/SKILL.md" "Promise.race"
+    assert_contains "$chrome_dir/skills/control-chrome/SKILL.md" "Chrome profile tab probe timed out"
     assert_not_contains "$chrome_dir/skills/control-chrome/SKILL.md" "{ error: String(error) }"
     assert_not_contains "$chrome_dir/skills/control-chrome/SKILL.md" 'globalThis.browser = await agent.browsers.get("extension");'
     assert_contains "$install_dir/resources/plugins/openai-bundled/.agents/plugins/marketplace.json" '"name": "chrome"'
@@ -3820,6 +3898,8 @@ JS
     assert_contains "$browser_client" "instanceId:await ZA(o.id,e,r)"
     assert_contains "$browser_client" "codexLinuxRankBrowserBackends"
     assert_contains "$browser_client" "codexLinuxFilterBrowserBackends"
+    assert_contains "$browser_client" "codexLinuxCloseDiscardedBrowserBackends"
+    assert_contains "$browser_client" "await codexLinuxFilterBrowserBackends"
     assert_contains "$browser_client" "p$.platform()"
     assert_contains "$browser_client" "codexLinuxRejectAmbiguousBrowserAlias"
     assert_contains "$browser_client" "codexLinuxRejectAmbiguousBrowserAlias(p.browser_id,i)"
@@ -5917,6 +5997,7 @@ main() {
     test_bundled_plugin_builders_accept_prebuilt_binaries
     test_browser_use_node_repl_fallback_runtime
     test_browser_use_file_url_policy_patch_behavior
+    test_browser_use_node_repl_config_shim_patch_behavior
     test_browser_plugin_renamed_upstream_staging
     test_browser_use_node_repl_glibc_pidfd_patch_static
     test_browser_use_node_repl_ldd_output_compatibility
