@@ -65,6 +65,15 @@ function syntheticCurrentMainBundle() {
   ].join("");
 }
 
+function syntheticCryptoAliasCollisionMainBundle() {
+  return [
+    "let a=require(`node:path`),o=require(`node:fs`),c=require(`node:crypto`),b={createRequire:()=>()=>({})};",
+    "function mz(e){return Buffer.from(JSON.stringify({domain:`codex-device-key-sign-payload/v1`,payload:e}),`utf8`)}",
+    "var lz=(0,b.createRequire)(__filename),uz=`remote-control-device-key.node`,dz=`codex-device-key-sign-payload/v1`;",
+    "function pz({resourcesPath:e}){let t=null,n=()=>{if(process.platform!==`darwin`)throw Error(`Remote control device keys are only available on macOS`);if(e==null)throw Error(`Remote control device keys require resourcesPath`);return t??=lz((0,a.join)(e,`native`,uz)),t};return{createDeviceKey:e=>n().createDeviceKey(e??`hardware_only`),deleteDeviceKey:e=>n().deleteDeviceKey(e),getDeviceKeyPublic:e=>n().getDeviceKeyPublic(e),signDeviceKey:async(e,t)=>{let r=mz(t);return{...await n().signDeviceKey(e,r),signedPayloadBase64:r.toString(`base64`)}}}}",
+  ].join("");
+}
+
 function syntheticOldClientEnrollmentBundle() {
   return [
     "async function dd({appServerClient:e,desktopApiOptions:t,deviceKeyClient:n,globalState:r}){let i=Sd(await md({action:`check remote control authorization`,appServerClient:e,desktopApiOptions:t})).tokenAccountUserId;if(i==null)return{clientAuthorized:!1,clientId:null};let a=await Ld({deviceKeyClient:n,enrollmentKey:pd(fd(t),i),globalState:r});return{clientAuthorized:a!=null,clientId:a?.clientId??null}}",
@@ -675,6 +684,41 @@ test("Linux remote-control device-key patch handles current minified aliases", (
   assert.equal(applyLinuxRemoteControlPreserveConfigPatch(applyLinuxRemoteControlDeviceKeyPatch(patched)), patched);
 });
 
+test("Linux remote-control device-key provider avoids upstream minified alias collisions", async () => {
+  const configHome = fs.mkdtempSync(path.join(os.tmpdir(), "codex-remote-mobile-key-collision-"));
+  try {
+    const patched = applyLinuxRemoteControlDeviceKeyPatch(syntheticCryptoAliasCollisionMainBundle());
+    assert.match(patched, /\(0,c\.generateKeyPairSync\)\(`/);
+    assert.match(patched, /codexLinuxRemoteControlKeyRecord/);
+    assert.doesNotMatch(patched, /let c=\{algorithm:`ecdsa_p256_sha256`/);
+
+    const context = {
+      Buffer,
+      Date,
+      Error,
+      JSON,
+      Promise,
+      console,
+      __filename: path.join(configHome, "main.js"),
+      module: { exports: {} },
+      process: {
+        env: { XDG_CONFIG_HOME: configHome },
+        pid: process.pid,
+        platform: "linux",
+      },
+      require,
+    };
+
+    vm.runInNewContext(`${patched};module.exports=pz({resourcesPath:null});`, context);
+    const created = await context.module.exports.createDeviceKey("allow_os_protected_nonextractable");
+    assert.equal(created.algorithm, "ecdsa_p256_sha256");
+    assert.equal(created.protectionClass, "os_protected_nonextractable");
+    assert.match(created.keyId, /^[0-9a-f-]{36}$/u);
+  } finally {
+    fs.rmSync(configHome, { recursive: true, force: true });
+  }
+});
+
 test("Linux remote-control client enrollment accepts account-scoped and base user ids", () => {
   const source = syntheticOldClientEnrollmentBundle();
   const patched = applyLinuxRemoteControlClientAccountCompatibilityPatch(source);
@@ -770,6 +814,15 @@ test("Linux remote mobile app-server launch enables remote control on the Deskto
   );
   assert.doesNotMatch(patched, /args:\[`app-server`,`--analytics-default-enabled`\]/);
   assert.match(patched, /args:codexLinuxRemoteMobileAppServerArgs\(\)/);
+  assert.equal(applyLinuxRemoteMobileAppServerRemoteControlPatch(patched), patched);
+});
+
+test("Linux remote mobile app-server launch keeps a leading use strict directive first", () => {
+  const source = `"use strict";${syntheticAppServerLaunchBundle()}`;
+  const patched = applyLinuxRemoteMobileAppServerRemoteControlPatch(source);
+
+  assert.notEqual(patched, source);
+  assert.match(patched, /^"use strict";function codexLinuxRemoteMobileAppServerArgs/);
   assert.equal(applyLinuxRemoteMobileAppServerRemoteControlPatch(patched), patched);
 });
 

@@ -7,6 +7,7 @@ const { linuxSettingsKeys, requireName } = require("../../scripts/patches/shared
 const HANDLER_NAME = "codex-linux-wrapper-updater";
 const RUNTIME_VERSION = "codex-wrapper-updater-v3";
 const KEYBINDS_ASSET = "keybinds-settings-linux.js";
+const LINUX_DESKTOP_SETTINGS_ASSET = "linux-desktop-settings-linux.js";
 const WRAPPER_UPDATES_SETTING_KEY = linuxSettingsKeys.wrapperUpdates;
 const FEATURE_PICKER_ON_UPDATE_SETTING_KEY = linuxSettingsKeys.featurePickerOnUpdate;
 
@@ -209,14 +210,17 @@ function applyWrapperUpdateGeneralSettingsPatch(source) {
 function patchWrapperUpdateSettingsAssets(extractedDir) {
   try {
     const assetsDir = path.join(extractedDir, "webview", "assets");
-    const keybindsPath = path.join(assetsDir, KEYBINDS_ASSET);
-    if (fs.existsSync(keybindsPath)) {
-      const current = fs.readFileSync(keybindsPath, "utf8");
+    for (const settingsAsset of [LINUX_DESKTOP_SETTINGS_ASSET, KEYBINDS_ASSET]) {
+      const settingsPath = path.join(assetsDir, settingsAsset);
+      if (!fs.existsSync(settingsPath)) {
+        continue;
+      }
+      const current = fs.readFileSync(settingsPath, "utf8");
       const patched = applyWrapperUpdateSettingsPatch(current);
       if (patched === current) {
         return { matched: true, changed: 0 };
       }
-      fs.writeFileSync(keybindsPath, patched, "utf8");
+      fs.writeFileSync(settingsPath, patched, "utf8");
       return { matched: true, changed: 1 };
     }
 
@@ -224,7 +228,7 @@ function patchWrapperUpdateSettingsAssets(extractedDir) {
       .readdirSync(assetsDir)
       .filter((name) => /^general-settings-.*\.js$/.test(name));
     if (generalSettingsAssets.length === 0) {
-      return { matched: false, changed: 0, reason: `${KEYBINDS_ASSET} and general settings asset are not present` };
+      return { matched: false, changed: 0, reason: `${LINUX_DESKTOP_SETTINGS_ASSET}, ${KEYBINDS_ASSET}, and general settings asset are not present` };
     }
 
     let lastError = null;

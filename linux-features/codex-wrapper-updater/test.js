@@ -132,6 +132,32 @@ test("settings asset patch skips re-exported general settings bundles", () => {
   }
 });
 
+test("settings asset patch prefers generated Linux desktop settings bundle", () => {
+  const appDir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-wrapper-updater-linux-desktop-settings-"));
+  const assetsDir = path.join(appDir, "webview", "assets");
+  fs.mkdirSync(assetsDir, { recursive: true });
+  const linuxDesktopSettings =
+    `var KEYS={autoUpdateOnExit:"codex-linux-auto-update-on-exit"};` +
+    `function Settings(){return $.jsx(SettingsGroup,{children:$.jsx(LinuxToggle,{settingKey:KEYS.autoUpdateOnExit,label:"Install updates when you close Codex",description:"When on, a ready update waits for Codex to close and then installs. When off, updates wait until you click Update."})})}`;
+  const generalSettings = `function Br(){return null}`;
+  fs.writeFileSync(path.join(assetsDir, "linux-desktop-settings-linux.js"), linuxDesktopSettings);
+  fs.writeFileSync(path.join(assetsDir, "general-settings-z.js"), generalSettings);
+
+  try {
+    assert.deepEqual(patchWrapperUpdateSettingsAssets(appDir), { matched: true, changed: 1 });
+    assert.match(
+      fs.readFileSync(path.join(assetsDir, "linux-desktop-settings-linux.js"), "utf8"),
+      /Check for Codex Desktop Linux updates/,
+    );
+    assert.equal(
+      fs.readFileSync(path.join(assetsDir, "general-settings-z.js"), "utf8"),
+      generalSettings,
+    );
+  } finally {
+    fs.rmSync(appDir, { recursive: true, force: true });
+  }
+});
+
 test("feature exposes optional patches and declarative apply hooks when enabled", () => {
   withTempFeatureConfig(["codex-wrapper-updater"], () => {
     assert.deepEqual(enabledLinuxFeatureIds({ featuresRoot }), ["codex-wrapper-updater"]);

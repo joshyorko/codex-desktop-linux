@@ -424,29 +424,48 @@ function applyKeybindsSettingsSectionsPatch(currentSource) {
 function applyLinuxDesktopSettingsSectionsPatch(currentSource) {
   let patchedSource = currentSource;
 
-  if (patchedSource.includes("slug:`linux-desktop`")) {
+  if (
+    patchedSource.includes("slug:`linux-desktop`") &&
+    /=\[`general-settings`,`linux-desktop`/.test(patchedSource)
+  ) {
     return patchedSource;
   }
 
-  const sectionsNeedle = "var e=`general-settings`,t=`mcp-settings`,n=[{slug:e},";
-  const sectionsPatch = "var e=`general-settings`,t=`mcp-settings`,n=[{slug:e},{slug:`linux-desktop`},";
-  if (patchedSource.includes(sectionsNeedle)) {
-    return patchedSource.replace(sectionsNeedle, sectionsPatch);
+  if (!/=\[`general-settings`,`linux-desktop`/.test(patchedSource)) {
+    const orderPattern = /([A-Za-z_$][\w$]*=\[`general-settings`,)(?!`linux-desktop`)/;
+    if (orderPattern.test(patchedSource)) {
+      patchedSource = patchedSource.replace(orderPattern, "$1`linux-desktop`,");
+    }
   }
 
-  const currentNeedle = "n=[{slug:e},{slug:`appearance`}";
-  if (patchedSource.includes(currentNeedle)) {
-    return patchedSource.replace(currentNeedle, "n=[{slug:e},{slug:`linux-desktop`},{slug:`appearance`}");
+  if (!patchedSource.includes("slug:`linux-desktop`")) {
+    const sectionsNeedle = "var e=`general-settings`,t=`mcp-settings`,n=[{slug:e},";
+    const sectionsPatch = "var e=`general-settings`,t=`mcp-settings`,n=[{slug:e},{slug:`linux-desktop`},";
+    if (patchedSource.includes(sectionsNeedle)) {
+      patchedSource = patchedSource.replace(sectionsNeedle, sectionsPatch);
+    } else {
+      const currentNeedle = "n=[{slug:e},{slug:`appearance`}";
+      if (patchedSource.includes(currentNeedle)) {
+        patchedSource = patchedSource.replace(currentNeedle, "n=[{slug:e},{slug:`linux-desktop`},{slug:`appearance`}");
+      } else {
+        const literalNeedle = "n=[{slug:`general-settings`},{slug:`appearance`}";
+        if (patchedSource.includes(literalNeedle)) {
+          patchedSource = patchedSource.replace(literalNeedle, "n=[{slug:`general-settings`},{slug:`linux-desktop`},{slug:`appearance`}");
+        } else {
+          const generalFirstPattern = /([A-Za-z_$][\w$]*=\[\{slug:(?:`general-settings`|[A-Za-z_$][\w$]*)\},)/;
+          if (generalFirstPattern.test(patchedSource)) {
+            patchedSource = patchedSource.replace(generalFirstPattern, "$1{slug:`linux-desktop`},");
+          }
+        }
+      }
+    }
   }
 
-  const literalNeedle = "n=[{slug:`general-settings`},{slug:`appearance`}";
-  if (patchedSource.includes(literalNeedle)) {
-    return patchedSource.replace(literalNeedle, "n=[{slug:`general-settings`},{slug:`linux-desktop`},{slug:`appearance`}");
-  }
-
-  const generalFirstPattern = /(n=\[\{slug:`general-settings`\},)/;
-  if (generalFirstPattern.test(patchedSource)) {
-    return patchedSource.replace(generalFirstPattern, "$1{slug:`linux-desktop`},");
+  if (
+    patchedSource.includes("slug:`linux-desktop`") &&
+    (/=\[`general-settings`,`linux-desktop`/.test(patchedSource) || !/[A-Za-z_$][\w$]*=\[`general-settings`,/.test(currentSource))
+  ) {
+    return patchedSource;
   }
 
   throw new Error("Required Keybinds settings patch failed: could not add Linux desktop settings section");

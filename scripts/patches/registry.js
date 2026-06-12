@@ -164,20 +164,20 @@ function patchExtractedApp(extractedDir, options = {}) {
   if (main != null) {
     const target = path.join(main.buildDir, main.mainBundle);
     const source = fs.readFileSync(target, "utf8");
-    const { patchedSource, warnings, coreWarnings } = applyMainBundlePatches(source, assetContext, report);
+    const { patchedSource, requiredCoreWarnings } = applyMainBundlePatches(source, assetContext, report);
     if (patchedSource !== source) {
       fs.writeFileSync(target, patchedSource, "utf8");
     }
     recordPatch(
       report,
       "main-process-ui",
-      patchStatusFromChange(patchedSource !== source, coreWarnings, REQUIRED_UPSTREAM),
-      coreWarnings[0] ?? null,
+      patchStatusFromChange(patchedSource !== source, requiredCoreWarnings, REQUIRED_UPSTREAM),
+      requiredCoreWarnings[0] ?? null,
       {
         phase: "main-bundle",
         ciPolicy: REQUIRED_UPSTREAM,
         sourceKind: "core",
-        ...(coreWarnings.length > 0 ? { warnings: [...coreWarnings] } : {}),
+        ...(requiredCoreWarnings.length > 0 ? { warnings: [...requiredCoreWarnings] } : {}),
       },
     );
   }

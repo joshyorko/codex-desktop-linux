@@ -2,6 +2,7 @@
 
 const {
   applyBrowserUseNodeReplApprovalPatch,
+  applyLinuxBrowserUseRouteLivenessPatch,
   applyLinuxChromeExtensionStatusPatch,
 } = require("../../../../main-process.js");
 const { applyLinuxChromePluginAutoInstallPatch } = require("../../../../chrome-plugin.js");
@@ -20,6 +21,13 @@ module.exports = [
     order: 160,
     ciPolicy: "optional",
     apply: applyBrowserUseNodeReplApprovalPatch,
+  },
+  {
+    id: "linux-browser-use-route-liveness",
+    phase: "main-bundle",
+    order: 170,
+    ciPolicy: "optional",
+    apply: applyLinuxBrowserUseRouteLivenessPatch,
   },
   {
     id: "linux-chrome-extension-status",

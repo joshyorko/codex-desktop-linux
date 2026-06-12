@@ -64,6 +64,9 @@ test("main bundle patch adds a Linux read aloud handler", () => {
   assert.doesNotMatch(patched, /\|\|\s*`female1`/);
   assert.match(patched, /spd-say/);
   assert.match(patched, /espeak-ng/);
+  // A custom voice must win, otherwise fall back by language; without the
+  // parentheses any custom voice forced the Hebrew espeak voice.
+  assert.match(patched, /let espeakVoice=voice\|\|\(hasHebrew\?`he`:`en-us`\);/);
   assert.doesNotThrow(() => new Function("require", "process", patched));
 });
 

@@ -227,8 +227,8 @@ build_native_modules() {
         "$ELECTRON_REBUILD_PACKAGE" \
         "$ELECTRON_REBUILD_NODE_ABI_PACKAGE" \
         --save-dev \
-        --ignore-scripts 2>&1 >&2
-    npm install "better-sqlite3@$bs3_build_ver" "node-pty@$npty_ver" --ignore-scripts 2>&1 >&2
+        --ignore-scripts >&2
+    npm install "better-sqlite3@$bs3_build_ver" "node-pty@$npty_ver" --ignore-scripts >&2
     patch_better_sqlite3_for_v8_external_pointer_api "$build_dir/node_modules/better-sqlite3"
 
     info "Compiling for Electron v$ELECTRON_VERSION (this takes ~1 min)..."
@@ -239,7 +239,7 @@ build_native_modules() {
         npm_config_disturl="$ELECTRON_HEADERS_URL" \
         NPM_CONFIG_DISTURL="$ELECTRON_HEADERS_URL" \
         "${native_build_env[@]}" \
-        node "$build_dir/node_modules/@electron/rebuild/lib/cli.js" -v "$ELECTRON_VERSION" --force --dist-url "$ELECTRON_HEADERS_URL" "${electron_rebuild_mode_args[@]}" 2>&1 >&2
+        node "$build_dir/node_modules/@electron/rebuild/lib/cli.js" -v "$ELECTRON_VERSION" --force --dist-url "$ELECTRON_HEADERS_URL" "${electron_rebuild_mode_args[@]}" >&2
 
     info "Native modules built successfully"
 

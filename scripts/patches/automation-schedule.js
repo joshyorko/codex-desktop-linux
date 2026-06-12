@@ -13,16 +13,27 @@ const AUTOMATION_SCHEDULE_MARKER =
 const AUTOMATION_SCHEDULE_PATCH_MARKER = "function codexLinuxNormalizeRruleNumbers(";
 
 function findWorkspaceRootDropHandlerBundles(extractedDir) {
-  const buildDir = path.join(extractedDir, ".vite", "build");
-  return readDirectoryNames(buildDir)
-    .filter((name) => name.endsWith(".js"))
-    .sort()
-    .map((name) => path.join(buildDir, name))
+  const candidateDirs = [
+    path.join(extractedDir, ".vite", "build"),
+    path.join(extractedDir, "webview", "assets"),
+  ];
+  return candidateDirs
+    .flatMap((dir) =>
+      readDirectoryNames(dir)
+        .filter((name) => name.endsWith(".js"))
+        .sort()
+        .map((name) => path.join(dir, name)),
+    )
     .filter((candidate) => {
       try {
         const source = fs.readFileSync(candidate, "utf8");
         return source.includes(AUTOMATION_SCHEDULE_MARKER) ||
-          source.includes(AUTOMATION_SCHEDULE_PATCH_MARKER);
+          source.includes(AUTOMATION_SCHEDULE_PATCH_MARKER) ||
+          (
+            /^automation-schedule-.*\.js$/.test(path.basename(candidate)) &&
+            source.includes("hasMultipleTimeValues") &&
+            source.includes("function Tn(")
+          );
       } catch {
         return false;
       }
@@ -100,6 +111,10 @@ function applyAutomationScheduleMultiTimePatch(source) {
 
   const block = findAutomationScheduleHelperBlock(source);
   if (block == null) {
+    const currentPatched = applyCurrentAutomationScheduleMultiTimePatch(source);
+    if (currentPatched !== source) {
+      return currentPatched;
+    }
     console.warn("WARN: Could not find automation schedule helper block — skipping RRULE multi-time patch");
     return source;
   }
@@ -107,10 +122,49 @@ function applyAutomationScheduleMultiTimePatch(source) {
   return source.slice(0, block.start) + automationScheduleReplacement(block) + source.slice(block.end);
 }
 
+function applyCurrentAutomationScheduleMultiTimePatch(source) {
+  if (
+    !source.includes("hasMultipleTimeValues") ||
+    !source.includes("function Tn(") ||
+    !source.includes("function bn(")
+  ) {
+    return source;
+  }
+
+  let patchedSource = source;
+  const helperNeedle =
+    "function Tn(e,t,n){let r=En(e),i=En(t);return r!=null&&i!=null?Mn(r,i):n.dtstart?Mn(n.dtstart.getHours(),n.dtstart.getMinutes()):Wt}function En(e){return Array.isArray(e)?typeof e[0]==`number`?e[0]:null:typeof e==`number`?e:null}";
+  const helperPatch =
+    `${helperNeedle}function codexLinuxNormalizeRruleNumbers(e,t,n){let r=Array.isArray(e)?e:[e];return Array.from(new Set(r.filter(e=>typeof e==\`number\`&&Number.isInteger(e)&&e>=t&&e<=n))).sort((e,t)=>e-t)}function codexLinuxRruleTimes(e,t,n){let r=codexLinuxNormalizeRruleNumbers(e,0,23),i=codexLinuxNormalizeRruleNumbers(t,0,59);n.dtstart&&(r.length!==0||(r=[n.dtstart.getHours()]),i.length!==0||(i=[n.dtstart.getMinutes()]));let a=[];for(let e of r)for(let t of i)a.push(Mn(e,t));return Array.from(new Set(a)).sort()}function codexLinuxAutomationTimeLabel(e,t){let n=Array.isArray(e.timeValues)&&e.timeValues.length>0?e.timeValues:[e.time],r=n.map(e=>Mt(e,t)).filter(Boolean);return r.length===0?null:typeof t.formatList==\`function\`?t.formatList(r,{type:\`conjunction\`}):r.join(\`, \`)}`;
+  if (!patchedSource.includes(helperNeedle)) {
+    return source;
+  }
+  patchedSource = patchedSource.replace(helperNeedle, helperPatch);
+
+  const parserNeedle =
+    "hasMultipleTimeValues:Array.isArray(r.byhour)&&r.byhour.length>1||Array.isArray(r.byminute)&&r.byminute.length>1,interval:Math.max(1,Math.round(r.interval??1)),minute:a,origOptions:n.origOptions,rruleText:e,time:Tn(r.byhour,r.byminute,r),weekdays:i";
+  const parserPatch =
+    "hasMultipleTimeValues:codexLinuxRruleTimes(r.byhour,r.byminute,r).length>1,interval:Math.max(1,Math.round(r.interval??1)),minute:a,origOptions:n.origOptions,rruleText:e,time:Tn(r.byhour,r.byminute,r),timeValues:codexLinuxRruleTimes(r.byhour,r.byminute,r),weekdays:i";
+  if (!patchedSource.includes(parserNeedle)) {
+    return source;
+  }
+  patchedSource = patchedSource.replace(parserNeedle, parserPatch);
+
+  const summaryNeedle =
+    "function bn(e,t){if(!e||e.hasMultipleTimeValues)return null;let n=on(e.weekdays),r=n.length===q.length;if(e.freq===K.MINUTELY)return Sn({intervalMinutes:e.interval,intl:t,isEveryDay:r,weekdays:n});if(e.freq===K.HOURLY)return xn({intervalHours:e.interval,intl:t,isEveryDay:r,weekdays:n});if(e.freq!==K.DAILY&&e.freq!==K.WEEKLY)return null;let i=Mt(e.time,t);return i?wn({intl:t,isEveryDay:r,timeLabel:i,weekdays:n}):null}";
+  const summaryPatch =
+    "function bn(e,t){if(!e)return null;let n=on(e.weekdays),r=n.length===q.length;if(e.freq===K.MINUTELY)return Sn({intervalMinutes:e.interval,intl:t,isEveryDay:r,weekdays:n});if(e.freq===K.HOURLY)return xn({intervalHours:e.interval,intl:t,isEveryDay:r,weekdays:n});if(e.freq!==K.DAILY&&e.freq!==K.WEEKLY)return null;let i=codexLinuxAutomationTimeLabel(e,t);return i?wn({intl:t,isEveryDay:r,timeLabel:i,weekdays:n}):null}";
+  if (!patchedSource.includes(summaryNeedle)) {
+    return source;
+  }
+  patchedSource = patchedSource.replace(summaryNeedle, summaryPatch);
+  return patchedSource;
+}
+
 function patchAutomationScheduleAssets(extractedDir) {
   const candidates = findWorkspaceRootDropHandlerBundles(extractedDir);
   if (candidates.length === 0) {
-    const reason = `Could not find workspace-root-drop-handler bundle in ${path.join(extractedDir, ".vite", "build")}`;
+    const reason = `Could not find automation schedule bundle in ${path.join(extractedDir, ".vite", "build")} or ${path.join(extractedDir, "webview", "assets")}`;
     console.warn(`WARN: ${reason} — skipping RRULE multi-time patch`);
     return { matched: 0, changed: 0, reason };
   }

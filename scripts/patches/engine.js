@@ -174,6 +174,7 @@ function applyMainBundlePatchDescriptors(source, descriptors, context, report) {
   let patched = source;
   const warnings = [];
   const coreWarnings = [];
+  const requiredCoreWarnings = [];
   for (const descriptor of descriptors.filter((patch) => patch.phase === "main-bundle")) {
     if (!descriptorAppliesTo(descriptor, context)) {
       recordDescriptorPatch(report, descriptor, SKIPPED_TARGET, null, context);
@@ -189,6 +190,9 @@ function applyMainBundlePatchDescriptors(source, descriptors, context, report) {
     warnings.push(...result.warnings);
     if ((descriptor.sourceKind ?? "core") === "core") {
       coreWarnings.push(...result.warnings);
+      if (descriptor.ciPolicy === REQUIRED_UPSTREAM) {
+        requiredCoreWarnings.push(...result.warnings);
+      }
     }
     context.reportWarnings = result.warnings;
     recordDescriptorPatch(
@@ -200,7 +204,7 @@ function applyMainBundlePatchDescriptors(source, descriptors, context, report) {
     );
     delete context.reportWarnings;
   }
-  return { patchedSource: patched, warnings, coreWarnings };
+  return { patchedSource: patched, warnings, coreWarnings, requiredCoreWarnings };
 }
 
 function defaultWebviewMissingWarning(extractedDir, descriptor) {

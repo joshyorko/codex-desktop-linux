@@ -7,6 +7,7 @@ const {
   applyLinuxMenuPatch,
   applyLinuxSetIconPatch,
   applyLinuxReadyToShowWindowStatePatch,
+  applyLinuxResizeRepaintPatch,
   applyLinuxOpaqueBackgroundPatch,
   applyLinuxFileManagerPatch,
   applyLinuxCodeEditorOpenTargetPatch,
@@ -59,6 +60,13 @@ module.exports = [
     order: 75,
     ciPolicy: "optional",
     apply: applyLinuxReadyToShowWindowStatePatch,
+  },
+  {
+    id: "linux-resize-repaint",
+    phase: "main-bundle",
+    order: 78,
+    ciPolicy: "optional",
+    apply: applyLinuxResizeRepaintPatch,
   },
   {
     id: "linux-opaque-background",

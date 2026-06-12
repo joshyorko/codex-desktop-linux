@@ -109,10 +109,14 @@ function applyLinuxAvatarOverlayMousePassthroughPatch(currentSource) {
     /displayBounds:([A-Za-z_$][\w$]*)\.screen\.getDisplayNearestPoint\(\1\.screen\.getCursorScreenPoint\(\)\)\.bounds\}\}moveDrag\(e\)\{/;
   const previousStartDragAfterStateRegex =
     /displayBounds:([A-Za-z_$][\w$]*)\.screen\.getDisplayNearestPoint\(\1\.screen\.getCursorScreenPoint\(\)\)\.bounds\},this\.pointerInteractive=!0,this\.applyPointerInteractivityPolicy\(\)\}moveDrag\(e\)\{/;
+  const currentStartDragPatchRegex =
+    /displayBounds:([A-Za-z_$][\w$]*)\.screen\.getDisplayNearestPoint\(\1\.screen\.getCursorScreenPoint\(\)\)\.bounds\},process\.platform===`linux`&&\(this\.pointerInteractive=!0,this\.applyPointerInteractivityPolicy\(\)\)\}moveDrag\(e\)\{/;
   if (patchedSource.includes(previousStartDragPatch)) {
     patchedSource = patchedSource.replace(previousStartDragPatch, originalStartDragPrefix);
   }
-  if (previousStartDragAfterStateRegex.test(patchedSource)) {
+  if (currentStartDragPatchRegex.test(patchedSource)) {
+    // Already patched.
+  } else if (previousStartDragAfterStateRegex.test(patchedSource)) {
     patchedSource = patchedSource.replace(previousStartDragAfterStateRegex, startDragPatch);
   } else if (patchedSource.includes(previousStartDragAfterStatePatch)) {
     patchedSource = patchedSource.replace(previousStartDragAfterStatePatch, startDragPatch);
@@ -150,15 +154,15 @@ function applyLinuxAvatarOverlayMousePassthroughPatch(currentSource) {
 
   const setElementSizeMethod = findAvatarMethod(
     patchedSource,
-    /setElementSize\([A-Za-z_$][\w$]*,\{mascot:[A-Za-z_$][\w$]*,tray:[A-Za-z_$][\w$]*\}\)\{/,
+    /setElementSize\([A-Za-z_$][\w$]*,\{(?:[^{}]*,)?mascot:[A-Za-z_$][\w$]*,tray:[A-Za-z_$][\w$]*(?:,[^{}]*)?\}\)\{/,
   );
   if (setElementSizeMethod != null) {
     if (
-      !/this\.applyLayout\([A-Za-z_$][\w$]*\),process\.platform===`linux`&&this\.applyPointerInteractivityPolicy\(\)/.test(setElementSizeMethod.text)
+      !/this\.(?:applyLayout|applyLatestElementSizes)\([A-Za-z_$][\w$]*\),process\.platform===`linux`&&this\.applyPointerInteractivityPolicy\(\)/.test(setElementSizeMethod.text)
     ) {
       const patchedMethod = setElementSizeMethod.text.replace(
-        /this\.applyLayout\(([A-Za-z_$][\w$]*)\)(?!,process\.platform===`linux`&&this\.applyPointerInteractivityPolicy\(\))/g,
-        "this.applyLayout($1),process.platform===`linux`&&this.applyPointerInteractivityPolicy()",
+        /this\.(applyLayout|applyLatestElementSizes)\(([A-Za-z_$][\w$]*)\)(?!,process\.platform===`linux`&&this\.applyPointerInteractivityPolicy\(\))/g,
+        "this.$1($2),process.platform===`linux`&&this.applyPointerInteractivityPolicy()",
       );
       if (patchedMethod !== setElementSizeMethod.text) {
         patchedSource =
@@ -176,17 +180,15 @@ function applyLinuxAvatarOverlayMousePassthroughPatch(currentSource) {
     );
   }
 
-  if (
-    !patchedSource.includes("this.codexLinuxAvatarCompositorHintsApplied=!1,this.codexLinuxAvatarCompositorHintsApplying=!1,this.rendererReady")
-  ) {
+  if (!patchedSource.includes("this.codexLinuxAvatarCompositorHintsApplied=!1")) {
     patchedSource = patchedSource.replace(
-      /return this\.window=([A-Za-z_$][\w$]*),this\.rendererReady=this\.windowManager\.isWebContentsReady\(\1\.webContents\.id\),/,
-      "return this.window=$1,this.codexLinuxAvatarCompositorHintsApplied=!1,this.codexLinuxAvatarCompositorHintsApplying=!1,this.rendererReady=this.windowManager.isWebContentsReady($1.webContents.id),",
+      /return this\.window=([A-Za-z_$][\w$]*),/,
+      "return this.window=$1,this.codexLinuxAvatarCompositorHintsApplied=!1,this.codexLinuxAvatarCompositorHintsApplying=!1,",
     );
   }
 
   const i3TrayFallbackRegex =
-    /traySize:this\.traySize\?\?([A-Za-z_$][\w$]*)\}\);this\.anchor=/;
+    /traySize:this\.traySize\?\?([A-Za-z_$][\w$]*|\([^{};]*?\))\}\);this\.anchor=/;
   const i3TrayFallbackPatch =
     "traySize:process.platform===`linux`&&typeof this.codexLinuxIsI3Session==`function`&&this.codexLinuxIsI3Session()?this.traySize:this.traySize??$1});this.anchor=";
   if (
@@ -204,11 +206,11 @@ function applyLinuxAvatarOverlayMousePassthroughPatch(currentSource) {
   }
 
   const currentApplyLayoutPatchRegex =
-    /this\.setWindowBounds\(e,([A-Za-z_$][\w$]*)\.windowBounds((?:,[A-Za-z_$][\w$]*)?)\),this\.sendLayoutToRenderer\(e\),process\.platform===`linux`&&this\.applyPointerInteractivityPolicy\(\)\}getLayout\(e\)\{/;
+    /this\.setWindowBounds\(e,([A-Za-z_$][\w$]*)\.windowBounds((?:,[A-Za-z_$][\w$]*)*)\),this\.sendLayoutToRenderer\(e\),process\.platform===`linux`&&this\.applyPointerInteractivityPolicy\(\)\}getLayout\(e\)\{/;
   const previousApplyLayoutPatchRegex =
-    /this\.setWindowBounds\(e,([A-Za-z_$][\w$]*)\.windowBounds((?:,[A-Za-z_$][\w$]*)?)\),this\.sendLayoutToRenderer\(e\),this\.codexLinuxSyncAvatarPointerInteractivity\(e\)&&this\.applyPointerInteractivityPolicy\(\)\}getLayout\(e\)\{/;
+    /this\.setWindowBounds\(e,([A-Za-z_$][\w$]*)\.windowBounds((?:,[A-Za-z_$][\w$]*)*)\),this\.sendLayoutToRenderer\(e\),this\.codexLinuxSyncAvatarPointerInteractivity\(e\)&&this\.applyPointerInteractivityPolicy\(\)\}getLayout\(e\)\{/;
   const applyLayoutRegex =
-    /this\.setWindowBounds\(e,([A-Za-z_$][\w$]*)\.windowBounds((?:,[A-Za-z_$][\w$]*)?)\),this\.sendLayoutToRenderer\(e\)\}getLayout\(e\)\{/;
+    /this\.setWindowBounds\(e,([A-Za-z_$][\w$]*)\.windowBounds((?:,[A-Za-z_$][\w$]*)*)\),this\.sendLayoutToRenderer\(e\)\}getLayout\(e\)\{/;
   if (currentApplyLayoutPatchRegex.test(patchedSource)) {
     // Already patched.
   } else if (previousApplyLayoutPatchRegex.test(patchedSource)) {
@@ -240,6 +242,10 @@ function applyLinuxAvatarOverlayMousePassthroughPatch(currentSource) {
     "e.moveTop(),e.showInactive(),process.platform===`linux`&&this.applyPointerInteractivityPolicy(),!t&&this.isOpen()&&this.broadcastOpenState()}broadcastOpenState(){";
   const previousShowWindowPatch =
     "e.moveTop(),e.showInactive(),process.platform===`linux`&&this.codexLinuxStartAvatarPassthroughRecovery(),this.codexLinuxSyncAvatarPointerInteractivity(e)&&this.applyPointerInteractivityPolicy(),!t&&this.isOpen()&&this.broadcastOpenState()}broadcastOpenState(){";
+  const currentShowWindowRegex =
+    /e\.moveTop\(\),e\.showInactive\(\),(![A-Za-z_$][\w$]*&&this\.isOpen\(\)&&this\.broadcastOpenState\(\)\}showWindowIfReady\([A-Za-z_$][\w$]*\)\{)/;
+  const currentShowWindowPatchRegex =
+    /e\.moveTop\(\),e\.showInactive\(\),process\.platform===`linux`&&this\.codexLinuxApplyAvatarCompositorHints\(e\),process\.platform===`linux`&&this\.applyPointerInteractivityPolicy\(\),![A-Za-z_$][\w$]*&&this\.isOpen\(\)&&this\.broadcastOpenState\(\)\}showWindowIfReady\([A-Za-z_$][\w$]*\)\{/;
   if (patchedSource.includes(previousShowWindowCompositorPatch)) {
     patchedSource = patchedSource.replace(previousShowWindowCompositorPatch, showWindowPatch);
   } else if (patchedSource.includes(previousShowWindowPatch)) {
@@ -248,6 +254,13 @@ function applyLinuxAvatarOverlayMousePassthroughPatch(currentSource) {
     patchedSource = patchedSource.replace(previousShowWindowI3Patch, showWindowPatch);
   } else if (patchedSource.includes(showWindowNeedle)) {
     patchedSource = patchedSource.replace(showWindowNeedle, showWindowPatch);
+  } else if (currentShowWindowPatchRegex.test(patchedSource)) {
+    // Already patched.
+  } else if (currentShowWindowRegex.test(patchedSource)) {
+    patchedSource = patchedSource.replace(
+      currentShowWindowRegex,
+      "e.moveTop(),e.showInactive(),process.platform===`linux`&&this.codexLinuxApplyAvatarCompositorHints(e),process.platform===`linux`&&this.applyPointerInteractivityPolicy(),$1",
+    );
   } else if (
     patchedSource.includes("avatar-overlay") &&
     !patchedSource.includes(showWindowPatch)
@@ -258,13 +271,13 @@ function applyLinuxAvatarOverlayMousePassthroughPatch(currentSource) {
   }
 
   const closedPatchRegex =
-    /this\.window===[A-Za-z_$][\w$]*&&\(this\.codexLinuxStopAvatarPassthroughRecovery\(\),this\.codexLinuxAvatarInputShapeKey=null,this\.codexLinuxAvatarCompositorHintsApplied=!1,this\.codexLinuxAvatarCompositorHintsApplying=!1,this\.cancelMomentum\(\),this\.window=null,/;
+    /this\.window===[A-Za-z_$][\w$]*&&\(this\.codexLinuxStopAvatarPassthroughRecovery\(\),this\.codexLinuxAvatarInputShapeKey=null,this\.codexLinuxAvatarCompositorHintsApplied=!1,this\.codexLinuxAvatarCompositorHintsApplying=!1,this\.cancelMomentum\(\),[\s\S]*?this\.window=null,/;
   if (closedPatchRegex.test(patchedSource)) {
     // Already patched.
-  } else if (/this\.window===([A-Za-z_$][\w$]*)&&\(this\.cancelMomentum\(\),this\.window=null,/.test(patchedSource)) {
+  } else if (/this\.window===([A-Za-z_$][\w$]*)&&\(this\.cancelMomentum\(\),((?:(?!this\.window=null,).)*?)this\.window=null,/.test(patchedSource)) {
     patchedSource = patchedSource.replace(
-      /this\.window===([A-Za-z_$][\w$]*)&&\(this\.cancelMomentum\(\),this\.window=null,/,
-      "this.window===$1&&(this.codexLinuxStopAvatarPassthroughRecovery(),this.codexLinuxAvatarInputShapeKey=null,this.codexLinuxAvatarCompositorHintsApplied=!1,this.codexLinuxAvatarCompositorHintsApplying=!1,this.cancelMomentum(),this.window=null,",
+      /this\.window===([A-Za-z_$][\w$]*)&&\(this\.cancelMomentum\(\),((?:(?!this\.window=null,).)*?)this\.window=null,/,
+      "this.window===$1&&(this.codexLinuxStopAvatarPassthroughRecovery(),this.codexLinuxAvatarInputShapeKey=null,this.codexLinuxAvatarCompositorHintsApplied=!1,this.codexLinuxAvatarCompositorHintsApplying=!1,this.cancelMomentum(),$2this.window=null,",
     );
   } else if (
     patchedSource.includes("avatar-overlay") &&

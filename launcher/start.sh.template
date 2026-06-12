@@ -322,6 +322,13 @@ HELP
     exit 0
 fi
 
+# Capture interactivity before stdout/stderr are redirected into the log;
+# [ -t 1 ] is always false after the exec below.
+LAUNCHER_INTERACTIVE_TERMINAL=0
+if [ -t 0 ] && [ -t 1 ]; then
+    LAUNCHER_INTERACTIVE_TERMINAL=1
+fi
+
 exec >>"$LOG_FILE" 2>&1
 
 echo "[$(date -Is)] Starting $CODEX_LINUX_APP_DISPLAY_NAME launcher"
@@ -1275,7 +1282,7 @@ run_cli_preflight_background() {
 }
 
 is_interactive_terminal() {
-    [ -t 0 ] && [ -t 1 ]
+    [ "$LAUNCHER_INTERACTIVE_TERMINAL" -eq 1 ] && [ -r /dev/tty ] && [ -w /dev/tty ]
 }
 
 run_gui_cli_prompt() {
@@ -1310,8 +1317,9 @@ prompt_install_missing_cli() {
     fi
 
     local reply=""
-    printf 'Codex CLI is not installed. Install it now? [Y/n] '
-    if ! read -r reply; then
+    # stdout is redirected into the launcher log, so prompt via the terminal.
+    printf 'Codex CLI is not installed. Install it now? [Y/n] ' >/dev/tty
+    if ! read -r reply </dev/tty; then
         return 1
     fi
 
@@ -1661,7 +1669,7 @@ verify_webview_origin() {
     local body err detail
     err=$(mktemp 2>/dev/null) || err="${TMPDIR:-/tmp}/codex-curl-err.$$"
     if ! body="$(curl --disable --noproxy 127.0.0.1,localhost --silent --show-error --fail --max-time 2 "$url" 2>"$err")"; then
-        detail=$(< "$err" 2>/dev/null)
+        detail=$(cat "$err" 2>/dev/null || true)
         rm -f "$err"
         echo "Webview origin validation failed for $url; ${detail:-curl exited non-zero with no diagnostic}" >&2
         return 1

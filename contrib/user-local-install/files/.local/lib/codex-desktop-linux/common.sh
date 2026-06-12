@@ -3,7 +3,6 @@ set -euo pipefail
 
 OPT_ROOT="${HOME}/.local/opt/codex-desktop-linux"
 APP_DIR="${OPT_ROOT}/codex-app"
-DMG_FILE="${OPT_ROOT}/Codex.dmg"
 DMG_URL="https://persistent.oaistatic.com/codex-app-prod/Codex.dmg"
 
 XDG_DATA_HOME="${XDG_DATA_HOME:-${HOME}/.local/share}"
@@ -58,6 +57,12 @@ effective_repo_dir() {
         return 0
     fi
     printf '%s\n' "$SOURCE_REPO_DIR"
+}
+
+# install.sh caches the upstream DMG next to itself in the build repo
+# checkout, never under $OPT_ROOT.
+cached_dmg_file() {
+    printf '%s/Codex.dmg\n' "$(effective_repo_dir)"
 }
 
 current_repo_head() {
@@ -464,11 +469,12 @@ header_value() {
 
 extract_icon() {
     ensure_layout
-    local tmp_dir
+    local dmg_file tmp_dir
+    dmg_file="$(cached_dmg_file)"
     tmp_dir="$(mktemp -d)"
     trap 'rm -rf "$tmp_dir"' RETURN
 
-    7z e -y "$DMG_FILE" "Codex Installer/Codex.app/Contents/Resources/electron.icns" "-o${tmp_dir}" >/dev/null
+    7z e -y "$dmg_file" "Codex Installer/Codex.app/Contents/Resources/electron.icns" "-o${tmp_dir}" >/dev/null
     python3 - "$tmp_dir/electron.icns" "$ICON_PATH" <<'PY'
 from PIL import Image
 import sys
@@ -485,7 +491,7 @@ record_metadata() {
     ensure_layout
     load_install_config
 
-    local build_repo_dir repo_head source_repo_head_value source_overlay_sha dmg_sha256 dmg_size electron_version dmg_headers dmg_etag dmg_last_modified dmg_content_length build_time repo_origin
+    local build_repo_dir repo_head source_repo_head_value source_overlay_sha dmg_file dmg_sha256 dmg_size electron_version dmg_headers dmg_etag dmg_last_modified dmg_content_length build_time repo_origin
     build_repo_dir="$(effective_repo_dir)"
 
     if [ -d "$build_repo_dir/.git" ]; then
@@ -495,8 +501,14 @@ record_metadata() {
         repo_head="unavailable"
         repo_origin="unavailable"
     fi
-    dmg_sha256="$(sha256sum "$DMG_FILE" | awk '{ print $1 }')"
-    dmg_size="$(stat -c '%s' "$DMG_FILE")"
+    dmg_file="$(cached_dmg_file)"
+    if [ -f "$dmg_file" ]; then
+        dmg_sha256="$(sha256sum "$dmg_file" | awk '{ print $1 }')"
+        dmg_size="$(stat -c '%s' "$dmg_file")"
+    else
+        dmg_sha256="unavailable"
+        dmg_size="unavailable"
+    fi
     electron_version="$(cat "$APP_DIR/version")"
     build_time="$(date -Iseconds)"
     source_repo_head_value="$(source_repo_head 2>/dev/null || true)"
