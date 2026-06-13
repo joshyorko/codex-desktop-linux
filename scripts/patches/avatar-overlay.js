@@ -44,6 +44,17 @@ function avatarApplyInputShapePatch() {
   return "codexLinuxApplyAvatarInputShape(e){if(process.platform!==`linux`||e==null||e.isDestroyed()||typeof e.setShape!=`function`)return!1;try{let t=this.codexLinuxBuildAvatarInputShape(e);if(t==null)return!1;let n=JSON.stringify(t);if(this.codexLinuxAvatarInputShapeKey===n)return!0;e.setShape(t),this.codexLinuxAvatarInputShapeKey=n;return!0}catch{this.codexLinuxAvatarInputShapeKey=null;return!1}}";
 }
 
+function patchAvatarOverlayFocusable(source) {
+  const focusablePatch = "appearance:`avatarOverlay`,focusable:process.platform===`linux`?!0:!1";
+  if (source.includes(focusablePatch)) {
+    return source;
+  }
+  return source.replace(
+    "appearance:`avatarOverlay`,focusable:!1",
+    focusablePatch,
+  );
+}
+
 function upgradeAvatarOverlayInjectedMethods(source, electronVar) {
   let patched = source;
   patched = replaceAvatarMethod(
@@ -122,6 +133,14 @@ function applyLinuxAvatarOverlayMousePassthroughPatch(currentSource) {
     );
   }
   patchedSource = upgradeAvatarOverlayInjectedMethods(patchedSource, electronVar);
+  const beforeFocusablePatch = patchedSource;
+  patchedSource = patchAvatarOverlayFocusable(patchedSource);
+  recordStrategy(
+    "avatar-focusable",
+    patchedSource === beforeFocusablePatch
+      ? patchedSource.includes("appearance:`avatarOverlay`") ? "already-applied" : "none"
+      : "upstream",
+  );
 
   const startDragPatch =
     `displayBounds:${electronVar}.screen.getDisplayNearestPoint(${electronVar}.screen.getCursorScreenPoint()).bounds},process.platform===\`linux\`&&(this.pointerInteractive=!0,this.applyPointerInteractivityPolicy())}moveDrag(e){`;
