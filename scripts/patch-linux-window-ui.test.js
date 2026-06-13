@@ -49,6 +49,7 @@ const {
   applyLinuxSettingsPersistencePatch,
   applyLinuxMenuPatch,
   applyLinuxNativeTitlebarPatch,
+  applyLinuxLocalAppServerFeatureEnablementHandlerPatch,
   applyLinuxMultiInstanceBootstrapPatch,
   applyLinuxAppSunsetPatch,
   applyLinuxBrowserUseAvailabilityPatch,
@@ -657,6 +658,7 @@ test("default core patch descriptors are grouped and unique", () => {
     "browser-use-node-repl-approval",
     "linux-browser-use-route-liveness",
     "linux-chrome-extension-status",
+    "linux-local-app-server-feature-enablement-handler",
     "linux-remote-control-config-preservation",
     "linux-app-updater-menu",
     "linux-tray-close-setting",
@@ -1151,6 +1153,31 @@ test("warns when upstream still strips remote_control but the guard shape drifts
 
   assert.equal(value, source);
   assert.match(warnings.join("\n"), /remote-control config stripper guard/);
+});
+
+test("registers local app-server feature enablement in internal and Electron handlers", () => {
+  const source = [
+    "function create(){let f=new t.wn(this.options.messageChannel,{sharedObjectRepository:this.sharedObjectRepository});",
+    "return f.registerInternalServerRequestHandler({methods:[`item/commandExecution/requestApproval`,`mcpServer/elicitation/request`],handler:t=>(this.messageHandler.revealWindowsReviewRequest(e,t),null)}),",
+    "f.registerInternalServerRequestHandler({methods:[`attestation/generate`],handler:be({bundleIdentifier:n.k(this.options.buildFlavor),resourcesPath:l})}),f}",
+    "var oN=class{handlers={\"set-vs-context\":async()=>{throw new rN},\"linux-read-aloud\":async(e)=>codexLinuxReadAloudHandle(e)};",
+    "handleVSCodeRequest(e,n,r,i,a){let o=n,s=this.handlers[o];if(typeof s!=`function`)throw Error(`${n} not implemented in the current Electron process. Restart Codex to load the latest Electron handlers.`);return s({...r,origin:e,signal:a})}}",
+  ].join("");
+
+  const patched = applyPatchTwice(
+    applyLinuxLocalAppServerFeatureEnablementHandlerPatch,
+    source,
+  );
+
+  assert.match(patched, /methods:\[`set-local-app-server-feature-enablement`\]/);
+  assert.match(patched, /"set-local-app-server-feature-enablement":async/);
+  assert.match(patched, /local_app_server_feature_enablement/);
+  assert.match(patched, /local_remote_control_enabled/);
+  assert.match(patched, /enablement/);
+  assert.equal(
+    (patched.match(/set-local-app-server-feature-enablement/g) ?? []).length,
+    2,
+  );
 });
 
 test("adds the Linux quit guard when electron/path/fs requires are split across statements", () => {
@@ -2049,6 +2076,31 @@ test("patches remaining Linux window icon snippets when another window is alread
     patchedSetIcon,
     /function createSecondWindow\(\)\{process\.platform===`linux`&&E\.setIcon\(process\.resourcesPath\+`\/\.\.\/content\/webview\/assets\/app-test\.png`\),E\.once\(`ready-to-show`,\(\)=>\{\}\)\}/,
   );
+});
+
+test("recognizes current Linux setIcon coverage as window icon handling", () => {
+  const iconAsset = "app-test.png";
+  const iconPathExpression = "process.resourcesPath+`/../content/webview/assets/app-test.png`";
+  const source = `process.platform===\`linux\`&&D.setIcon(${iconPathExpression}),D.once(\`ready-to-show\`,()=>{})`;
+
+  const { value: patched, warnings } = captureWarns(() =>
+    applyPatchTwice(applyLinuxWindowOptionsPatch, source, iconAsset),
+  );
+
+  assert.equal(patched, source);
+  assert.deepEqual(warnings, []);
+});
+
+test("lets ready-to-show icon insertion cover current window options drift", () => {
+  const iconAsset = "app-test.png";
+  const source = "D.once(`ready-to-show`,()=>{})";
+
+  const { value: patched, warnings } = captureWarns(() =>
+    applyPatchTwice(applyLinuxWindowOptionsPatch, source, iconAsset),
+  );
+
+  assert.equal(patched, source);
+  assert.deepEqual(warnings, []);
 });
 
 test("adds Linux tray support including the platform guard", () => {
@@ -3180,6 +3232,22 @@ test("preserves supported dynamic remote_plugin in current app-server feature sy
   assert.match(patched, /n\[vI\]=t/);
 });
 
+test("sanitizes unsupported features in current dynamic app-server feature sync", () => {
+  const source = [
+    "var BV=[`apps_mcp_path_override`,`auth_elicitation`,`memories`,`tool_suggest`],VV=`4218407052`,HV=`remote_plugin`;",
+    "function UV(){let e=(0,Q.c)(7),t=f(g),[n]=ft(`statsig_default_enable_features`),r=So(VV),i=Ho(),a=on(),o,s;",
+    "return e[0]!==i||e[1]!==r||e[2]!==n||e[3]!==a||e[4]!==t?(o=()=>{let e=new Map,o=()=>{if(nt(`set-default-feature-overrides`,{overrides:n??null}),n==null)return;let i=WV(n,r),o=t.get(Ft),s=new Set(t.get(gt).filter(e=>e===o||Ut(t,e).state===`connected`));for(let t of e.keys())s.has(t)||e.delete(t);let c=t.get(gt).filter(e=>s.has(e)).flatMap(t=>(0,zb.default)(e.get(t),i)?[]:(e.set(t,i),[nt(`set-experimental-feature-enablement-for-host`,{hostId:t,enablement:i}).catch(n=>{e.delete(t),cn.error(`Failed to sync experimental feature enablement`,{safe:{hostId:t},sensitive:{error:n}})})]));c.length!==0&&Promise.all(c).then(()=>{a.invalidateQueries({queryKey:ll})})};return o(),i.addRegistryCallback(o)},s=[i,r,n,a,t],e[0]=i,e[1]=r,e[2]=n,e[3]=a,e[4]=t,e[5]=o,e[6]=s):(o=e[5],s=e[6]),(0,$.useEffect)(o,s),null}",
+    "function WV(e,t){let n={};for(let t of BV){let r=e[t];r!=null&&(n[t]=r)}return n[HV]=t,n}",
+  ].join("");
+
+  const patched = applyPatchTwice(applyLinuxAppServerFeatureEnablementPatch, source);
+
+  assert.match(patched, /var BV=\[`memories`,`tool_suggest`\],VV=`4218407052`,HV=`remote_plugin`/);
+  assert.match(patched, /n\[HV\]=t,n/);
+  assert.doesNotMatch(patched, /`apps_mcp_path_override`/);
+  assert.doesNotMatch(patched, /`auth_elicitation`/);
+});
+
 test("preserves dynamic remote_plugin when the minified feature key contains regex syntax", () => {
   const source = [
     "var GF=[`apps`,`memories`,`plugins`,`tool_call_mcp_elicitation`,`tool_suggest`],v$I=`remote_plugin`;",
@@ -4022,6 +4090,20 @@ test("enables current Computer Use desktop features on Linux", () => {
   assert.match(patched, /CODEX_ELECTRON_ENABLE_WINDOWS_COMPUTER_USE/);
 });
 
+test("enables nested current Computer Use desktop features on Linux", () => {
+  const source =
+    "function Ve(e,{buildFlavor:t=n.F.resolve(),env:r=p.default.env,platform:i=p.default.platform}={}){let a=i===`darwin`&&!n.F.isInternal(t)&&e.computerUseNodeRepl!=null?{...e,computerUseNodeRepl:!1}:e,o=i===`win32`&&e.computerUse===!0?{...a,computerUseNodeRepl:!0}:a,s=i===`win32`&&r.CODEX_ELECTRON_ENABLE_WINDOWS_COMPUTER_USE===`1`?{...o,computerUse:!0,computerUseNodeRepl:!0}:o,c=t===n.F.Dev?He(r):null;return c==null?{...s,deviceAttestation:ve({platform:i})}:{...s,...c,deviceAttestation:ve({platform:i})}}";
+
+  const patched = applyPatchTwice(applyLinuxComputerUseFeaturePatch, source);
+
+  assert.match(
+    patched,
+    /,s=i===`linux`\?\{\.\.\.o,computerUse:!0,computerUseNodeRepl:!0\}:i===`win32`&&r\.CODEX_ELECTRON_ENABLE_WINDOWS_COMPUTER_USE===`1`\?\{\.\.\.o,computerUse:!0,computerUseNodeRepl:!0\}:o,/,
+  );
+  assert.match(patched, /i===`darwin`&&!n\.F\.isInternal\(t\)/);
+  assert.match(patched, /i===`win32`&&e\.computerUse===!0/);
+});
+
 test("patches all Computer Use desktop feature gates in one pass", () => {
   const patchedFeature =
     "function A(e,{env:t=process.env,platform:n=process.platform}={}){return n===`linux`?{...e,computerUse:!0,computerUseNodeRepl:!0}:n!==`win32`||t.CODEX_ELECTRON_ENABLE_WINDOWS_COMPUTER_USE!==`1`?e:{...e,computerUse:!0,computerUseNodeRepl:!0}}";
@@ -4308,6 +4390,21 @@ test("shows object-helper Computer Use plugin UI on Linux without host-local fie
   assert.doesNotMatch(patched, /isHostLocal:/);
 });
 
+test("shows required-features Computer Use plugin UI on Linux", () => {
+  const source =
+    "function d(e){return e===`macOS`||e===`windows`}" +
+    "function f(e){let t=(0,l.c)(16),{enabled:n,hostId:r}=e,i=n===void 0?!0:n,{isLoading:o,platform:c}=s(),f=a(`1506311413`),m;t[0]===r?m=t[1]:(m={featureName:`computer_use`,hostId:r},t[0]=r,t[1]=m);let h=u(m),g;t[2]===r?g=t[3]:(g={featureName:`windows_computer_use`,hostId:r},t[2]=r,t[3]=g);let _=u(g),v=c===`windows`&&!o,y=h.isLoading||v&&_.isLoading,b=h.enabled&&(!v||_.enabled),x;t[4]!==b||t[5]!==i||t[6]!==y||t[7]!==f||t[8]!==o||t[9]!==c?(x=p({areRequiredFeaturesEnabled:b,enabled:i,isAnyFeatureLoading:y,isComputerUseGateEnabled:f,isHostCompatiblePlatform:d(c),isPlatformLoading:o,windowType:`electron`}),t[4]=b,t[5]=i,t[6]=y,t[7]=f,t[8]=o,t[9]=c,t[10]=x):x=t[10];return x}";
+
+  const patched = applyPatchTwice(applyLinuxComputerUseRendererAvailabilityPatch, source);
+
+  assert.match(patched, /function d\(e\)\{return e===`macOS`\|\|e===`windows`\|\|e===`linux`\}/);
+  assert.match(
+    patched,
+    /x=p\(\{areRequiredFeaturesEnabled:c===`linux`\|\|b,enabled:i,isAnyFeatureLoading:c===`linux`\?!1:y,isComputerUseGateEnabled:c===`linux`\|\|f,isHostCompatiblePlatform:c===`linux`\|\|d\(c\),isPlatformLoading:o,windowType:`electron`\}\)/,
+  );
+  assert.match(patched, /featureName:`windows_computer_use`/);
+});
+
 test("keeps object-helper Computer Use host compatibility on Linux when platform predicate drifts", () => {
   const source =
     "function m(e){return e===`macOS`||e===`windows`||q(e)}" +
@@ -4498,6 +4595,18 @@ test("auto-approves and trusts the current Browser Use node_repl runtime config 
   } finally {
     fs.rmSync(resourcesRoot, { recursive: true, force: true });
   }
+});
+
+test("recognizes already-approved Electron 42 Browser Use node_repl runtime config builder", () => {
+  const source =
+    "return t.Fa({codexCliPath:c.codexCliPath,codexHome:m,extraEnv:b,nodeModuleDirs:f,nodePath:c.nodePath,nodeReplPath:u?t.kr(c.nodeReplPath):c.nodeReplPath,tools:{js:{approval_mode:`approve`}},platform:c.platform,requestMeta:g,sentryUserId:l,traceMeta:v,trustAllCode:_,trustedBrowserClientSha256s:d,shouldUseWslPaths:u})";
+
+  const { value: patched, warnings } = captureWarns(() =>
+    applyPatchTwice(applyBrowserUseNodeReplApprovalPatch, source),
+  );
+
+  assert.equal(patched, source);
+  assert.deepEqual(warnings, []);
 });
 
 test("trusts Linux patched bundled Browser Use clients by hashing staged files", () => {

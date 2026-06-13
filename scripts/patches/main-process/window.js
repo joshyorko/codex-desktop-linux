@@ -42,6 +42,8 @@ function applyLinuxWindowOptionsPatch(currentSource, iconAsset) {
 
   const iconPathExpression = `process.resourcesPath+\`/../content/webview/assets/${iconAsset}\``;
   const iconPathNeedle = `icon:${iconPathExpression}`;
+  const setIconNeedle = `setIcon(${iconPathExpression})`;
+  const readyToShowSetIconInsertionPattern = /[A-Za-z_$][\w$]*\.once\(`ready-to-show`,\(\)=>\{/;
 
   const windowOptionsNeedle = "...process.platform===`win32`?{autoHideMenuBar:!0}:{},";
   const currentLinuxAutoHideMenuBarNeedle =
@@ -64,7 +66,12 @@ function applyLinuxWindowOptionsPatch(currentSource, iconAsset) {
     return patchedSource.split(currentLinuxAutoHideMenuBarNeedle).join(windowOptionsReplacement);
   }
 
-  if (patchedSource !== currentSource || patchedSource.includes(iconPathNeedle)) {
+  if (
+    patchedSource !== currentSource ||
+    patchedSource.includes(iconPathNeedle) ||
+    patchedSource.includes(setIconNeedle) ||
+    readyToShowSetIconInsertionPattern.test(patchedSource)
+  ) {
     return patchedSource;
   }
 

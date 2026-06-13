@@ -589,6 +589,33 @@ function applyLinuxAppServerFeatureEnablementPatch(currentSource) {
     return currentSource;
   }
 
+  function sanitizeFeatureArrayItems(featureArrayItems) {
+    return featureArrayItems
+      .split(",")
+      .filter((entry) => {
+        const featureMatch = entry.trim().match(/^`([^`]+)`$/u);
+        return featureMatch != null && supportedFeatures.has(featureMatch[1]);
+      })
+      .join(",");
+  }
+
+  function sanitizeFeatureArrayDeclaration(source, arrayVar) {
+    const arrayDeclarationRegex = new RegExp(
+      `(var\\s+${escapeRegExp(arrayVar)}=\\[)([^\\]]*?)(\\])`,
+      "u",
+    );
+    const match = source.match(arrayDeclarationRegex);
+    if (match == null) {
+      return source;
+    }
+    const [, prefix, featureArrayItems, suffix] = match;
+    const supportedFeatureArrayItems = sanitizeFeatureArrayItems(featureArrayItems);
+    if (supportedFeatureArrayItems === featureArrayItems) {
+      return source;
+    }
+    return source.replace(arrayDeclarationRegex, `${prefix}${supportedFeatureArrayItems}${suffix}`);
+  }
+
   const featureArrayRegex =
     /var ([A-Za-z_$][\w$]*)=\[([^\]]*?)\];function ([A-Za-z_$][\w$]*)\(\)\{let [\s\S]{0,2400}?statsig_default_enable_features[\s\S]{0,2400}?set-experimental-feature-enablement-for-host/u;
   const featureArrayMatch = currentSource.match(featureArrayRegex);
@@ -598,18 +625,19 @@ function applyLinuxAppServerFeatureEnablementPatch(currentSource) {
     // that copies supported defaults, then adds a gated extra. The copied
     // defaults are Linux-safe; the trailing extra is not.
     const dynamicBuilderExtraRegex =
-      /(for\(let ([A-Za-z_$][\w$]*) of [A-Za-z_$][\w$]*\)\{let ([A-Za-z_$][\w$]*)=[A-Za-z_$][\w$]*\[\2\];\3!=null&&\(([A-Za-z_$][\w$]*)\[\2\]=\3\)\})return \4\[([A-Za-z_$][\w$]*)\]=([A-Za-z_$][\w$]*),\4\}/u;
+      /(for\(let ([A-Za-z_$][\w$]*) of ([A-Za-z_$][\w$]*)\)\{let ([A-Za-z_$][\w$]*)=[A-Za-z_$][\w$]*\[\2\];\4!=null&&\(([A-Za-z_$][\w$]*)\[\2\]=\4\)\})return \5\[([A-Za-z_$][\w$]*)\]=([A-Za-z_$][\w$]*),\5\}/u;
     const dynamicBuilderExtraMatch = currentSource.match(dynamicBuilderExtraRegex);
     if (dynamicBuilderExtraMatch != null) {
-      const [, loopBlock, , , enablementVar, featureKeyVar] = dynamicBuilderExtraMatch;
+      const [, loopBlock, , arrayVar, , enablementVar, featureKeyVar] = dynamicBuilderExtraMatch;
       const featureKeyDeclaration = new RegExp(
         `${escapeRegExp(featureKeyVar)}=\`remote_plugin\``,
         "u",
       );
+      const arraySanitizedSource = sanitizeFeatureArrayDeclaration(currentSource, arrayVar);
       if (featureKeyDeclaration.test(currentSource)) {
-        return currentSource;
+        return arraySanitizedSource;
       }
-      return currentSource.replace(
+      return arraySanitizedSource.replace(
         dynamicBuilderExtraRegex,
         `${loopBlock}return ${enablementVar}}`,
       );
@@ -628,13 +656,7 @@ function applyLinuxAppServerFeatureEnablementPatch(currentSource) {
   }
 
   const [, arrayVar, featureArrayItems] = featureArrayMatch;
-  const supportedFeatureArrayItems = featureArrayItems
-    .split(",")
-    .filter((entry) => {
-      const featureMatch = entry.trim().match(/^`([^`]+)`$/u);
-      return featureMatch != null && supportedFeatures.has(featureMatch[1]);
-    })
-    .join(",");
+  const supportedFeatureArrayItems = sanitizeFeatureArrayItems(featureArrayItems);
   if (supportedFeatureArrayItems === featureArrayItems) {
     return currentSource;
   }
@@ -1087,6 +1109,8 @@ function applyBrowserAnnotationScreenshotPatch(currentSource) {
     // Already patched.
   } else if (/=\([A-Za-z_$][\w$]*\?[A-Za-z_$][\w$]*:![A-Za-z_$][\w$]*&&[A-Za-z_$][\w$]*!=null\?[A-Za-z_$][\w$]*\.filter\(e=>e\.id!==[A-Za-z_$][\w$]*\.id\):[A-Za-z_$][\w$]*\)\.flatMap/.test(patchedSource)) {
     // Already patched with the current upstream symbol names.
+  } else if (/=\([A-Za-z_$][\w$]*\?[A-Za-z_$][\w$]*\?\.kind===`comment`\?[A-Za-z_$][\w$]*\.filter\(e=>e\.id===[A-Za-z_$][\w$]*\.annotation\.id\):\[\]:[A-Za-z_$][\w$]*==null\?[A-Za-z_$][\w$]*:[A-Za-z_$][\w$]*\.filter\(e=>e\.id!==[A-Za-z_$][\w$]*\.id\)\)\.flatMap/.test(patchedSource)) {
+    // Already patched with the current comment-preload selected-comment shape.
   } else if (patchedSource.includes(allMarkersInScreenshotNeedle)) {
     patchedSource = patchedSource.replace(allMarkersInScreenshotNeedle, selectedMarkerInScreenshotPatch);
   } else {
