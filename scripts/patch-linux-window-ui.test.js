@@ -1816,7 +1816,7 @@ test("adds Linux avatar overlay mouse passthrough recovery", () => {
   assert.match(patched, /this\.window===t&&\(this\.codexLinuxStopAvatarPassthroughRecovery\(\),this\.codexLinuxAvatarInputShapeKey=null,this\.codexLinuxAvatarCompositorHintsApplied=!1,this\.codexLinuxAvatarCompositorHintsApplying=!1,this\.cancelMomentum\(\)/);
 });
 
-test("makes Linux avatar overlay focusable for inline reply inputs", () => {
+test("keeps Linux avatar overlay above the app while reply inputs are focusable", () => {
   const patched = applyPatchTwice(
     applyLinuxAvatarOverlayMousePassthroughPatch,
     avatarOverlayBundleFixture(),
@@ -1824,7 +1824,7 @@ test("makes Linux avatar overlay focusable for inline reply inputs", () => {
 
   assert.match(
     patched,
-    /appearance:`avatarOverlay`,focusable:process\.platform===`linux`\?!0:!1,show:!1/,
+    /appearance:`avatarOverlay`,alwaysOnTop:process\.platform===`linux`,skipTaskbar:process\.platform===`linux`,focusable:process\.platform===`linux`\?!0:!1,show:!1/,
   );
   assert.doesNotMatch(patched, /appearance:`avatarOverlay`,focusable:!1,show:!1/);
 

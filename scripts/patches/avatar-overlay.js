@@ -44,15 +44,21 @@ function avatarApplyInputShapePatch() {
   return "codexLinuxApplyAvatarInputShape(e){if(process.platform!==`linux`||e==null||e.isDestroyed()||typeof e.setShape!=`function`)return!1;try{let t=this.codexLinuxBuildAvatarInputShape(e);if(t==null)return!1;let n=JSON.stringify(t);if(this.codexLinuxAvatarInputShapeKey===n)return!0;e.setShape(t),this.codexLinuxAvatarInputShapeKey=n;return!0}catch{this.codexLinuxAvatarInputShapeKey=null;return!1}}";
 }
 
-function patchAvatarOverlayFocusable(source) {
-  const focusablePatch = "appearance:`avatarOverlay`,focusable:process.platform===`linux`?!0:!1";
-  if (source.includes(focusablePatch)) {
+function patchAvatarOverlayWindowOptions(source) {
+  const windowOptionsPatch =
+    "appearance:`avatarOverlay`,alwaysOnTop:process.platform===`linux`,skipTaskbar:process.platform===`linux`,focusable:process.platform===`linux`?!0:!1";
+  if (source.includes(windowOptionsPatch)) {
     return source;
   }
-  return source.replace(
-    "appearance:`avatarOverlay`,focusable:!1",
-    focusablePatch,
-  );
+  return source
+    .replace(
+      "appearance:`avatarOverlay`,focusable:process.platform===`linux`?!0:!1",
+      windowOptionsPatch,
+    )
+    .replace(
+      "appearance:`avatarOverlay`,focusable:!1",
+      windowOptionsPatch,
+    );
 }
 
 function upgradeAvatarOverlayInjectedMethods(source, electronVar) {
@@ -134,9 +140,9 @@ function applyLinuxAvatarOverlayMousePassthroughPatch(currentSource) {
   }
   patchedSource = upgradeAvatarOverlayInjectedMethods(patchedSource, electronVar);
   const beforeFocusablePatch = patchedSource;
-  patchedSource = patchAvatarOverlayFocusable(patchedSource);
+  patchedSource = patchAvatarOverlayWindowOptions(patchedSource);
   recordStrategy(
-    "avatar-focusable",
+    "avatar-window-options",
     patchedSource === beforeFocusablePatch
       ? patchedSource.includes("appearance:`avatarOverlay`") ? "already-applied" : "none"
       : "upstream",
