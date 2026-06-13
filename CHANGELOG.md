@@ -68,6 +68,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- The avatar overlay is focusable on Linux so inline pet reply inputs can accept
+  keyboard input after being clicked.
 - Plugin marketplace browsing now preserves upstream's `remote_plugin`
   feature sync on Linux, so current app servers can load the remote OpenAI
   curated catalog instead of falling back to only locally installed plugins.
