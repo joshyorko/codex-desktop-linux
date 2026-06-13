@@ -14,6 +14,73 @@ truthy() {
     esac
 }
 
+prelaunch_timeout_seconds() {
+    local value="${CODEX_WRAPPER_UPDATER_PRELAUNCH_TIMEOUT_SECONDS:-5}"
+
+    case "$value" in
+        ""|*[!0-9]*)
+            log "invalid CODEX_WRAPPER_UPDATER_PRELAUNCH_TIMEOUT_SECONDS='${CODEX_WRAPPER_UPDATER_PRELAUNCH_TIMEOUT_SECONDS:-}'; using 5" >&2
+            echo 5
+            return 0
+            ;;
+    esac
+
+    if [ "$value" -gt 300 ]; then
+        log "CODEX_WRAPPER_UPDATER_PRELAUNCH_TIMEOUT_SECONDS=$value is too high; using 300" >&2
+        echo 300
+        return 0
+    fi
+
+    echo "$value"
+}
+
+run_prelaunch_apply_with_watchdog() {
+    local timeout_seconds="$1"
+    local manager="$2"
+    local limit_ticks=$((timeout_seconds * 10))
+    local ticks=0
+    local apply_pid
+    local output_file="${TMPDIR:-/tmp}/codex-wrapper-updater-apply-$$-${RANDOM:-0}.log"
+    local status
+    local use_setsid=0
+    local line
+
+    if command -v setsid >/dev/null 2>&1; then
+        setsid "$manager" apply-wrapper-update >"$output_file" 2>&1 &
+        use_setsid=1
+    else
+        "$manager" apply-wrapper-update >"$output_file" 2>&1 &
+    fi
+    apply_pid=$!
+
+    while kill -0 "$apply_pid" 2>/dev/null; do
+        if [ "$ticks" -ge "$limit_ticks" ]; then
+            if [ "$use_setsid" -eq 1 ]; then
+                kill -- "-$apply_pid" 2>/dev/null || true
+                kill -9 -- "-$apply_pid" 2>/dev/null || true
+            else
+                kill "$apply_pid" 2>/dev/null || true
+                kill -9 "$apply_pid" 2>/dev/null || true
+            fi
+            while IFS= read -r line || [ -n "$line" ]; do
+                printf '%s\n' "$line"
+            done < "$output_file" 2>/dev/null || true
+            rm -f "$output_file"
+            return 124
+        fi
+        sleep 0.1
+        ticks=$((ticks + 1))
+    done
+
+    wait "$apply_pid" 2>/dev/null
+    status=$?
+    while IFS= read -r line || [ -n "$line" ]; do
+        printf '%s\n' "$line"
+    done < "$output_file" 2>/dev/null || true
+    rm -f "$output_file"
+    return "$status"
+}
+
 resolve_app_id() {
     local candidate="${CODEX_LINUX_APP_ID:-${CODEX_APP_ID:-codex-desktop}}"
     case "$candidate" in
@@ -88,12 +155,30 @@ manager="$(resolve_update_manager)" || {
 }
 
 log "applying pending wrapper update via $manager"
-if "$manager" apply-wrapper-update; then
+apply_status=0
+if [ "$phase" = "prelaunch" ]; then
+    timeout_seconds="$(prelaunch_timeout_seconds)"
+    if [ "$timeout_seconds" -eq 0 ]; then
+        log "prelaunch wrapper update apply disabled; leaving marker for after-exit retry"
+        exit 0
+    fi
+    run_prelaunch_apply_with_watchdog "$timeout_seconds" "$manager"
+    apply_status=$?
+else
+    "$manager" apply-wrapper-update
+    apply_status=$?
+fi
+
+if [ "$apply_status" -eq 0 ]; then
     rm -f "$marker"
     log "wrapper update applied"
     [ "$phase" = "after-exit" ] && relaunch_app success
 else
-    log "wrapper update apply failed; leaving marker for retry"
+    if [ "$phase" = "prelaunch" ] && [ "$apply_status" -eq 124 ]; then
+        log "prelaunch wrapper update apply timed out after ${timeout_seconds}s; leaving marker for after-exit retry"
+    else
+        log "wrapper update apply failed with status $apply_status; leaving marker for retry"
+    fi
     [ "$phase" = "after-exit" ] && relaunch_app failed
 fi
 

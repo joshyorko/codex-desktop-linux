@@ -9,6 +9,15 @@ const path = require("node:path");
 const test = require("node:test");
 const vm = require("node:vm");
 
+// Pin the feature config so a developer's local gitignored features.json
+// cannot change which patch descriptors these core tests exercise.
+process.env.CODEX_LINUX_FEATURES_CONFIG = path.join(
+  __dirname,
+  "..",
+  "linux-features",
+  "features.example.json",
+);
+
 const {
   COMPUTER_USE_UI_ENV_VAR,
   COMPUTER_USE_UI_SETTINGS_KEY,
@@ -21,7 +30,6 @@ const {
   applyLinuxDesktopSettingsIndexPatch,
   applyLinuxAvatarOverlayMousePassthroughPatch,
   applyBrowserUseNodeReplApprovalPatch,
-  applyLinuxBrowserUseIabVisibleOnCreatePatch,
   applyLinuxBrowserUseRouteLivenessPatch,
   applyLinuxChromeExtensionStatusPatch,
   applyLinuxChromeNativeHostRuntimePatch,
@@ -47,6 +55,7 @@ const {
   applyLinuxBrowserUseAvailabilityPatch,
   applyLinuxBrowserUseExternalAvailabilityPatch,
   applyLinuxBrowserUseNonLocalNavigationPatch,
+  applyLinuxAppServerBackfillWaitPatch,
   applyLinuxOpaqueBackgroundPatch,
   applyLinuxFastModeModelGuardPatch,
   applyLinuxOpaqueWindowsDefaultPatch,
@@ -94,6 +103,8 @@ const {
   sourceInfo,
 } = require("./lib/build-info.js");
 const {
+  criticalFailuresFromReport,
+  optionalDriftFromReport,
   summarizePatchReport,
 } = require("./lib/patch-report.js");
 const {
@@ -101,6 +112,7 @@ const {
   applyLocalEnvironmentActionModalDraftPatch,
   applyPersistentRateLimitFooterPatch,
   applyLinuxAppServerFeatureEnablementPatch,
+  applyLinuxChatSearchHydrationPatch,
   applyLinuxConfigWriteVersionConflictPatch,
   applyLinuxI18nGatePatch,
   applyLinuxProfileSettingsMenuPatch,
@@ -392,6 +404,10 @@ test("Linux target context parses distro, package, and desktop details", () => {
 
 test("build info captures DMG hash, features, distro profile, and source revision", () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "codex-build-info-"));
+  // This test reads features.json from its own featuresRoot, which the
+  // file-level CODEX_LINUX_FEATURES_CONFIG pin would otherwise override.
+  const pinnedFeaturesConfig = process.env.CODEX_LINUX_FEATURES_CONFIG;
+  delete process.env.CODEX_LINUX_FEATURES_CONFIG;
   try {
     const dmgPath = path.join(tempRoot, "Codex.dmg");
     fs.writeFileSync(dmgPath, "fake dmg payload", "utf8");
@@ -455,6 +471,9 @@ test("build info captures DMG hash, features, distro profile, and source revisio
     assert.deepEqual(info.linuxFeatures.enabled, ["read-aloud", "zed-opener"]);
     assert.equal(info.linuxFeatures.configPath, undefined);
   } finally {
+    if (pinnedFeaturesConfig != null) {
+      process.env.CODEX_LINUX_FEATURES_CONFIG = pinnedFeaturesConfig;
+    }
     fs.rmSync(tempRoot, { recursive: true, force: true });
   }
 });
@@ -629,6 +648,7 @@ test("default core patch descriptors are grouped and unique", () => {
     "linux-browser-use-availability",
     "linux-browser-use-non-local-navigation",
     "linux-browser-use-external-availability",
+    "linux-chat-search-hydration",
     "linux-file-manager",
     "linux-code-editor-open-targets",
     "linux-tray",
@@ -653,6 +673,7 @@ test("default core patch descriptors are grouped and unique", () => {
     "automation-schedule-multi-time-rrule",
     "linux-app-sunset-gate",
     "linux-app-server-feature-enablement",
+    "linux-app-server-backfill-wait",
     "linux-config-write-version-conflict",
     "opaque-window-default-general-settings",
     "opaque-window-default-webview-index",
@@ -1068,7 +1089,7 @@ function avatarOverlayBundleFixture() {
     "setElementSize(e,{mascot:t,tray:n}){let r=this.window;r==null||r.isDestroyed()||r.webContents.id!==e||(this.cancelMomentum(),this.anchor={...this.anchor,width:t.width,height:t.height},this.mascotSize=t,this.traySize=n,this.applyLayout(r))}",
     "async createWindow(e){let t=await this.windowManager.createWindow({title:n.app.getName(),width:zB.width,height:zB.height,appearance:`avatarOverlay`,focusable:!1,show:!1,initialRoute:rV,hostId:this.windowManager.getHostIdForWebContents(e)??`local`});return this.window=t,this.rendererReady=this.windowManager.isWebContentsReady(t.webContents.id),this.dragState=null,this.layout=null,this.mascotSize=oV,this.mousePassthroughEnabled=!1,this.placement=`top-end`,this.pointerInteractive=!1,this.traySize=null,t.once(`ready-to-show`,()=>{t.isDestroyed()||!this.rendererReady||(this.showWindow(t),this.applyPointerInteractivityPolicy())}),t.on(`closed`,()=>{this.window===t&&(this.cancelMomentum(),this.window=null,this.dragState=null,this.layout=null,this.rendererReady=!1,this.pointerInteractive=!1,this.mousePassthroughEnabled=!1,this.globalState.set(Te,!1),this.broadcastOpenState())}),t}",
     "applyLayout(e,t=n.screen.getDisplayNearestPoint(hV(this.anchor)).bounds){if(e.isDestroyed())return;let r=UB({anchor:this.anchor,displayBounds:t,mascotSize:this.mascotSize,previousPlacement:this.placement,traySize:this.traySize??sV});this.anchor=r.anchor,this.layout=r,this.placement=r.placement,this.setWindowBounds(e,r.windowBounds),this.sendLayoutToRenderer(e)}getLayout(e){if(this.layout??this.applyLayout(e),this.layout==null)throw Error(`Expected avatar overlay layout`);return this.layout}",
-    "showWindow(e){if(e.isDestroyed())return;let t=this.isOpen();e.moveTop(),e.showInactive(),!t&&this.isOpen()&&this.broadcastOpenState()}broadcastOpenState(){this.windowManager.sendMessageToAllRegisteredWindows({type:`avatar-overlay-open-state-changed`,isOpen:this.isOpen()})}",
+    "showWindow(e){if(e.isDestroyed())return;let t=this.isOpen();e.moveTop(),e.showInactive(),!t&&this.isOpen()&&this.broadcastOpenState()}showWindowIfReady(e){!this.rendererReady||(this.showWindow(e),this.applyPointerInteractivityPolicy())}broadcastOpenState(){this.windowManager.sendMessageToAllRegisteredWindows({type:`avatar-overlay-open-state-changed`,isOpen:this.isOpen()})}",
     "applyPointerInteractivityPolicy(){let e=this.window;if(e==null||e.isDestroyed()){this.mousePassthroughEnabled=!1;return}let t=!this.pointerInteractive;if(this.mousePassthroughEnabled!==t){if(this.mousePassthroughEnabled=t,t){e.setIgnoreMouseEvents(!0,{forward:!0});return}e.setIgnoreMouseEvents(!1),this.refreshCursorAtCurrentMousePosition(e)}}",
     "refreshCursorAtCurrentMousePosition(e){if(e.isDestroyed())return;let t=n.screen.getCursorScreenPoint(),r=e.getContentBounds(),i=t.x-r.x,a=t.y-r.y;i<0||a<0||i>r.width||a>r.height||e.webContents.sendInputEvent({type:`mouseMove`,x:i,y:a,movementX:0,movementY:0})}",
     "};",
@@ -1424,6 +1445,62 @@ test("updates the Linux native titlebar overlay when nativeTheme changes", () =>
   assert.doesNotMatch(patched, /data-codex-window-type/);
 });
 
+test("redirects the renamed Linux-aware titlebar overlay sync away from the transparent win32 helper", () => {
+  const source = [
+    "function A2(e){return e===`avatarOverlay`}",
+    "function I2({platform:e,appearance:t,opaqueWindowsEnabled:n,prefersDarkColors:r}){return n&&!A2(t)&&(e===`darwin`||e===`win32`)?{backgroundColor:r?a2:o2,backgroundMaterial:e===`win32`?`none`:null}:e===`linux`&&!A2(t)?{backgroundColor:r?a2:o2,backgroundMaterial:null}:{backgroundColor:i2,backgroundMaterial:null}}",
+    "function b2(e=1){return{color:i2,symbolColor:a.nativeTheme.shouldUseDarkColors?v2:_2,height:Math.round(g2*e)}}",
+    "case`primary`:return n===`darwin`?t?{titleBarStyle:`hiddenInset`,trafficLightPosition:y2(r)}:{vibrancy:`menu`,titleBarStyle:`hiddenInset`,trafficLightPosition:y2(r)}:n===`win32`||n===`linux`?{titleBarStyle:`hidden`,titleBarOverlay:b2(r)}:{titleBarStyle:`default`};",
+    "installApplicationMenuTitleBarOverlaySync(e,t){if(process.platform!==`win32`&&process.platform!==`linux`||t!==`primary`)return;let n=()=>{e.isDestroyed()||e.setTitleBarOverlay(b2(this.windowZooms.get(e.id)))};return a.nativeTheme.on(`updated`,n),n(),()=>{a.nativeTheme.off(`updated`,n)}}",
+    "process.platform===`darwin`?n.setWindowButtonPosition(y2(t)):(process.platform===`win32`||process.platform===`linux`)&&(this.windowZooms.set(n.id,t),n.setTitleBarOverlay(b2(t)))",
+  ].join("");
+  const { value: patched, warnings } = captureWarns(() =>
+    applyPatchTwice(applyLinuxNativeTitlebarPatch, source),
+  );
+
+  assert.match(
+    patched,
+    /n===`linux`\?\{titleBarStyle:`hidden`,titleBarOverlay:codexLinuxTitleBarOverlay\(r\)\}/,
+  );
+  assert.match(
+    patched,
+    /installApplicationMenuTitleBarOverlaySync\(e,t\)\{if\(\(process\.platform!==`win32`&&process\.platform!==`linux`\)\|\|t!==`primary`\)return/,
+  );
+  assert.match(
+    patched,
+    /e\.setTitleBarOverlay\(process\.platform===`linux`\?codexLinuxTitleBarOverlay\(this\.windowZooms\.get\(e\.id\)\):b2\(this\.windowZooms\.get\(e\.id\)\)\)/,
+  );
+  assert.match(
+    patched,
+    /n\.setTitleBarOverlay\(process\.platform===`linux`\?codexLinuxTitleBarOverlay\(t\):b2\(t\)\)/,
+  );
+  assert.doesNotMatch(patched, /setTitleBarOverlay\(b2\(/);
+  assert.deepEqual(warnings, []);
+});
+
+
+test("updates every Linux zoom titlebar overlay refresh call site", () => {
+  const source = [
+    "function A2(e){return e===`avatarOverlay`}",
+    "function I2({platform:e,appearance:t,opaqueWindowsEnabled:n,prefersDarkColors:r}){return n&&!A2(t)&&(e===`darwin`||e===`win32`)?{backgroundColor:r?a2:o2,backgroundMaterial:e===`win32`?`none`:null}:e===`linux`&&!A2(t)?{backgroundColor:r?a2:o2,backgroundMaterial:null}:{backgroundColor:i2,backgroundMaterial:null}}",
+    "function b2(e=1){return{color:i2,symbolColor:a.nativeTheme.shouldUseDarkColors?v2:_2,height:Math.round(g2*e)}}",
+    "case`primary`:return n===`darwin`?t?{titleBarStyle:`hiddenInset`,trafficLightPosition:y2(r)}:{vibrancy:`menu`,titleBarStyle:`hiddenInset`,trafficLightPosition:y2(r)}:n===`win32`||n===`linux`?{titleBarStyle:`hidden`,titleBarOverlay:b2(r)}:{titleBarStyle:`default`};",
+    "installApplicationMenuTitleBarOverlaySync(e,t){if(process.platform!==`win32`&&process.platform!==`linux`||t!==`primary`)return;let n=()=>{e.isDestroyed()||e.setTitleBarOverlay(b2(this.windowZooms.get(e.id)))};return a.nativeTheme.on(`updated`,n),n(),()=>{a.nativeTheme.off(`updated`,n)}}",
+    "process.platform===`darwin`?n.setWindowButtonPosition(y2(t)):(process.platform===`win32`||process.platform===`linux`)&&(this.windowZooms.set(n.id,t),n.setTitleBarOverlay(b2(t)))",
+    "process.platform===`darwin`?o.setWindowButtonPosition(y2(i)):(process.platform===`win32`||process.platform===`linux`)&&(this.windowZooms.set(o.id,i),o.setTitleBarOverlay(b2(i)))",
+  ].join("");
+  const patched = applyPatchTwice(applyLinuxNativeTitlebarPatch, source);
+
+  assert.equal(
+    (patched.match(/setTitleBarOverlay\(process\.platform===`linux`\?codexLinuxTitleBarOverlay/g) ?? []).length,
+    3,
+  );
+  assert.doesNotMatch(
+    patched,
+    /\(process\.platform===`win32`\|\|process\.platform===`linux`\)&&\(this\.windowZooms\.set\([^)]+\),[A-Za-z_$][\w$]*\.setTitleBarOverlay\(b2\([^)]+\)\)\)/,
+  );
+});
+
 test("adds a right-side safe area for Linux window controls in application menu chrome", () => {
   const source = [
     "var l=Object.freeze({default:Object.freeze({left:0,right:0}),mac:Object.freeze({legacy:Object.freeze({left:66+c,right:0}),modern:Object.freeze({left:76+c,right:0})}),applicationMenu:Object.freeze({left:0,right:0})});",
@@ -1536,6 +1613,16 @@ test("patches remaining Windows menu snippets when another copy is already Linux
   );
 });
 
+test("recognizes the frameless-titlebar upgraded menu snippet as already applied", () => {
+  const source =
+    "process.platform===`linux`&&(k.setMenuBarVisibility(!1),k.removeMenu?.()),process.platform===`win32`&&k.removeMenu(),";
+
+  const patched = applyPatchTwice(applyLinuxMenuPatch, source);
+
+  assert.equal(patched, source);
+  assert.equal((patched.match(/setMenuBarVisibility\(!1\)/g) ?? []).length, 1);
+});
+
 test("recognizes already-applied Linux opaque background patch", () => {
   const patched = applyPatchTwice(applyLinuxOpaqueBackgroundPatch, alreadyOpaqueBackgroundBundle);
   assert.equal(patched, alreadyOpaqueBackgroundBundle);
@@ -1635,6 +1722,19 @@ test("patches drifted comment preload screenshot anchor helper names", () => {
   );
   assert.doesNotMatch(patched, /\bWd\(/);
   assert.doesNotMatch(patched, /\bS\.width\b/);
+});
+
+test("patches current comment preload screenshot marker selection list", () => {
+  const source =
+    "let Ue=M?.annotation.id??null,We=M?.kind===`comment`?[M.annotation]:he,Ge=M!=null&&g!=null,Ke=m?.target.mode===`create`?oo(m.anchor):null,qe=m?.target.mode===`create`&&m.anchor.type===`element`?m.anchor.viewportSize:void 0,Je=Ke==null?null:he.find(e=>le(e.anchor,Ke))??null,Ye=(Ge?M?.kind===`comment`?he:[]:Je==null?he:he.filter(e=>e.id!==Je.id)).flatMap(e=>{let t=fe.get(e.id);if(t==null)return[];return[{comment:e,commentNumber:t}]})";
+
+  const patched = applyPatchTwice(applyBrowserAnnotationScreenshotPatch, source);
+
+  assert.match(
+    patched,
+    /Ye=\(Ge\?M\?\.kind===`comment`\?We:\[\]:Je==null\?he:he\.filter\(e=>e\.id!==Je\.id\)\)\.flatMap/,
+  );
+  assert.doesNotMatch(patched, /Ge\?M\?\.kind===`comment`\?he:\[\]/);
 });
 
 test("guards fast-mode model tier lookup when serviceTiers is missing", () => {
@@ -1739,9 +1839,11 @@ test("adds Linux avatar overlay mouse passthrough recovery", () => {
   assert.doesNotMatch(patched, /let\[,l,u,d,f\]=c/);
   assert.doesNotMatch(patched, /this\.codexLinuxIsI3Session\(\)\)\{this\.codexLinuxStopAvatarPassthroughRecovery\(\),this\.codexLinuxAvatarInputShapeKey=null,this\.pointerInteractive=!0,this\.mousePassthroughEnabled&&\(this\.mousePassthroughEnabled=!1\),e\.setIgnoreMouseEvents\(!1\);return\}/);
   assert.match(patched, /if\(process\.platform===`linux`&&typeof e\.setShape==`function`\)\{/);
+  assert.match(patched, /if\(process\.platform===`linux`&&typeof e\.setShape==`function`\)\{this\.codexLinuxStartAvatarPassthroughRecovery\(\),/);
+  assert.doesNotMatch(patched, /if\(process\.platform===`linux`&&typeof e\.setShape==`function`\)\{this\.codexLinuxStopAvatarPassthroughRecovery\(\),/);
   assert.doesNotMatch(patched, /typeof e\.setShape==`function`&&!this\.codexLinuxIsI3Session\(\)/);
   assert.match(patched, /if\(t==null\)return null/);
-  assert.match(patched, /if\(t==null\)return!1;let n=JSON\.stringify\(t\)/);
+  assert.match(patched, /try\{let t=this\.codexLinuxBuildAvatarInputShape\(e\);if\(t==null\)return!1;let n=JSON\.stringify\(t\)/);
   assert.match(patched, /e\.setShape\(t\),this\.codexLinuxAvatarInputShapeKey=n;return!0/);
   assert.match(patched, /return\[i\(t\.mascot\),i\(t\.tray\)\]\.filter\(Boolean\)/);
   assert.match(patched, /process\.platform!==`linux`/);
@@ -1750,6 +1852,9 @@ test("adds Linux avatar overlay mouse passthrough recovery", () => {
   assert.doesNotMatch(patched, /typeof e\.setShape==`function`\)return;this\.codexLinuxAvatarPassthroughRecoveryTimer=setInterval/);
   assert.match(patched, /this\.dragState!=null/);
   assert.match(patched, /this\.codexLinuxIsCursorInAvatarInteractiveRegion\(e\)/);
+  assert.match(patched, /__codexWindowHit=__codexX>=0&&__codexY>=0&&__codexX<=__codexBounds\.width&&__codexY<=__codexBounds\.height/);
+  assert.match(patched, /return __codexHit\(t\.mascot\)\|\|__codexHit\(t\.tray\)\|\|__codexWindowHit/);
+  assert.doesNotMatch(patched, /let r=r\.screen\.getCursorScreenPoint\(\)/);
   assert.match(patched, /catch\{t=!0\}/);
   assert.match(patched, /this\.pointerInteractive=t/);
   assert.match(patched, /displayBounds:n\.screen\.getDisplayNearestPoint\(n\.screen\.getCursorScreenPoint\(\)\)\.bounds\},process\.platform===`linux`&&\(this\.pointerInteractive=!0,this\.applyPointerInteractivityPolicy\(\)\)\}moveDrag\(e\)/);
@@ -1761,6 +1866,95 @@ test("adds Linux avatar overlay mouse passthrough recovery", () => {
   assert.match(patched, /e\.moveTop\(\),e\.showInactive\(\),process\.platform===`linux`&&this\.codexLinuxApplyAvatarCompositorHints\(e\),process\.platform===`linux`&&this\.applyPointerInteractivityPolicy\(\)/);
   assert.doesNotMatch(patched, /codexLinuxRecoverAvatarPointerInteractivity/);
   assert.match(patched, /this\.window===t&&\(this\.codexLinuxStopAvatarPassthroughRecovery\(\),this\.codexLinuxAvatarInputShapeKey=null,this\.codexLinuxAvatarCompositorHintsApplied=!1,this\.codexLinuxAvatarCompositorHintsApplying=!1,this\.cancelMomentum\(\)/);
+});
+
+test("Linux avatar overlay treats visible window content as interactive fallback", () => {
+  const patched = applyPatchTwice(
+    applyLinuxAvatarOverlayMousePassthroughPatch,
+    avatarOverlayBundleFixture(),
+  );
+  const context = {
+    globalThis: {},
+    process: {
+      env: {},
+      pid: 123,
+      platform: "linux",
+    },
+    require(moduleName) {
+      assert.equal(moduleName, "node:child_process");
+      return { execFile() {} };
+    },
+    pV(bounds) {
+      return bounds;
+    },
+    n: {
+      app: {
+        getName: () => "Codex",
+      },
+      screen: {
+        getCursorScreenPoint: () => ({ x: 5765, y: 1088 }),
+        getDisplayNearestPoint: () => ({ bounds: { x: 0, y: 0, width: 800, height: 600 } }),
+      },
+    },
+  };
+  vm.runInNewContext(`${patched};globalThis.AvatarOverlayController=fV;`, context);
+
+  const controller = new context.globalThis.AvatarOverlayController(
+    { sendMessageToAllRegisteredWindows() {} },
+    { set() {} },
+  );
+  controller.layout = {
+    mascot: { left: 220, top: 190, width: 113, height: 122 },
+    tray: { left: 57, top: 55, width: 276, height: 131 },
+  };
+
+  assert.equal(
+    controller.codexLinuxIsCursorInAvatarInteractiveRegion({
+      getContentBounds: () => ({ x: 5743, y: 936, width: 356, height: 320 }),
+    }),
+    true,
+  );
+  assert.equal(
+    controller.codexLinuxIsCursorInAvatarInteractiveRegion({
+      getContentBounds: () => ({ x: 6000, y: 936, width: 100, height: 100 }),
+    }),
+    false,
+  );
+
+  const overlayWindow = {
+    isDestroyed: () => false,
+    getContentBounds: () => ({ x: 5743, y: 936, width: 356, height: 320 }),
+    setShape() {},
+  };
+  const serializeShape = (shape) => JSON.parse(JSON.stringify(shape));
+  assert.deepEqual(serializeShape(controller.codexLinuxBuildAvatarInputShape(overlayWindow)), [
+    { x: 220, y: 190, width: 113, height: 122 },
+    { x: 57, y: 55, width: 276, height: 131 },
+  ]);
+  controller.pointerInteractive = true;
+  assert.deepEqual(serializeShape(controller.codexLinuxBuildAvatarInputShape(overlayWindow)), [
+    { x: 0, y: 0, width: 356, height: 320 },
+  ]);
+  assert.equal(
+    controller.codexLinuxApplyAvatarInputShape({
+      isDestroyed: () => false,
+      getContentBounds: () => {
+        throw new Error("drift");
+      },
+      setShape() {},
+    }),
+    false,
+  );
+  assert.equal(
+    controller.codexLinuxApplyAvatarInputShape({
+      isDestroyed: () => false,
+      getContentBounds: () => ({ x: 5743, y: 936, width: 356, height: 320 }),
+      setShape() {
+        throw new Error("unsupported");
+      },
+    }),
+    false,
+  );
 });
 
 test("keeps avatar overlay layout sync working after layout alias drift", () => {
@@ -1829,6 +2023,19 @@ test("adds Linux window icon handling when an icon asset is available", () => {
   assert.match(patchedMain, new RegExp(`icon:${escapeRegExp(iconPathExpression)}`));
   assert.doesNotMatch(patchedMain, /process\.platform===`win32`\|\|process\.platform===`linux`\?\{autoHideMenuBar:!0/);
   assert.match(patchedMain, new RegExp(`D\\.setIcon\\(${escapeRegExp(iconPathExpression)}\\)`));
+});
+
+test("adds Linux window icon handling to current Linux autoHideMenuBar options", () => {
+  const iconAsset = "app-test.png";
+  const iconPathExpression = "process.resourcesPath+`/../content/webview/assets/app-test.png`";
+  const windowOptionsSource =
+    "...process.platform===`win32`||process.platform===`linux`?{autoHideMenuBar:!0}:{},";
+
+  const patched = applyPatchTwice(applyLinuxWindowOptionsPatch, windowOptionsSource, iconAsset);
+
+  assert.match(patched, /process\.platform===`win32`\?\{autoHideMenuBar:!0\}:process\.platform===`linux`/);
+  assert.doesNotMatch(patched, /process\.platform===`win32`\|\|process\.platform===`linux`/);
+  assert.match(patched, new RegExp(`icon:${escapeRegExp(iconPathExpression)}`));
 });
 
 test("patches remaining Linux window icon snippets when another window is already patched", () => {
@@ -2185,16 +2392,80 @@ test("adds Linux single-instance lock and second-instance handoff", () => {
   assert.match(patched, /n\.app\.off\(`second-instance`,codexLinuxSecondInstanceHandler\)/);
 });
 
-test("lets explicit Linux multi-instance launches bypass the bootstrap single-instance lock", () => {
+test("forces the bootstrap single-instance lock on Linux even when upstream disables it", () => {
   const source =
     "var S=t.x({isMacOS:b,isPackaged:n.app.isPackaged});if(!(!S||n.app.requestSingleInstanceLock()))t.Jr().info(`Exiting second desktop instance`,{safe:{packaged:n.app.isPackaged,platform:process.platform}}),n.app.exit(0);else{let e=t.C(x);}";
   const patched = applyPatchTwice(applyLinuxMultiInstanceBootstrapPatch, source);
 
   assert.match(
     patched,
-    /if\(!\(!S\|\|process\.platform===`linux`&&process\.env\.CODEX_LINUX_MULTI_LAUNCH===`1`\|\|n\.app\.requestSingleInstanceLock\(\)\)\)/,
+    /if\(!\(process\.platform===`linux`\?process\.env\.CODEX_LINUX_MULTI_LAUNCH===`1`\|\|n\.app\.requestSingleInstanceLock\(\):!S\|\|n\.app\.requestSingleInstanceLock\(\)\)\)/,
   );
   assert.match(patched, /Exiting second desktop instance/);
+});
+
+test("upgrades the legacy guarded bootstrap single-instance lock to the enforced form", () => {
+  const source =
+    "var $=r.D({isMacOS:Z,isPackaged:e.app.isPackaged});if(!(!$||process.platform===`linux`&&process.env.CODEX_LINUX_MULTI_LAUNCH===`1`||e.app.requestSingleInstanceLock()))t.Vr().info(`Exiting second desktop instance`,{}),e.app.exit(0);";
+  const patched = applyPatchTwice(applyLinuxMultiInstanceBootstrapPatch, source);
+
+  assert.match(
+    patched,
+    /if\(!\(process\.platform===`linux`\?process\.env\.CODEX_LINUX_MULTI_LAUNCH===`1`\|\|e\.app\.requestSingleInstanceLock\(\):!\$\|\|e\.app\.requestSingleInstanceLock\(\)\)\)/,
+  );
+  assert.ok(!patched.includes("&&process.env.CODEX_LINUX_MULTI_LAUNCH"));
+});
+
+test("enforced bootstrap lock takes the Linux lock with upstream flag off and exits the loser", () => {
+  const source =
+    "var S=t.x({isMacOS:b,isPackaged:n.app.isPackaged});if(!(!S||n.app.requestSingleInstanceLock()))n.app.exit(0);";
+  const patched = applyLinuxMultiInstanceBootstrapPatch(source);
+
+  const run = ({ lockResult, multiLaunch }) => {
+    const calls = { lock: 0, exit: 0 };
+    const t = { x: () => false };
+    const n = {
+      app: {
+        isPackaged: true,
+        requestSingleInstanceLock: () => {
+          calls.lock += 1;
+          return lockResult;
+        },
+        exit: () => {
+          calls.exit += 1;
+        },
+      },
+    };
+    const previous = process.env.CODEX_LINUX_MULTI_LAUNCH;
+    if (multiLaunch) {
+      process.env.CODEX_LINUX_MULTI_LAUNCH = "1";
+    } else {
+      delete process.env.CODEX_LINUX_MULTI_LAUNCH;
+    }
+    try {
+      new Function("t", "n", "b", patched)(t, n, false);
+    } finally {
+      if (previous == null) {
+        delete process.env.CODEX_LINUX_MULTI_LAUNCH;
+      } else {
+        process.env.CODEX_LINUX_MULTI_LAUNCH = previous;
+      }
+    }
+    return calls;
+  };
+
+  // process.platform is linux in CI and on dev machines for this repo.
+  const winner = run({ lockResult: true, multiLaunch: false });
+  assert.equal(winner.lock, 1);
+  assert.equal(winner.exit, 0);
+
+  const loser = run({ lockResult: false, multiLaunch: false });
+  assert.equal(loser.lock, 1);
+  assert.equal(loser.exit, 1);
+
+  const sideBySide = run({ lockResult: true, multiLaunch: true });
+  assert.equal(sideBySide.lock, 0);
+  assert.equal(sideBySide.exit, 0);
 });
 
 test("recognizes bootstrap-owned single-instance handoff in current bundles", () => {
@@ -2430,6 +2701,23 @@ test("adds Linux launch actions after current window API drift", () => {
   assert.match(patched, /codexLinuxHandleLaunchActionArgs/);
   assert.match(patched, /let n=M\.getPrimaryWindow\(B\),r=n\?\?await M\.createFreshWindow\(e\);/);
   assert.match(patched, /let e=M\.getPrimaryWindow\(B\),t=e\?\?await M\.createFreshWindow\(`/);
+});
+
+test("adds Linux launch actions when current upstream wraps fresh window creation", () => {
+  const source = currentLaunchActionBundleFixture()
+    .replaceAll("createFreshLocalWindow", "createFreshWindow")
+    .replace(
+      "let A=Date.now(),w=()=>{}",
+      "let enabled=!0,ee=e=>enabled?M.createFreshWindow(e):Promise.resolve(null),A=Date.now(),w=()=>{}",
+    )
+    .replace("M.getPrimaryWindow()??await M.createFreshWindow(`/`)", "M.getPrimaryWindow()??await ee(`/`)")
+    .replace("r=n??await M.createFreshWindow(e)", "r=n??await ee(e)");
+
+  const patched = applyPatchTwice(applyLinuxLaunchActionArgsPatch, source);
+
+  assert.match(patched, /codexLinuxHandleLaunchActionArgs/);
+  assert.match(patched, /let n=M\.getPrimaryWindow\(B\),r=n\?\?await ee\(e\);/);
+  assert.match(patched, /let e=M\.getPrimaryWindow\(B\),t=e\?\?await ee\(`\/`\);/);
 });
 
 test("prewarms the hotkey window after startup marker drift", () => {
@@ -2927,6 +3215,20 @@ test("preserves supported dynamic remote_plugin in current app-server feature sy
   assert.match(patched, /n\[vI\]=t/);
 });
 
+test("preserves dynamic remote_plugin when the minified feature key contains regex syntax", () => {
+  const source = [
+    "var GF=[`apps`,`memories`,`plugins`,`tool_call_mcp_elicitation`,`tool_suggest`],v$I=`remote_plugin`;",
+    "function KF(){let e=(0,Z.c)(6),t=K(G),[n]=ts(`statsig_default_enable_features`),r=Lc(),i=Io(),a,o;",
+    "return e[0]!==r?(a=()=>{let r=qF(n,!0);qn(`set-experimental-feature-enablement-for-host`,{hostId:t,enablement:r})},o=[r],e[0]=r,e[1]=a,e[2]=o):(a=e[1],o=e[2]),null}",
+    "function qF(e,t){let n={};for(let r of GF){let i=e[r];i!=null&&(n[r]=i)}return n[v$I]=t,n}",
+  ].join("");
+
+  const patched = applyPatchTwice(applyLinuxAppServerFeatureEnablementPatch, source);
+
+  assert.equal(patched, source);
+  assert.match(patched, /n\[v\$I\]=t/);
+});
+
 test("keeps already-sanitized dynamic app-server feature sync quiet", () => {
   const source = [
     "var GF=[`apps`,`memories`,`plugins`,`tool_call_mcp_elicitation`,`tool_suggest`],vI=`remote_plugin`;",
@@ -2980,6 +3282,51 @@ test("leaves already-null config write versions unchanged", () => {
   const patched = applyPatchTwice(applyLinuxConfigWriteVersionConflictPatch, source);
 
   assert.equal(patched, source);
+});
+
+test("extends app-server startup waits while state db backfill is running", () => {
+  const source = [
+    "var Js=`Please continue this conversation on the window where it was started.`,Ys=3e4,Xs=2e3;",
+    "class RequestClient{createRequest(e,t,n){let r=P(B()),i=n?.timeoutMs??0,a=Da(t),o=this.requestPromises.size,s=Date.now();return{request:{id:r,method:e,params:t},conversationId:a,pending:o,startedAtMs:s,timeoutMs:i}}}",
+    "function za(e){let t=La.safeParse(e);return t.success?new Ba(t.data):e}",
+    "function Np(e){if(e.startsWith(`Parse Error`))return{code:`restart-required`};let t=Mp(e);return t==null?e.startsWith(`codex-app-server-version-unsupported:`)?{code:`update-required`,minRequiredVersion:Dp,currentVersion:e.slice(37)}:{code:`connection-failed`,message:e}:{code:`restart-required`,currentVersion:t.currentVersion,installedVersion:t.installedVersion}}",
+  ].join("");
+
+  const { value: patched, warnings } = captureWarns(() =>
+    applyPatchTwice(applyLinuxAppServerBackfillWaitPatch, source),
+  );
+
+  assert.deepEqual(warnings, []);
+  assert.match(patched, /function codexLinuxIsStateDbBackfillMessage\(e\)/);
+  assert.match(patched, /function codexLinuxAppServerBackfillTimeoutMs\(e,t\)/);
+  assert.match(patched, /i=codexLinuxAppServerBackfillTimeoutMs\(e,i\);let a=Da\(t\)/);
+  assert.match(
+    patched,
+    /if\(codexLinuxIsStateDbBackfillMessage\(e\)\)return\{code:`connection-failed`,message:codexLinuxStateDbBackfillMessage\(e\)\}/,
+  );
+
+  const context = {};
+  vm.runInNewContext(
+    `${patched};result=Np("state db backfill is running at /home/user/.codex");startupTimeout=codexLinuxAppServerBackfillTimeoutMs("thread/start",3e4);turnTimeout=codexLinuxAppServerBackfillTimeoutMs("turn/start",3e4);`,
+    context,
+  );
+  assert.equal(context.result.code, "connection-failed");
+  assert.match(context.result.message, /state database backfill is still running/);
+  assert.equal(context.startupTimeout, 3e5);
+  assert.equal(context.turnTimeout, 3e4);
+});
+
+test("skips app-server timeout rewrite when the helper insertion anchor drifts", () => {
+  const source =
+    "class RequestClient{createRequest(e,t,n){let r=P(B()),i=n?.timeoutMs??0,a=Da(t),o=this.requestPromises.size;return{request:{id:r,method:e,params:t},conversationId:a,pending:o,timeoutMs:i}}}";
+
+  const { value: patched, warnings } = captureWarns(() =>
+    applyLinuxAppServerBackfillWaitPatch(source),
+  );
+
+  assert.equal(patched, source);
+  assert.match(warnings.join("\n"), /Could not insert app-server backfill wait helper/);
+  assert.doesNotMatch(patched, /codexLinuxAppServerBackfillTimeoutMs\(/);
 });
 
 test("adds Linux package updater behind the existing app updater manager", () => {
@@ -3540,7 +3887,7 @@ test("uses Linux managed runtime paths for current Chrome native host sync shape
   });
 });
 
-test("reports drifted Chrome native host runtime resolver as required upstream failure", () => {
+test("reports drifted Chrome native host runtime resolver as optional drift", () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "codex-patch-report-chrome-runtime-drift-"));
   try {
     const buildDir = path.join(tempRoot, ".vite", "build");
@@ -3557,12 +3904,17 @@ test("reports drifted Chrome native host runtime resolver as required upstream f
     captureWarns(() => patchExtractedApp(tempRoot, { report }));
 
     const runtimePatch = report.patches.find((patch) => patch.name === "linux-chrome-native-host-runtime");
-    assert.equal(runtimePatch.status, "failed-required");
+    assert.equal(runtimePatch.status, "skipped-optional");
     assert.match(runtimePatch.reason, /Could not identify Chrome native host runtime resolver shape/);
     assert.ok(
-      validateReport(report, "upstream-build").some((failure) =>
-        failure.startsWith("linux-chrome-native-host-runtime: failed-required"),
+      !validateReport(report, "upstream-build").some((failure) =>
+        failure.startsWith("linux-chrome-native-host-runtime:"),
       ),
+      "browser integration drift must not fail the build",
+    );
+    assert.ok(
+      optionalDriftFromReport(report).some((drift) => drift.name === "linux-chrome-native-host-runtime"),
+      "the drift must still be surfaced in the optional-drift summary",
     );
   } finally {
     fs.rmSync(tempRoot, { recursive: true, force: true });
@@ -3620,7 +3972,7 @@ test("handles literal Chrome plugin gate names", () => {
   assert.doesNotMatch(patched, /installWhenMissing:!0,name:'chrome-internal'/);
 });
 
-test("reports missing required Chrome plugin auto-install gate as required upstream validation failure", () => {
+test("reports missing Chrome plugin auto-install gate as optional drift", () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "codex-patch-report-missing-chrome-"));
   try {
     const buildDir = path.join(tempRoot, ".vite", "build");
@@ -3631,12 +3983,16 @@ test("reports missing required Chrome plugin auto-install gate as required upstr
     captureWarns(() => patchExtractedApp(tempRoot, { report }));
 
     const pluginGatePatch = report.patches.find((patch) => patch.name === "linux-chrome-plugin-auto-install");
-    assert.equal(pluginGatePatch.status, "failed-required");
+    assert.equal(pluginGatePatch.status, "skipped-optional");
     assert.match(pluginGatePatch.reason, /Could not find Chrome plugin gate literal/);
     assert.ok(
-      validateReport(report, "upstream-build").some((failure) =>
-        failure.startsWith("linux-chrome-plugin-auto-install: failed-required"),
+      !validateReport(report, "upstream-build").some((failure) =>
+        failure.startsWith("linux-chrome-plugin-auto-install:"),
       ),
+      "browser integration drift must not fail the build",
+    );
+    assert.ok(
+      optionalDriftFromReport(report).some((drift) => drift.name === "linux-chrome-plugin-auto-install"),
     );
   } finally {
     fs.rmSync(tempRoot, { recursive: true, force: true });
@@ -3663,7 +4019,7 @@ test("fails hard when the Computer Use gate is recognizable but unpatchable", ()
   );
 });
 
-test("reports missing required Computer Use plugin gate as required upstream validation failure", () => {
+test("reports missing Computer Use plugin gate as optional drift", () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "codex-patch-report-missing-computer-use-"));
   try {
     const buildDir = path.join(tempRoot, ".vite", "build");
@@ -3674,12 +4030,16 @@ test("reports missing required Computer Use plugin gate as required upstream val
     captureWarns(() => patchExtractedApp(tempRoot, { report }));
 
     const pluginGatePatch = report.patches.find((patch) => patch.name === "linux-computer-use-plugin-gate");
-    assert.equal(pluginGatePatch.status, "failed-required");
+    assert.equal(pluginGatePatch.status, "skipped-optional");
     assert.match(pluginGatePatch.reason, /Could not find Computer Use plugin gate literal/);
     assert.ok(
-      validateReport(report, "upstream-build").some((failure) =>
-        failure.startsWith("linux-computer-use-plugin-gate: failed-required"),
+      !validateReport(report, "upstream-build").some((failure) =>
+        failure.startsWith("linux-computer-use-plugin-gate:"),
       ),
+      "Computer Use is a feature — its drift must not fail the build",
+    );
+    assert.ok(
+      optionalDriftFromReport(report).some((drift) => drift.name === "linux-computer-use-plugin-gate"),
     );
   } finally {
     fs.rmSync(tempRoot, { recursive: true, force: true });
@@ -3834,7 +4194,43 @@ test("patches later Browser Use navigation dispatches when an earlier one is alr
   assert.doesNotMatch(patched, /browser-use-non-local-sites-allowed-changed`,\{allowed:p\}/);
 });
 
-test("falls back to the single live Linux Browser Use route window", () => {
+test("hydrates local chat search results before navigating", () => {
+  const source = [
+    "function FS(e,t,n){let r=A(e);if(r!=null){t(r);return}n(L(e))}",
+    "function tF({cloudTasks:e,conversationsMeta:t,hostIds:n}){return[...t.flatMap(e=>{if(!n.has(e.hostId??`local`))return[];let t=e.cwd??``,r=ye(e),i=(E(e)??t)||e.id,a=Dn(e.id);return[{kind:`local`,threadKey:Le(a),conversationId:a,threadId:e.id,title:r,searchTitle:i,cwd:t,branch:e.gitInfo?.branch??``,updatedAt:e.updatedAt,searchPreview:null}]}),...e?.map(e=>({kind:`remote`,threadKey:de(e.id)}))??[]]}",
+    "function aF(e){let t=Dn(e.threadId);return{kind:`local`,threadKey:Le(t),conversationId:t,threadId:e.threadId,title:e.title,searchTitle:e.title,cwd:e.cwd,branch:``,updatedAt:e.updatedAt,searchPreview:e.searchPreview}}",
+    "function MF(){let y=[He],C=`abc`,T=9;return $t({queryKey:[`command-menu-thread-search`,y,C,T],queryFn:async()=>(await Promise.allSettled(y.map(e=>nt(`search-threads-for-host`,{hostId:e,query:C,limit:T})))).flatMap(IF)})}",
+    "function NF(e){return e.threadKey}function PF(e){return e.threadKey}",
+    "function qF(e){let t=(0,Q.c)(40),{close:r,navigateToLocalConversation:o,result:s}=e,d=Fc(),v;t[20]!==r||t[21]!==d||t[22]!==o||t[23]!==s.threadKey?(v=()=>{FS(s.threadKey,o,d),r()},t[20]=r,t[21]=d,t[22]=o,t[23]=s.threadKey,t[24]=v):v=t[24];return v}",
+  ].join("");
+
+  const patched = applyPatchTwice(applyLinuxChatSearchHydrationPatch, source);
+
+  assert.match(patched, /function codexLinuxHydrateSearchConversation/);
+  assert.match(
+    patched,
+    /nt\(`load-recent-conversation-ids-for-host`,\{hostId:n,conversationIds:\[t\]\}\)/,
+  );
+  assert.match(
+    patched,
+    /async function FS\(e,t,n\)\{let codexLinuxRouteKey=codexLinuxSearchThreadKey\(e\),r=A\(codexLinuxRouteKey\);if\(r!=null\)\{await codexLinuxHydrateSearchConversation\(e,r\);t\(r\);return\}n\(L\(codexLinuxRouteKey\)\)\}/,
+  );
+  assert.match(
+    patched,
+    /nt\(`search-threads-for-host`,\{hostId:e,query:C,limit:T\}\)\.then\(codexLinuxSearchResults=>codexLinuxSearchResults\.map\(codexLinuxSearchResult=>\(\{\.\.\.codexLinuxSearchResult,hostId:e\}\)\)\)/,
+  );
+  assert.match(patched, /return\[\{kind:`local`,hostId:e\.hostId\?\?`local`,threadKey:/);
+  assert.match(patched, /return\{kind:`local`,hostId:e\.hostId\?\?`local`,threadKey:/);
+  assert.match(patched, /function NF\(e\)\{return e\}function PF\(e\)\{return e\}/);
+  assert.match(
+    patched,
+    /t\[20\]!==r\|\|t\[21\]!==d\|\|t\[22\]!==o\|\|t\[23\]!==s\?\(v=\(\)=>\{FS\(s,o,d\),r\(\)\},t\[20\]=r,t\[21\]=d,t\[22\]=o,t\[23\]=s,t\[24\]=v\):v=t\[24\]/,
+  );
+  assert.doesNotMatch(patched, /t\[23\]!==s\.threadKey/);
+  assert.doesNotMatch(patched, /t\[23\]=s\.threadKey/);
+});
+
+test("resolves the requested live Linux Browser Use route window by id", () => {
   const source =
     "var kK=t.Ur(`browser-sidebar-manager`);" +
     "function AK({ensureWindowState:e,windowId:t,windows:n}){let i=n.get(t)??null;if(i==null){let n=r.BrowserWindow.fromId(t);n!=null&&!n.isDestroyed()&&!n.webContents.isDestroyed()&&(i=e(n,n.webContents))}return i==null||i.window.isDestroyed()||i.owner.isDestroyed()?(kK().warning(`IAB_LIFECYCLE route window is not live`,{safe:{hasWindowState:i!=null,ownerDestroyed:i?.owner.isDestroyed()??null,windowDestroyed:i?.window.isDestroyed()??null,windowId:t},sensitive:{}}),null):i}";
@@ -3845,20 +4241,67 @@ test("falls back to the single live Linux Browser Use route window", () => {
   assert.match(patched, /i==null&&\(i=codexLinuxResolveLiveBrowserUseRouteWindow\(e,t,n,r\)\);return/);
   assert.equal((patched.match(/codexLinuxResolveLiveBrowserUseRouteWindow/g) || []).length, 2);
 
-  const webContents = { isDestroyed: () => false };
-  const window = { id: 7, isDestroyed: () => false, webContents };
+  const requestedWebContents = { isDestroyed: () => false };
+  const unrelatedWebContents = { isDestroyed: () => false };
+  const requestedWindow = { id: 42, isDestroyed: () => false, webContents: requestedWebContents };
+  const unrelatedWindow = { id: 7, isDestroyed: () => false, webContents: unrelatedWebContents };
+  let warnings = 0;
+  let getAllWindowsCalls = 0;
   const context = {
     process: { platform: "linux" },
-    r: { BrowserWindow: { fromId: () => null, getAllWindows: () => [window] } },
-    t: { Ur: () => () => ({ warning: () => assert.fail("fallback should avoid warning") }) },
+    r: {
+      BrowserWindow: {
+        fromId: (id) => (id === 42 ? requestedWindow : null),
+        getAllWindows: () => {
+          getAllWindowsCalls += 1;
+          return [unrelatedWindow];
+        },
+      },
+    },
+    t: { Ur: () => () => ({ warning: () => { warnings += 1; } }) },
   };
   const result = vm.runInNewContext(
     `${patched};AK({ensureWindowState:(window,owner)=>({owner,threads:new Map,window}),windowId:42,windows:new Map})`,
     context,
   );
 
-  assert.equal(result.window.id, 7);
-  assert.equal(result.owner, webContents);
+  assert.equal(result.window.id, 42);
+  assert.equal(result.owner, requestedWebContents);
+  assert.equal(warnings, 0);
+  assert.equal(getAllWindowsCalls, 0);
+});
+
+test("does not fall back to an unrelated single live Linux Browser Use route window", () => {
+  const source =
+    "var kK=t.Ur(`browser-sidebar-manager`);" +
+    "function AK({ensureWindowState:e,windowId:t,windows:n}){let i=n.get(t)??null;if(i==null){let n=r.BrowserWindow.fromId(t);n!=null&&!n.isDestroyed()&&!n.webContents.isDestroyed()&&(i=e(n,n.webContents))}return i==null||i.window.isDestroyed()||i.owner.isDestroyed()?(kK().warning(`IAB_LIFECYCLE route window is not live`,{safe:{hasWindowState:i!=null,ownerDestroyed:i?.owner.isDestroyed()??null,windowDestroyed:i?.window.isDestroyed()??null,windowId:t},sensitive:{}}),null):i}";
+
+  const patched = applyPatchTwice(applyLinuxBrowserUseRouteLivenessPatch, source);
+  const webContents = { isDestroyed: () => false };
+  const unrelatedWindow = { id: 7, isDestroyed: () => false, webContents };
+  let warnings = 0;
+  let getAllWindowsCalls = 0;
+  const context = {
+    process: { platform: "linux" },
+    r: {
+      BrowserWindow: {
+        fromId: () => null,
+        getAllWindows: () => {
+          getAllWindowsCalls += 1;
+          return [unrelatedWindow];
+        },
+      },
+    },
+    t: { Ur: () => () => ({ warning: () => { warnings += 1; } }) },
+  };
+  const result = vm.runInNewContext(
+    `${patched};AK({ensureWindowState:(window,owner)=>({owner,window}),windowId:42,windows:new Map})`,
+    context,
+  );
+
+  assert.equal(result, null);
+  assert.equal(warnings, 1);
+  assert.equal(getAllWindowsCalls, 0);
 });
 
 test("keeps Browser Use route liveness fallback inactive when ambiguous", () => {
@@ -4015,7 +4458,7 @@ test("patches all Browser Use node_repl approval configs in one pass", () => {
   assert.doesNotMatch(patched, /startup_timeout_sec:120,env:\{/);
 });
 
-test("auto-approves the current Browser Use node_repl runtime config builder", () => {
+test("auto-approves the older Browser Use node_repl runtime config builder", () => {
   const source =
     "return e.Dn({codexCliPath:o.codexCliPath,nodePath:o.nodePath,nodeReplPath:o.nodeReplPath,platform:o.platform})";
 
@@ -4025,6 +4468,86 @@ test("auto-approves the current Browser Use node_repl runtime config builder", (
     patched,
     /e\.Dn\(\{codexCliPath:o\.codexCliPath,nodePath:o\.nodePath,nodeReplPath:o\.nodeReplPath,tools:\{js:\{approval_mode:`approve`\}\},platform:o\.platform\}\)/,
   );
+});
+
+test("auto-approves the current Browser Use node_repl runtime config builder", () => {
+  const source =
+    "return e.Pn({codexCliPath:c.codexCliPath,codexHome:f,extraEnv:y,nodeModuleDirs:d,nodePath:c.nodePath,nodeReplPath:l?t.Cr(c.nodeReplPath):c.nodeReplPath,platform:c.platform,requestMeta:h,traceMeta:_,trustAllCode:g,trustedBrowserClientSha256s:u,shouldUseWslPaths:l})";
+
+  const patched = applyPatchTwice(applyBrowserUseNodeReplApprovalPatch, source);
+
+  assert.match(
+    patched,
+    /e\.Pn\(\{codexCliPath:c\.codexCliPath,codexHome:f,extraEnv:y,nodeModuleDirs:d,nodePath:c\.nodePath,nodeReplPath:l\?t\.Cr\(c\.nodeReplPath\):c\.nodeReplPath,tools:\{js:\{approval_mode:`approve`\}\},platform:c\.platform/,
+  );
+});
+
+test("auto-approves the Electron 42 Browser Use node_repl runtime config builder", () => {
+  const source =
+    "return t.Fa({codexCliPath:c.codexCliPath,codexHome:m,extraEnv:b,nodeModuleDirs:f,nodePath:c.nodePath,nodeReplPath:u?t.kr(c.nodeReplPath):c.nodeReplPath,platform:c.platform,requestMeta:g,sentryUserId:l,traceMeta:v,trustAllCode:_,trustedBrowserClientSha256s:d,shouldUseWslPaths:u})";
+
+  const patched = applyPatchTwice(applyBrowserUseNodeReplApprovalPatch, source);
+
+  assert.match(
+    patched,
+    /t\.Fa\(\{codexCliPath:c\.codexCliPath,codexHome:m,extraEnv:b,nodeModuleDirs:f,nodePath:c\.nodePath,nodeReplPath:u\?t\.kr\(c\.nodeReplPath\):c\.nodeReplPath,tools:\{js:\{approval_mode:`approve`\}\},platform:c\.platform/,
+  );
+});
+
+test("auto-approves and trusts the current Browser Use node_repl runtime config builder", () => {
+  const resourcesRoot = fs.mkdtempSync(path.join(os.tmpdir(), "codex-current-browser-client-hash-"));
+  try {
+    const browserClient = path.join(
+      resourcesRoot,
+      "plugins",
+      "openai-bundled",
+      "plugins",
+      "browser",
+      "scripts",
+      "browser-client.mjs",
+    );
+    const chromeClient = path.join(
+      resourcesRoot,
+      "plugins",
+      "openai-bundled",
+      "plugins",
+      "chrome",
+      "scripts",
+      "browser-client.mjs",
+    );
+    fs.mkdirSync(path.dirname(browserClient), { recursive: true });
+    fs.mkdirSync(path.dirname(chromeClient), { recursive: true });
+    fs.writeFileSync(browserClient, "patched current browser client\n", "utf8");
+    fs.writeFileSync(chromeClient, "patched current chrome client\n", "utf8");
+    const browserHash = cryptoHash("patched current browser client\n");
+    const chromeHash = cryptoHash("patched current chrome client\n");
+    const source =
+      "\"use strict\";let o=require(`node:fs`),a=require(`node:path`),s=require(`node:crypto`),d=[`upstream-hash`],u=!1,t={La:e=>e,jr:e=>e},c={codexCliPath:null,nodePath:null,nodeReplPath:null,platform:`linux`},m=null,b=null,f=[],g=null,l=null,v=null,_=!1;function build(){return t.La({codexCliPath:c.codexCliPath,codexHome:m,extraEnv:b,nodeModuleDirs:f,nodePath:c.nodePath,nodeReplPath:u?t.jr(c.nodeReplPath):c.nodeReplPath,platform:c.platform,requestMeta:g,sentryUserId:l,traceMeta:v,trustAllCode:_,trustedBrowserClientSha256s:d,shouldUseWslPaths:u}).trustedBrowserClientSha256s}";
+
+    const patched = applyPatchTwice(applyBrowserUseNodeReplApprovalPatch, source);
+
+    assert.match(patched, /^"use strict";function codexLinuxTrustedBrowserClientSha256s/);
+    assert.match(
+      patched,
+      /t\.La\(\{codexCliPath:c\.codexCliPath,codexHome:m,extraEnv:b,nodeModuleDirs:f,nodePath:c\.nodePath,nodeReplPath:u\?t\.jr\(c\.nodeReplPath\):c\.nodeReplPath,tools:\{js:\{approval_mode:`approve`\}\},platform:c\.platform/,
+    );
+    assert.match(
+      patched,
+      /trustedBrowserClientSha256s:codexLinuxTrustedBrowserClientSha256s\(d\),shouldUseWslPaths:u/,
+    );
+    assert.equal(
+      (patched.match(/function codexLinuxTrustedBrowserClientSha256s/g) || []).length,
+      1,
+    );
+    assert.doesNotMatch(patched, /for\(let a of/);
+    const linuxHashes = vm.runInNewContext(`${patched};build();`, {
+      require,
+      process: { platform: "linux", resourcesPath: resourcesRoot },
+    });
+    assert.deepEqual(Array.from(linuxHashes), ["upstream-hash", browserHash, chromeHash]);
+  } finally {
+    fs.rmSync(resourcesRoot, { recursive: true, force: true });
+  }
 });
 
 test("trusts Linux patched bundled Browser Use clients by hashing staged files", () => {
@@ -4078,12 +4601,6 @@ test("trusts Linux patched bundled Browser Use clients by hashing staged files",
   } finally {
     fs.rmSync(resourcesRoot, { recursive: true, force: true });
   }
-});
-
-test("keeps removed IAB visible patch export as a no-op", () => {
-  const source = "class BrowserSessionRegistry{}";
-
-  assert.equal(applyLinuxBrowserUseIabVisibleOnCreatePatch(source), source);
 });
 
 test("patchMainBundleSource does not force the in-app browser panel visible", () => {
@@ -4586,15 +5103,19 @@ test("patchExtractedApp records a structured patch report", () => {
     assert.equal(report.iconAsset, "app-test.png");
     assert.equal(report.desktopName, "codex-desktop.desktop");
     assert.deepEqual(report.enabledFeatures, enabledLinuxFeatureIds());
+    // Browser/Computer Use integration drift is optional: the aggregate stays
+    // applied because no required main-bundle patch warned on this fixture.
     assert.ok(
       report.patches.some(
         (patch) =>
           patch.name === "main-process-ui" &&
-          patch.status === "failed-required" &&
+          patch.status === "applied" &&
           patch.sourceKind === "core" &&
-          Array.isArray(patch.warnings) &&
-          patch.warnings.length > 0,
+          patch.warnings === undefined,
       ),
+    );
+    assert.ok(
+      optionalDriftFromReport(report).some((drift) => drift.name === "linux-chrome-plugin-auto-install"),
     );
     assert.ok(report.patches.some((patch) => patch.name === "keybinds-settings" && patch.status === "skipped-optional"));
   } finally {
@@ -4850,25 +5371,6 @@ test("patch report marks warned asset patches as required failures", () => {
   }
 });
 
-test("persistent rate limit footer uses existing account signal without dropdown copy", () => {
-  const source = [
-    'import{A as Do,E as Oo,I as ko,L as Ao,M as jo,N as Mo,P as No,S as Po,W as Fo,_ as Io,a as Lo,c as Ro,d as zo,f as Bo,g as Vo,h as Ho,j as Uo,l as Wo,m as Go,o as Ko,p as qo,r as Jo,s as Yo,t as Xo,u as Zo,v as Qo,x as $o,y as es}from"./rate-limit-rows-HF3Xhn3F.js";',
-    "function TF(e){let t=(0,Z.c)(148),",
-    "t[131]!==Ut||t[132]!==Wt||t[133]!==Gt?(Kt=(0,Q.jsxs)(`div`,{className:`flex min-w-0 flex-1 flex-nowrap items-center gap-1`,children:[Ut,Wt,Gt]}),t[131]=Ut,t[132]=Wt,t[133]=Gt,t[134]=Kt):Kt=t[134]",
-    "(0,Q.jsx)(nz,{conversationId:f,hostId:C,cwdOverride:w}),(0,Q.jsx)(vz,{conversationId:f,hasGoal:y,isGoalActionAvailable:b,onClearGoal:x,showDivider:!0})",
-  ].join("");
-
-  const patched = applyPatchTwice(applyPersistentRateLimitFooterPatch, source);
-
-  assert.match(patched, /function codexLinuxRateLimitFooter/);
-  assert.match(patched, /catch\(e\)\{return null\}/);
-  assert.match(patched, /\{data:a=null\}=li\(Fn\)/);
-  assert.match(patched, /c=Xo\(Jo\(o,\{activeLimitName:s,selectedModel:i\}\)\)\.slice\(0,2\)/);
-  assert.doesNotMatch(patched, /codexLinuxUseRateLimitStatus/);
-  assert.doesNotMatch(patched, /codex-linux-rate-limit-footer/);
-  assert.equal((patched.match(/Rate limits remaining/g) || []).length, 1);
-});
-
 test("persistent rate limit footer descriptor ignores external footer chunks", () => {
   const descriptor = corePatchDescriptors().find(
     (candidate) => candidate.id === "composer-persistent-rate-limit-footer",
@@ -5028,7 +5530,144 @@ test("persistent rate limit footer adapts to current composer permissions footer
   );
   assert.match(
     patched,
-    /\(0,Q\.jsx\)\(Sm,\{conversationId:f,hostId:C,cwdOverride:w\}\),f==null\?null:\(0,Q\.jsx\)\(codexLinuxRateLimitFooter,\{conversationId:f\}\),\(0,Q\.jsx\)\(Rm,\{conversationId:f,hasGoal:y,isGoalActionAvailable:b,onClearGoal:x,showDivider:!0\}\)/,
+    /\(0,Q\.jsx\)\(Sm,\{conversationId:f,hostId:C,cwdOverride:w\}\),\(0,Q\.jsx\)\(codexLinuxRateLimitFooter,\{conversationId:f\}\),\(0,Q\.jsx\)\(Rm,\{conversationId:f,hasGoal:y,isGoalActionAvailable:b,onClearGoal:x,showDivider:!0\}\)/,
+  );
+});
+
+test("persistent rate limit footer adapts to latest composer footer controls without conversation guard", () => {
+  const source = [
+    "var $=qt();var Q=Hr();",
+    "function Mm(e){let t=(0,$.c)(12),{addContextButton:n,conversationId:s}=e,Ke=null,qe;t[0]!==n||t[1]!==Ke?(qe=(0,Q.jsxs)(Pp.FooterInlineControls,{gap:`normal`,children:[n,Ke]}),t[0]=n,t[1]=Ke,t[2]=qe):qe=t[2];return qe}",
+  ].join("");
+
+  const patched = applyPatchTwice(applyPersistentRateLimitFooterPatch, source);
+
+  assert.match(patched, /function codexLinuxRateLimitFooter\(\)/);
+  assert.doesNotMatch(patched, /selectedModel:r/);
+  assert.doesNotMatch(patched, /\.filter\(og\)/);
+  assert.match(patched, /t=f\(Ae\)\?\.data,n=t\?\.rate_limit,r=\[n\?\.primary_window,n\?\.secondary_window\]\.filter/);
+  assert.match(patched, /Math\.max\(0,100-\(e\.used_percent\?\?0\)\)/);
+  assert.match(patched, /if\(r\.length===0\)return null/);
+  assert.match(patched, /catch\(e\)\{return null\}/);
+  assert.doesNotMatch(patched, /children:`Usage limits`/);
+  assert.match(patched, /className:`composer-footer__label--sm inline-flex shrink-0 items-center gap-1\.5 rounded-full border border-token-border-light bg-transparent px-2 py-1 text-xs text-token-text-secondary dark:border-white\/10`/);
+  assert.match(
+    patched,
+    /FooterInlineControls,\{gap:`normal`,children:\[n,Ke,\(0,Q\.jsx\)\(codexLinuxRateLimitFooter,\{conversationId:s\}\)\]\}/,
+  );
+  assert.doesNotMatch(patched, /s==null\?null:\(0,Q\.jsx\)\(codexLinuxRateLimitFooter/);
+});
+
+test("persistent rate limit footer detects latest rate-limit query symbols", () => {
+  const source = [
+    "var $=qt();var Q=Hr();",
+    "function ef(e){let t=(0,$.c)(23),{selectedModel:n}=e,{data:r}=wr(),{data:i}=Dr(Qk),a=ru(),o;if(t[0]!==i){o=go({rateLimitStatus:i,isWorkspaceAccount:!0}),t[0]=i,t[1]=o}else o=t[1];return o}",
+    "function Mm(e){let t=(0,$.c)(12),{addContextButton:n,conversationId:s}=e,Ke=null,qe;t[0]!==n||t[1]!==Ke?(qe=(0,Q.jsxs)(Pp.FooterInlineControls,{gap:`normal`,children:[n,Ke]}),t[0]=n,t[1]=Ke,t[2]=qe):qe=t[2];return qe}",
+  ].join("");
+
+  const patched = applyPatchTwice(applyPersistentRateLimitFooterPatch, source);
+
+  assert.match(patched, /t=Dr\(Qk\)\?\.data,n=t\?\.rate_limit/);
+  assert.doesNotMatch(patched, /t=f\(Ae\)\?\.data/);
+  assert.match(
+    patched,
+    /FooterInlineControls,\{gap:`normal`,children:\[n,Ke,\(0,Q\.jsx\)\(codexLinuxRateLimitFooter,\{conversationId:s\}\)\]\}/,
+  );
+});
+
+test("persistent rate limit footer removes broad inline controls patch without assuming cache variable", () => {
+  const source = [
+    "var $=qt();var Q=Hr();",
+    "function ef(e){let t=(0,$.c)(23),{selectedModel:n}=e,{data:r}=wr(),{data:i}=Dr(Qk),a=ru(),o;if(t[0]!==i){o=go({rateLimitStatus:i,isWorkspaceAccount:!0}),t[0]=i,t[1]=o}else o=t[1];return o}",
+    "var Pp=Object.assign(Fp,{FooterInlineControls:Wp});",
+    "function Wp(e){let r=(0,$.c)(6),{children:n,gap:i,ref:a}=e,o=(i===void 0?`compact`:i)===`compact`?`gap-1`:`gap-[5px]`,s;r[0]===o?s=r[1]:(s=J(`flex min-w-0 items-center`,o),r[0]=o,r[1]=s);let c;return c=(0,Q.jsxs)(`div`,{ref:a,className:s,children:[n,(0,Q.jsx)(codexLinuxRateLimitFooter,{conversationId:null})]}),c}",
+    "function Mm(e){let t=(0,$.c)(12),{addContextButton:n,conversationId:s}=e,Ke=null,qe;t[0]!==n||t[1]!==Ke?(qe=(0,Q.jsxs)(Pp.FooterInlineControls,{gap:`normal`,children:[n,Ke]}),t[0]=n,t[1]=Ke,t[2]=qe):qe=t[2];return qe}",
+  ].join("");
+
+  const patched = applyPatchTwice(applyPersistentRateLimitFooterPatch, source);
+
+  assert.match(
+    patched,
+    /let c;return c=\(0,Q\.jsx\)\(`div`,\{ref:a,className:s,children:n\}\),c\}/,
+  );
+  assert.doesNotMatch(patched, /return t\[2\]/);
+  assert.doesNotMatch(patched, /conversationId:null/);
+  assert.match(
+    patched,
+    /FooterInlineControls,\{gap:`normal`,children:\[n,Ke,\(0,Q\.jsx\)\(codexLinuxRateLimitFooter,\{conversationId:s\}\)\]\}/,
+  );
+});
+
+test("persistent rate limit footer migrates latest composer footer away from conversation guard", () => {
+  const oldHelper =
+    "function codexLinuxRateLimitFooter({conversationId:e}){try{let t=(0,$.c)(8),{activeMode:n}=or(e),r=n?.settings.model??null,{data:i}=St(ue),a=ma(i),o=la(i),s=da(a,{activeLimitName:o,selectedModel:r}).filter(og).slice(0,2);if(s.length===0)return null;let c=ht(),l;if(t[0]!==s||t[1]!==c){l=s.map(e=>`${Xh(e.bucket.windowDurationMins??null,c)} ${c.formatNumber(Sa(e.bucket.usedPercent??0),{maximumFractionDigits:0})}%`).join(` / `),t[0]=s,t[1]=c,t[2]=l}else l=t[2];let u;return t[3]!==l?(u=(0,Q.jsx)(`span`,{className:`composer-footer__label--sm inline-flex shrink-0 items-center gap-1.5 rounded-full border border-token-border-light bg-token-main-surface-primary/80 px-2 py-1 text-xs text-token-text-secondary shadow-sm dark:border-white/10`,children:l}),t[3]=l,t[4]=u):u=t[4],u}catch(e){return null}}";
+  const source = [
+    "var $=qt();var Q=Hr();",
+    oldHelper,
+    "function Mm(e){let t=(0,$.c)(12),{addContextButton:n,conversationId:s}=e,Ke=null,qe;t[0]!==n||t[1]!==Ke?(qe=(0,Q.jsxs)(Pp.FooterInlineControls,{gap:`normal`,children:[n,s==null?null:(0,Q.jsx)(codexLinuxRateLimitFooter,{conversationId:s}),Ke]}),t[0]=n,t[1]=Ke,t[2]=qe):qe=t[2];return qe}",
+  ].join("");
+
+  const patched = applyPatchTwice(applyPersistentRateLimitFooterPatch, source);
+
+  assert.equal((patched.match(/function codexLinuxRateLimitFooter/g) || []).length, 1);
+  assert.doesNotMatch(patched, /selectedModel:null/);
+  assert.doesNotMatch(patched, /a=ma\(i\)/);
+  assert.match(patched, /t=f\(Ae\)\?\.data,n=t\?\.rate_limit,r=\[n\?\.primary_window,n\?\.secondary_window\]\.filter/);
+  assert.match(patched, /Math\.max\(0,100-\(e\.used_percent\?\?0\)\)/);
+  assert.match(patched, /if\(r\.length===0\)return null/);
+  assert.doesNotMatch(patched, /children:`Usage limits`/);
+  assert.match(patched, /className:`composer-footer__label--sm inline-flex shrink-0 items-center gap-1\.5 rounded-full border border-token-border-light bg-transparent px-2 py-1 text-xs text-token-text-secondary dark:border-white\/10`/);
+  assert.match(
+    patched,
+    /FooterInlineControls,\{gap:`normal`,children:\[n,Ke,\(0,Q\.jsx\)\(codexLinuxRateLimitFooter,\{conversationId:s\}\)\]\}/,
+  );
+  assert.doesNotMatch(patched, /s==null\?null:\(0,Q\.jsx\)\(codexLinuxRateLimitFooter/);
+});
+
+test("persistent rate limit footer preserves intervening latest composer functions when replacing helper", () => {
+  const oldHelper =
+    "function codexLinuxRateLimitFooter({conversationId:e}){try{return e}catch(e){return null}}";
+  const source = [
+    "var $=qt();var Q=Hr();",
+    oldHelper,
+    "function lh(){return `keep me`}",
+    "function Mm(e){let t=(0,$.c)(12),{addContextButton:n,conversationId:s}=e,Ke=null,qe;t[0]!==n||t[1]!==Ke?(qe=(0,Q.jsxs)(Pp.FooterInlineControls,{gap:`normal`,children:[n,(0,Q.jsx)(codexLinuxRateLimitFooter,{conversationId:s}),Ke]}),t[0]=n,t[1]=Ke,t[2]=qe):qe=t[2];return qe}",
+  ].join("");
+
+  const patched = applyPatchTwice(applyPersistentRateLimitFooterPatch, source);
+
+  assert.equal((patched.match(/function codexLinuxRateLimitFooter/g) || []).length, 1);
+  assert.match(patched, /function codexLinuxRateLimitFooter\(\)/);
+  assert.match(patched, /function lh\(\)\{return `keep me`\}/);
+  assert.doesNotMatch(patched, /try\{return e\}/);
+  assert.match(
+    patched,
+    /FooterInlineControls,\{gap:`normal`,children:\[n,Ke,\(0,Q\.jsx\)\(codexLinuxRateLimitFooter,\{conversationId:s\}\)\]\}/,
+  );
+});
+
+test("persistent rate limit footer keeps latest model fallback numeric-only", () => {
+  const oldHelper =
+    "function codexLinuxRateLimitFooter({conversationId:e}){try{let t=(0,$.c)(8),{activeMode:n}=or(e),r=n?.settings.model??null,{data:i}=St(ue),a=ma(i),o=la(i),s=da(a,{activeLimitName:o,selectedModel:r}).filter(og).slice(0,2);s.length===0&&(s=da(a,{activeLimitName:o,selectedModel:null}).filter(og).slice(0,2));if(s.length===0)return null;let c=ht(),l;if(t[0]!==s||t[1]!==c){l=s.map(e=>`${Xh(e.bucket.windowDurationMins??null,c)} ${c.formatNumber(Sa(e.bucket.usedPercent??0),{maximumFractionDigits:0})}%`).join(` / `),t[0]=s,t[1]=c,t[2]=l}else l=t[2];let u;return t[3]!==l?(u=(0,Q.jsx)(`span`,{className:`composer-footer__label--sm inline-flex shrink-0 items-center gap-1.5 rounded-full border border-token-border-light bg-token-main-surface-primary/80 px-2 py-1 text-xs text-token-text-secondary shadow-sm dark:border-white/10`,children:l}),t[3]=l,t[4]=u):u=t[4],u}catch(e){return null}}";
+  const source = [
+    "var $=qt();var Q=Hr();",
+    oldHelper,
+    "function Mm(e){let t=(0,$.c)(12),{addContextButton:n,conversationId:s}=e,Ke=null,qe;t[0]!==n||t[1]!==Ke?(qe=(0,Q.jsxs)(Pp.FooterInlineControls,{gap:`normal`,children:[n,(0,Q.jsx)(codexLinuxRateLimitFooter,{conversationId:s}),Ke]}),t[0]=n,t[1]=Ke,t[2]=qe):qe=t[2];return qe}",
+  ].join("");
+
+  const patched = applyPatchTwice(applyPersistentRateLimitFooterPatch, source);
+
+  assert.equal((patched.match(/function codexLinuxRateLimitFooter/g) || []).length, 1);
+  assert.doesNotMatch(patched, /a=ma\(i\)/);
+  assert.match(patched, /t=f\(Ae\)\?\.data,n=t\?\.rate_limit,r=\[n\?\.primary_window,n\?\.secondary_window\]\.filter/);
+  assert.match(patched, /Math\.max\(0,100-\(e\.used_percent\?\?0\)\)/);
+  assert.match(patched, /if\(r\.length===0\)return null/);
+  assert.match(patched, /catch\(e\)\{return null\}/);
+  assert.doesNotMatch(patched, /children:`Usage limits`/);
+  assert.match(patched, /className:`composer-footer__label--sm inline-flex shrink-0 items-center gap-1\.5 rounded-full border border-token-border-light bg-transparent px-2 py-1 text-xs text-token-text-secondary dark:border-white\/10`/);
+  assert.match(
+    patched,
+    /FooterInlineControls,\{gap:`normal`,children:\[n,Ke,\(0,Q\.jsx\)\(codexLinuxRateLimitFooter,\{conversationId:s\}\)\]\}/,
   );
 });
 
@@ -5066,4 +5705,381 @@ test("patcher CLI writes --report-json output", () => {
   } finally {
     fs.rmSync(tempRoot, { recursive: true, force: true });
   }
+});
+
+function writeCorePatchFixture(root, relativeDir, descriptorSource) {
+  const patchDir = path.join(root, relativeDir);
+  fs.mkdirSync(patchDir, { recursive: true });
+  fs.writeFileSync(path.join(patchDir, "patch.js"), descriptorSource);
+}
+
+test("engine catches a throwing optional patch and continues with later patches", () => {
+  const coreRoot = fs.mkdtempSync(path.join(os.tmpdir(), "codex-throwing-optional-core-"));
+  const tempApp = fs.mkdtempSync(path.join(os.tmpdir(), "codex-throwing-optional-app-"));
+  try {
+    writeCorePatchFixture(coreRoot, "sample/throwing", [
+      "\"use strict\";",
+      "module.exports = {",
+      "  id: \"throwing-optional-sample\",",
+      "  phase: \"main-bundle\",",
+      "  ciPolicy: \"optional\",",
+      "  order: 100,",
+      "  apply: () => { throw new Error(\"boom-optional\"); },",
+      "};",
+    ].join("\n"));
+    writeCorePatchFixture(coreRoot, "sample/following", [
+      "\"use strict\";",
+      "module.exports = {",
+      "  id: \"following-optional-sample\",",
+      "  phase: \"main-bundle\",",
+      "  ciPolicy: \"optional\",",
+      "  order: 200,",
+      "  apply: (source) => source.replace(\"codexLinuxFollowUp()\", \"codexLinuxFollowedUp()\"),",
+      "};",
+    ].join("\n"));
+
+    const buildDir = path.join(tempApp, ".vite", "build");
+    fs.mkdirSync(buildDir, { recursive: true });
+    fs.writeFileSync(path.join(buildDir, "main.js"), "codexLinuxFollowUp()");
+
+    const report = createPatchReport();
+    captureWarns(() => patchExtractedApp(tempApp, { report, corePatchRoot: coreRoot }));
+
+    const throwing = report.patches.find((patch) => patch.name === "throwing-optional-sample");
+    assert.equal(throwing?.status, "skipped-optional");
+    assert.equal(throwing?.error, true);
+    assert.match(throwing?.reason ?? "", /boom-optional/);
+
+    const following = report.patches.find((patch) => patch.name === "following-optional-sample");
+    assert.equal(following?.status, "applied", "engine must continue after an optional patch throws");
+    assert.match(fs.readFileSync(path.join(buildDir, "main.js"), "utf8"), /codexLinuxFollowedUp/);
+
+    assert.ok(
+      !criticalFailuresFromReport(report).some((failure) => failure.name === "throwing-optional-sample"),
+    );
+    assert.ok(
+      !validateReport(report, "upstream-build").some((failure) =>
+        failure.startsWith("throwing-optional-sample:"),
+      ),
+    );
+  } finally {
+    fs.rmSync(coreRoot, { recursive: true, force: true });
+    fs.rmSync(tempApp, { recursive: true, force: true });
+  }
+});
+
+test("engine records a throwing critical patch as failed-required without aborting", () => {
+  const coreRoot = fs.mkdtempSync(path.join(os.tmpdir(), "codex-throwing-critical-core-"));
+  const tempApp = fs.mkdtempSync(path.join(os.tmpdir(), "codex-throwing-critical-app-"));
+  try {
+    writeCorePatchFixture(coreRoot, "sample/critical", [
+      "\"use strict\";",
+      "module.exports = {",
+      "  id: \"throwing-critical-sample\",",
+      "  phase: \"main-bundle\",",
+      "  ciPolicy: \"required-upstream\",",
+      "  order: 100,",
+      "  apply: () => { throw new Error(\"boom-critical\"); },",
+      "};",
+    ].join("\n"));
+
+    const buildDir = path.join(tempApp, ".vite", "build");
+    fs.mkdirSync(buildDir, { recursive: true });
+    const originalSource = "codexLinuxCriticalFixture()";
+    fs.writeFileSync(path.join(buildDir, "main.js"), originalSource);
+
+    const report = createPatchReport();
+    captureWarns(() => patchExtractedApp(tempApp, { report, corePatchRoot: coreRoot }));
+
+    const entry = report.patches.find((patch) => patch.name === "throwing-critical-sample");
+    assert.equal(entry?.status, "failed-required");
+    assert.equal(entry?.error, true);
+    assert.match(entry?.reason ?? "", /boom-critical/);
+    assert.equal(
+      fs.readFileSync(path.join(buildDir, "main.js"), "utf8"),
+      originalSource,
+      "a throwing patch must contribute no partial edit",
+    );
+
+    assert.ok(
+      criticalFailuresFromReport(report).some((failure) => failure.name === "throwing-critical-sample"),
+    );
+    assert.ok(
+      validateReport(report, "upstream-build").some((failure) =>
+        failure.startsWith("throwing-critical-sample:"),
+      ),
+    );
+  } finally {
+    fs.rmSync(coreRoot, { recursive: true, force: true });
+    fs.rmSync(tempApp, { recursive: true, force: true });
+  }
+});
+
+test("a throwing webview-asset patch leaves no partially patched assets", () => {
+  const coreRoot = fs.mkdtempSync(path.join(os.tmpdir(), "codex-throwing-asset-core-"));
+  const tempApp = fs.mkdtempSync(path.join(os.tmpdir(), "codex-throwing-asset-app-"));
+  try {
+    writeCorePatchFixture(coreRoot, "sample/asset", [
+      "\"use strict\";",
+      "module.exports = {",
+      "  id: \"throwing-asset-sample\",",
+      "  phase: \"webview-asset\",",
+      "  ciPolicy: \"optional\",",
+      "  order: 100,",
+      "  pattern: /^demo-.*\\.js$/,",
+      "  apply: (source) => {",
+      "    if (source.includes(\"second\")) { throw new Error(\"boom-asset\"); }",
+      "    return source.replace(\"first\", \"first-patched\");",
+      "  },",
+      "};",
+    ].join("\n"));
+
+    const buildDir = path.join(tempApp, ".vite", "build");
+    const assetsDir = path.join(tempApp, "webview", "assets");
+    fs.mkdirSync(buildDir, { recursive: true });
+    fs.mkdirSync(assetsDir, { recursive: true });
+    fs.writeFileSync(path.join(buildDir, "main.js"), "codexLinuxAssetFixture()");
+    fs.writeFileSync(path.join(assetsDir, "demo-a.js"), "first asset");
+    fs.writeFileSync(path.join(assetsDir, "demo-b.js"), "second asset");
+
+    const report = createPatchReport();
+    captureWarns(() => patchExtractedApp(tempApp, { report, corePatchRoot: coreRoot }));
+
+    const entry = report.patches.find((patch) => patch.name === "throwing-asset-sample");
+    assert.equal(entry?.status, "skipped-optional");
+    assert.equal(entry?.error, true);
+    assert.equal(fs.readFileSync(path.join(assetsDir, "demo-a.js"), "utf8"), "first asset");
+    assert.equal(fs.readFileSync(path.join(assetsDir, "demo-b.js"), "utf8"), "second asset");
+  } finally {
+    fs.rmSync(coreRoot, { recursive: true, force: true });
+    fs.rmSync(tempApp, { recursive: true, force: true });
+  }
+});
+
+test("tray close-to-tray patch failure is engine-caught and does not abort patching", () => {
+  // Recognizable-but-unpatchable shape: both markers present, gate shape absent —
+  // applyLinuxTrayCloseSettingPatch throws, the engine must absorb it.
+  const source = "canHideLastLocalWindowToTray /* drifted */ console.log(`Launching app`)";
+  assert.throws(() => applyLinuxTrayCloseSettingPatch(source), /tray settings patch failed/);
+
+  const tempApp = fs.mkdtempSync(path.join(os.tmpdir(), "codex-tray-close-throw-app-"));
+  try {
+    const buildDir = path.join(tempApp, ".vite", "build");
+    fs.mkdirSync(buildDir, { recursive: true });
+    fs.writeFileSync(path.join(buildDir, "main.js"), source);
+
+    const report = createPatchReport();
+    captureWarns(() => patchExtractedApp(tempApp, { report }));
+
+    const entry = report.patches.find((patch) => patch.name === "linux-tray-close-setting");
+    assert.equal(entry?.status, "skipped-optional");
+    assert.equal(entry?.error, true);
+    assert.ok(
+      !criticalFailuresFromReport(report).some((failure) => failure.name === "linux-tray-close-setting"),
+    );
+  } finally {
+    fs.rmSync(tempApp, { recursive: true, force: true });
+  }
+});
+
+test("criticalFailuresFromReport agrees with validateReport and skips non-applicable statuses", () => {
+  const report = {
+    patches: [
+      { name: "req-bad", status: "failed-required", ciPolicy: "required-upstream", reason: "anchor drifted" },
+      { name: "req-good", status: "applied", ciPolicy: "required-upstream" },
+      { name: "req-not-applicable", status: "skipped-target", ciPolicy: "required-upstream" },
+      { name: "opt-bad", status: "skipped-optional", ciPolicy: "optional", reason: "optional drift" },
+    ],
+  };
+
+  assert.deepEqual(criticalFailuresFromReport(report), [
+    { name: "req-bad", status: "failed-required", reason: "anchor drifted" },
+  ]);
+  assert.deepEqual(optionalDriftFromReport(report), [
+    { name: "opt-bad", status: "skipped-optional", reason: "optional drift" },
+  ]);
+
+  const failures = validateReport(report, "upstream-build");
+  assert.ok(failures.some((failure) => failure.startsWith("req-bad:")));
+  assert.ok(!failures.some((failure) => failure.startsWith("req-not-applicable:")));
+  assert.ok(!failures.some((failure) => failure.startsWith("opt-bad:")));
+});
+
+test("patchMainBundleSource survives a throwing optional patch without a report", () => {
+  const coreRoot = fs.mkdtempSync(path.join(os.tmpdir(), "codex-throwing-no-report-core-"));
+  try {
+    writeCorePatchFixture(coreRoot, "sample/throwing", [
+      "\"use strict\";",
+      "module.exports = {",
+      "  id: \"throwing-no-report-sample\",",
+      "  phase: \"main-bundle\",",
+      "  ciPolicy: \"optional\",",
+      "  order: 100,",
+      "  apply: () => { throw new Error(\"boom-no-report\"); },",
+      "};",
+    ].join("\n"));
+
+    const source = "codexLinuxNoReportFixture()";
+    const { value: patched } = captureWarns(() =>
+      patchMainBundleSource(source, null, { corePatchRoot: coreRoot }),
+    );
+    assert.equal(patched, source);
+  } finally {
+    fs.rmSync(coreRoot, { recursive: true, force: true });
+  }
+});
+
+test("patcher CLI --enforce-critical exits non-zero with an aggregated message", () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "codex-enforce-critical-cli-test-"));
+  try {
+    const buildDir = path.join(tempRoot, ".vite", "build");
+    const assetsDir = path.join(tempRoot, "webview", "assets");
+    const reportPath = path.join(tempRoot, "reports", "patch-report.json");
+    fs.mkdirSync(buildDir, { recursive: true });
+    fs.mkdirSync(assetsDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(buildDir, "main.js"),
+      [
+        mainBundlePrefix,
+        "process.platform===`win32`&&k.removeMenu(),",
+        alreadyOpaqueBackgroundBundle,
+        fileManagerBundle,
+        trayBundleFixture(),
+        singleInstanceBundleFixture(),
+      ].join(""),
+    );
+    fs.writeFileSync(path.join(tempRoot, "package.json"), JSON.stringify({ name: "codex" }));
+
+    const result = spawnSync(
+      process.execPath,
+      [
+        path.join(__dirname, "patch-linux-window-ui.js"),
+        "--enforce-critical",
+        "--report-json",
+        reportPath,
+        tempRoot,
+      ],
+      { encoding: "utf8" },
+    );
+
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /Critical patch failures \(\d+\):/);
+    assert.match(result.stderr, /failed-required/);
+    // The report must still be written for CI artifact upload despite the failure.
+    const report = JSON.parse(fs.readFileSync(reportPath, "utf8"));
+    assert.ok(criticalFailuresFromReport(report).length > 0);
+
+    // Without the flag the same fixture must keep exiting 0 (fail-soft default).
+    const lenient = spawnSync(
+      process.execPath,
+      [path.join(__dirname, "patch-linux-window-ui.js"), tempRoot],
+      { encoding: "utf8" },
+    );
+    assert.equal(lenient.status, 0, lenient.stderr);
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("a disabled patch is recorded as skipped-disabled and never counts as a critical failure", () => {
+  const coreRoot = fs.mkdtempSync(path.join(os.tmpdir(), "codex-disabled-core-"));
+  const tempApp = fs.mkdtempSync(path.join(os.tmpdir(), "codex-disabled-app-"));
+  try {
+    writeCorePatchFixture(coreRoot, "sample/disabled", [
+      "\"use strict\";",
+      "module.exports = {",
+      "  id: \"disabled-required-sample\",",
+      "  phase: \"main-bundle\",",
+      "  ciPolicy: \"required-upstream\",",
+      "  order: 100,",
+      "  enabled: () => false,",
+      "  apply: () => { throw new Error(\"must never run\"); },",
+      "};",
+    ].join("\n"));
+
+    const buildDir = path.join(tempApp, ".vite", "build");
+    fs.mkdirSync(buildDir, { recursive: true });
+    fs.writeFileSync(path.join(buildDir, "main.js"), "codexLinuxDisabledFixture()");
+
+    const report = createPatchReport();
+    captureWarns(() => patchExtractedApp(tempApp, { report, corePatchRoot: coreRoot }));
+
+    const entry = report.patches.find((patch) => patch.name === "disabled-required-sample");
+    assert.equal(entry?.status, "skipped-disabled");
+    assert.ok(
+      !criticalFailuresFromReport(report).some((failure) => failure.name === "disabled-required-sample"),
+      "a disabled patch is not applicable, so it must not fail the build",
+    );
+  } finally {
+    fs.rmSync(coreRoot, { recursive: true, force: true });
+    fs.rmSync(tempApp, { recursive: true, force: true });
+  }
+});
+
+test("strategy telemetry recorded during apply lands on the patch report entry", () => {
+  const coreRoot = fs.mkdtempSync(path.join(os.tmpdir(), "codex-strategy-core-"));
+  const tempApp = fs.mkdtempSync(path.join(os.tmpdir(), "codex-strategy-app-"));
+  try {
+    const telemetryPath = path.join(__dirname, "patches", "strategy-telemetry.js");
+    writeCorePatchFixture(coreRoot, "sample/instrumented", [
+      "\"use strict\";",
+      `const { recordStrategy } = require(${JSON.stringify(telemetryPath)});`,
+      "module.exports = {",
+      "  id: \"instrumented-sample\",",
+      "  phase: \"main-bundle\",",
+      "  ciPolicy: \"optional\",",
+      "  order: 100,",
+      "  apply: (source) => {",
+      "    recordStrategy(\"sample-group\", \"legacy:old-shape\");",
+      "    return source.replace(\"codexLinuxStrategyFixture()\", \"codexLinuxStrategyPatched()\");",
+      "  },",
+      "};",
+    ].join("\n"));
+
+    const buildDir = path.join(tempApp, ".vite", "build");
+    fs.mkdirSync(buildDir, { recursive: true });
+    fs.writeFileSync(path.join(buildDir, "main.js"), "codexLinuxStrategyFixture()");
+
+    const report = createPatchReport();
+    captureWarns(() => patchExtractedApp(tempApp, { report, corePatchRoot: coreRoot }));
+
+    const entry = report.patches.find((patch) => patch.name === "instrumented-sample");
+    assert.equal(entry?.status, "applied");
+    assert.deepEqual(entry?.strategies, [{ group: "sample-group", strategy: "legacy:old-shape" }]);
+  } finally {
+    fs.rmSync(coreRoot, { recursive: true, force: true });
+    fs.rmSync(tempApp, { recursive: true, force: true });
+  }
+});
+
+test("persistent rate limit footer adapts to the latest composer footer controls shape", () => {
+  const source = [
+    "var $=qt();var Q=Hr();",
+    "function Wm(e){let t=(0,$.c)(12),{addContextButton:Ab,conversationId:n}=e,r=Qd(n),i=qd(n);",
+    "return (0,Q.jsx)(FooterInlineControls,{gap:`normal`,children:[Ab,Cb]})}",
+  ].join("");
+
+  const patched = applyPatchTwice(applyPersistentRateLimitFooterPatch, source);
+
+  assert.match(patched, /function codexLinuxRateLimitFooter\(\)/);
+  assert.match(patched, /t=f\(Ae\)\?\.data,n=t\?\.rate_limit/);
+  assert.match(
+    patched,
+    /FooterInlineControls,\{gap:`normal`,children:\[Ab,Cb,\(0,Q\.jsx\)\(codexLinuxRateLimitFooter,\{conversationId:n\}\)\]\}/,
+  );
+  assert.equal((patched.match(/codexLinuxRateLimitFooter,\{conversationId:n\}/g) || []).length, 1);
+});
+
+test("persistent rate limit footer warns when composer footer controls drift", () => {
+  const source =
+    "function Wm(e){let t=(0,$.c)(12);return (0,Q.jsx)(FooterInlineControls,{gap:`wide`,children:[Ab,Cb,Db]})}";
+
+  const { value: patched, warnings } = captureWarns(() =>
+    applyPersistentRateLimitFooterPatch(source),
+  );
+
+  assert.equal(patched, source);
+  assert.deepEqual(warnings, [
+    "WARN: Could not insert persistent rate limit footer helper — skipping composer footer limit patch",
+  ]);
 });

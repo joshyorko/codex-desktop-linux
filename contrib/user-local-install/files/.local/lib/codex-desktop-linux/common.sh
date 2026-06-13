@@ -469,7 +469,13 @@ header_value() {
 
 extract_icon() {
     ensure_layout
-    local dmg_file tmp_dir
+    local dmg_file source_icon tmp_dir
+    source_icon="${SOURCE_REPO_DIR:-$REPO_DIR_DEFAULT}/assets/codex.png"
+    if [ -f "$source_icon" ]; then
+        cp "$source_icon" "$ICON_PATH"
+        return 0
+    fi
+
     dmg_file="$(cached_dmg_file)"
     tmp_dir="$(mktemp -d)"
     trap 'rm -rf "$tmp_dir"' RETURN
@@ -502,7 +508,7 @@ record_metadata() {
         repo_origin="unavailable"
     fi
     dmg_file="$(cached_dmg_file)"
-    if [ -f "$dmg_file" ]; then
+    if [ "${CODEX_USER_LOCAL_RECORD_DMG_FINGERPRINT:-0}" = "1" ] && [ -f "$dmg_file" ]; then
         dmg_sha256="$(sha256sum "$dmg_file" | awk '{ print $1 }')"
         dmg_size="$(stat -c '%s' "$dmg_file")"
     else

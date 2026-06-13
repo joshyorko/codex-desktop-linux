@@ -18,6 +18,14 @@ repository does not install or maintain the CLI for you; it only needs a
 working `codex` binary. Put `codex` on your user `PATH`, or set
 `CODEX_CLI_PATH` to the exact binary that Codex Desktop should launch.
 
+Relying on `PATH` alone is fragile: a graphical autostart entry, an application
+launcher, or a warm-start handoff to an already-running instance may not have
+your Nix profile on `PATH`, in which case Codex Desktop fails with
+`Unable to locate the Codex CLI binary. Set CODEX_CLI_PATH ...`. Pinning the CLI
+explicitly avoids this. The Home Manager and NixOS modules can do this for you
+via [`programs.codexDesktopLinux.cliPackage`](#home-manager--nixos-module),
+which wraps the launcher so `CODEX_CLI_PATH` is always set.
+
 One direct upstream install path is the npm package:
 
 ```bash
@@ -93,9 +101,24 @@ in
     codexCli
   ];
 
-  programs.codexDesktopLinux.enable = true;
+  programs.codexDesktopLinux = {
+    enable = true;
+    # Bake CODEX_CLI_PATH into the launcher so the Desktop app always finds this
+    # CLI, even when launched from a graphical session that lacks the profile on
+    # PATH.
+    cliPackage = codexCli;
+  };
 }
 ```
+
+Setting `cliPackage` wraps the installed Codex Desktop launcher (and its
+`.desktop` entry) so it always starts with `CODEX_CLI_PATH` pointing at the
+package's `codex` binary. Because the value is baked into the launcher rather
+than exported as a session variable, it works for graphical, terminal, and
+warm-start launches and takes effect on the next app launch — no re-login
+required. An explicit `CODEX_CLI_PATH` already in the environment still wins. If
+you enable `remoteControl` but leave `cliPackage` unset, the module reuses
+`remoteControl.package` automatically.
 
 For a NixOS module, use the same package in `environment.systemPackages`
 instead of `home.packages`.
@@ -122,11 +145,15 @@ Pinning `github:sadjow/codex-cli-nix` to a release tag or commit is
 recommended for fully reproducible configurations.
 
 If your graphical session does not put the selected profile on `PATH`, set
-`CODEX_CLI_PATH` to the Nix-built CLI binary:
+`cliPackage` so the launcher is wrapped with `CODEX_CLI_PATH`:
 
 ```nix
 {
-  home.sessionVariables.CODEX_CLI_PATH = "${codexCli}/bin/codex";
+  # Preferred: wrap the launcher so CODEX_CLI_PATH is always set.
+  programs.codexDesktopLinux.cliPackage = codexCli;
+
+  # Manual fallback if you are not using the module (needs a re-login to apply):
+  # home.sessionVariables.CODEX_CLI_PATH = "${codexCli}/bin/codex";
 }
 ```
 

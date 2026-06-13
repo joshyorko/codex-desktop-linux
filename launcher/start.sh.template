@@ -207,6 +207,8 @@ ADOPTED_WEBVIEW_PID=""
 ELECTRON_PID=""
 RUNNING_APP_PID=""
 WARM_START=0
+LAUNCHER_LOCK_FD_OPEN=0
+LAUNCHER_LOCK_TIMED_OUT=0
 
 codex_desktop_node_bin() {
     if [ -x "$MANAGED_NODE_BIN_DIR/node" ]; then
@@ -310,7 +312,9 @@ Environment:
                               Auto-detect WSLg, keep generic Linux defaults, force the WSLg profile,
                               or force native Wayland with GPU compositing enabled
   CODEX_ELECTRON_DISABLE_GPU_COMPOSITING=0|1
-                              Set to 1 to add --disable-gpu-compositing for flicker workarounds
+                              Override Wayland side-panel compositing workaround; 1 forces and 0 disables
+  CODEX_LAUNCHER_LOCK_WAIT_SECONDS=N
+                              Seconds to wait for another launcher to leave the startup lock (default: 5)
   CODEX_FORCE_RENDERER_ACCESSIBILITY=auto|0|1
                               Override --force-renderer-accessibility; auto skips it under WSLg and wayland-gpu
   CODEX_MULTI_LAUNCH=1        Treat normal launches like --new-instance
@@ -327,6 +331,12 @@ fi
 LAUNCHER_INTERACTIVE_TERMINAL=0
 if [ -t 0 ] && [ -t 1 ]; then
     LAUNCHER_INTERACTIVE_TERMINAL=1
+fi
+LAUNCHER_EARLY_STDERR_FD=""
+if exec {LAUNCHER_EARLY_STDERR_FD}>&2 2>/dev/null; then
+    :
+else
+    LAUNCHER_EARLY_STDERR_FD=""
 fi
 
 exec >>"$LOG_FILE" 2>&1
@@ -358,6 +368,15 @@ log_phase() {
     echo "[$(date -Is)] launcher_phase=$phase elapsedMs=$elapsed_ms"
 }
 
+launcher_notice() {
+    local message="$1"
+
+    echo "$message"
+    if [ -n "${LAUNCHER_EARLY_STDERR_FD:-}" ]; then
+        printf '%s\n' "$message" >&"$LAUNCHER_EARLY_STDERR_FD" 2>/dev/null || true
+    fi
+}
+
 make_tree_owner_writable() {
     local path="$1"
 
@@ -371,6 +390,20 @@ remove_tree_if_exists() {
     [ -e "$path" ] || return 0
     make_tree_owner_writable "$path"
     rm -rf "$path"
+}
+
+replace_symlink() {
+    local target="$1"
+    local link_path="$2"
+
+    if [ -e "$link_path" ] && [ ! -L "$link_path" ]; then
+        remove_tree_if_exists "$link_path"
+    fi
+
+    if ! ln -sfnT "$target" "$link_path" 2>/dev/null; then
+        remove_tree_if_exists "$link_path"
+        ln -sfnT "$target" "$link_path"
+    fi
 }
 
 fix_bundled_marketplace_tmp_permissions() {
@@ -755,16 +788,10 @@ sync_browser_use_bundled_plugin_cache() {
         fi
     fi
 
-    if [ -e "$cache_root/latest" ] && [ ! -L "$cache_root/latest" ]; then
-        remove_tree_if_exists "$cache_root/latest"
-    fi
-    ln -sfn "$version" "$cache_root/latest"
+    replace_symlink "$version" "$cache_root/latest"
 
     mkdir -p "$marketplace_root/plugins"
-    if [ -e "$marketplace_plugin_link" ] && [ ! -L "$marketplace_plugin_link" ]; then
-        remove_tree_if_exists "$marketplace_plugin_link"
-    fi
-    ln -sfn "$cache_root/latest" "$marketplace_plugin_link"
+    replace_symlink "$cache_root/latest" "$marketplace_plugin_link"
 }
 
 chrome_extension_host_arch() {
@@ -954,10 +981,7 @@ sync_chrome_bundled_plugin_cache() {
         fi
     fi
 
-    if [ -e "$cache_root/latest" ] && [ ! -L "$cache_root/latest" ]; then
-        remove_tree_if_exists "$cache_root/latest"
-    fi
-    ln -sfn "$version" "$cache_root/latest"
+    replace_symlink "$version" "$cache_root/latest"
 
     marketplace_root="$codex_home/.tmp/bundled-marketplaces/openai-bundled"
     marketplace_plugins_dir="$marketplace_root/.agents/plugins"
@@ -969,10 +993,7 @@ sync_chrome_bundled_plugin_cache() {
             chmod u+w "$marketplace_plugins_dir/marketplace.json" || \
             echo "Chrome bundled marketplace sync failed; continuing with existing marketplace cache."
     fi
-    if [ -e "$marketplace_plugin_link" ] && [ ! -L "$marketplace_plugin_link" ]; then
-        remove_tree_if_exists "$marketplace_plugin_link"
-    fi
-    ln -sfn "$cache_root/latest" "$marketplace_plugin_link"
+    replace_symlink "$cache_root/latest" "$marketplace_plugin_link"
 
     host_path="$cache_root/latest/extension-host/linux/$extension_arch/extension-host"
     [ -x "$host_path" ] || return 0
@@ -1047,16 +1068,10 @@ sync_computer_use_bundled_plugin_cache() {
         fi
     fi
 
-    if [ -e "$cache_root/latest" ] && [ ! -L "$cache_root/latest" ]; then
-        remove_tree_if_exists "$cache_root/latest"
-    fi
-    ln -sfn "$version" "$cache_root/latest"
+    replace_symlink "$version" "$cache_root/latest"
 
     mkdir -p "$marketplace_root/plugins"
-    if [ -e "$marketplace_plugin_link" ] && [ ! -L "$marketplace_plugin_link" ]; then
-        remove_tree_if_exists "$marketplace_plugin_link"
-    fi
-    ln -sfn "$cache_root/latest" "$marketplace_plugin_link"
+    replace_symlink "$cache_root/latest" "$marketplace_plugin_link"
 }
 
 sync_read_aloud_bundled_plugin_cache() {
@@ -1131,16 +1146,10 @@ sync_read_aloud_bundled_plugin_cache() {
         fi
     fi
 
-    if [ -e "$cache_root/latest" ] && [ ! -L "$cache_root/latest" ]; then
-        remove_tree_if_exists "$cache_root/latest"
-    fi
-    ln -sfn "$version" "$cache_root/latest"
+    replace_symlink "$version" "$cache_root/latest"
 
     mkdir -p "$marketplace_root/plugins"
-    if [ -e "$marketplace_plugin_link" ] && [ ! -L "$marketplace_plugin_link" ]; then
-        remove_tree_if_exists "$marketplace_plugin_link"
-    fi
-    ln -sfn "$cache_root/latest" "$marketplace_plugin_link"
+    replace_symlink "$cache_root/latest" "$marketplace_plugin_link"
 }
 
 resolve_browser_use_runtime_env() {
@@ -1461,16 +1470,82 @@ run_update_manager() {
 
 pid_is_current_user() {
     local pid="$1"
+    local key
     local uid
 
-    uid="$(awk '/^Uid:/ {print $2}' "/proc/$pid/status" 2>/dev/null || true)"
-    [ "$uid" = "$(id -u)" ]
+    [ -r "/proc/$pid/status" ] || return 1
+    while IFS=$' \t' read -r key uid _; do
+        if [ "$key" = "Uid:" ]; then
+            [ "$uid" = "$EUID" ]
+            return $?
+        fi
+    done < "/proc/$pid/status"
+    return 1
 }
 
 pid_is_electron_helper() {
     local pid="$1"
-    [ -r "/proc/$pid/cmdline" ] || return 1
-    tr '\0' '\n' < "/proc/$pid/cmdline" 2>/dev/null | grep -q '^--type='
+    local cmdline
+
+    cmdline="$(pid_cmdline "$pid")"
+    [[ "$cmdline" == --type=* || "$cmdline" == *" --type="* ]]
+}
+
+pid_cmdline() {
+    local pid="$1"
+    local part
+    local cmdline=""
+
+    [ -r "/proc/$pid/cmdline" ] || return 0
+    while IFS= read -r -d '' part; do
+        if [ -n "$cmdline" ]; then
+            cmdline="$cmdline $part"
+        else
+            cmdline="$part"
+        fi
+        part=""
+    done < "/proc/$pid/cmdline" 2>/dev/null || true
+    if [ -n "${part:-}" ]; then
+        if [ -n "$cmdline" ]; then
+            cmdline="$cmdline $part"
+        else
+            cmdline="$part"
+        fi
+    fi
+    printf '%s\n' "$cmdline"
+}
+
+pid_cmdline_arg0() {
+    local pid="$1"
+    local arg0=""
+
+    [ -r "/proc/$pid/cmdline" ] || return 0
+    IFS= read -r -d '' arg0 < "/proc/$pid/cmdline" 2>/dev/null || true
+    printf '%s\n' "$arg0"
+}
+
+pid_cmdline_arg0_path() {
+    local pid="$1"
+    local arg0
+
+    arg0="$(pid_cmdline_arg0 "$pid")"
+    printf '%s\n' "$arg0"
+}
+
+pid_arg0_matches_path() {
+    local actual="$1"
+    local expected="$2"
+
+    case "$actual" in
+        "$expected"|"$expected "*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+pid_environ_lines() {
+    local pid="$1"
+    [ -r "/proc/$pid/environ" ] || return 0
+    tr '\0' '\n' 2>/dev/null < "/proc/$pid/environ" || true
 }
 
 pid_matches_executable() {
@@ -1480,9 +1555,9 @@ pid_matches_executable() {
 
     [[ "$pid" =~ ^[0-9]+$ ]] || return 1
     [ -d "/proc/$pid" ] || return 1
+    actual="$(pid_cmdline_arg0_path "$pid")"
+    pid_arg0_matches_path "$actual" "$expected" || return 1
     pid_is_current_user "$pid" || return 1
-    actual="$(readlink -f "/proc/$pid/exe" 2>/dev/null || true)"
-    [ "$actual" = "$(canonical_path "$expected")" ] || return 1
     ! pid_is_electron_helper "$pid"
 }
 
@@ -1500,21 +1575,189 @@ find_running_app_pid() {
     return 1
 }
 
+pid_in_same_launch_instance() {
+    # The /proc scan matches by electron binary path, which side-by-side
+    # multi-launch instances share with the default app. Match instance
+    # identity via the process environment so the default app never adopts
+    # a side-by-side instance and vice versa. Substring checks on the
+    # newline-joined environ avoid grep -q pipelines, which can fail under
+    # pipefail when grep exits before the writer finishes.
+    local pid="$1"
+    local environ="/proc/$pid/environ"
+    local env_lines
+
+    env_lines=$'\n'"$(pid_environ_lines "$pid")"$'\n'
+    if [ "$MULTI_LAUNCH_ACTIVE" -eq 1 ]; then
+        [[ "$env_lines" == *$'\n'"CODEX_LINUX_INSTANCE_ID=$CODEX_LINUX_INSTANCE_ID"$'\n'* ]]
+    else
+        [[ "$env_lines" != *$'\n'"CODEX_LINUX_MULTI_LAUNCH=1"$'\n'* ]]
+    fi
+}
+
+pid_matches_app_identity() {
+    local pid="$1"
+    local env_lines
+    local cmdline
+
+    [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+    [ -d "/proc/$pid" ] || return 1
+    pid_is_current_user "$pid" || return 1
+    env_lines=$'\n'"$(pid_environ_lines "$pid")"$'\n'
+    if [[ "$env_lines" == *$'\n'"CODEX_LINUX_APP_ID=$CODEX_LINUX_APP_ID"$'\n'* ]] ||
+       [[ "$env_lines" == *$'\n'"CODEX_APP_ID=$CODEX_LINUX_APP_ID"$'\n'* ]]; then
+        return 0
+    fi
+    cmdline="$(pid_cmdline "$pid")"
+    [[ "$cmdline" == *"--app-id=$CODEX_LINUX_APP_ID"* ]]
+}
+
+pid_is_foreign_codex_electron() {
+    local pid="$1"
+    local actual
+
+    [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+    [ -d "/proc/$pid" ] || return 1
+    actual="$(pid_cmdline_arg0_path "$pid")"
+    [ -n "$actual" ] || return 1
+    ! pid_arg0_matches_path "$actual" "$SCRIPT_DIR/electron" || return 1
+    case "${actual##*/}" in
+        electron|electron\ *) ;;
+        *) return 1 ;;
+    esac
+    pid_is_current_user "$pid" || return 1
+    ! pid_is_electron_helper "$pid" || return 1
+    pid_matches_app_identity "$pid"
+}
+
 discover_running_app_pid() {
     local pid
-    local proc_exe
+    local proc_cmdline
 
-    for proc_exe in /proc/[0-9]*/exe; do
-        [ -e "$proc_exe" ] || continue
-        pid="${proc_exe#/proc/}"
-        pid="${pid%/exe}"
-        if pid_matches_executable "$pid" "$SCRIPT_DIR/electron"; then
+    for proc_cmdline in /proc/[0-9]*/cmdline; do
+        [ -r "$proc_cmdline" ] || continue
+        pid="${proc_cmdline#/proc/}"
+        pid="${pid%/cmdline}"
+        if pid_matches_executable "$pid" "$SCRIPT_DIR/electron" && pid_in_same_launch_instance "$pid"; then
             echo "$pid"
             return 0
         fi
     done
 
     return 1
+}
+
+discover_foreign_app_pid() {
+    local pid
+    local proc_cmdline
+
+    for proc_cmdline in /proc/[0-9]*/cmdline; do
+        [ -r "$proc_cmdline" ] || continue
+        pid="${proc_cmdline#/proc/}"
+        pid="${pid%/cmdline}"
+        if pid_is_foreign_codex_electron "$pid"; then
+            echo "$pid"
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+pid_install_dir() {
+    local pid="$1"
+    local actual
+
+    actual="$(pid_cmdline_arg0_path "$pid")"
+    [ -n "$actual" ] || return 1
+    dirname "$actual"
+}
+
+pid_summary() {
+    local pid="$1"
+    local exe
+    local cmdline
+
+    exe="$(pid_cmdline_arg0_path "$pid")"
+    cmdline="$(pid_cmdline "$pid")"
+    printf 'pid=%s exe=%s cmd=%s' "$pid" "${exe:-unknown}" "${cmdline:-unknown}"
+}
+
+pid_is_orphaned_runtime_process() {
+    local pid="$1"
+    local cmdline
+    local arg0
+
+    [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+    [ "$pid" != "$$" ] || return 1
+    [ -d "/proc/$pid" ] || return 1
+
+    arg0="$(pid_cmdline_arg0_path "$pid")"
+    case "$arg0" in
+        "$SCRIPT_DIR/electron"|"$SCRIPT_DIR/electron "*)
+            pid_is_current_user "$pid" || return 1
+            pid_matches_app_identity "$pid" || return 1
+            pid_is_electron_helper "$pid"
+            ;;
+        "$SCRIPT_DIR/chrome_crashpad_handler"|"$SCRIPT_DIR/chrome_crashpad_handler "*|"$SCRIPT_DIR/resources/node-runtime/bin/node"|"$SCRIPT_DIR/resources/node-runtime/bin/node "*|"$SCRIPT_DIR/resources/node_repl"|"$SCRIPT_DIR/resources/node_repl "*)
+            pid_is_current_user "$pid" || return 1
+            pid_matches_app_identity "$pid" || return 1
+            return 0
+            ;;
+        *)
+            case "$arg0" in
+                "$SCRIPT_DIR"/*) ;;
+                *) return 1 ;;
+            esac
+            cmdline="$(pid_cmdline "$pid")"
+            case "$cmdline" in
+                *"$SCRIPT_DIR/resources/node-runtime/bin/node"*|*"$SCRIPT_DIR/resources/node_repl"*)
+                    pid_is_current_user "$pid" || return 1
+                    pid_matches_app_identity "$pid" || return 1
+                    return 0
+                    ;;
+            esac
+            return 1
+            ;;
+    esac
+}
+
+detect_cross_install_conflict() {
+    local pid
+    local install_dir
+    local detail
+
+    [ "$MULTI_LAUNCH_ACTIVE" -eq 0 ] || return 0
+    if ! pid="$(discover_foreign_app_pid)"; then
+        return 0
+    fi
+
+    install_dir="$(pid_install_dir "$pid" 2>/dev/null || echo "unknown")"
+    detail="Another $CODEX_LINUX_APP_DISPLAY_NAME is already running from $install_dir (pid $pid), while this launcher is $SCRIPT_DIR. Both use app id '$CODEX_LINUX_APP_ID', webview port $CODEX_LINUX_WEBVIEW_PORT, config $APP_CONFIG_DIR, and state $APP_STATE_DIR. Close the other app, or launch one build with a side-by-side CODEX_APP_ID/CODEX_LINUX_APP_ID or --new-instance."
+    echo "Foreign Codex Desktop process: $(pid_summary "$pid")"
+    notify_error "$detail"
+    exit 1
+}
+
+runtime_recovery_scan_needed() {
+    [ -f "$APP_PID_FILE" ] && return 0
+    [ -e "$LAUNCH_ACTION_SOCKET" ] && return 0
+    [ -f "$WEBVIEW_PID_FILE" ] && return 0
+    return 1
+}
+
+set_detected_running_app() {
+    RUNNING_APP_PID="$1"
+    echo "$RUNNING_APP_PID" > "$APP_PID_FILE"
+
+    if ! linux_setting_enabled "codex-linux-warm-start-enabled" 1; then
+        WARM_START=0
+        echo "Warm-start handoff disabled by $APP_SETTINGS_FILE"
+        echo "Detected running Codex Desktop pid=$RUNNING_APP_PID; preserving liveness marker for second-instance handoff"
+        return 0
+    fi
+
+    WARM_START=1
+    echo "Detected running Codex Desktop pid=$RUNNING_APP_PID; using warm-start handoff"
 }
 
 running_app_is_active() {
@@ -1530,17 +1773,15 @@ needs_cold_start() {
 }
 
 detect_warm_start() {
-    if RUNNING_APP_PID="$(find_running_app_pid)" || { [ -S "$LAUNCH_ACTION_SOCKET" ] && RUNNING_APP_PID="$(discover_running_app_pid)"; }; then
-        echo "$RUNNING_APP_PID" > "$APP_PID_FILE"
-        if ! linux_setting_enabled "codex-linux-warm-start-enabled" 1; then
-            WARM_START=0
-            echo "Warm-start handoff disabled by $APP_SETTINGS_FILE"
-            echo "Detected running Codex Desktop pid=$RUNNING_APP_PID; preserving liveness marker for second-instance handoff"
-            return 0
-        fi
+    local pid
 
-        WARM_START=1
-        echo "Detected running Codex Desktop pid=$RUNNING_APP_PID; using warm-start handoff"
+    if pid="$(find_running_app_pid)"; then
+        set_detected_running_app "$pid"
+        return 0
+    fi
+
+    if runtime_recovery_scan_needed && pid="$(discover_running_app_pid)"; then
+        set_detected_running_app "$pid"
         return 0
     fi
 
@@ -1877,6 +2118,7 @@ ensure_webview_server() {
             return 0
         fi
 
+        detect_cross_install_conflict
         notify_error "$CODEX_LINUX_APP_DISPLAY_NAME webview port $CODEX_LINUX_WEBVIEW_PORT is already serving Codex content, but it is not owned by this launcher. Stop the other webview server and try again."
         exit 1
     fi
@@ -1892,6 +2134,7 @@ ensure_webview_server() {
         fi
 
         if webview_port_is_open; then
+            detect_cross_install_conflict
             notify_error "$CODEX_LINUX_APP_DISPLAY_NAME webview port $CODEX_LINUX_WEBVIEW_PORT is already in use. Stop the other process and try again."
             exit 1
         fi
@@ -1943,12 +2186,73 @@ clear_stale_pid_file() {
     fi
 }
 
+reap_orphaned_runtime_processes() {
+    local pid
+    local proc_cmdline
+    local pids=()
+    local still_running=0
+
+    for proc_cmdline in /proc/[0-9]*/cmdline; do
+        [ -r "$proc_cmdline" ] || continue
+        pid="${proc_cmdline#/proc/}"
+        pid="${pid%/cmdline}"
+        if pid_is_orphaned_runtime_process "$pid"; then
+            pids+=("$pid")
+        fi
+    done
+
+    [ "${#pids[@]}" -gt 0 ] || return 0
+
+    for pid in "${pids[@]}"; do
+        if [ -d "/proc/$pid" ]; then
+            echo "Stopping orphaned Codex runtime process after stale launch state: $(pid_summary "$pid")"
+            kill "$pid" 2>/dev/null || true
+        fi
+    done
+
+    for _ in $(seq 1 20); do
+        still_running=0
+        for pid in "${pids[@]}"; do
+            if kill -0 "$pid" 2>/dev/null; then
+                still_running=1
+                break
+            fi
+        done
+        [ "$still_running" -eq 0 ] && return 0
+        sleep 0.05
+    done
+
+    for pid in "${pids[@]}"; do
+        if kill -0 "$pid" 2>/dev/null; then
+            echo "WARN: orphaned Codex runtime process is still running after SIGTERM; sending SIGKILL: $(pid_summary "$pid")"
+            kill -9 "$pid" 2>/dev/null || true
+        fi
+    done
+
+    for _ in $(seq 1 10); do
+        still_running=0
+        for pid in "${pids[@]}"; do
+            if kill -0 "$pid" 2>/dev/null; then
+                still_running=1
+                break
+            fi
+        done
+        [ "$still_running" -eq 0 ] && return 0
+        sleep 0.05
+    done
+
+    for pid in "${pids[@]}"; do
+        if kill -0 "$pid" 2>/dev/null; then
+            echo "WARN: orphaned Codex runtime process is still running after SIGKILL: $(pid_summary "$pid")"
+        fi
+    done
+}
+
 reconcile_runtime_state() {
-    local live_app_pid=""
     local webview_pid=""
 
-    if live_app_pid="$(find_running_app_pid)" || { [ -S "$LAUNCH_ACTION_SOCKET" ] && live_app_pid="$(discover_running_app_pid)"; }; then
-        echo "$live_app_pid" > "$APP_PID_FILE"
+    if [ -n "${RUNNING_APP_PID:-}" ] && running_app_is_active; then
+        echo "$RUNNING_APP_PID" > "$APP_PID_FILE"
         return 0
     fi
 
@@ -2164,6 +2468,13 @@ should_disable_gpu_compositing() {
             return 1
         fi
         echo "Invalid CODEX_ELECTRON_DISABLE_GPU_COMPOSITING='${CODEX_ELECTRON_DISABLE_GPU_COMPOSITING:-}'; using rendering profile default" >&2
+    fi
+
+    if [ "${XDG_SESSION_TYPE:-}" = "wayland" ] &&
+        [ "$ELECTRON_RENDERING_MODE" != "wayland-gpu" ] &&
+        [ "$ELECTRON_RENDERING_MODE" != "wslg" ]; then
+        echo "Detected Wayland session; adding --disable-gpu-compositing for side-panel rendering stability. Set CODEX_ELECTRON_DISABLE_GPU_COMPOSITING=0 to opt out."
+        return 0
     fi
 
     return 1
@@ -2396,6 +2707,83 @@ cleanup_launcher() {
     fi
 }
 
+launcher_lock_wait_seconds() {
+    local value="${CODEX_LAUNCHER_LOCK_WAIT_SECONDS:-5}"
+
+    case "$value" in
+        ""|*[!0-9]*)
+            echo "WARN: invalid CODEX_LAUNCHER_LOCK_WAIT_SECONDS='${CODEX_LAUNCHER_LOCK_WAIT_SECONDS:-}'; using 5" >&2
+            echo 5
+            return 0
+            ;;
+    esac
+
+    if [ "$value" -gt 300 ]; then
+        echo "WARN: CODEX_LAUNCHER_LOCK_WAIT_SECONDS=$value is too high; using 300" >&2
+        echo 300
+        return 0
+    fi
+
+    echo "$value"
+}
+
+# Serialize the running-app detection -> Electron spawn -> app.pid write
+# critical section across concurrent launchers. Without this, two launches
+# racing through detection can both cold-start, and the loser's cleanup later
+# deletes the survivor's app.pid marker, making it undetectable. Fd 9 must not
+# survive into Electron or plugin children, otherwise a stale child can keep the
+# flock alive after this launcher has moved on.
+acquire_launcher_lock() {
+    local wait_seconds
+
+    command -v flock >/dev/null 2>&1 || return 0
+    LAUNCHER_LOCK_TIMED_OUT=0
+    exec 9>"$APP_STATE_DIR/launcher.lock" || return 0
+    LAUNCHER_LOCK_FD_OPEN=1
+    if flock -n 9; then
+        return 0
+    fi
+
+    wait_seconds="$(launcher_lock_wait_seconds)"
+    launcher_notice "Another $CODEX_LINUX_APP_DISPLAY_NAME launcher is holding $APP_STATE_DIR/launcher.lock; waiting up to ${wait_seconds}s."
+
+    if ! flock -w "$wait_seconds" 9; then
+        LAUNCHER_LOCK_TIMED_OUT=1
+        launcher_notice "WARN: timed out waiting for launcher.lock after ${wait_seconds}s; continuing after a quick state refresh."
+    else
+        echo "Acquired launcher lock after waiting"
+    fi
+}
+
+close_launcher_lock_fd_for_child() {
+    [ "$LAUNCHER_LOCK_FD_OPEN" -eq 1 ] || return 0
+    { exec 9>&-; } 2>/dev/null || true
+}
+
+release_launcher_lock() {
+    [ "$LAUNCHER_LOCK_FD_OPEN" -eq 1 ] || return 0
+    flock -u 9 2>/dev/null || true
+    { exec 9>&-; } 2>/dev/null || true
+    LAUNCHER_LOCK_FD_OPEN=0
+}
+
+refresh_launch_state() {
+    WARM_START=0
+    RUNNING_APP_PID=""
+    detect_warm_start
+    reconcile_runtime_state
+}
+
+refresh_launch_state_quick() {
+    local pid
+
+    WARM_START=0
+    RUNNING_APP_PID=""
+    if pid="$(find_running_app_pid)"; then
+        set_detected_running_app "$pid"
+    fi
+}
+
 launch_electron() {
     cd "$SCRIPT_DIR"
     log_phase "electron_launch"
@@ -2407,21 +2795,32 @@ launch_electron() {
     build_electron_launch_args
 
     if [ "$WARM_START" -eq 1 ]; then
+        release_launcher_lock
         echo "Electron warm-start handoff: pid=$RUNNING_APP_PID rendering_mode=$ELECTRON_RENDERING_MODE wslg_detected=$ELECTRON_WSLG_DETECTED ozone_platform=${ELECTRON_OZONE_PLATFORM:-default} ozone_hint=${ELECTRON_OZONE_HINT:-none} gpu_enabled=$ELECTRON_GPU_ENABLED gpu_disable_arg=$ELECTRON_GPU_DISABLE_SWITCH_IN_ARGS gpu_compositing_disabled=$ELECTRON_GPU_COMPOSITING_DISABLED gl_switch_added=$ELECTRON_GL_SWITCH_ADDED renderer_accessibility_forced=$ELECTRON_RENDERER_ACCESSIBILITY_FORCED"
+        if [ "$ELECTRON_GPU_COMPOSITING_DISABLED" = "0" ] && [ "${XDG_SESSION_TYPE:-}" = "wayland" ]; then
+            echo "Rendering hint: if the side panel flickers or appears transparent on Wayland, retry with CODEX_ELECTRON_DISABLE_GPU_COMPOSITING=1"
+        fi
         unset ELECTRON_RUN_AS_NODE
         "$SCRIPT_DIR/electron" "${ELECTRON_LAUNCH_ARGS[@]}" "${ELECTRON_ARGS[@]}"
         return $?
     fi
 
     echo "Electron launch mode: rendering_mode=$ELECTRON_RENDERING_MODE wslg_detected=$ELECTRON_WSLG_DETECTED ozone_platform=${ELECTRON_OZONE_PLATFORM:-default} ozone_hint=${ELECTRON_OZONE_HINT:-none} gpu_enabled=$ELECTRON_GPU_ENABLED gpu_disable_arg=$ELECTRON_GPU_DISABLE_SWITCH_IN_ARGS gpu_compositing_disabled=$ELECTRON_GPU_COMPOSITING_DISABLED gl_switch_added=$ELECTRON_GL_SWITCH_ADDED renderer_accessibility_forced=$ELECTRON_RENDERER_ACCESSIBILITY_FORCED"
-    unset ELECTRON_RUN_AS_NODE
-    "$SCRIPT_DIR/electron" "${ELECTRON_LAUNCH_ARGS[@]}" "${ELECTRON_ARGS[@]}" &
+    if [ "$ELECTRON_GPU_COMPOSITING_DISABLED" = "0" ] && [ "${XDG_SESSION_TYPE:-}" = "wayland" ]; then
+        echo "Rendering hint: if the side panel flickers or appears transparent on Wayland, retry with CODEX_ELECTRON_DISABLE_GPU_COMPOSITING=1"
+    fi
+    (
+        close_launcher_lock_fd_for_child
+        unset ELECTRON_RUN_AS_NODE
+        exec "$SCRIPT_DIR/electron" "${ELECTRON_LAUNCH_ARGS[@]}" "${ELECTRON_ARGS[@]}"
+    ) &
     ELECTRON_PID=$!
     if [ -n "${RUNNING_APP_PID:-}" ] && pid_matches_executable "$RUNNING_APP_PID" "$SCRIPT_DIR/electron"; then
         echo "Preserving Codex Desktop pid=$RUNNING_APP_PID liveness marker for second-instance handoff"
     else
         echo "$ELECTRON_PID" > "$APP_PID_FILE"
     fi
+    release_launcher_lock
     log_phase "electron_spawned"
 
     set +e
@@ -2439,9 +2838,13 @@ load_packaged_runtime_helper
 prepend_managed_node_runtime_to_path
 source_feature_env_files
 register_url_scheme_handlers
-reconcile_runtime_state
-detect_warm_start
+log_phase "initial_launch_state_refresh_start"
+refresh_launch_state
+log_phase "initial_launch_state_refreshed"
 trap cleanup_launcher EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
 
 if send_warm_start_launch_action "${LAUNCHER_ARGS[@]}"; then
     echo "Sent launch args over warm-start IPC"
@@ -2455,8 +2858,10 @@ if using_second_instance_handoff; then
     echo "Detected running Codex Desktop pid=$RUNNING_APP_PID; using Electron second-instance handoff"
     log_phase "second_instance_handoff_ready"
 elif needs_cold_start; then
+    log_phase "feature_prelaunch_start"
     run_feature_prelaunch_hooks
     log_phase "feature_prelaunch"
+    log_phase "packaged_prelaunch_start"
     run_packaged_runtime_prelaunch
     log_phase "packaged_prelaunch"
     ensure_webview_server
@@ -2465,7 +2870,7 @@ else
     log_phase "warm_start_ready"
 fi
 
-if needs_cold_start && [ -z "${CODEX_CLI_PATH:-}" ]; then
+if [ -z "${CODEX_CLI_PATH:-}" ]; then
     CODEX_CLI_PATH="$(find_codex_cli || true)"
     export CODEX_CLI_PATH
     log_phase "cli_lookup"
@@ -2511,19 +2916,39 @@ fi
 
 export_packaged_runtime_env
 if needs_cold_start; then
+    log_phase "cold_start_cache_sync_start"
     clear_bundled_marketplace_tmp_cache
+    log_phase "bundled_marketplace_tmp_cleared"
     # The runtime marketplace is populated asynchronously and can briefly
     # recreate read-only plugin cache trees before the sync below replaces them.
     monitor_bundled_marketplace_tmp_permissions
+    log_phase "bundled_marketplace_tmp_monitor_started"
     sync_browser_use_bundled_plugin_cache
+    log_phase "browser_use_plugin_cache_synced"
     sync_chrome_bundled_plugin_cache
+    log_phase "chrome_plugin_cache_synced"
     if ! early_truthy_env_value "${CODEX_COMPUTER_USE_BROWSER_ONLY:-}" && [ "${CODEX_COMPUTER_CONTROL_MODE:-}" != "browser-only" ]; then
         sync_computer_use_bundled_plugin_cache
     fi
+    log_phase "computer_use_plugin_cache_synced"
     sync_read_aloud_bundled_plugin_cache
+    log_phase "read_aloud_plugin_cache_synced"
     run_cold_start_hooks
+    log_phase "cold_start_hooks_dispatched"
 fi
 resolve_browser_use_runtime_env
+log_phase "browser_use_runtime_env_resolved"
+
+if needs_cold_start; then
+    acquire_launcher_lock
+    log_phase "launcher_lock_ready"
+    refresh_launch_state_quick
+    log_phase "launch_state_refreshed_under_lock"
+    if [ "$LAUNCHER_LOCK_TIMED_OUT" -eq 1 ]; then
+        reap_orphaned_runtime_processes
+        detect_cross_install_conflict
+    fi
+fi
 
 echo "Using CODEX_CLI_PATH=${CODEX_CLI_PATH:-warm-start-skip}"
 echo "Using managed Node.js runtime=${CODEX_MANAGED_NODE_RUNTIME_DIR:-$SCRIPT_DIR/resources/node-runtime}"

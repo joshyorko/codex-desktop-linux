@@ -1,0 +1,62 @@
+name: Sync upstream into self-hosted
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 10 * * *"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-upstream-self-hosted
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: Sync upstream main and self-hosted
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout self-hosted
+        uses: actions/checkout@v4
+        with:
+          ref: self-hosted
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Fetch branches
+        run: |
+          git remote add upstream https://github.com/ilysenko/codex-desktop-linux.git || \
+            git remote set-url upstream https://github.com/ilysenko/codex-desktop-linux.git
+          git fetch --prune origin main self-hosted
+          git fetch --prune upstream main
+
+      - name: Fast-forward fork main from upstream
+        run: |
+          git switch -C main origin/main
+          git merge --ff-only upstream/main
+          if [ "$(git rev-parse HEAD)" != "$(git rev-parse origin/main)" ]; then
+            git push origin HEAD:main
+          else
+            echo "origin/main already matches upstream/main"
+          fi
+
+      - name: Merge main into self-hosted
+        run: |
+          git switch -C self-hosted origin/self-hosted
+          if git merge --no-edit origin/main; then
+            if [ "$(git rev-parse HEAD)" != "$(git rev-parse origin/self-hosted)" ]; then
+              git push origin HEAD:self-hosted
+            else
+              echo "self-hosted already includes origin/main"
+            fi
+          else
+            git diff --name-only --diff-filter=U | tee conflict-files.txt
+            echo "::error::Conflicts while merging origin/main into self-hosted"
+            exit 1
+          fi
