@@ -30,7 +30,7 @@ module.exports = [
     id: "linux-window-options",
     phase: "main-bundle",
     order: 50,
-    ciPolicy: "optional",
+    ciPolicy: "required-upstream",
     apply: (source, context) => applyLinuxWindowOptionsPatch(source, context.iconAsset),
   },
   {
@@ -44,7 +44,7 @@ module.exports = [
     id: "linux-native-titlebar",
     phase: "main-bundle",
     order: 85,
-    ciPolicy: "optional",
+    ciPolicy: "required-upstream",
     apply: applyLinuxNativeTitlebarPatch,
   },
   {
@@ -72,14 +72,14 @@ module.exports = [
     id: "linux-opaque-background",
     phase: "main-bundle",
     order: 80,
-    ciPolicy: "optional",
+    ciPolicy: "required-upstream",
     apply: applyLinuxOpaqueBackgroundPatch,
   },
   {
     id: "linux-avatar-overlay-mouse-passthrough",
     phase: "main-bundle",
     order: 90,
-    ciPolicy: "optional",
+    ciPolicy: "required-upstream",
     apply: applyLinuxAvatarOverlayMousePassthroughPatch,
   },
   {
@@ -100,7 +100,7 @@ module.exports = [
     id: "linux-tray",
     phase: "main-bundle",
     order: 110,
-    ciPolicy: "optional",
+    ciPolicy: "required-upstream",
     apply: (source, context) => applyLinuxTrayPatch(source, context.iconPathExpression),
   },
   {

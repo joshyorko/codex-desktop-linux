@@ -709,6 +709,19 @@ test("default core patch descriptors are grouped and unique", () => {
     descriptors.find((descriptor) => descriptor.id === "local-environment-action-modal-draft")?.ciPolicy,
     "optional",
   );
+  for (const id of [
+    "linux-window-options",
+    "linux-native-titlebar",
+    "linux-opaque-background",
+    "linux-avatar-overlay-mouse-passthrough",
+    "linux-tray",
+  ]) {
+    assert.equal(
+      descriptors.find((descriptor) => descriptor.id === id)?.ciPolicy,
+      "required-upstream",
+      `${id} should block upstream builds when it drifts`,
+    );
+  }
 
   const descriptorOrder = new Map(descriptors.map((descriptor) => [descriptor.id, descriptor.order]));
   assert.ok(
@@ -5122,16 +5135,20 @@ test("patchExtractedApp records a structured patch report", () => {
     assert.equal(report.iconAsset, "app-test.png");
     assert.equal(report.desktopName, "codex-desktop.desktop");
     assert.deepEqual(report.enabledFeatures, enabledLinuxFeatureIds());
-    // Browser/Computer Use integration drift is optional: the aggregate stays
-    // applied because no required main-bundle patch warned on this fixture.
+    // Browser/Computer Use integration drift is optional, but window-shell
+    // drift is critical: this partial fixture lacks the titlebar shape.
     assert.ok(
       report.patches.some(
         (patch) =>
           patch.name === "main-process-ui" &&
-          patch.status === "applied" &&
+          patch.status === "failed-required" &&
           patch.sourceKind === "core" &&
-          patch.warnings === undefined,
+          Array.isArray(patch.warnings) &&
+          patch.warnings.some((warning) => warning.includes("Linux native titlebar patch")),
       ),
+    );
+    assert.ok(
+      criticalFailuresFromReport(report).some((failure) => failure.name === "linux-native-titlebar"),
     );
     assert.ok(
       optionalDriftFromReport(report).some((drift) => drift.name === "linux-chrome-plugin-auto-install"),
@@ -5995,6 +6012,42 @@ test("patcher CLI --enforce-critical exits non-zero with an aggregated message",
       { encoding: "utf8" },
     );
     assert.equal(lenient.status, 0, lenient.stderr);
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("patcher CLI --enforce-critical treats window-shell drift as critical", () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "codex-critical-window-shell-cli-test-"));
+  try {
+    const buildDir = path.join(tempRoot, ".vite", "build");
+    const assetsDir = path.join(tempRoot, "webview", "assets");
+    const reportPath = path.join(tempRoot, "reports", "patch-report.json");
+    fs.mkdirSync(buildDir, { recursive: true });
+    fs.mkdirSync(assetsDir, { recursive: true });
+    fs.writeFileSync(path.join(buildDir, "main.js"), mainBundlePrefix);
+    fs.writeFileSync(path.join(tempRoot, "package.json"), JSON.stringify({ name: "codex" }));
+
+    const result = spawnSync(
+      process.execPath,
+      [
+        path.join(__dirname, "patch-linux-window-ui.js"),
+        "--enforce-critical",
+        "--report-json",
+        reportPath,
+        tempRoot,
+      ],
+      { encoding: "utf8" },
+    );
+
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /linux-opaque-background \(failed-required\)/);
+    const report = JSON.parse(fs.readFileSync(reportPath, "utf8"));
+    assert.ok(
+      criticalFailuresFromReport(report).some(
+        (failure) => failure.name === "linux-opaque-background" && failure.status === "failed-required",
+      ),
+    );
   } finally {
     fs.rmSync(tempRoot, { recursive: true, force: true });
   }
