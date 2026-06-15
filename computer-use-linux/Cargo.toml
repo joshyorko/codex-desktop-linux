@@ -1,6 +1,6 @@
 [package]
 name = "codex-computer-use-linux"
-version = "0.2.6-linux-alpha1"
+version = "0.2.7-linux-alpha1"
 edition = "2021"
 
 [[bin]]
@@ -12,6 +12,7 @@ name = "codex-chrome-extension-host"
 path = "src/bin/codex-chrome-extension-host.rs"
 
 [dependencies]
+mimalloc = { version = "0.1", default-features = false }
 anyhow = "1.0.102"
 atspi = { version = "0.29.0", features = ["tokio"] }
 base64 = "0.22.1"
