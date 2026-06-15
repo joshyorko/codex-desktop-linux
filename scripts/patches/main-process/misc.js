@@ -111,8 +111,61 @@ function applyLinuxRemoteControlConfigPreservationPatch(currentSource) {
   return currentSource;
 }
 
+function applyLinuxLocalAppServerFeatureEnablementHandlerPatch(currentSource) {
+  const method = "set-local-app-server-feature-enablement";
+  const handler =
+    "async e=>{let t=e?.params??e??{},n={},r=(e,t)=>{typeof t===`boolean`&&(n[e]=t)};if(t.enablement&&typeof t.enablement===`object`)for(let[e,n]of Object.entries(t.enablement))r(e,n);let i=t.featureName??t.feature_name??t.name??t.feature??null,a=t.enabled;i!=null&&r(i,a);for(let e of[`remote_control`,`remote_plugin`,`memories`,`tool_suggest`,`tool_call_mcp_elicitation`,`plugins`,`apps`])r(e,t[e]);let o=this.sharedObjectRepository?.get?.(`local_app_server_feature_enablement`)??{};return this.sharedObjectRepository?.set?.(`local_app_server_feature_enablement`,{...o,...n}),Object.prototype.hasOwnProperty.call(n,`remote_control`)&&this.sharedObjectRepository?.set?.(`local_remote_control_enabled`,n.remote_control),{enabled:n}}";
+  let patchedSource = currentSource;
+
+  if (!patchedSource.includes(`methods:[\`${method}\`]`)) {
+    const approvalHandlerRegex =
+      /(registerInternalServerRequestHandler\(\{methods:\[`item\/commandExecution\/requestApproval`,`mcpServer\/elicitation\/request`\],handler:[^}]+?\}\),)([A-Za-z_$][\w$]*\.registerInternalServerRequestHandler\(\{methods:\[`attestation\/generate`\])/u;
+    const match = patchedSource.match(approvalHandlerRegex);
+    if (match == null) {
+      if (
+        patchedSource.includes("registerInternalServerRequestHandler") &&
+        patchedSource.includes("item/commandExecution/requestApproval") &&
+        patchedSource.includes("attestation/generate")
+      ) {
+        console.warn(
+          "WARN: Could not find local app-server feature enablement internal handler insertion point — skipping Linux app-server feature enablement internal handler patch",
+        );
+      }
+    } else {
+      const [, approvalRegistration, nextRegistration] = match;
+      const receiverVar = nextRegistration.slice(0, nextRegistration.indexOf("."));
+      patchedSource = patchedSource.replace(
+        approvalHandlerRegex,
+        `${approvalRegistration}${receiverVar}.registerInternalServerRequestHandler({methods:[\`${method}\`],handler:${handler}}),${nextRegistration}`,
+      );
+    }
+  }
+
+  if (!patchedSource.includes(`"${method}":async`)) {
+    const fetchHandlerRegex =
+      /("set-vs-context":async\(\)=>\{throw new [A-Za-z_$][\w$]*\},)/u;
+    if (fetchHandlerRegex.test(patchedSource)) {
+      patchedSource = patchedSource.replace(
+        fetchHandlerRegex,
+        `$1"${method}":${handler},`,
+      );
+    } else if (
+      patchedSource.includes("not implemented in the current Electron process") &&
+      patchedSource.includes("handleVSCodeRequest") &&
+      patchedSource.includes("handlers=")
+    ) {
+      console.warn(
+        "WARN: Could not find local app-server feature enablement Electron handler insertion point — skipping Linux app-server feature enablement Electron handler patch",
+      );
+    }
+  }
+
+  return patchedSource;
+}
+
 module.exports = {
   applyLinuxFileManagerPatch,
   applyLinuxGitOriginsSourceFallbackPatch,
+  applyLinuxLocalAppServerFeatureEnablementHandlerPatch,
   applyLinuxRemoteControlConfigPreservationPatch,
 };

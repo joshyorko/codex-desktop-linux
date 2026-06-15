@@ -32,6 +32,8 @@ function applyBrowserUseNodeReplApprovalPatch(currentSource) {
 
   const currentRuntimeConfigRegex =
     /([A-Za-z_$][\w$]*)\.(Dn|Pn|Fa|La)\(\{([^{}]*?)nodeReplPath:([^,{}]+)(,)(?!tools:\{js:\{approval_mode:`approve`\}\})/g;
+  const currentRuntimeConfigAlreadyApprovedRegex =
+    /[A-Za-z_$][\w$]*\.(?:Dn|Pn|Fa|La)\(\{[^{}]*?nodeReplPath:[^,{}]+,tools:\{js:\{approval_mode:`approve`\}\},/;
   let patchedAnyCurrentRuntimeConfig = false;
   patchedSource = patchedSource.replace(
     currentRuntimeConfigRegex,
@@ -102,6 +104,7 @@ function applyBrowserUseNodeReplApprovalPatch(currentSource) {
     patchedSource === currentSource &&
     !patchedSource.includes(approvalPatch) &&
     !patchedAnyCurrentRuntimeConfig &&
+    !currentRuntimeConfigAlreadyApprovedRegex.test(patchedSource) &&
     !patchedTrustedHashes &&
     !patchedSource.includes("codexLinuxTrustedBrowserClientSha256s(")
   ) {
