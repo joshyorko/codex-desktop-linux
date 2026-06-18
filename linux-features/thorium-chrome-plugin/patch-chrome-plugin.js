@@ -88,6 +88,20 @@ const nativeHostManifestFallback = `  if (process.platform === "linux") {
       path.join(
         os.homedir(),
         ".config",
+        "google-chrome-beta",
+        "NativeMessagingHosts",
+        \`\${expectedHostName}.json\`,
+      ),
+      path.join(
+        os.homedir(),
+        ".config",
+        "google-chrome-unstable",
+        "NativeMessagingHosts",
+        \`\${expectedHostName}.json\`,
+      ),
+      path.join(
+        os.homedir(),
+        ".config",
         "BraveSoftware",
         "Brave-Browser",
         "NativeMessagingHosts",
@@ -132,6 +146,8 @@ const nativeHostManifestFallbackWithoutThorium = nativeHostManifestFallback.repl
 );
 
 const extensionAwareUserDataFallback = `  const linuxChromeUserDataDirectory = path.join(os.homedir(), ".config", "google-chrome");
+  const linuxChromeBetaUserDataDirectory = path.join(os.homedir(), ".config", "google-chrome-beta");
+  const linuxChromeUnstableUserDataDirectory = path.join(os.homedir(), ".config", "google-chrome-unstable");
   const linuxChromiumUserDataDirectory = path.join(os.homedir(), ".config", "chromium");
   const linuxThoriumUserDataDirectory = path.join(os.homedir(), ".config", "thorium");
   const linuxBraveUserDataDirectory = path.join(
@@ -143,6 +159,8 @@ const extensionAwareUserDataFallback = `  const linuxChromeUserDataDirectory = p
   const linuxUserDataCandidates = [
     linuxBraveUserDataDirectory,
     linuxChromeUserDataDirectory,
+    linuxChromeBetaUserDataDirectory,
+    linuxChromeUnstableUserDataDirectory,
     linuxChromiumUserDataDirectory,
     linuxThoriumUserDataDirectory,
   ].filter((candidate) => fs.existsSync(candidate));
@@ -177,6 +195,8 @@ const extensionAwareUserDataFallbackWithoutThorium = extensionAwareUserDataFallb
   .replace("    linuxThoriumUserDataDirectory,\n", "");
 
 const defaultBrowserUserDataFallback = `  const linuxChromeUserDataDirectory = path.join(os.homedir(), ".config", "google-chrome");
+  const linuxChromeBetaUserDataDirectory = path.join(os.homedir(), ".config", "google-chrome-beta");
+  const linuxChromeUnstableUserDataDirectory = path.join(os.homedir(), ".config", "google-chrome-unstable");
   const linuxChromiumUserDataDirectory = path.join(os.homedir(), ".config", "chromium");
   const linuxThoriumUserDataDirectory = path.join(os.homedir(), ".config", "thorium");
   const linuxBraveUserDataDirectory = path.join(
@@ -193,6 +213,18 @@ const defaultBrowserUserDataFallback = `  const linuxChromeUserDataDirectory = p
     return linuxBraveUserDataDirectory;
   }
   if (
+    defaultBrowser === "google-chrome-beta.desktop" &&
+    fs.existsSync(linuxChromeBetaUserDataDirectory)
+  ) {
+    return linuxChromeBetaUserDataDirectory;
+  }
+  if (
+    defaultBrowser === "google-chrome-unstable.desktop" &&
+    fs.existsSync(linuxChromeUnstableUserDataDirectory)
+  ) {
+    return linuxChromeUnstableUserDataDirectory;
+  }
+  if (
     ["chromium.desktop", "chromium-browser.desktop"].includes(defaultBrowser) &&
     fs.existsSync(linuxChromiumUserDataDirectory)
   ) {
@@ -207,6 +239,8 @@ const defaultBrowserUserDataFallback = `  const linuxChromeUserDataDirectory = p
 
   if (fs.existsSync(linuxBraveUserDataDirectory)) return linuxBraveUserDataDirectory;
   if (fs.existsSync(linuxChromeUserDataDirectory)) return linuxChromeUserDataDirectory;
+  if (fs.existsSync(linuxChromeBetaUserDataDirectory)) return linuxChromeBetaUserDataDirectory;
+  if (fs.existsSync(linuxChromeUnstableUserDataDirectory)) return linuxChromeUnstableUserDataDirectory;
   if (fs.existsSync(linuxChromiumUserDataDirectory)) return linuxChromiumUserDataDirectory;
   if (fs.existsSync(linuxThoriumUserDataDirectory)) return linuxThoriumUserDataDirectory;
 
@@ -227,9 +261,10 @@ patchFileFirstMatch(path.join(scriptsDir, "installManifest.mjs"), {
   label: "Thorium native host manifest location",
   oldTexts: [
     'linux:[".config/google-chrome/NativeMessagingHosts",".config/BraveSoftware/Brave-Browser/NativeMessagingHosts",".config/chromium/NativeMessagingHosts"]',
+    'linux:[".config/google-chrome/NativeMessagingHosts",".config/google-chrome-beta/NativeMessagingHosts",".config/google-chrome-unstable/NativeMessagingHosts",".config/BraveSoftware/Brave-Browser/NativeMessagingHosts",".config/chromium/NativeMessagingHosts"]',
   ],
   newText:
-    'linux:[".config/google-chrome/NativeMessagingHosts",".config/BraveSoftware/Brave-Browser/NativeMessagingHosts",".config/chromium/NativeMessagingHosts",".config/thorium/NativeMessagingHosts"]',
+    'linux:[".config/google-chrome/NativeMessagingHosts",".config/google-chrome-beta/NativeMessagingHosts",".config/google-chrome-unstable/NativeMessagingHosts",".config/BraveSoftware/Brave-Browser/NativeMessagingHosts",".config/chromium/NativeMessagingHosts",".config/thorium/NativeMessagingHosts"]',
 });
 
 patchFile(path.join(scriptsDir, "check-native-host-manifest.js"), [
@@ -249,16 +284,32 @@ patchFileFirstMatch(path.join(scriptsDir, "browser-client.mjs"), {
       newText: String.raw`codexLinuxChromeUserDataDirectories=()=>WF()==="linux"?[GF(VF(),".config","BraveSoftware","Brave-Browser"),GF(VF(),".config","google-chrome"),GF(VF(),".config","chromium"),GF(VF(),".config","thorium")]:[Tc]`,
     },
     {
+      oldText: String.raw`codexLinuxChromeUserDataDirectories=()=>WF()==="linux"?[GF(VF(),".config","BraveSoftware","Brave-Browser"),GF(VF(),".config","google-chrome"),GF(VF(),".config","google-chrome-beta"),GF(VF(),".config","google-chrome-unstable"),GF(VF(),".config","chromium")]:[Tc]`,
+      newText: String.raw`codexLinuxChromeUserDataDirectories=()=>WF()==="linux"?[GF(VF(),".config","BraveSoftware","Brave-Browser"),GF(VF(),".config","google-chrome"),GF(VF(),".config","google-chrome-beta"),GF(VF(),".config","google-chrome-unstable"),GF(VF(),".config","chromium"),GF(VF(),".config","thorium")]:[Tc]`,
+    },
+    {
       oldText: String.raw`codexLinuxChromeUserDataDirectories=()=>rO()==="linux"?[eO(tO(),".config","BraveSoftware","Brave-Browser"),eO(tO(),".config","google-chrome"),eO(tO(),".config","chromium")]:[Ic]`,
       newText: String.raw`codexLinuxChromeUserDataDirectories=()=>rO()==="linux"?[eO(tO(),".config","BraveSoftware","Brave-Browser"),eO(tO(),".config","google-chrome"),eO(tO(),".config","chromium"),eO(tO(),".config","thorium")]:[Ic]`,
+    },
+    {
+      oldText: String.raw`codexLinuxChromeUserDataDirectories=()=>rO()==="linux"?[eO(tO(),".config","BraveSoftware","Brave-Browser"),eO(tO(),".config","google-chrome"),eO(tO(),".config","google-chrome-beta"),eO(tO(),".config","google-chrome-unstable"),eO(tO(),".config","chromium")]:[Ic]`,
+      newText: String.raw`codexLinuxChromeUserDataDirectories=()=>rO()==="linux"?[eO(tO(),".config","BraveSoftware","Brave-Browser"),eO(tO(),".config","google-chrome"),eO(tO(),".config","google-chrome-beta"),eO(tO(),".config","google-chrome-unstable"),eO(tO(),".config","chromium"),eO(tO(),".config","thorium")]:[Ic]`,
     },
     {
       oldText: String.raw`codexLinuxChromeUserDataDirectories=()=>X5()==="linux"?[Y5(Z5(),".config","BraveSoftware","Brave-Browser"),Y5(Z5(),".config","google-chrome"),Y5(Z5(),".config","chromium")]:[hl]`,
       newText: String.raw`codexLinuxChromeUserDataDirectories=()=>X5()==="linux"?[Y5(Z5(),".config","BraveSoftware","Brave-Browser"),Y5(Z5(),".config","google-chrome"),Y5(Z5(),".config","chromium"),Y5(Z5(),".config","thorium")]:[hl]`,
     },
     {
+      oldText: String.raw`codexLinuxChromeUserDataDirectories=()=>X5()==="linux"?[Y5(Z5(),".config","BraveSoftware","Brave-Browser"),Y5(Z5(),".config","google-chrome"),Y5(Z5(),".config","google-chrome-beta"),Y5(Z5(),".config","google-chrome-unstable"),Y5(Z5(),".config","chromium")]:[hl]`,
+      newText: String.raw`codexLinuxChromeUserDataDirectories=()=>X5()==="linux"?[Y5(Z5(),".config","BraveSoftware","Brave-Browser"),Y5(Z5(),".config","google-chrome"),Y5(Z5(),".config","google-chrome-beta"),Y5(Z5(),".config","google-chrome-unstable"),Y5(Z5(),".config","chromium"),Y5(Z5(),".config","thorium")]:[hl]`,
+    },
+    {
       oldText: String.raw`codexLinuxChromeUserDataDirectories=()=>L9()==="linux"?[M9(F9(),".config","BraveSoftware","Brave-Browser"),M9(F9(),".config","google-chrome"),M9(F9(),".config","chromium")]:[kl]`,
       newText: String.raw`codexLinuxChromeUserDataDirectories=()=>L9()==="linux"?[M9(F9(),".config","BraveSoftware","Brave-Browser"),M9(F9(),".config","google-chrome"),M9(F9(),".config","chromium"),M9(F9(),".config","thorium")]:[kl]`,
+    },
+    {
+      oldText: String.raw`codexLinuxChromeUserDataDirectories=()=>L9()==="linux"?[M9(F9(),".config","BraveSoftware","Brave-Browser"),M9(F9(),".config","google-chrome"),M9(F9(),".config","google-chrome-beta"),M9(F9(),".config","google-chrome-unstable"),M9(F9(),".config","chromium")]:[kl]`,
+      newText: String.raw`codexLinuxChromeUserDataDirectories=()=>L9()==="linux"?[M9(F9(),".config","BraveSoftware","Brave-Browser"),M9(F9(),".config","google-chrome"),M9(F9(),".config","google-chrome-beta"),M9(F9(),".config","google-chrome-unstable"),M9(F9(),".config","chromium"),M9(F9(),".config","thorium")]:[kl]`,
     },
     {
       oldText: String.raw`var hl=Y5(Z5(),X5()==="win32"?"AppData\\Local\\Google\\Chrome\\User Data":"Library/Application Support/Google/Chrome");`,
@@ -325,6 +376,12 @@ patchFile(path.join(scriptsDir, "chrome-is-running.js"), [
     label: "Thorium running-process detection",
     oldText: `  linux: new Set(["chrome", "google-chrome", "brave", "brave-browser", "chromium", "chromium-browser"]),`,
     newText: `  linux: new Set(["chrome", "google-chrome", "brave", "brave-browser", "chromium", "chromium-browser", "thorium", "thorium-browser", "thorium-browser-avx2"]),`,
+    alreadyText: "thorium-browser-avx2",
+  },
+  {
+    label: "Thorium running-process detection after Chrome Beta support",
+    oldText: `  linux: new Set(["chrome", "google-chrome", "google-chrome-beta", "google-chrome-unstable", "brave", "brave-browser", "chromium", "chromium-browser"]),`,
+    newText: `  linux: new Set(["chrome", "google-chrome", "google-chrome-beta", "google-chrome-unstable", "brave", "brave-browser", "chromium", "chromium-browser", "thorium", "thorium-browser", "thorium-browser-avx2"]),`,
     alreadyText: "thorium-browser-avx2",
   },
 ]);

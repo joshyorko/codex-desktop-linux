@@ -1809,6 +1809,10 @@ client.settimeout(1.0)
 try:
     client.connect(socket_path)
     client.sendall(payload)
+    client.shutdown(socket.SHUT_WR)
+    response = client.recv(32)
+    if not response.startswith(b"ok\n"):
+        sys.exit(1)
 finally:
     client.close()
 PY
@@ -2337,6 +2341,41 @@ scan_electron_rendering_arg() {
     esac
 }
 
+add_electron_enable_features() {
+    local raw="$1"
+    local feature
+    local existing
+    local IFS=,
+    local parts=()
+
+    read -r -a parts <<< "$raw"
+    for feature in "${parts[@]}"; do
+        feature="${feature#"${feature%%[![:space:]]*}"}"
+        feature="${feature%"${feature##*[![:space:]]}"}"
+        [ -n "$feature" ] || continue
+        for existing in "${ELECTRON_ENABLE_FEATURES[@]}"; do
+            [ "$existing" != "$feature" ] || continue 2
+        done
+        ELECTRON_ENABLE_FEATURES+=("$feature")
+    done
+}
+
+electron_enable_features_arg() {
+    local joined=""
+    local feature
+
+    for feature in "${ELECTRON_ENABLE_FEATURES[@]}"; do
+        if [ -z "$joined" ]; then
+            joined="$feature"
+        else
+            joined="$joined,$feature"
+        fi
+    done
+
+    [ -n "$joined" ] || return 1
+    printf '%s\n' "--enable-features=$joined"
+}
+
 write_user_electron_flags_template() {
     cat > "$USER_ELECTRON_FLAGS_FILE" <<'EOF'
 # Codex Desktop Linux launch flags.
@@ -2539,12 +2578,20 @@ set_electron_defaults() {
     ELECTRON_GPU_COMPOSITING_SWITCH_PROVIDED=0
     ELECTRON_RENDERER_ACCESSIBILITY_FORCED=0
     ELECTRON_ARGS=()
+    ELECTRON_ENABLE_FEATURES=()
     local passthrough=0
 
     while [ "$#" -gt 0 ]; do
         if [ "$passthrough" -eq 1 ]; then
-            ELECTRON_ARGS+=("$1")
-            scan_electron_rendering_arg "$1"
+            case "$1" in
+                --enable-features=*)
+                    add_electron_enable_features "${1#--enable-features=}"
+                    ;;
+                *)
+                    ELECTRON_ARGS+=("$1")
+                    scan_electron_rendering_arg "$1"
+                    ;;
+            esac
             shift
             continue
         fi
@@ -2584,6 +2631,9 @@ set_electron_defaults() {
                 ELECTRON_OZONE_HINT="${1#--ozone-platform-hint=}"
                 ELECTRON_OZONE_PLATFORM=""
                 ELECTRON_PLATFORM_EXPLICIT=1
+                ;;
+            --enable-features=*)
+                add_electron_enable_features "${1#--enable-features=}"
                 ;;
             *)
                 ELECTRON_ARGS+=("$1")
@@ -2638,6 +2688,8 @@ load_feature_electron_args() {
 }
 
 build_electron_launch_args() {
+    local enable_features_arg
+
     ELECTRON_LAUNCH_ARGS=(
         --no-sandbox
         --class="$CODEX_LINUX_APP_ID"
@@ -2677,7 +2729,11 @@ build_electron_launch_args() {
     fi
 
     if [ "$ELECTRON_OZONE_PLATFORM" = "wayland" ]; then
-        ELECTRON_LAUNCH_ARGS+=(--enable-features=WaylandWindowDecorations)
+        add_electron_enable_features "WaylandWindowDecorations"
+    fi
+
+    if enable_features_arg="$(electron_enable_features_arg)"; then
+        ELECTRON_LAUNCH_ARGS+=("$enable_features_arg")
     fi
 
 }

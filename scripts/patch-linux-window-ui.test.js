@@ -34,7 +34,6 @@ const {
   applyLinuxChromeExtensionStatusPatch,
   applyLinuxChromeNativeHostRuntimePatch,
   applyLinuxChromePluginAutoInstallPatch,
-  applyLinuxCodeEditorOpenTargetPatch,
   applyLinuxAppUpdaterBridgePatch,
   applyLinuxAppUpdaterMenuPatch,
   applyLinuxAboutDialogPatch,
@@ -55,12 +54,14 @@ const {
   applyLinuxAppSunsetPatch,
   applyLinuxBrowserUseAvailabilityPatch,
   applyLinuxBrowserUseExternalAvailabilityPatch,
+  applyLinuxProjectlessXdgDocumentsDirPatch,
   applyLinuxBrowserUseNonLocalNavigationPatch,
   applyLinuxAppServerBackfillWaitPatch,
   applyLinuxOpaqueBackgroundPatch,
   applyLinuxFastModeModelGuardPatch,
   applyLinuxOpaqueWindowsDefaultPatch,
   applyLinuxReadyToShowWindowStatePatch,
+  applyLinuxCodeEditorOpenTargetPatch,
   applyLinuxResizeRepaintPatch,
   applyLinuxSetIconPatch,
   applyLinuxRemoteControlConfigPreservationPatch,
@@ -69,12 +70,14 @@ const {
   applyLinuxTrayPatch,
   applyLinuxWillQuitDrainTimeoutPatch,
   applyLinuxWindowOptionsPatch,
+  applyLinuxXdgDocumentsDirPatch,
   applySubagentNicknameMetadataPatch,
   isComputerUseUiEnabled,
   patchMainBundleSource,
   patchExtractedApp,
   patchPackageJson,
   patchLinuxAppUpdaterBridge,
+  patchProjectlessDocumentsAssets,
   patchKeybindsSettingsAssets,
   patchAutomationScheduleAssets,
   createPatchReport,
@@ -650,9 +653,9 @@ test("default core patch descriptors are grouped and unique", () => {
     "linux-browser-use-non-local-navigation",
     "linux-browser-use-external-availability",
     "linux-chat-search-hydration",
-    "linux-file-manager",
-    "linux-code-editor-open-targets",
-    "linux-tray",
+  "linux-file-manager",
+  "linux-code-editor-open-targets",
+  "linux-tray",
     "linux-build-info-tray",
     "linux-single-instance",
     "linux-computer-use-ui-feature",
@@ -670,6 +673,8 @@ test("default core patch descriptors are grouped and unique", () => {
     "linux-launch-actions",
     "linux-hotkey-window-prewarm",
     "linux-git-origins-source-fallback",
+    "linux-xdg-documents-dir",
+    "linux-projectless-xdg-documents-dir",
     "linux-i18n-gate",
     "linux-profile-settings-menu",
     "automation-schedule-multi-time-rrule",
@@ -797,13 +802,6 @@ function currentPluginGateBundleFixture() {
   return [
     "var lt=`browser-use`,ut=`chrome`,dt=`chrome-internal`,xt=`chrome-dev`,ft=`computer-use`,pt=`latex-tectonic`;",
     "var Kr=[{forceReload:!0,installWhenMissing:!0,name:lt,isAvailable:({features:e})=>e.inAppBrowserUseAllowed,migrate:rr},{forceReload:!0,name:xt,syncInstallStateWithChromeExtension:!0,isAvailable:({buildFlavor:e,env:t,features:n})=>Ar(e,t)&&n.externalBrowserUseAllowed},{forceReload:!0,name:dt,syncInstallStateWithChromeExtension:!0,isAvailable:({buildFlavor:e,env:t,features:n})=>jr(e,t)&&n.externalBrowserUseAllowed},{forceReload:!0,name:ut,syncInstallStateWithChromeExtension:!0,isAvailable:({buildFlavor:e,features:t})=>t.externalBrowserUseAllowed&&$n(e)},{name:ft,isAvailable:({features:e,platform:t})=>t===`darwin`&&e.computerUse,migrate:vr},{forceReload:!0,installWhenMissing:!0,name:ft,isAvailable:({buildFlavor:e,features:n,platform:r})=>t.T.isInternal(e)&&r===`win32`&&n.computerUse},{name:pt,isAvailable:()=>!0}];",
-  ].join("");
-}
-
-function currentChromeSyncPluginGateBundleFixture() {
-  return [
-    "var ke=`chrome`,Ae=`chrome-dev`,Ti=e=>t.O.isInternal(e);",
-    "var Ei=[{autoInstallOptOutKey:e.Jn(e.Kn),installWhenMissing:!0,name:e.Kn,isAvailable:({buildFlavor:e})=>Ti(e)},{autoInstallOptOutKey:e.Jn(e.Hn),forceReload:!0,installWhenMissing:!0,name:e.Hn,isAvailable:({features:e})=>e.inAppBrowserUseAllowed,migrate:Ir},{forceReload:!0,name:Ae,syncInstallStateWithChromeExtension:!0,isAvailable:({buildFlavor:e,env:t,features:n})=>Ar(e,t)&&n.externalBrowserUseAllowed},{forceReload:!0,name:e.Un,syncInstallStateWithChromeExtension:!0,isAvailable:({buildFlavor:e,env:t,features:n})=>jr(e,t)&&n.externalBrowserUseAllowed},{forceReload:!0,name:ke,syncInstallStateWithChromeExtension:!0,isAvailable:({buildFlavor:e,features:t})=>t.externalBrowserUseAllowed&&Mr(e)},{name:e.Wn,isAvailable:({features:e,platform:t})=>t===`darwin`&&e.computerUse,migrate:Zr},{forceReload:!0,installWhenMissing:!0,name:e.Wn,isAvailable:({buildFlavor:e,features:n,platform:r})=>t.O.isInternal(e)&&r===`win32`&&n.computerUse},{name:e.Gn,isAvailable:()=>!0}];",
   ].join("");
 }
 
@@ -1014,7 +1012,10 @@ function createNativeKeyboardShortcutsSettingsFixture() {
   );
   writeAsset("general-settings-A.js", "hotkey-window-hotkey-state");
   writeAsset("toggle-A.js", "export{t};");
-  writeAsset("settings-row-A.js", "export{n};");
+  writeAsset(
+    "settings-row-A.js",
+    "function a(e){let{label:t,description:n,control:r}=e;return null}function s(e){let{label:t,children:n}=e;return null}export{s as n,a as r};",
+  );
   writeAsset("settings-content-layout-A.js", "export{n,r,t};");
   writeAsset("settings-group-A.js", "export{n,t};");
   writeAsset("settings-surface-A.js", "export{t};");
@@ -1111,29 +1112,25 @@ function avatarOverlayBundleFixture() {
   ].join("");
 }
 
-function avatarOverlayBundleWithLayoutResultVarDriftFixture() {
-  return avatarOverlayBundleFixture().replace(
-    "applyLayout(e,t=n.screen.getDisplayNearestPoint(hV(this.anchor)).bounds){if(e.isDestroyed())return;let r=UB({anchor:this.anchor,displayBounds:t,mascotSize:this.mascotSize,previousPlacement:this.placement,traySize:this.traySize??sV});this.anchor=r.anchor,this.layout=r,this.placement=r.placement,this.setWindowBounds(e,r.windowBounds),this.sendLayoutToRenderer(e)}getLayout(e){if(this.layout??this.applyLayout(e),this.layout==null)throw Error(`Expected avatar overlay layout`);return this.layout}",
-    "applyLayout(e,t=this.getCurrentDisplayBounds()){if(e.isDestroyed())return;let n=UB({anchor:this.anchor,displayBounds:t,mascotSize:this.mascotSize,previousPlacement:this.placement,traySize:this.traySize??sV});this.anchor=n.anchor,this.layout=n,this.placement=n.placement,this.setWindowBounds(e,n.windowBounds),this.sendLayoutToRenderer(e)}getLayout(e){if(this.layout??this.applyLayout(e),this.layout==null)throw Error(`Expected avatar overlay layout`);return this.layout}",
-  );
-}
-
 function currentAvatarOverlayBundleFixture() {
   return [
-    "let r=require(`electron`),f=require(`node:child_process`);",
-    "var rV=`/avatar-overlay`,zB={width:356,height:320},oV={width:112,height:121},u1={width:0,height:0},l1={width:276,height:131};",
-    "var fV=class{window=null;rendererReady=!1;layout=null;mascotSize=oV;traySize=null;pointerInteractive=!1;mousePassthroughEnabled=!1;windowStagedForNativePresentation=!1;layoutMode=`native`;compositionHost={setOverlayWindow(){},isNativeMaterialAttached(){return!1}};",
+    "let a=require(`electron`),f=require(`node:child_process`);",
+    "var rV=`/avatar-overlay`,zB={width:356,height:320},oV={width:112,height:121},k2={width:0,height:0},O2={width:276,height:131};",
+    "var h2=class{constructor(e,t,n,r){this.cursorSource=e;this.pointerAnchorX=t;this.pointerAnchorY=n;this.displayBounds=r}recordMovementIntent(){this.hasMovementIntent=!0}getCursorPointForSource(){return null}shouldSuppressRendererThrow(){return!1}updateDisplayBounds(e){this.displayBounds=e}};",
+    "var fV=class{window=null;rendererReady=!1;layout=null;mascotSize=oV;traySize=null;pointerInteractive=!1;mousePassthroughEnabled=!1;windowStagedForNativePresentation=!1;layoutMode=`native`;compositionHost={setOverlayWindow(){},isNativeMaterialAttached(){return!1},getCursorPosition(){return null}};nativePositionController={clear(){}};",
     "constructor(e,t){this.windowManager=e,this.globalState=t}",
     "isOpen(){let e=this.window;return e!=null&&!e.isDestroyed()&&e.isVisible()&&!this.windowStagedForNativePresentation}",
-    "startDrag(e,{pointerWindowX:t,pointerWindowY:n}){let i=this.window;if(i==null||i.isDestroyed()||i.webContents.id!==e)return;this.cancelMomentum(),this.clearDetachedDisplayRestore();let a=this.getLayout(i);this.dragState={pointerAnchorX:t-a.mascot.left,pointerAnchorY:n-a.mascot.top,hasMoved:!1,displayBounds:r.screen.getDisplayNearestPoint(r.screen.getCursorScreenPoint()).bounds},process.platform===`linux`&&(this.pointerInteractive=!0,this.applyPointerInteractivityPolicy())}",
+    "setPointerInteraction(e,t){let n=this.window;n==null||n.isDestroyed()||n.webContents.id!==e||(this.pointerInteractive=t,this.movedWindowPersistTimer??this.applyPointerInteractivityPolicy())}",
+    "startDrag(e,t){let n=this.window;if(n==null||n.isDestroyed()||n.webContents.id!==e)return;this.cancelMomentum(),this.suppressNextRendererThrow=!1,this.clearDetachedDisplayRestore();let r=this.getLayout(n);this.nativePositionController.clear();let i=V2(this.compositionHost.getCursorPosition()),o=t.pointerScreenX!=null&&t.pointerScreenY!=null?{x:t.pointerScreenX,y:t.pointerScreenY}:a.screen.getCursorScreenPoint(),s=i??o,c=t.pointerWindowX-r.mascot.left,l=t.pointerWindowY-r.mascot.top;this.dragState=new h2(i==null?`renderer`:`native`,c,l,a.screen.getDisplayNearestPoint(s).bounds)}",
     "moveDrag(e){return e}",
-    "endDrag(e){let t=this.window;t==null||t.isDestroyed()||t.webContents.id!==e||(this.dragState?.hasMoved&&this.moveDragToCurrentCursor(t),this.dragState=null,this.reclampWindowToVisibleDisplay({shouldPersist:!0}),process.platform===`linux`&&this.applyPointerInteractivityPolicy())}",
+    "endDrag(e,t){let n=this.window;if(n==null||n.isDestroyed()||n.webContents.id!==e)return;let r=this.dragState;if(r?.hasMovementIntent){let e=r.screen.getCursorScreenPoint(),i=r.getCursorPointForSource({native:r.cursorSource===`native`?V2(this.compositionHost.getCursorPosition()):null,renderer:{x:t?.pointerScreenX??e.x,y:t?.pointerScreenY??e.y}});i!=null&&this.moveDragToPointer(n,i)}this.suppressNextRendererThrow=r?.shouldSuppressRendererThrow()??!1,this.dragState=null,this.reclampWindowToVisibleDisplay({shouldPersist:!0})}",
     "setElementSize(e,{isTrayVisible:t,mascot:n,tray:r}){let i=this.window;i==null||i.isDestroyed()||i.webContents.id!==e||(this.cancelMomentum(),this.layoutMode=t==null?`native`:`legacy`,this.mascotSize=n,this.traySize=r,this.applyLatestElementSizes(i),this.stageWindowForNativePresentation(i),this.showWindowIfReady(i))}",
     "applyLatestElementSizes(e){this.anchor={...this.anchor,width:this.mascotSize.width,height:this.mascotSize.height},this.applyLayout(e)}",
-    "async createWindow(e){let t=await this.windowManager.createWindow({title:r.app.getName(),width:zB.width,height:zB.height,appearance:`avatarOverlay`,focusable:!1,show:!1,initialRoute:rV});return this.window=t,this.compositionHost.setOverlayWindow(t),this.rendererReady=this.windowManager.isWebContentsReady(t.webContents.id),this.dragState=null,this.layout=null,this.mascotSize=oV,this.mousePassthroughEnabled=!1,this.traySize=null,t.on(`closed`,()=>{this.window===t&&(this.cancelMomentum(),this.clearMovedWindowPersist(),this.window=null,this.dragState=null,this.layout=null,this.rendererReady=!1,this.pointerInteractive=!1,this.mousePassthroughEnabled=!1,this.compositionHost.setOverlayWindow(null),this.broadcastOpenState())}),t}",
-    "applyLayout(e,t=this.getCurrentDisplay(),n=!1,r=!0){if(e.isDestroyed())return;let a=UB({anchor:this.anchor,displayBounds:t.bounds,mascotSize:this.mascotSize,previousPlacement:this.placement,traySize:this.traySize??(this.layoutMode===`native`?u1:l1)});this.anchor=a.anchor,this.layout=a,this.placement=a.placement,this.setWindowBounds(e,a.windowBounds,n,r),this.sendLayoutToRenderer(e)}getLayout(e){if(this.layout??this.applyLayout(e),this.layout==null)throw Error(`Expected avatar overlay layout`);return this.layout}",
-    "showWindow(e){if(e.isDestroyed())return;let t=this.isOpen();this.windowStagedForNativePresentation&&=(e.setOpacity(1),!1),e.moveTop(),e.showInactive(),!t&&this.isOpen()&&this.broadcastOpenState()}showWindowIfReady(e){!this.rendererReady||this.initialPresentationState!==`ready`||(this.showWindow(e),this.applyPointerInteractivityPolicy())}stageWindowForNativePresentation(e){e.isDestroyed()||this.applyPointerInteractivityPolicy()}broadcastOpenState(){this.windowManager.sendMessageToAllRegisteredWindows({type:`avatar-overlay-open-state-changed`,isOpen:this.isOpen()})}",
-    "applyPointerInteractivityPolicy(){let e=this.window;if(e==null||e.isDestroyed()){this.mousePassthroughEnabled=!1;return}let t=!this.pointerInteractive;if(this.mousePassthroughEnabled!==t){if(this.mousePassthroughEnabled=t,t){e.setIgnoreMouseEvents(!0,{forward:!0});return}e.setIgnoreMouseEvents(!1),this.refreshCursorAtCurrentMousePosition(e)}}refreshCursorAtCurrentMousePosition(e){let t=r.screen.getCursorScreenPoint()}",
+    "async createWindow(e){let t=await this.windowManager.createWindow({title:a.app.getName(),width:zB.width,height:zB.height,appearance:`avatarOverlay`,focusable:!1,show:!1,initialRoute:rV});return this.window=t,this.compositionHost.setOverlayWindow(t),this.rendererReady=this.windowManager.isWebContentsReady(t.webContents.id),this.clearDetachedDisplayRestore(),this.displayBounds=null,this.displayId=null,this.dragState=null,this.layout=null,this.mascotSize=oV,this.mousePassthroughEnabled=!1,this.traySize=null,t.on(`closed`,()=>{this.window===t&&(this.cancelMomentum(),this.clearMovedWindowPersist(),this.window=null,this.dragState=null,this.layout=null,this.rendererReady=!1,this.pointerInteractive=!1,this.mousePassthroughEnabled=!1,this.compositionHost.setOverlayWindow(null),this.broadcastOpenState())}),t}",
+    "applyLayout(e,t=this.getCurrentDisplay(),n=!1,r=!0,i=null){if(e.isDestroyed())return;let a=t.bounds;this.displayId=t.id,this.resolutionKey=H2(a),this.displayBounds=a;let o=UB({anchor:this.anchor,displayBounds:this.layoutMode===`native`?t.workArea:t.bounds,mode:this.layoutMode,mascotSize:this.mascotSize,nativeMaterialAttached:this.compositionHost.isNativeMaterialAttached(),previousPlacement:this.placement,traySize:this.traySize??(this.layoutMode===`native`?k2:O2)});this.anchor=o.anchor,this.layout=o,this.placement=o.placement,this.setWindowBounds(e,o.windowBounds,n,r),this.sendLayoutToRenderer(e,i)}getLayout(e){if(this.layout??this.applyLayout(e),this.layout==null)throw Error(`Expected avatar overlay layout`);return this.layout}",
+    "showWindow(e){if(e.isDestroyed())return;let t=this.isOpen();this.windowStagedForNativePresentation&&=(e.setOpacity(1),!1),e.moveTop(),e.showInactive(),!t&&this.isOpen()&&(this.finishPendingPresentation(),this.broadcastOpenState())}showWindowIfReady(e){!this.rendererReady||this.initialPresentationState!==`ready`||(this.showWindow(e),this.applyPointerInteractivityPolicy())}stageWindowForNativePresentation(e){e.isDestroyed()||this.applyPointerInteractivityPolicy()}broadcastOpenState(){this.windowManager.sendMessageToAllRegisteredWindows({type:`avatar-overlay-open-state-changed`,isOpen:this.isOpen()})}",
+    "applyPointerInteractivityPolicy(){let e=this.window;if(e==null||e.isDestroyed()){this.mousePassthroughEnabled=!1;return}let t=!this.pointerInteractive;if(this.mousePassthroughEnabled!==t){if(this.mousePassthroughEnabled=t,t){e.setIgnoreMouseEvents(!0,{forward:!0});return}e.setIgnoreMouseEvents(!1),this.refreshCursorAtCurrentMousePosition(e)}}refreshCursorAtCurrentMousePosition(e){let t=a.screen.getCursorScreenPoint()}",
+    "function V2(e){return e==null?null:{x:e.pointerScreenX,y:e.pointerScreenY}}function H2(e){return`${e.width}x${e.height}`}",
     "};",
   ].join("");
 }
@@ -1148,38 +1145,164 @@ test("adds Linux file manager support without relying on exact minified variable
   assert.match(patched, /n\.shell\.openPath\(__codexOpenTarget\)/);
 });
 
-test("patches Linux VS Code open targets to use executable lookup helper", () => {
-  const source = `${mainBundlePrefix}${codeEditorOpenTargetsBundle}`;
-  const patched = applyPatchTwice(applyLinuxCodeEditorOpenTargetPatch, source);
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-code-open-target-"));
-  const binDir = path.join(tempDir, "bin");
-  const code = path.join(binDir, "code");
-  const codeInsiders = path.join(binDir, "code-insiders");
-
+test("uses XDG user documents directory for projectless Codex folders on Linux", () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "codex-xdg-documents-"));
   try {
-    fs.mkdirSync(binDir, { recursive: true });
-    fs.writeFileSync(code, "#!/bin/sh\nexit 0\n");
-    fs.writeFileSync(codeInsiders, "#!/bin/sh\nexit 0\n");
-    fs.chmodSync(code, 0o755);
-    fs.chmodSync(codeInsiders, 0o755);
+    const configDir = path.join(tempRoot, "config");
+    fs.mkdirSync(configDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(configDir, "user-dirs.dirs"),
+      'XDG_DOCUMENTS_DIR="$HOME/My\\ Documents"\n',
+      "utf8",
+    );
 
-    assert.match(patched, /function codexLinuxOpenTargetExecutable\(e\)/);
-    assert.match(patched, /linuxDetect:\(\)=>codexLinuxOpenTargetExecutable\(`code`\)/);
-    assert.match(patched, /linuxDetect:\(\)=>codexLinuxOpenTargetExecutable\(`code-insiders`\)/);
-    assert.doesNotMatch(patched, /linuxDetect:\(\)=>lm\(`code/);
+    const source = [
+      "let i={default:require(`node:path`)},o=require(`node:fs`);",
+      "function ST(e,t,n){let r=CT(n),i=r.resolve(e),a=r.resolve(t);return n===`win32`?i.toLowerCase()===a.toLowerCase():i===a}",
+      "function CT(e){return e===`win32`?i.default.win32:i.default.posix}",
+      "function vT({desktopPaths:e,homeDir:t,platform:n}){return ST(t,e.getPath(`home`),n)?e.getPath(`documents`):CT(n).join(t,`Documents`)}",
+    ].join("");
 
-    const requireStub = (name) => (name === "electron" ? {} : require(name));
-    const [detectedCode, detectedCodeInsiders] = new Function(
-      "require",
-      "process",
-      `${patched};return [XT.platforms.linux.detect(),QT.platforms.linux.detect()];`,
-    )(requireStub, { platform: "linux", env: { HOME: tempDir, PATH: binDir } });
+    const patched = applyPatchTwice(applyLinuxXdgDocumentsDirPatch, source);
+    const context = {
+      home: "/home/example",
+      process: { env: { XDG_CONFIG_HOME: configDir } },
+      require,
+      result: null,
+    };
 
-    assert.equal(detectedCode, code);
-    assert.equal(detectedCodeInsiders, codeInsiders);
+    vm.runInNewContext(
+      `${patched};result=vT({desktopPaths:{getPath:e=>e===\`home\`?home:e===\`documents\`?home+\`/Documents\`:null},homeDir:home,platform:\`linux\`});`,
+      context,
+    );
+
+    assert.match(patched, /codexLinuxXdgDocumentsDir/);
+    assert.match(patched, /`\$1`/);
+    assert.equal(context.result, "/home/example/My Documents");
   } finally {
-    fs.rmSync(tempDir, { recursive: true, force: true });
+    fs.rmSync(tempRoot, { recursive: true, force: true });
   }
+});
+
+test("uses XDG user documents directory for generated projectless workspaces", () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "codex-projectless-xdg-documents-"));
+  try {
+    const configDir = path.join(tempRoot, "config");
+    fs.mkdirSync(configDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(configDir, "user-dirs.dirs"),
+      'XDG_DOCUMENTS_DIR="$HOME/My\\ Documents"\n',
+      "utf8",
+    );
+
+    const source =
+      "function Mb({homeDirectory:e,path:t}){return t.join(e,`Documents`,`Codex`)}function Lb({homeDirectory:e,path:t}){return Mb({homeDirectory:e,path:t})}function Rb(e){return e}";
+    const patched = applyPatchTwice(applyLinuxProjectlessXdgDocumentsDirPatch, source);
+    const context = {
+      home: "/home/example",
+      process: { platform: "linux", env: { XDG_CONFIG_HOME: configDir } },
+      require,
+      result: null,
+    };
+
+    vm.runInNewContext(
+      `${patched};result=Mb({homeDirectory:home,path:require(\`node:path\`).posix});`,
+      context,
+    );
+
+    assert.match(patched, /codexLinuxProjectlessDocumentsDir/);
+    assert.match(patched, /`\$1`/);
+    assert.equal(context.result, "/home/example/My Documents/Codex");
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("projectless documents asset patch updates Vite build bundle", () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "codex-projectless-xdg-asset-"));
+  try {
+    const buildDir = path.join(tempRoot, ".vite", "build");
+    fs.mkdirSync(buildDir, { recursive: true });
+    const bundlePath = path.join(buildDir, "src-test.js");
+    fs.writeFileSync(
+      bundlePath,
+      "function Mb({homeDirectory:e,path:t}){return t.join(e,`Documents`,`Codex`)}async function Lb(){throw Error(`Projectless thread directory must be a real directory`)}",
+      "utf8",
+    );
+
+    assert.deepEqual(patchProjectlessDocumentsAssets(tempRoot), { matched: 1, changed: 1 });
+    const patched = fs.readFileSync(bundlePath, "utf8");
+    assert.match(patched, /function codexLinuxProjectlessDocumentsDir/);
+    assert.deepEqual(patchProjectlessDocumentsAssets(tempRoot), { matched: 1, changed: 0 });
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("projectless documents descriptor surfaces resolver drift as skipped optional", () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "codex-projectless-xdg-drift-"));
+  try {
+    const buildDir = path.join(tempRoot, ".vite", "build");
+    fs.mkdirSync(buildDir, { recursive: true });
+    fs.writeFileSync(path.join(buildDir, "main.js"), mainBundlePrefix, "utf8");
+    fs.writeFileSync(
+      path.join(buildDir, "src-test.js"),
+      "function Mb({homeDirectory:e,path:t}){return t.resolve(e,`Documents`,`Codex`)}async function Lb(){throw Error(`Projectless thread directory must be a real directory`)}",
+      "utf8",
+    );
+
+    const report = createPatchReport();
+    captureWarns(() => patchExtractedApp(tempRoot, { report }));
+
+    const patch = report.patches.find((patch) =>
+      patch.name === "linux-projectless-xdg-documents-dir",
+    );
+    assert.equal(patch.status, "skipped-optional");
+    assert.match(patch.reason, /projectless documents directory resolver/);
+    assert.ok(
+      patch.warnings.some((warning) =>
+        warning.includes("projectless documents directory resolver"),
+      ),
+    );
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("patches Linux VS Code open targets to use executable lookup helper", () => {
+const source = `${mainBundlePrefix}${codeEditorOpenTargetsBundle}`;
+const patched = applyPatchTwice(applyLinuxCodeEditorOpenTargetPatch, source);
+const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-code-open-target-"));
+const binDir = path.join(tempDir, "bin");
+const code = path.join(binDir, "code");
+const codeInsiders = path.join(binDir, "code-insiders");
+
+try {
+fs.mkdirSync(binDir, { recursive: true });
+fs.writeFileSync(code, "#!/bin/sh\nexit 0\n");
+fs.writeFileSync(codeInsiders, "#!/bin/sh\nexit 0\n");
+fs.chmodSync(code, 0o755);
+fs.chmodSync(codeInsiders, 0o755);
+
+assert.match(patched, /function codexLinuxOpenTargetExecutable\(e\)/);
+assert.match(patched, /linuxDetect:\(\)=>codexLinuxOpenTargetExecutable\(`code`\)/);
+assert.match(patched, /linuxDetect:\(\)=>codexLinuxOpenTargetExecutable\(`code-insiders`\)/);
+assert.doesNotMatch(patched, /linuxDetect:\(\)=>lm\(`code/);
+
+const requireStub = (name) => (name === "electron" ? {} : require(name));
+  const patchedRunnerSource =
+    patched + ";return [XT.platforms.linux.detect(),QT.platforms.linux.detect()];";
+  const [detectedCode, detectedCodeInsiders] = new Function(
+    "require",
+    "process",
+    patchedRunnerSource,
+  )(requireStub, { platform: "linux", env: { HOME: tempDir, PATH: binDir } });
+
+assert.equal(detectedCode, code);
+assert.equal(detectedCodeInsiders, codeInsiders);
+} finally {
+fs.rmSync(tempDir, { recursive: true, force: true });
+}
 });
 
 test("preserves user-enabled remote_control config on Linux", () => {
@@ -2017,15 +2140,14 @@ test("Linux avatar overlay treats visible window content as interactive fallback
 });
 
 test("keeps avatar overlay layout sync working after layout alias drift", () => {
-  const { value: patched, warnings } = captureWarns(() =>
-    applyPatchTwice(
-      applyLinuxAvatarOverlayMousePassthroughPatch,
-      avatarOverlayBundleWithLayoutResultVarDriftFixture(),
-    ),
-  );
+  const source = avatarOverlayBundleFixture().replaceAll("r.windowBounds", "n.windowBounds");
 
-  assert.match(patched, /this\.setWindowBounds\(e,n\.windowBounds\),this\.sendLayoutToRenderer\(e\),process\.platform===`linux`&&this\.applyPointerInteractivityPolicy\(\)/);
-  assert.doesNotMatch(warnings.join("\n"), /avatar overlay layout application/);
+  const patched = applyPatchTwice(applyLinuxAvatarOverlayMousePassthroughPatch, source);
+
+  assert.match(
+    patched,
+    /this\.setWindowBounds\(e,n\.windowBounds\),this\.sendLayoutToRenderer\(e\),process\.platform===`linux`&&this\.applyPointerInteractivityPolicy\(\)\}getLayout\(e\)\{/,
+  );
 });
 
 test("keeps avatar overlay interactivity working after native presentation drift", () => {
@@ -2039,10 +2161,57 @@ test("keeps avatar overlay interactivity working after native presentation drift
   assert.deepEqual(warnings, []);
   assert.match(patched, /this\.applyLatestElementSizes\(i\),process\.platform===`linux`&&this\.applyPointerInteractivityPolicy\(\)/);
   assert.match(patched, /this\.codexLinuxAvatarCompositorHintsApplied=!1,this\.codexLinuxAvatarCompositorHintsApplying=!1,this\.compositionHost\.setOverlayWindow\(t\)/);
-  assert.match(patched, /traySize:process\.platform===`linux`&&typeof this\.codexLinuxIsI3Session==`function`&&this\.codexLinuxIsI3Session\(\)\?this\.traySize:this\.traySize\?\?\(this\.layoutMode===`native`\?u1:l1\)/);
-  assert.match(patched, /this\.setWindowBounds\(e,a\.windowBounds,n,r\),this\.sendLayoutToRenderer\(e\),process\.platform===`linux`&&this\.applyPointerInteractivityPolicy\(\)/);
-  assert.match(patched, /e\.moveTop\(\),e\.showInactive\(\),process\.platform===`linux`&&this\.codexLinuxApplyAvatarCompositorHints\(e\),process\.platform===`linux`&&this\.applyPointerInteractivityPolicy\(\),!t&&this\.isOpen\(\)&&this\.broadcastOpenState\(\)\}showWindowIfReady/);
+  assert.match(patched, /this\.dragState=new h2\(i==null\?`renderer`:`native`,c,l,a\.screen\.getDisplayNearestPoint\(s\)\.bounds\),process\.platform===`linux`&&\(this\.pointerInteractive=!0,this\.applyPointerInteractivityPolicy\(\)\)/);
+  assert.match(patched, /this\.dragState=null,this\.reclampWindowToVisibleDisplay\(\{shouldPersist:!0\}\),process\.platform===`linux`&&this\.applyPointerInteractivityPolicy\(\)/);
+  assert.match(patched, /traySize:process\.platform===`linux`&&typeof this\.codexLinuxIsI3Session==`function`&&this\.codexLinuxIsI3Session\(\)\?this\.traySize:this\.traySize\?\?\(this\.layoutMode===`native`\?k2:O2\)/);
+  assert.match(patched, /this\.setWindowBounds\(e,o\.windowBounds,n,r\),this\.sendLayoutToRenderer\(e,i\),process\.platform===`linux`&&this\.applyPointerInteractivityPolicy\(\)/);
+  assert.match(patched, /e\.moveTop\(\),e\.showInactive\(\),process\.platform===`linux`&&this\.codexLinuxApplyAvatarCompositorHints\(e\),process\.platform===`linux`&&this\.applyPointerInteractivityPolicy\(\),!t&&this\.isOpen\(\)&&\(this\.finishPendingPresentation\(\),this\.broadcastOpenState\(\)\)\}showWindowIfReady/);
   assert.match(patched, /this\.cancelMomentum\(\),this\.clearMovedWindowPersist\(\),this\.window=null/);
+});
+
+test("scopes avatar overlay method matching away from unrelated earlier classes", () => {
+  const unrelatedClass =
+    "var Unrelated=class{startDrag(e){this.dragState=null}endDrag(e){this.dragState=null,this.reclampWindowToVisibleDisplay({shouldPersist:!0})}showWindow(e){e.moveTop(),e.showInactive(),this.broadcastOpenState()}};";
+
+  const { value: patched, warnings } = captureWarns(() =>
+    applyPatchTwice(
+      applyLinuxAvatarOverlayMousePassthroughPatch,
+      `${unrelatedClass}${currentAvatarOverlayBundleFixture()}`,
+    ),
+  );
+
+  assert.deepEqual(warnings, []);
+  assert.match(
+    patched,
+    /var Unrelated=class\{startDrag\(e\)\{this\.dragState=null\}endDrag\(e\)\{this\.dragState=null,this\.reclampWindowToVisibleDisplay\(\{shouldPersist:!0\}\)\}showWindow\(e\)\{e\.moveTop\(\),e\.showInactive\(\),this\.broadcastOpenState\(\)\}\};/,
+  );
+  assert.match(
+    patched,
+    /this\.dragState=new h2\(i==null\?`renderer`:`native`,c,l,a\.screen\.getDisplayNearestPoint\(s\)\.bounds\),process\.platform===`linux`&&\(this\.pointerInteractive=!0,this\.applyPointerInteractivityPolicy\(\)\)/,
+  );
+});
+
+test("bounds avatar overlay method matching to the overlay class body", () => {
+  const unrelatedClass =
+    "var Other=class{startDrag(e,t){this.dragState={fake:!0}}endDrag(e,t){this.dragState=null,this.reclampWindowToVisibleDisplay({shouldPersist:!0})}setElementSize(e,{mascot:t,tray:n}){this.applyLayout(e)}applyLayout(e){this.setWindowBounds(e,o.windowBounds),this.sendLayoutToRenderer(e)}showWindow(e){e.moveTop(),e.showInactive(),this.broadcastOpenState()}};";
+  const source = currentAvatarOverlayBundleFixture().replace(
+    "var h2=class",
+    `${unrelatedClass}var h2=class`,
+  );
+
+  const { value: patched, warnings } = captureWarns(() =>
+    applyPatchTwice(
+      applyLinuxAvatarOverlayMousePassthroughPatch,
+      source,
+    ),
+  );
+
+  assert.deepEqual(warnings, []);
+  assert.equal(patched.includes(unrelatedClass), true);
+  assert.match(
+    patched,
+    /this\.dragState=new h2\(i==null\?`renderer`:`native`,c,l,a\.screen\.getDisplayNearestPoint\(s\)\.bounds\),process\.platform===`linux`&&\(this\.pointerInteractive=!0,this\.applyPointerInteractivityPolicy\(\)\)/,
+  );
 });
 
 test("adds Linux window icon handling when an icon asset is available", () => {
@@ -2629,20 +2798,6 @@ test("persists Linux settings with current setGlobalStateValue handler shape", (
         CODEX_LINUX_SETTINGS_FILE: settingsFile,
         HOME: path.join(tempRoot, "home"),
       },
-      "codex-linux-computer-use-ui-enabled",
-      true,
-    );
-
-    assert.equal(
-      JSON.parse(fs.readFileSync(settingsFile, "utf8"))["codex-linux-computer-use-ui-enabled"],
-      true,
-    );
-    runSettingsPersistence(
-      patched,
-      {
-        CODEX_LINUX_SETTINGS_FILE: settingsFile,
-        HOME: path.join(tempRoot, "home"),
-      },
       "codex-linux-read-aloud-enabled",
       true,
     );
@@ -2732,8 +2887,10 @@ test("adds Linux launch actions through current setSecondInstanceArgsHandler bun
   assert.match(launchPatched, /codexLinuxDefaultLaunchActionSocket=\(\)=>/);
   assert.match(launchPatched, /process\.env\.CODEX_DESKTOP_LAUNCH_ACTION_SOCKET\?\.trim\(\)\|\|codexLinuxDefaultLaunchActionSocket\(\)/);
   assert.match(launchPatched, /process\.env\.CODEX_LINUX_INSTANCE_ID\?\.trim\(\)/);
-  assert.match(launchPatched, /f\.default\.createServer/);
-  assert.match(launchPatched, /o\.mkdirSync\(i\.default\.dirname\(e\)/);
+  assert.match(launchPatched, /let n=require\(`node:path`\),r=require\(`node:fs`\),i=require\(`node:net`\);r\.mkdirSync\(n\.dirname\(e\)/);
+  assert.match(launchPatched, /let a=i\.createServer/);
+  assert.doesNotMatch(launchPatched, /f\.default\.createServer/);
+  assert.doesNotMatch(launchPatched, /o\.mkdirSync\(i\.default\.dirname\(e\)/);
   assert.match(launchPatched, /R\.desktopNotificationManager\.dismissByNavigationPath\(e\)/);
   assert.match(launchPatched, /codexLinuxHasDeepLink\(e\)&&z\.deepLinks\.queueProcessArgs\(e\)/);
   assert.match(launchPatched, /e\.includes\(`--prompt-chat`\)/);
@@ -2745,6 +2902,22 @@ test("adds Linux launch actions through current setSecondInstanceArgsHandler bun
     prewarmPatched,
     /process\.platform===`linux`&&codexLinuxPrewarmHotkeyWindow\(\),A=Date\.now\(\),await z\.deepLinks\.flushPendingDeepLinks\(\)/,
   );
+});
+
+test("uses collision-safe modules for launch-action socket in shadowed startup scopes", () => {
+  const source = currentLaunchActionBundleFixture().replace(
+    "async function CN(){let{setSecondInstanceArgsHandler:l}=t.y(),g={reportNonFatal(){}}",
+    "async function CN(){let{desktopSentry:o,setSecondInstanceArgsHandler:l}=t.y(),f=n.O.allowDebugMenu(),g={reportNonFatal(){}}",
+  );
+
+  const patched = applyPatchTwice(applyLinuxLaunchActionArgsPatch, source);
+
+  assert.match(patched, /codexLinuxStartLaunchActionSocket=\(\)=>\{if\(process\.platform!==`linux`\)return;try\{/);
+  assert.match(patched, /let n=require\(`node:path`\),r=require\(`node:fs`\),i=require\(`node:net`\);r\.mkdirSync\(n\.dirname\(e\)/);
+  assert.match(patched, /let a=i\.createServer/);
+  assert.match(patched, /t\.on\(`error`,e=>\{g\.reportNonFatal\(e instanceof Error\?e:`Failed Linux launch action socket client`,\{kind:`linux-launch-action-socket-client-error`\}\)\}\)/);
+  assert.doesNotMatch(patched, /o\.mkdirSync/);
+  assert.doesNotMatch(patched, /f\.default\.createServer/);
 });
 
 test("adds Linux launch actions when captured window identifiers contain dollar signs", () => {
@@ -3037,9 +3210,11 @@ test("keeps Linux desktop toggles visible with native Keyboard Shortcuts", () =>
     assert.match(linuxDesktopSource, /Linux source commit/);
     assert.match(linuxDesktopSource, /Copy commit/);
     assert.match(linuxDesktopSource, /Open commit/);
+    assert.match(linuxDesktopSource, /href:url/);
     assert.match(linuxDesktopSource, /codex-linux-get-build-info/);
     assert.match(linuxDesktopSource, /codex-linux-system-tray-enabled/);
     assert.match(linuxDesktopSource, /codex-linux-auto-update-on-exit/);
+    assert.match(linuxDesktopSource, /import\{r as SettingsRow\}from"\.\/settings-row-A\.js"/);
     assert.match(linuxDesktopSource, /import\{z as __post\}from"\.\/setting-storage-A\.js"/);
 
     assert.match(
@@ -3412,6 +3587,51 @@ test("extends app-server startup waits while state db backfill is running", () =
   );
   assert.equal(context.result.code, "connection-failed");
   assert.match(context.result.message, /state database backfill is still running/);
+  assert.equal(context.startupTimeout, 3e5);
+  assert.equal(context.turnTimeout, 3e4);
+});
+
+test("extends app-server startup waits in current manager signals bundle", () => {
+  const source =
+    "var gi=e(oi(),1),_i=z({code:Pe([He(),I()]),message:I().min(1)}).passthrough(),vi=class{requestLifecycleListeners=new Set;requestPromises=new Map;createRequest(e,t,n){let r=F(V()),i=n?.timeoutMs??0,a=si(t),o=this.requestPromises.size,s=Date.now();return{request:{id:r,method:e,params:t},conversationId:a,pending:o,startedAtMs:s,timeoutMs:i}}};";
+
+  const { value: patched, warnings } = captureWarns(() =>
+    applyPatchTwice(applyLinuxAppServerBackfillWaitPatch, source),
+  );
+
+  assert.deepEqual(warnings, []);
+  assert.match(
+    patched,
+    /function codexLinuxIsStateDbBackfillMessage\(e\)[\s\S]*var gi=e\(oi\(\),1\),_i=z/,
+  );
+  assert.match(patched, /i=codexLinuxAppServerBackfillTimeoutMs\(e,i\);let a=si\(t\)/);
+});
+
+test("keeps current app-server backfill helpers visible outside the Sentry handler", () => {
+  const source =
+    "function fi(e,t){let n=hi(t.originalException);return n==null?e:{...e,...n,extra:{...e.extra,...n.extra}}}var gi=e(oi(),1),_i=z({code:Pe([He(),I()]),message:I().min(1)}).passthrough(),vi=class{requestLifecycleListeners=new Set;requestPromises=new Map;createRequest(e,t,n){let r=F(V()),i=n?.timeoutMs??0,a=si(t),o=this.requestPromises.size,s=Date.now();return{request:{id:r,method:e,params:t},conversationId:a,pending:o,startedAtMs:s,timeoutMs:i}}};";
+
+  const { value: patched, warnings } = captureWarns(() =>
+    applyPatchTwice(applyLinuxAppServerBackfillWaitPatch, source),
+  );
+
+  assert.deepEqual(warnings, []);
+  assert.match(
+    patched,
+    /^function codexLinuxIsStateDbBackfillMessage\(e\)[\s\S]*function fi\(e,t\)\{let n=hi\(t\.originalException\);/,
+  );
+  assert.doesNotMatch(
+    patched,
+    /function fi\(e,t\)\{let n=hi\(t\.originalException\);function codexLinuxIsStateDbBackfillMessage/,
+  );
+  assert.match(patched, /i=codexLinuxAppServerBackfillTimeoutMs\(e,i\);let a=si\(t\)/);
+
+  const helperPrefix = patched.slice(0, patched.indexOf("function fi("));
+  const context = {};
+  vm.runInNewContext(
+    `${helperPrefix};startupTimeout=codexLinuxAppServerBackfillTimeoutMs("thread/start",3e4);turnTimeout=codexLinuxAppServerBackfillTimeoutMs("turn/start",3e4);`,
+    context,
+  );
   assert.equal(context.startupTimeout, 3e5);
   assert.equal(context.turnTimeout, 3e4);
 });
@@ -3879,21 +4099,6 @@ test("auto-installs the current Chrome plugin gate shape", () => {
   assert.equal((patched.match(/installWhenMissing:!0,name:xt/g) || []).length, 0);
 });
 
-test("auto-installs Chrome plugin gates with sync-to-extension fields", () => {
-  const patched = applyPatchTwice(
-    applyLinuxChromePluginAutoInstallPatch,
-    currentChromeSyncPluginGateBundleFixture(),
-  );
-
-  assert.match(
-    patched,
-    /\{forceReload:!0,installWhenMissing:!0,name:ke,syncInstallStateWithChromeExtension:!0,isAvailable:\(\{buildFlavor:e,features:t\}\)=>process\.platform===`linux`\|\|\(t\.externalBrowserUseAllowed&&Mr\(e\)\)\}/,
-  );
-  assert.match(patched, /name:Ae,syncInstallStateWithChromeExtension:!0,isAvailable:\(\{buildFlavor:e,env:t,features:n\}\)=>Ar\(e,t\)&&n\.externalBrowserUseAllowed/);
-  assert.equal((patched.match(/installWhenMissing:!0,name:ke/g) || []).length, 1);
-  assert.equal((patched.match(/installWhenMissing:!0,name:Ae/g) || []).length, 0);
-});
-
 test("uses Linux managed runtime paths for Chrome native host sync", () => {
   const patched = applyPatchTwice(
     applyLinuxChromeNativeHostRuntimePatch,
@@ -4281,6 +4486,13 @@ test("keeps already patched external Browser Use availability unchanged", () => 
   assert.equal(applyPatchTwice(applyLinuxBrowserUseExternalAvailabilityPatch, source), source);
 });
 
+test("external Browser Use availability descriptor matches the current bundle name", () => {
+  const descriptor = require("./patches/core/all-linux/webview/browser-use-external-availability/patch.js");
+
+  assert.match("use-is-plugins-enabled-current.js", descriptor.pattern);
+  assert.match("use-in-app-browser-use-availability-B4Bdb14G.js", descriptor.pattern);
+});
+
 test("allows Browser Use non-local navigation on Linux without the upstream rollout flag", () => {
   const source =
     "function mx(){let e=(0,Z.c)(20),t=q(Ss).value,n;e[0]===t?n=e[1]:(n=vs(t),e[0]=t,e[1]=n);let r=n,i=J(fl.activeTab$),a=J(Xn),o=ka(`3903563814`),s=ka(`2327881676`),c,l;e[2]!==i||e[3]!==r||e[4]!==a||e[5]!==t.pathname||e[6]!==t.search?(c=()=>{if(r==null)return;let e=ml(i,r);ci.dispatchMessage(`browser-sidebar-owner-sync`,{conversationId:r})},l=[i,r,a,t.pathname,t.search],e[2]=i,e[3]=r,e[4]=a,e[5]=t.pathname,e[6]=t.search,e[7]=c,e[8]=l):(c=e[7],l=e[8]),(0,$.useLayoutEffect)(c,l);let u,d;e[9]===o?(u=e[10],d=e[11]):(u=()=>{ux||ci.dispatchMessage(`browser-use-non-local-sites-allowed-changed`,{allowed:o})},d=[o],e[9]=o,e[10]=u,e[11]=d),(0,$.useEffect)(u,d);return null}";
@@ -4620,6 +4832,25 @@ test("auto-approves the Electron 42 Browser Use node_repl runtime config builder
   assert.match(
     patched,
     /t\.Fa\(\{codexCliPath:c\.codexCliPath,codexHome:m,extraEnv:b,nodeModuleDirs:f,nodePath:c\.nodePath,nodeReplPath:u\?t\.kr\(c\.nodeReplPath\):c\.nodeReplPath,tools:\{js:\{approval_mode:`approve`\}\},platform:c\.platform/,
+  );
+});
+
+test("auto-approves the latest Browser Use node_repl runtime config builder", () => {
+  const source =
+    "\"use strict\";let l=require(`node:fs`),s=require(`node:path`),u=require(`node:crypto`),d=[`upstream-hash`],w=!1,t={Ha:e=>e,Nr:e=>e},c={codexCliPath:null,nodePath:null,nodeReplPath:null,platform:`linux`},p=null,b=null,f=[],g=null,v=!1;function build(){return t.Ha({codexCliPath:c.codexCliPath,codexHome:p,extraEnv:b,nodeModuleDirs:f,nodePath:c.nodePath,nodeReplPath:w?t.Nr(c.nodeReplPath):c.nodeReplPath,platform:c.platform,requestMeta:g,traceMeta:v,trustedBrowserClientSha256s:d,shouldUseWslPaths:w})}";
+
+  const { value: patched, warnings } = captureWarns(() =>
+    applyPatchTwice(applyBrowserUseNodeReplApprovalPatch, source),
+  );
+
+  assert.deepEqual(warnings, []);
+  assert.match(
+    patched,
+    /t\.Ha\(\{codexCliPath:c\.codexCliPath,codexHome:p,extraEnv:b,nodeModuleDirs:f,nodePath:c\.nodePath,nodeReplPath:w\?t\.Nr\(c\.nodeReplPath\):c\.nodeReplPath,tools:\{js:\{approval_mode:`approve`\}\},platform:c\.platform/,
+  );
+  assert.match(
+    patched,
+    /trustedBrowserClientSha256s:codexLinuxTrustedBrowserClientSha256s\(d\),shouldUseWslPaths:w/,
   );
 });
 

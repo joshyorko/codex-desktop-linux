@@ -52,6 +52,7 @@ function appshotMainProcessBundleFixture() {
 function appshotHotkeyMainBundleFixture() {
   return [
     "var uG=`DoubleCommand`,dG=6e4;",
+    "var SO=new Set([`cmdorctrl`,`command`,`cmd`,`control`,`ctrl`,`alt`,`option`]),CO=new Set([...SO,`shift`]);",
     "function rw(e,t=process.platform){return t===`darwin`&&aw(e)!=null}",
     "function QC(e,t,r=`press`){if(process.platform!==`darwin`)return null;let i=aw(e);return i==null?null:KC(e,t,r)}",
     "function bw(e,t,r){if(iw(e))return rw(e)?QC(e,t,r?.bareModifierTrigger):null;let i=Ew(e),a=()=>{t.onPressed()},o=n.globalShortcut.register(i,a);return o?{handlesRelease:!1,unregister:()=>{n.globalShortcut.unregister(i)}}:null}",
@@ -62,6 +63,7 @@ function appshotHotkeyMainBundleFixture() {
 function appshotHotkeyStoredMainBundleFixture() {
   return [
     "var bX=`DoubleCommand`,xX=6e4;",
+    "var JE=new Set([`cmdorctrl`,`command`,`cmd`,`control`,`ctrl`,`alt`,`option`]),LE=new Set([...JE,`shift`]);",
     "function CE(e,t=process.platform){return t===`darwin`&&TE(e)!=null}",
     "function vE(e,t,n=`press`){if(process.platform!==`darwin`)return null;let r=TE(e);return r==null?null:DE(r,t,n)}",
     "function HE(e,t=process.platform){let n=GE(e);if(CE(e,t))return null;if(n.some(wE))return n.length===1?t===`darwin`?CE(e,t)?null:`This shortcut key is not supported.`:`Choose a shortcut with Ctrl or Alt plus another key.`:`Use Ctrl, Alt, or Command when combining with another key.`;return null}",
@@ -72,7 +74,7 @@ function appshotHotkeyStoredMainBundleFixture() {
 function appshotSettingsBundleFixture() {
   return [
     "var O=d(),A=e(t(),1),j=n(),M=[{hotkey:`DoubleCommand`,label:`\\u2318 + \\u2318`},{hotkey:`DoubleOption`,label:`\\u2325 + \\u2325`},{hotkey:`DoubleShift`,label:`\\u21e7 + \\u21e7`}];",
-    "function N(){let{data:h}=l(`appshot-hotkey-state`,{queryConfig:{enabled:t}}),x=c(`appshot-set-hotkey`);let w=h?.configuredHotkey??null,E=M.find(e=>e.hotkey===w)??null;return E}",
+    "function N(){let{data:h}=l(`appshot-hotkey-state`,{queryConfig:{enabled:t}}),x=c(`appshot-set-hotkey`);let w=h?.configuredHotkey??null,y=M.map(e=>e.label).join(`,`),E=M.find(e=>e.hotkey===w)??null;return E??y}",
   ].join("");
 }
 
@@ -124,12 +126,13 @@ test("appshots availability descriptor matches the current bundle", () => {
   assert.ok(descriptor.pattern.test("appshot-availability-BoK-Z77O.js"));
 });
 
-test("stages the Linux bare modifier monitor helper", () => {
+test("stages the Linux bare modifier monitor helper and Wayland portal hook", () => {
   const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, "feature.json"), "utf8"));
   const helperSource = fs.readFileSync(
     path.join(__dirname, "bin", "bare-modifier-monitor"),
     "utf8",
   );
+  const electronArgsSource = fs.readFileSync(path.join(__dirname, "electron-args"), "utf8");
 
   assert.deepEqual(manifest.resources, [
     {
@@ -138,6 +141,14 @@ test("stages the Linux bare modifier monitor helper", () => {
       mode: "0755",
     },
   ]);
+  assert.deepEqual(manifest.runtimeHooks, {
+    electronArgs: {
+      source: "electron-args",
+      name: "electron-args",
+      mode: "0644",
+    },
+  });
+  assert.equal(electronArgsSource.trim(), "--enable-features=GlobalShortcutsPortal");
   assert.match(helperSource, /xinput test "\$device_id"/);
   assert.match(helperSource, /stdbuf -oL/);
   assert.match(helperSource, /exec 4<>"\$event_fifo"/);
@@ -227,18 +238,23 @@ test("enables AppShots hotkeys and bare modifiers on Linux", () => {
 
   assert.match(
     patched,
-    /function rw\(e,t=process\.platform\)\{return \(t===`darwin`\|\|t===`linux`\)&&aw\(e\)!=null\}/,
+    /function codexLinuxAppshotIsWayland\(\)\{return process\.platform===`linux`&&\(\(process\.env\.XDG_SESSION_TYPE\|\|``\)\.toLowerCase\(\)===`wayland`\|\|!!process\.env\.WAYLAND_DISPLAY\)\}/,
+  );
+  assert.match(
+    patched,
+    /function rw\(e,t=process\.platform\)\{return \(t===`darwin`\|\|t===`linux`&&!codexLinuxAppshotIsWayland\(\)\)&&aw\(e\)!=null\}/,
   );
   assert.match(
     patched,
     /function QC\(e,t,r=`press`\)\{if\(process\.platform!==`darwin`&&process\.platform!==`linux`\)return null;/,
   );
+  assert.match(patched, /new Set\(\[\.\.\.SO,`shift`,`super`,`meta`,`win`\]\)/);
   assert.match(patched, /appshotHotkey`\)\?\?\(process\.platform===`linux`\?null:uG\)/);
   assert.doesNotMatch(patched, /process\.platform===`linux`\?`DoubleShift`/);
   assert.doesNotMatch(patched, /process\.platform===`linux`&&i!=null&&iw\(i\)&&\(i=null\)/);
   assert.match(
     patched,
-    /supported:r&&\(process\.platform===`darwin`\|\|process\.platform===`linux`\)/,
+    /supported:r&&\(process\.platform===`darwin`\|\|process\.platform===`linux`\),configuredHotkey:i,isActive:a!=null,linuxWayland:codexLinuxAppshotIsWayland\(\)/,
   );
   assert.match(
     patched,
@@ -262,12 +278,17 @@ test("enables Linux AppShots hotkeys for stored upstream controller shape", () =
 
   assert.match(
     patched,
-    /function CE\(e,t=process\.platform\)\{return \(t===`darwin`\|\|t===`linux`\)&&TE\(e\)!=null\}/,
+    /function codexLinuxAppshotIsWayland\(\)\{return process\.platform===`linux`&&\(\(process\.env\.XDG_SESSION_TYPE\|\|``\)\.toLowerCase\(\)===`wayland`\|\|!!process\.env\.WAYLAND_DISPLAY\)\}/,
+  );
+  assert.match(
+    patched,
+    /function CE\(e,t=process\.platform\)\{return \(t===`darwin`\|\|t===`linux`&&!codexLinuxAppshotIsWayland\(\)\)&&TE\(e\)!=null\}/,
   );
   assert.match(
     patched,
     /function vE\(e,t,n=`press`\)\{if\(process\.platform!==`darwin`&&process\.platform!==`linux`\)return null;/,
   );
+  assert.match(patched, /new Set\(\[\.\.\.JE,`shift`,`super`,`meta`,`win`\]\)/);
   assert.match(
     patched,
     /return n\.length===1\?\(t===`darwin`\|\|t===`linux`\)\?CE\(e,t\)\?null:`This shortcut key is not supported\.`:`Choose a shortcut with Ctrl or Alt plus another key\.`:`Use Ctrl, Alt, or Command when combining with another key\.`/,
@@ -278,7 +299,7 @@ test("enables Linux AppShots hotkeys for stored upstream controller shape", () =
   );
   assert.match(
     patched,
-    /supported:r&&\(process\.platform===`darwin`\|\|process\.platform===`linux`\)/,
+    /supported:r&&\(process\.platform===`darwin`\|\|process\.platform===`linux`\),configuredHotkey:a,isActive:o!=null,linuxWayland:codexLinuxAppshotIsWayland\(\)/,
   );
   assert.match(
     patched,
@@ -293,6 +314,15 @@ test("shows Linux AppShots accelerator choices in settings", () => {
   );
 
   assert.match(patched, /navigator\.userAgent\.includes\(`Linux`\)/);
+  assert.match(patched, /codexLinuxAppshotHotkeyOptions=e=>/);
+  assert.match(
+    patched,
+    /e\?\.linuxWayland\?\[\{hotkey:`Ctrl\+Super\+A`,label:`Ctrl \+ Super \+ A`\}\]:\[\{hotkey:`DoubleOption`,label:`Alt \+ Alt`\}/,
+  );
+  assert.match(patched, /codexLinuxAppshotHotkeyOptions\(h\)\.find/);
+  assert.match(patched, /codexLinuxAppshotHotkeyOptions\(h\)\.map/);
+  assert.doesNotMatch(patched, /\bM\.find\(/);
+  assert.doesNotMatch(patched, /\bM\.map\(/);
   assert.match(patched, /hotkey:`DoubleOption`,label:`Alt \+ Alt`/);
   assert.match(patched, /hotkey:`DoubleShift`,label:`Shift \+ Shift`/);
   assert.match(patched, /hotkey:`Ctrl\+Super\+A`,label:`Ctrl \+ Super \+ A`/);

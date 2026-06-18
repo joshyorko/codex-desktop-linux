@@ -697,18 +697,102 @@ function applyLinuxAppServerBackfillWaitPatch(currentSource) {
     /(?:^|[;,])\s*[A-Za-z_$][\w$]*=codexLinuxAppServerBackfillTimeoutMs\([A-Za-z_$][\w$]*,[A-Za-z_$][\w$]*\)/;
   const shouldPatchParser = parserNeedle.test(currentSource) || parserPatchedRegex.test(currentSource);
   const shouldPatchTimeout = timeoutNeedle.test(currentSource) || timeoutPatchedRegex.test(currentSource);
+  const topLevelInsertionPointBefore = (source, index) => {
+    let depth = 0;
+    let state = "code";
+    let insertionPoint = 0;
+    for (let i = 0; i < index; i += 1) {
+      const char = source[i];
+      const next = source[i + 1];
+      if (state === "code") {
+        if (char === "/" && next === "/") {
+          state = "line-comment";
+          i += 1;
+        } else if (char === "/" && next === "*") {
+          state = "block-comment";
+          i += 1;
+        } else if (char === "\"" || char === "'") {
+          state = char;
+        } else if (char === "`") {
+          state = "template";
+        } else if (char === "{") {
+          depth += 1;
+        } else if (char === "}") {
+          depth = Math.max(0, depth - 1);
+        } else if (char === ";" && depth === 0) {
+          insertionPoint = i + 1;
+        }
+      } else if (state === "line-comment") {
+        if (char === "\n" || char === "\r") {
+          state = "code";
+        }
+      } else if (state === "block-comment") {
+        if (char === "*" && next === "/") {
+          state = "code";
+          i += 1;
+        }
+      } else if (state === "template") {
+        if (char === "\\") {
+          i += 1;
+        } else if (char === "`") {
+          state = "code";
+        }
+      } else if (char === "\\") {
+        i += 1;
+      } else if (char === state) {
+        state = "code";
+      }
+    }
+    return insertionPoint;
+  };
   let patchedSource = currentSource;
   let changed = false;
 
   if (!patchedSource.includes("function codexLinuxIsStateDbBackfillMessage(")) {
-    const helperAnchors = [
+    // Insert helpers at module top-level so they're visible to ALL scopes.
+    // The helpers must not land inside the Sentry error handler because
+    // createRequest() calls them from a different scope.
+    const currentTopLevelAnchors = [
+      "function fi(e,t){let n=hi(t.originalException);",
+    ];
+    const legacyAnchors = [
       "function za(e){let t=La.safeParse(e);return t.success?new Ba(t.data):e}",
       "function za(e){",
     ];
-    const helperAnchor = helperAnchors.find((anchor) => patchedSource.includes(anchor));
-    if (helperAnchor != null) {
-      patchedSource = patchedSource.replace(helperAnchor, `${helperSource}${helperAnchor}`);
-      changed = true;
+    let inserted = false;
+    for (const anchor of currentTopLevelAnchors) {
+      const anchorIndex = patchedSource.indexOf(anchor);
+      if (
+        anchorIndex !== -1 &&
+        patchedSource.indexOf(anchor, anchorIndex + anchor.length) === -1
+      ) {
+        patchedSource = patchedSource.replace(anchor, `${helperSource}${anchor}`);
+        changed = true;
+        inserted = true;
+        break;
+      }
+    }
+    if (!inserted) {
+      const legacyAnchor = legacyAnchors.find((anchor) => patchedSource.includes(anchor));
+      if (legacyAnchor != null) {
+        patchedSource = patchedSource.replace(legacyAnchor, `${helperSource}${legacyAnchor}`);
+        changed = true;
+        inserted = true;
+      }
+    }
+    if (!inserted && shouldPatchTimeout) {
+      const timeoutMatch = patchedSource.match(timeoutNeedle);
+      const classIndex = timeoutMatch?.index == null
+        ? -1
+        : patchedSource.lastIndexOf("=class{", timeoutMatch.index);
+      if (classIndex !== -1) {
+        const statementStart = topLevelInsertionPointBefore(patchedSource, classIndex);
+        patchedSource =
+          patchedSource.slice(0, statementStart) +
+          helperSource +
+          patchedSource.slice(statementStart);
+        changed = true;
+      }
     }
   }
 

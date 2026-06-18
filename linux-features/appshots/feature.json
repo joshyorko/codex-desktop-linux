@@ -12,5 +12,12 @@
       "target": "resources/native/bare-modifier-monitor",
       "mode": "0755"
     }
-  ]
+  ],
+  "runtimeHooks": {
+    "electronArgs": {
+      "source": "electron-args",
+      "name": "electron-args",
+      "mode": "0644"
+    }
+  }
 }

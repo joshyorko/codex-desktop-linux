@@ -108,6 +108,11 @@ function getOpenChromeCommand(profileDirectory) {
 }
 `,
   );
+
+  fs.writeFileSync(
+    path.join(scriptsDir, "browser-client.mjs"),
+    'function codexLinuxChromeUserDataDirectories=()=>WF()==="linux"?[GF(VF(),".config","BraveSoftware","Brave-Browser"),GF(VF(),".config","google-chrome"),GF(VF(),".config","chromium")]:[Tc];',
+  );
 }
 
 function run(command, args, options = {}) {
@@ -138,7 +143,7 @@ test("Thorium Chrome plugin feature exposes its patch and stage hook when enable
 
 test("Thorium settings patch extends the core Linux Chrome status helper", () => {
   const source =
-    "function codexLinuxChromeProfileRoots({homeDir:e,platform:t}){return t===`linux`?[(0,p.join)(e,`.config`,`BraveSoftware`,`Brave-Browser`),(0,p.join)(e,`.config`,`google-chrome`),(0,p.join)(e,`.config`,`google-chrome-beta`),(0,p.join)(e,`.config`,`google-chrome-unstable`),(0,p.join)(e,`.config`,`chromium`)]:[]}function codexLinuxChromeCommand(){for(let t of[`brave-browser`,`brave`,`google-chrome`,`google-chrome-stable`,`chromium-browser`,`chromium`]){}}throw Error(`Google Chrome, Brave, or Chromium is not installed`)";
+    "function codexLinuxChromeProfileRoots({homeDir:e,platform:t}){return t===`linux`?[(0,p.join)(e,`.config`,`BraveSoftware`,`Brave-Browser`),(0,p.join)(e,`.config`,`google-chrome`),(0,p.join)(e,`.config`,`google-chrome-beta`),(0,p.join)(e,`.config`,`google-chrome-unstable`),(0,p.join)(e,`.config`,`chromium`)]:[]}function codexLinuxChromeCommand(){for(let t of[`brave-browser`,`brave`,`google-chrome`,`google-chrome-stable`,`google-chrome-beta`,`google-chrome-unstable`,`chromium-browser`,`chromium`]){}}throw Error(`Google Chrome, Brave, or Chromium is not installed`)";
   const patched = applyThoriumChromeExtensionStatusPatch(source);
 
   assert.match(patched, /`\.config`,`thorium`/);
@@ -185,7 +190,10 @@ test("Thorium stage hook upgrades a core Linux-patched Chrome plugin", () => {
     const scriptsDir = path.join(chromePlugin, "scripts");
     assert.match(fs.readFileSync(path.join(scriptsDir, "installManifest.mjs"), "utf8"), /thorium\/NativeMessagingHosts/);
     assert.match(fs.readFileSync(path.join(scriptsDir, "check-native-host-manifest.js"), "utf8"), /"thorium"/);
-    assert.match(fs.readFileSync(path.join(scriptsDir, "browser-client.mjs"), "utf8"), /"\.config","thorium"/);
+  assert.match(
+    fs.readFileSync(path.join(scriptsDir, "browser-client.mjs"), "utf8"),
+    /"\.config","thorium"/,
+  );
     assert.match(fs.readFileSync(path.join(scriptsDir, "installed-browsers.js"), "utf8"), /Thorium/);
     assert.match(fs.readFileSync(path.join(scriptsDir, "chrome-is-running.js"), "utf8"), /thorium-browser-avx2/);
     assert.match(fs.readFileSync(path.join(scriptsDir, "check-extension-installed.js"), "utf8"), /linuxThoriumUserDataDirectory/);

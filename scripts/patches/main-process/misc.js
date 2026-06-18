@@ -111,6 +111,56 @@ function applyLinuxRemoteControlConfigPreservationPatch(currentSource) {
   return currentSource;
 }
 
+function applyLinuxXdgDocumentsDirPatch(currentSource) {
+  if (currentSource.includes("codexLinuxXdgDocumentsDir")) {
+    return currentSource;
+  }
+
+  const fsVar = requireName(currentSource, "node:fs");
+  if (fsVar == null) {
+    console.warn("WARN: Could not find fs require — skipping Linux XDG documents dir patch");
+    return currentSource;
+  }
+
+  const documentsDirRegex =
+    /function ([A-Za-z_$][\w$]*)\(\{desktopPaths:([A-Za-z_$][\w$]*),homeDir:([A-Za-z_$][\w$]*),platform:([A-Za-z_$][\w$]*)\}\)\{return ([A-Za-z_$][\w$]*)\(\3,\2\.getPath\(`home`\),\4\)\?\2\.getPath\(`documents`\):([A-Za-z_$][\w$]*)\(\4\)\.join\(\3,`Documents`\)\}/u;
+  const match = currentSource.match(documentsDirRegex);
+  if (match == null) {
+    if (
+      currentSource.includes("getPath(`documents`)") &&
+      currentSource.includes(".join(") &&
+      currentSource.includes("`Documents`")
+    ) {
+      console.warn(
+        "WARN: Could not find documents directory resolver — skipping Linux XDG documents dir patch",
+      );
+    }
+    return currentSource;
+  }
+
+  const [, fnName, desktopPathsVar, homeDirVar, platformVar, sameHomeFn, pathFactoryFn] = match;
+  const helper = [
+    "function codexLinuxXdgDocumentsDir({fs:e,homeDir:t,path:n}){try{",
+    "let r=process.env.XDG_CONFIG_HOME?.trim(),i=r&&n.isAbsolute(r)?n.join(r,`user-dirs.dirs`):n.join(t,`.config`,`user-dirs.dirs`);",
+    "if(!e.existsSync(i))return null;",
+    "let a=e.readFileSync(i,`utf8`).match(/^XDG_DOCUMENTS_DIR=([\"'])(.*)\\1/m);",
+    "if(a==null)return null;",
+    "let o=a[2].replace(/\\\\(.)/g,`$1`);",
+    "if(o===`$HOME`)return t;",
+    "if(o.startsWith(`$HOME/`))return n.join(t,o.slice(6));",
+    "if(o.startsWith(`~/`))return n.join(t,o.slice(2));",
+    "return n.isAbsolute(o)?o:n.join(t,o)",
+    "}catch{return null}}",
+  ].join("");
+  const patchedFn =
+    `${helper}function ${fnName}({desktopPaths:${desktopPathsVar},homeDir:${homeDirVar},platform:${platformVar}}){` +
+    `if(${platformVar}===\`linux\`){let __codexLinuxDocumentsDir=codexLinuxXdgDocumentsDir({fs:${fsVar},homeDir:${homeDirVar},path:${pathFactoryFn}(${platformVar})});` +
+    "if(__codexLinuxDocumentsDir!=null)return __codexLinuxDocumentsDir}" +
+    `return ${sameHomeFn}(${homeDirVar},${desktopPathsVar}.getPath(\`home\`),${platformVar})?${desktopPathsVar}.getPath(\`documents\`):${pathFactoryFn}(${platformVar}).join(${homeDirVar},\`Documents\`)}`;
+
+  return currentSource.replace(documentsDirRegex, () => patchedFn);
+}
+
 function applyLinuxLocalAppServerFeatureEnablementHandlerPatch(currentSource) {
   const method = "set-local-app-server-feature-enablement";
   const handler =
@@ -168,4 +218,5 @@ module.exports = {
   applyLinuxGitOriginsSourceFallbackPatch,
   applyLinuxLocalAppServerFeatureEnablementHandlerPatch,
   applyLinuxRemoteControlConfigPreservationPatch,
+  applyLinuxXdgDocumentsDirPatch,
 };
