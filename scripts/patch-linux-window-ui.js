@@ -82,6 +82,7 @@ const {
   applyLinuxNativeTitlebarPatch,
   applyLinuxLocalAppServerFeatureEnablementHandlerPatch,
   applyLinuxOpaqueBackgroundPatch,
+  applyLinuxOwlFeatureBindingFallbackPatch,
   applyLinuxQuitGuardPatch,
   applyLinuxReadyToShowWindowStatePatch,
   applyLinuxResizeRepaintPatch,
@@ -92,6 +93,7 @@ const {
   applyLinuxWillQuitDrainTimeoutPatch,
   applyLinuxWindowOptionsPatch,
   applyLinuxXdgDocumentsDirPatch,
+  patchLinuxOwlFeatureBindingFallbackAssets,
 } = require("./patches/main-process.js");
 const {
   applyLinuxAvatarOverlayMousePassthroughPatch,
@@ -234,6 +236,7 @@ module.exports = {
   applyLinuxProjectlessXdgDocumentsDirPatch,
   applyLinuxMultiInstanceBootstrapPatch,
   applyLinuxOpaqueBackgroundPatch,
+  applyLinuxOwlFeatureBindingFallbackPatch,
   applyLinuxOpaqueWindowsDefaultPatch,
   applyLinuxFastModeModelGuardPatch,
   applyLinuxQuitGuardPatch,
@@ -271,6 +274,7 @@ module.exports = {
   patchLinuxMultiInstanceBootstrap,
   patchLinuxAppUpdaterBridge,
   patchLinuxChromeNativeHostRuntimeAssets,
+  patchLinuxOwlFeatureBindingFallbackAssets,
   patchProjectlessDocumentsAssets,
   patchMainBundleSource,
   patchPackageJson,

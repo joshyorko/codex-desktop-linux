@@ -58,6 +58,7 @@ const {
   applyLinuxBrowserUseNonLocalNavigationPatch,
   applyLinuxAppServerBackfillWaitPatch,
   applyLinuxOpaqueBackgroundPatch,
+  applyLinuxOwlFeatureBindingFallbackPatch,
   applyLinuxFastModeModelGuardPatch,
   applyLinuxOpaqueWindowsDefaultPatch,
   applyLinuxReadyToShowWindowStatePatch,
@@ -79,6 +80,7 @@ const {
   patchProjectlessDocumentsAssets,
   patchKeybindsSettingsAssets,
   patchAutomationScheduleAssets,
+  patchLinuxOwlFeatureBindingFallbackAssets,
   createPatchReport,
   corePatchDescriptors,
   detectLinuxTargetContext,
@@ -357,6 +359,43 @@ test("subagent nickname metadata patch accepts current upstream patched aliases"
 
   assert.equal(value, source);
   assert.deepEqual(warnings, []);
+});
+
+test("subagent metadata descriptor ignores matching sibling bundles without metadata", () => {
+  const descriptor = corePatchDescriptors().find((candidate) =>
+    candidate.id === "subagent-nickname-metadata-shape",
+  );
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "codex-subagent-metadata-sibling-"));
+  try {
+    const assetsDir = path.join(tempRoot, "webview", "assets");
+    fs.mkdirSync(assetsDir, { recursive: true });
+    const siblingSource = "export const hostConfig={local:!0};";
+    const metadataSource = [
+      "function j(e){return e}",
+      "function B(e){if(e==null||typeof e==`string`)return null;let t=Mi(e);return t==null?null:Ni(t)}",
+      "function Mi(e){return`subAgent`in e?e.subAgent:null}",
+      "function Ni(e){return typeof e==`string`?Pi():`thread_spawn`in e?{parentThreadId:j(e.thread_spawn.parent_thread_id),depth:e.thread_spawn.depth,agentNickname:e.thread_spawn.agent_nickname,agentRole:e.thread_spawn.agent_role}:Pi()}",
+      "function Pi(){return{parentThreadId:null,depth:null,agentNickname:null,agentRole:null}}",
+      "function Xl(e){return e==null?null:Zl(e.agentNickname)??Zl(B(e.source)?.agentNickname)}",
+      "function Zl(e){if(e==null)return null;let t=e.trim();return t.length===0?null:t}",
+    ].join("");
+    fs.writeFileSync(path.join(assetsDir, "app-server-manager-signals-test.js"), siblingSource);
+    fs.writeFileSync(path.join(assetsDir, "use-host-config-test.js"), metadataSource);
+
+    const { value: result, warnings } = captureWarns(() =>
+      patchAssetFiles(tempRoot, descriptor.pattern, descriptor.apply, "missing subagent metadata bundle"),
+    );
+
+    assert.deepEqual(result, { matched: 2, changed: 1 });
+    assert.deepEqual(warnings, []);
+    assert.equal(fs.readFileSync(path.join(assetsDir, "app-server-manager-signals-test.js"), "utf8"), siblingSource);
+    assert.match(
+      fs.readFileSync(path.join(assetsDir, "use-host-config-test.js"), "utf8"),
+      /Zl\(e\.agentNickname\)\?\?Zl\(e\.agent_nickname\)\?\?Zl\(B\(e\.source\)\?\.agentNickname\)/,
+    );
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
 });
 
 test("Linux target context parses distro, package, and desktop details", () => {
@@ -645,6 +684,7 @@ test("default core patch descriptors are grouped and unique", () => {
     "linux-set-icon",
     "linux-resize-repaint",
     "linux-opaque-background",
+    "linux-owl-feature-binding-fallback",
     "linux-avatar-overlay-mouse-passthrough",
     "linux-browser-use-availability",
     "linux-browser-use-non-local-navigation",
@@ -704,6 +744,10 @@ test("default core patch descriptors are grouped and unique", () => {
     descriptors.find((descriptor) => descriptor.id === "package-desktop-name")?.phase,
     "extracted-app",
   );
+  assert.equal(
+    descriptors.find((descriptor) => descriptor.id === "linux-owl-feature-binding-fallback")?.phase,
+    "extracted-app",
+  );
   assert.match(
     descriptors.find((descriptor) => descriptor.id === "linux-chrome-plugin-auto-install")?.sourcePath,
     /main-process[\\/]browser-integrations[\\/]patch\.js$/,
@@ -743,6 +787,16 @@ test("fast-mode guard descriptor follows upstream service-tier bundle names", ()
   assert.ok(descriptor.pattern.test("use-service-tier-settings-DFXPADNF.js"));
   assert.ok(descriptor.pattern.test("app-server-manager-signals-BOGyjFm3.js"));
   assert.equal(descriptor.pattern.test("service-tier-icons-CsNhab5W.js"), false);
+});
+
+test("subagent nickname metadata descriptor follows upstream metadata bundle names", () => {
+  const descriptor = corePatchDescriptors().find((descriptor) =>
+    descriptor.id === "subagent-nickname-metadata-shape",
+  );
+
+  assert.ok(descriptor.pattern.test("app-server-manager-signals-BOGyjFm3.js"));
+  assert.ok(descriptor.pattern.test("use-host-config-Dpd_LQBD.js"));
+  assert.equal(descriptor.pattern.test("thread-context-inputs-D5uMjcUB.js"), false);
 });
 
 function trayBundleFixture() {
@@ -2349,6 +2403,22 @@ test("uses collision-proof Linux tray icon variables when Electron alias is r", 
   );
 });
 
+test("adds Linux tray icon fallback when current upstream uses small file icon fallback", () => {
+  const iconPathExpression = "process.resourcesPath+`/../content/webview/assets/app-test.png`";
+  const source = trayBundleFixture().replace(
+    "n.app.getFileIcon(process.execPath,{size:process.platform===`win32`?`small`:`normal`})",
+    "n.app.getFileIcon(process.execPath,{size:`small`})",
+  );
+
+  const { value: patched, warnings } = captureWarns(() =>
+    applyPatchTwice(applyLinuxTrayPatch, source, iconPathExpression),
+  );
+
+  assert.deepEqual(warnings, []);
+  assert.match(patched, /__codexLinuxTrayIcon=n\.nativeImage\.createFromPath/);
+  assert.match(patched, /n\.app\.getFileIcon\(process\.execPath,\{size:`small`\}\)/);
+});
+
 test("adds Linux tray support even when About dialog already uses the bundled icon path", () => {
   const iconPathExpression = "process.resourcesPath+`/../content/webview/assets/app-test.png`";
   const packagedTrayIconPathExpression = "process.resourcesPath+`/../.codex-linux/codex-desktop-tray.png`";
@@ -2511,6 +2581,27 @@ test("adds Linux tray support for current minified window and startup identifier
     /catch\(e\)\{O=!1;process\.platform===`linux`&&console\.warn\(`\[codex-linux\] Failed to set up system tray`,e\)\}/,
   );
   assert.equal((patched.match(/\[codex-linux\] Failed to set up system tray/g) ?? []).length, 1);
+});
+
+test("adds Linux tray startup support for current appBrand initializer", () => {
+  const source = [
+    "async function H5(e){let t=await W5(e.appBrand,e.repoRoot),n=new a.Tray(t.defaultIcon);return n}",
+    "let ye=async()=>{O=!0;try{await H5({appBrand:r.et(),repoRoot:j.repoRoot})}catch(e){O=!1,_.reportNonFatal(e instanceof Error?e:`Failed to set up tray`,{kind:`tray-setup-failed`,tags:{errorType:`tray-setup-failed`}}),ee()}};E&&ye();",
+  ].join("");
+
+  const { value: patched, warnings } = captureWarns(() =>
+    applyPatchTwice(applyLinuxTrayPatch, source, null),
+  );
+
+  assert.deepEqual(warnings.filter((warning) => warning.includes("tray startup")), []);
+  assert.match(
+    patched,
+    /\(E\|\|process\.platform===`linux`&&\(typeof codexLinuxIsTrayEnabled!==`function`\|\|codexLinuxIsTrayEnabled\(\)\)\)&&ye\(\);/,
+  );
+  assert.match(
+    patched,
+    /ee\(\);process\.platform===`linux`&&console\.warn\(`\[codex-linux\] Failed to set up system tray`,e\)\}/,
+  );
 });
 
 test("scopes dynamic tray startup matching to the tray initializer", () => {
@@ -5330,6 +5421,81 @@ test("adds a fallback source for renderer git-origins requests without weakening
   assert.match(patched, /throw Error\(`Missing git operation source for \$\{r\}`\)/);
 });
 
+test("falls back when Electron Owl feature binding is absent on Linux", () => {
+  const source =
+    "var Ge={parse:e=>e};function Qe(){let e=process._linkedBinding;if(typeof e!=`function`)throw Error(`Owl feature binding is unavailable`);return Ge.parse(e.call(process,`electron_common_owl_features`))}";
+
+  const patched = applyPatchTwice(applyLinuxOwlFeatureBindingFallbackPatch, source);
+
+  assert.match(patched, /No such binding was linked/);
+  assert.match(patched, /isOwlFeatureEnabled:\(\)=>!1/);
+  assert.match(patched, /throw t/);
+
+  const sandbox = {
+    process: {
+      _linkedBinding() {
+        throw new Error("No such binding was linked: electron_common_owl_features");
+      },
+    },
+    result: null,
+  };
+  vm.createContext(sandbox);
+  vm.runInContext(`${patched};result=Qe().isOwlFeatureEnabled(\`SomeOwlFlag\`);`, sandbox);
+
+  assert.equal(sandbox.result, false);
+});
+
+test("preserves real Electron Owl feature binding when available", () => {
+  const source =
+    "var Ge={parse:e=>e};function Qe(){let e=process._linkedBinding;if(typeof e!=`function`)throw Error(`Owl feature binding is unavailable`);return Ge.parse(e.call(process,`electron_common_owl_features`))}";
+
+  const patched = applyPatchTwice(applyLinuxOwlFeatureBindingFallbackPatch, source);
+  const sandbox = {
+    process: {
+      _linkedBinding(name) {
+        assert.equal(name, "electron_common_owl_features");
+        return { isOwlFeatureEnabled: (feature) => feature === "EnabledOwlFlag" };
+      },
+    },
+    enabled: null,
+    disabled: null,
+  };
+  vm.createContext(sandbox);
+  vm.runInContext(
+    `${patched};enabled=Qe().isOwlFeatureEnabled(\`EnabledOwlFlag\`);disabled=Qe().isOwlFeatureEnabled(\`OtherOwlFlag\`);`,
+    sandbox,
+  );
+
+  assert.equal(sandbox.enabled, true);
+  assert.equal(sandbox.disabled, false);
+});
+
+test("patches Electron Owl feature binding fallback outside the main bundle", () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "codex-owl-feature-build-"));
+  try {
+    const buildDir = path.join(tempRoot, ".vite", "build");
+    fs.mkdirSync(buildDir, { recursive: true });
+    const bundlePath = path.join(buildDir, "workspace-root-drop-handler-test.js");
+    fs.writeFileSync(
+      bundlePath,
+      "var Ge={parse:e=>e};function Qe(){let e=process._linkedBinding;if(typeof e!=`function`)throw Error(`Owl feature binding is unavailable`);return Ge.parse(e.call(process,`electron_common_owl_features`))}",
+      "utf8",
+    );
+
+    assert.deepEqual(patchLinuxOwlFeatureBindingFallbackAssets(tempRoot), {
+      matched: 1,
+      changed: 1,
+    });
+    assert.match(fs.readFileSync(bundlePath, "utf8"), /isOwlFeatureEnabled:\(\)=>!1/);
+    assert.deepEqual(patchLinuxOwlFeatureBindingFallbackAssets(tempRoot), {
+      matched: 1,
+      changed: 0,
+    });
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
 test("missing icon asset skips only icon patches", () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "codex-patch-test-"));
   try {
@@ -5702,6 +5868,30 @@ test("patch report marks missing required package metadata as required failure",
     assert.ok(
       validateReport(report, "upstream-build").some((failure) =>
         failure.startsWith("package-desktop-name: failed-required"),
+      ),
+    );
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("patch report marks missing Owl feature binding bundle as required failure", () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "codex-patch-report-missing-owl-feature-"));
+  try {
+    const buildDir = path.join(tempRoot, ".vite", "build");
+    fs.mkdirSync(buildDir, { recursive: true });
+    fs.writeFileSync(path.join(buildDir, "main.js"), mainBundlePrefix);
+    fs.writeFileSync(path.join(tempRoot, "package.json"), JSON.stringify({ name: "codex" }));
+
+    const report = createPatchReport();
+    captureWarns(() => patchExtractedApp(tempRoot, { report }));
+
+    const owlPatch = report.patches.find((patch) => patch.name === "linux-owl-feature-binding-fallback");
+    assert.equal(owlPatch.status, "failed-required");
+    assert.match(owlPatch.reason, /Owl feature binding loader bundle missing/);
+    assert.ok(
+      validateReport(report, "upstream-build").some((failure) =>
+        failure.startsWith("linux-owl-feature-binding-fallback: failed-required"),
       ),
     );
   } finally {
