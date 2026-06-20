@@ -396,10 +396,11 @@ bootstrap_7zz() {
     fi
 
     # Try pinned versions newest-first with HEAD verification — no HTML parsing
-    local -a versions=(2600 2500 2409)
-    local version="" url="" candidate_url
+    local -a versions=(2601 2600 2500 2409)
+    local version="" url="" candidate_url candidate_tag
     for candidate in "${versions[@]}"; do
-        candidate_url="https://www.7-zip.org/a/7z${candidate}-linux-${sevenzip_arch}.tar.xz"
+        candidate_tag="${candidate:0:2}.${candidate:2:2}"
+        candidate_url="https://github.com/ip7z/7zip/releases/download/${candidate_tag}/7z${candidate}-linux-${sevenzip_arch}.tar.xz"
         if curl -fsI "$candidate_url" >/dev/null 2>&1; then
             version="$candidate"
             url="$candidate_url"
