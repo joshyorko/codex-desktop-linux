@@ -277,6 +277,36 @@ test("open-target discovery exposes desktop IDEs as available open targets", () 
   });
 });
 
+test("open-target discovery exposes desktop IDEs during deferred open target enrichment", () => {
+  withTempDir((tmp) => {
+    const dataHome = path.join(tmp, "share");
+    const appsDir = path.join(dataHome, "applications");
+    const editorCommand = makeExecutable(path.join(tmp, "toolbox", "bin"), "fleet");
+    fs.mkdirSync(appsDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(appsDir, "com.example.Fleet.desktop"),
+      [
+        "[Desktop Entry]",
+        "Type=Application",
+        "Name=Fleet IDE",
+        `Exec=${editorCommand} --goto %f`,
+        "Categories=Development;IDE;",
+      ].join("\n"),
+    );
+
+    const bundleWithDeferredOpenTargetsHandler =
+      openTargetsBundle +
+      "function qN(){return Xg.flatMap((target)=>{let platform=target.platforms.linux;return platform?[{id:target.id,label:platform.label,icon:platform.icon,kind:platform.kind,hidden:platform.hidden}]:[]})}function sj(e){return e}function Dg({n=!1,a=null}){let s={},o={hostConfig:{}};if(n&&a==null){let t=null;return{preferredTarget:t,availableTargets:[],mode:`editor`,targets:sj(qN(s),o.hostConfig).map(({id:e,label:n,icon:r,kind:i,hidden:a})=>({id:e,target:e,label:n,icon:r,kind:i,hidden:a,default:t===e||void 0}))}}}";
+    const visibleLabels = evaluatePatched(
+      bundleWithDeferredOpenTargetsHandler,
+      { HOME: tmp, PATH: path.join(tmp, "bin"), XDG_DATA_HOME: dataHome, XDG_DATA_DIRS: path.join(tmp, "empty") },
+      "(()=>{let result=Dg({n:true});let available=new Set(result.availableTargets);return result.targets.filter((target)=>available.has(target.target)&&!target.hidden).map((target)=>target.label)})()",
+    );
+
+    assert.ok(visibleLabels.includes("Fleet IDE"));
+  });
+});
+
 test("open-target discovery finds IDEs from symlinked desktop entries", () => {
   withTempDir((tmp) => {
     const dataHome = path.join(tmp, "share");

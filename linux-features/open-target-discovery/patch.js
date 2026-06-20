@@ -265,7 +265,8 @@ function applyTerminalDiscoveryPatch(currentSource, deps) {
 function applyIdeDiscoveryPatch(currentSource, deps) {
   if (
     currentSource.includes("...codexLinuxDiscoveredIdeTargets()") &&
-    currentSource.includes("codexLinuxDiscoveredIdeTargetsAvailable")
+    currentSource.includes("codexLinuxDiscoveredIdeTargetsAvailable") &&
+    currentSource.includes("codexLinuxDiscoveredIdeTargetsDeferredAvailable")
   ) {
     return currentSource;
   }
@@ -412,6 +413,22 @@ function applyIdeDiscoveryPatch(currentSource, deps) {
     );
     if (patchedSource === previousSource && currentSource.includes("open-in-targets")) {
       warn("Could not expose dynamic IDE desktop targets as available");
+    }
+  }
+
+  const deferredAvailableTargetsMarker = "codexLinuxDiscoveredIdeTargetsDeferredAvailable";
+  if (!patchedSource.includes(deferredAvailableTargetsMarker)) {
+    const deferredAvailableTargetsPattern =
+      /(availableTargets:)\[\](,mode:`editor`,targets:)([A-Za-z_$][\w$]*\([A-Za-z_$][\w$]*\([A-Za-z_$][\w$]*\),[A-Za-z_$][\w$]*\.hostConfig\))(\.map\()/u;
+    const previousSource = patchedSource;
+    patchedSource = patchedSource.replace(
+      deferredAvailableTargetsPattern,
+      "$1$3.filter(e=>typeof e?.id===`string`&&e.id.startsWith(`linux-desktop-`)).map(e=>e.id)/*" +
+        deferredAvailableTargetsMarker +
+        "*/$2$3$4",
+    );
+    if (patchedSource === previousSource && currentSource.includes("open-in-targets")) {
+      warn("Could not expose deferred dynamic IDE desktop targets as available");
     }
   }
 
