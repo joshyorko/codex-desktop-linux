@@ -287,6 +287,14 @@ function syntheticAppMainEnablementBridgeBundle() {
   ].join("");
 }
 
+function syntheticCurrentAppMainEnablementBridgeBundle() {
+  return [
+    "var fH=`[remote-connections/slingshot-gate-bridge]`;",
+    "function mH(){let e=(0,Q.c)(6),{checkGate:t,isLoading:n}=eo(),r;e[0]===t?r=e[1]:(r=t(`1042620455`),e[0]=t,e[1]=r);let i=r,a,o;return e[2]!==n||e[3]!==i?(a=()=>{n||qt(`set-remote-control-connections-enabled`,{params:{enabled:i}}).catch(e=>{Y.warning(`${fH} sync_failed`,{safe:{slingshotEnabled:i},sensitive:{error:e}})})},o=[n,i],e[2]=n,e[3]=i,e[4]=a,e[5]=o):(a=e[4],o=e[5]),(0,$.useEffect)(a,o),null}",
+    "var handlers={\"set-remote-control-enabled-for-host\":pU((e,{enabled:t})=>e.sendRequest(t?`remoteControl/enable`:`remoteControl/disable`,null))};",
+  ].join("");
+}
+
 function syntheticSelectedTabBundle() {
   return [
     "function nr(e,t){return e.displayName.localeCompare(t.displayName)}",
@@ -1646,6 +1654,32 @@ test("Linux remote-control enablement bridge loads remote-control clients on Lin
   assert.equal(calls.length, 1);
   assert.equal(calls[0].method, "set-remote-control-connections-enabled");
   assert.equal(calls[0].params.enabled, true);
+});
+
+test("Linux remote-control enablement bridge omits params for current host toggle handler", async () => {
+  const source = syntheticCurrentAppMainEnablementBridgeBundle();
+  const patched = applyLinuxRemoteControlEnablementBridgePatch(source);
+
+  assert.notEqual(patched, source);
+  assert.match(patched, /codexLinuxRemoteControlEnableForHostParams/);
+  assert.doesNotMatch(patched, /remoteControl\/disable`,null/);
+  assert.equal(applyLinuxRemoteControlEnablementBridgePatch(patched), patched);
+
+  const calls = [];
+  const context = {
+    pU: (handler) => handler,
+    host: {
+      sendRequest(method, params) {
+        calls.push({ method, params });
+        return Promise.resolve({ status: "enabled" });
+      },
+    },
+  };
+  await vm.runInNewContext(`${patched};handlers["set-remote-control-enabled-for-host"](host,{enabled:true});`, context);
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].method, "remoteControl/enable");
+  assert.equal(calls[0].params, undefined);
 });
 
 test("Linux remote-control enablement bridge migrates old auto-connect cleanup patch", () => {
