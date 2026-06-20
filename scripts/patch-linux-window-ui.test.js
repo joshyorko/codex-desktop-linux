@@ -58,6 +58,7 @@ const {
   applyLinuxBrowserUseNonLocalNavigationPatch,
   applyLinuxAppServerBackfillWaitPatch,
   applyLinuxOpaqueBackgroundPatch,
+  applyLinuxOwlFeatureBindingFallbackPatch,
   applyLinuxFastModeModelGuardPatch,
   applyLinuxOpaqueWindowsDefaultPatch,
   applyLinuxReadyToShowWindowStatePatch,
@@ -80,6 +81,7 @@ const {
   patchProjectlessDocumentsAssets,
   patchKeybindsSettingsAssets,
   patchAutomationScheduleAssets,
+  patchLinuxOwlFeatureBindingFallbackAssets,
   createPatchReport,
   corePatchDescriptors,
   detectLinuxTargetContext,
@@ -360,6 +362,43 @@ test("subagent nickname metadata patch accepts current upstream patched aliases"
 
   assert.equal(value, source);
   assert.deepEqual(warnings, []);
+});
+
+test("subagent metadata descriptor ignores matching sibling bundles without metadata", () => {
+  const descriptor = corePatchDescriptors().find((candidate) =>
+    candidate.id === "subagent-nickname-metadata-shape",
+  );
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "codex-subagent-metadata-sibling-"));
+  try {
+    const assetsDir = path.join(tempRoot, "webview", "assets");
+    fs.mkdirSync(assetsDir, { recursive: true });
+    const siblingSource = "export const hostConfig={local:!0};";
+    const metadataSource = [
+      "function j(e){return e}",
+      "function B(e){if(e==null||typeof e==`string`)return null;let t=Mi(e);return t==null?null:Ni(t)}",
+      "function Mi(e){return`subAgent`in e?e.subAgent:null}",
+      "function Ni(e){return typeof e==`string`?Pi():`thread_spawn`in e?{parentThreadId:j(e.thread_spawn.parent_thread_id),depth:e.thread_spawn.depth,agentNickname:e.thread_spawn.agent_nickname,agentRole:e.thread_spawn.agent_role}:Pi()}",
+      "function Pi(){return{parentThreadId:null,depth:null,agentNickname:null,agentRole:null}}",
+      "function Xl(e){return e==null?null:Zl(e.agentNickname)??Zl(B(e.source)?.agentNickname)}",
+      "function Zl(e){if(e==null)return null;let t=e.trim();return t.length===0?null:t}",
+    ].join("");
+    fs.writeFileSync(path.join(assetsDir, "app-server-manager-signals-test.js"), siblingSource);
+    fs.writeFileSync(path.join(assetsDir, "use-host-config-test.js"), metadataSource);
+
+    const { value: result, warnings } = captureWarns(() =>
+      patchAssetFiles(tempRoot, descriptor.pattern, descriptor.apply, "missing subagent metadata bundle"),
+    );
+
+    assert.deepEqual(result, { matched: 2, changed: 1 });
+    assert.deepEqual(warnings, []);
+    assert.equal(fs.readFileSync(path.join(assetsDir, "app-server-manager-signals-test.js"), "utf8"), siblingSource);
+    assert.match(
+      fs.readFileSync(path.join(assetsDir, "use-host-config-test.js"), "utf8"),
+      /Zl\(e\.agentNickname\)\?\?Zl\(e\.agent_nickname\)\?\?Zl\(B\(e\.source\)\?\.agentNickname\)/,
+    );
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
 });
 
 test("Linux target context parses distro, package, and desktop details", () => {
@@ -648,6 +687,7 @@ test("default core patch descriptors are grouped and unique", () => {
     "linux-set-icon",
     "linux-resize-repaint",
     "linux-opaque-background",
+    "linux-owl-feature-binding-fallback",
     "linux-avatar-overlay-mouse-passthrough",
     "linux-browser-use-availability",
     "linux-browser-use-non-local-navigation",
@@ -708,6 +748,10 @@ test("default core patch descriptors are grouped and unique", () => {
     descriptors.find((descriptor) => descriptor.id === "package-desktop-name")?.phase,
     "extracted-app",
   );
+  assert.equal(
+    descriptors.find((descriptor) => descriptor.id === "linux-owl-feature-binding-fallback")?.phase,
+    "extracted-app",
+  );
   assert.match(
     descriptors.find((descriptor) => descriptor.id === "linux-chrome-plugin-auto-install")?.sourcePath,
     /main-process[\\/]browser-integrations[\\/]patch\.js$/,
@@ -747,6 +791,16 @@ test("fast-mode guard descriptor follows upstream service-tier bundle names", ()
   assert.ok(descriptor.pattern.test("use-service-tier-settings-DFXPADNF.js"));
   assert.ok(descriptor.pattern.test("app-server-manager-signals-BOGyjFm3.js"));
   assert.equal(descriptor.pattern.test("service-tier-icons-CsNhab5W.js"), false);
+});
+
+test("subagent nickname metadata descriptor follows upstream metadata bundle names", () => {
+  const descriptor = corePatchDescriptors().find((descriptor) =>
+    descriptor.id === "subagent-nickname-metadata-shape",
+  );
+
+  assert.ok(descriptor.pattern.test("app-server-manager-signals-BOGyjFm3.js"));
+  assert.ok(descriptor.pattern.test("use-host-config-Dpd_LQBD.js"));
+  assert.equal(descriptor.pattern.test("thread-context-inputs-D5uMjcUB.js"), false);
 });
 
 function trayBundleFixture() {
@@ -827,6 +881,24 @@ function currentChromeNativeHostRuntimeBundleFixture() {
     "function QL(e){let t=Nj(e.resourcesPath)??$L(e.devRuntimeRepoRoot,[`extension`,`bin`,process.platform===`win32`?`codex.exe`:`codex`]),n=kj(e.resourcesPath),r=Oj(e.resourcesPath),i=[t==null?`codex`:null,n==null?`node`:null,r==null?`node_repl`:null].filter(e=>e!=null);if(i.length>0)throw Error(`Missing bundled Electron runtime required to sync Chrome native host resources for ${e.nativeHostName}: ${i.join(`, `)} (resourcesPath: ${e.resourcesPath}).`);if(t==null||n==null||r==null)throw Error(`Missing bundled Electron runtime required to sync Chrome native host resources for ${e.nativeHostName}.`);return{codexCliPath:t,nodePath:n,nodeModuleDirs:Aj(e.resourcesPath),nodeReplPath:r}}",
     "function $L(e,t){if(e==null)return null;let n=(0,r.join)(e,...t);try{return(0,o.statSync)(n).isFile()?n:null}catch{return null}}",
     "function Aj(e){return []}",
+  ].join("");
+}
+
+function electron42BrowserUseRuntimeResolverBundleFixture() {
+  return [
+    "let s=require(`node:path`),l=require(`node:fs`);",
+    "function tt({resourcesPath:e}){return e}",
+    "function Kn(e){return e===`linux`?`/primary/node`:null}",
+    "function Hn({env:e=process.env,isPackaged:n=!0,platform:r=process.platform,repoRoot:i=process.cwd(),resolveCodexPath:a=t.Wn,resolveNodePath:o=t.Gn,resolveNodeReplPath:s=t.Kn,resolvePrimaryRuntimeNodePath:c=Kn,resourcesPath:l}){let u=l??tt({env:e,resourcesPath:process.resourcesPath}),d=c(r),f=Gn({platform:r,rawValue:e.CODEX_CLI_PATH,resolveWindowsAppsPath:a})??Wn({devRelativePathSegments:[`extension`,`bin`,`codex`],isPackaged:n,platform:r,repoRoot:i,resolveBundledPath:a,resourcesPath:u}),p=Wn({devRelativePathSegments:null,isPackaged:n,platform:r,repoRoot:i,resolveBundledPath:o,resourcesPath:u}),m=Gn({platform:r,rawValue:e.CODEX_BROWSER_USE_NODE_PATH,resolveWindowsAppsPath:o})??(p.path==null&&d!=null?{path:d,source:`primary-runtime`}:p),h=Gn({platform:r,rawValue:e.CODEX_NODE_REPL_PATH,resolveWindowsAppsPath:s})??Wn({devRelativePathSegments:null,isPackaged:n,platform:r,repoRoot:i,resolveBundledPath:s,resourcesPath:u});return{codexCliPath:f.path,codexCliPathSource:f.source,nodeModuleDirs:t.Vn(u),nodePath:m.path,nodePathSource:m.source,nodeReplPath:h.path,nodeReplPathSource:h.source,platform:r}}",
+    "function Wn(e){return{path:null,source:`missing`}}function Gn({rawValue:e}){return e==null?null:{path:e,source:`env-override`}}",
+  ].join("");
+}
+
+function currentChromePluginAppServerRuntimeBundleFixture() {
+  return [
+    "let r=require(`node:path`),o=require(`node:fs`);",
+    "async function XB(e){let t=ZB(e),n=NM(e.resourcesPath),r=MM(e.resourcesPath),i=[t==null?`codex`:null,n==null?`node`:null,r==null?`node_repl`:null].filter(e=>e!=null);if(i.length>0)throw Error(`Missing bundled Electron runtime required to sync Chrome native host resources for ${e.nativeHostName}: ${i.join(`, `)} (resourcesPath: ${e.resourcesPath}).`);if(t==null||n==null||r==null)throw Error(`Missing bundled Electron runtime required to sync Chrome native host resources for ${e.nativeHostName}.`);return{codexCliPath:await fz({codexCliPath:t,codexHome:e.codexHome,nativeHostName:e.nativeHostName}),nodePath:n,nodeModuleDirs:PM(e.resourcesPath),nodeReplPath:r}}",
+    "function ZB(e){return LM(e.resourcesPath)??QB(e.devRuntimeRepoRoot,[`extension`,`bin`,process.platform===`win32`?`codex.exe`:`codex`])}function NM(e){return null}function MM(e){return null}function PM(e){return []}function QB(e,t){return null}function LM(e){return null}async function fz({codexCliPath:e}){return e}",
   ].join("");
 }
 
@@ -1900,6 +1972,19 @@ test("patches current comment preload screenshot marker selection list", () => {
   assert.doesNotMatch(patched, /Ge\?M\?\.kind===`comment`\?he:\[\]/);
 });
 
+test("patches Electron 42 comment preload screenshot marker selection list", () => {
+  const source =
+    "let Ue=g==null?null:ge.find(e=>e.id===g)??null,We=g==null?null:we.find(e=>e.id===g)??null,A=Ue==null?We==null?null:{kind:`design`,annotation:We}:{kind:`comment`,annotation:Ue},Ge=A?.annotation.id??null,Ke=A?.kind===`comment`?[A.annotation]:ge,qe=A!=null&&g!=null,Je=m?.target.mode===`create`?ho(m.anchor):null,Ye=m?.target.mode===`create`&&m.anchor.type===`element`?m.anchor.viewportSize:void 0,Xe=Je==null?null:ge.find(e=>ue(e.anchor,Je))??null,Ze=(qe?A?.kind===`comment`?ge:[]:Xe==null?ge:ge.filter(e=>e.id!==Xe.id)).flatMap(e=>{let t=fe.get(e.id);if(t==null)return[];return[{comment:e,commentNumber:t}]})";
+
+  const patched = applyPatchTwice(applyBrowserAnnotationScreenshotPatch, source);
+
+  assert.match(
+    patched,
+    /Ze=\(qe\?A\?\.kind===`comment`\?Ke:\[\]:Xe==null\?ge:ge\.filter\(e=>e\.id!==Xe\.id\)\)\.flatMap/,
+  );
+  assert.doesNotMatch(patched, /qe\?A\?\.kind===`comment`\?ge:\[\]/);
+});
+
 test("guards fast-mode model tier lookup when serviceTiers is missing", () => {
   const source =
     "function m(e){return e.serviceTiers.length>0||e.additionalSpeedTiers?.includes(u)===!0}";
@@ -2389,6 +2474,22 @@ test("uses collision-proof Linux tray icon variables when Electron alias is r", 
   );
 });
 
+test("adds Linux tray icon fallback when current upstream uses small file icon fallback", () => {
+  const iconPathExpression = "process.resourcesPath+`/../content/webview/assets/app-test.png`";
+  const source = trayBundleFixture().replace(
+    "n.app.getFileIcon(process.execPath,{size:process.platform===`win32`?`small`:`normal`})",
+    "n.app.getFileIcon(process.execPath,{size:`small`})",
+  );
+
+  const { value: patched, warnings } = captureWarns(() =>
+    applyPatchTwice(applyLinuxTrayPatch, source, iconPathExpression),
+  );
+
+  assert.deepEqual(warnings, []);
+  assert.match(patched, /__codexLinuxTrayIcon=n\.nativeImage\.createFromPath/);
+  assert.match(patched, /n\.app\.getFileIcon\(process\.execPath,\{size:`small`\}\)/);
+});
+
 test("adds Linux tray support even when About dialog already uses the bundled icon path", () => {
   const iconPathExpression = "process.resourcesPath+`/../content/webview/assets/app-test.png`";
   const packagedTrayIconPathExpression = "process.resourcesPath+`/../.codex-linux/codex-desktop-tray.png`";
@@ -2551,6 +2652,27 @@ test("adds Linux tray support for current minified window and startup identifier
     /catch\(e\)\{O=!1;process\.platform===`linux`&&console\.warn\(`\[codex-linux\] Failed to set up system tray`,e\)\}/,
   );
   assert.equal((patched.match(/\[codex-linux\] Failed to set up system tray/g) ?? []).length, 1);
+});
+
+test("adds Linux tray startup support for current appBrand initializer", () => {
+  const source = [
+    "async function H5(e){let t=await W5(e.appBrand,e.repoRoot),n=new a.Tray(t.defaultIcon);return n}",
+    "let ye=async()=>{O=!0;try{await H5({appBrand:r.et(),repoRoot:j.repoRoot})}catch(e){O=!1,_.reportNonFatal(e instanceof Error?e:`Failed to set up tray`,{kind:`tray-setup-failed`,tags:{errorType:`tray-setup-failed`}}),ee()}};E&&ye();",
+  ].join("");
+
+  const { value: patched, warnings } = captureWarns(() =>
+    applyPatchTwice(applyLinuxTrayPatch, source, null),
+  );
+
+  assert.deepEqual(warnings.filter((warning) => warning.includes("tray startup")), []);
+  assert.match(
+    patched,
+    /\(E\|\|process\.platform===`linux`&&\(typeof codexLinuxIsTrayEnabled!==`function`\|\|codexLinuxIsTrayEnabled\(\)\)\)&&ye\(\);/,
+  );
+  assert.match(
+    patched,
+    /ee\(\);process\.platform===`linux`&&console\.warn\(`\[codex-linux\] Failed to set up system tray`,e\)\}/,
+  );
 });
 
 test("scopes dynamic tray startup matching to the tray initializer", () => {
@@ -2869,6 +2991,22 @@ test("adds Linux settings persistence after current global-state handler drift",
 
   assert.match(patched, /function codexLinuxSettingsAppId\(\)/);
   assert.match(patched, /var c=`config\.toml`;/);
+  assert.match(
+    patched,
+    /"set-global-state":async\(\{key:a,value:b,origin:c\}\)=>\(this\.setGlobalStateValue\(a,b,c\),codexLinuxPersistSettingsState\(a,b\),\{success:!0\}\)/,
+  );
+});
+
+test("adds Linux settings persistence when upstream removed the state-file marker", () => {
+  const source = [
+    "\"use strict\";",
+    "let i=require(`node:path`),o=require(`node:fs`);",
+    "const h={\"set-global-state\":async({key:a,value:b,origin:c})=>(this.setGlobalStateValue(a,b,c),{success:!0})};",
+  ].join("");
+
+  const patched = applyPatchTwice(applyLinuxSettingsPersistencePatch, source);
+
+  assert.match(patched, /^"use strict";function codexLinuxSettingsAppId\(\)/);
   assert.match(
     patched,
     /"set-global-state":async\(\{key:a,value:b,origin:c\}\)=>\(this\.setGlobalStateValue\(a,b,c\),codexLinuxPersistSettingsState\(a,b\),\{success:!0\}\)/,
@@ -4082,6 +4220,19 @@ test("patches the current isAvailable Computer Use gate shape", () => {
   assert.equal((patched.match(/installWhenMissing:!0,name:ft/g) || []).length, 2);
 });
 
+test("patches the Electron 42 Computer Use gate with descriptor metadata fields", () => {
+  const source = [
+    "var t={Oo:`computer-use`,No:e=>e};",
+    "var Ua=[{autoInstallOptOutKey:t.No(t.Oo),installWhenMissing:!0,installWhenMissingRequiresOptIn:!0,name:t.Oo,isAvailable:({features:e,platform:t})=>t===`darwin`&&e.computerUse,migrate:ha},{autoInstallOptOutKey:t.No(t.Oo),installWhenMissing:!0,installWhenMissingRequiresOptIn:!0,name:t.Oo,isAvailable:({features:e,platform:t})=>t===`win32`&&e.computerUse}];",
+  ].join("");
+
+  const patched = applyPatchTwice(applyLinuxComputerUsePluginGatePatch, source);
+
+  assert.match(patched, /autoInstallOptOutKey:t\.No\(t\.Oo\),installWhenMissing:!0,installWhenMissingRequiresOptIn:!0,name:t\.Oo/);
+  assert.match(patched, /isAvailable:\(\{features:e,platform:t\}\)=>\(t===`darwin`\|\|t===`linux`\)&&e\.computerUse,migrate:ha/);
+  assert.match(patched, /isAvailable:\(\{features:e,platform:t\}\)=>t===`win32`&&e\.computerUse/);
+});
+
 test("auto-installs the current Chrome plugin gate shape", () => {
   const patched = applyPatchTwice(
     applyLinuxChromePluginAutoInstallPatch,
@@ -4190,6 +4341,38 @@ test("uses Linux managed runtime paths for current Chrome native host sync shape
     nodePath: "/opt/codex/resources/node-runtime/bin/node",
     nodeReplPath: "/opt/codex/resources/node_repl",
   });
+});
+
+test("uses Linux managed runtime paths for Electron 42 Browser Use runtime resolver", () => {
+  const patched = applyPatchTwice(
+    applyLinuxChromeNativeHostRuntimePatch,
+    electron42BrowserUseRuntimeResolverBundleFixture(),
+  );
+
+  assert.match(
+    patched,
+    /codexLinuxChromeNativeHostRuntimeEntry\(codexLinuxChromeNativeHostRuntimePath\(`codex`\),`linux-path`\)\?\?Wn/,
+  );
+  assert.match(
+    patched,
+    /codexLinuxChromeNativeHostRuntimeFile\(u,\[\[`node-runtime`,`bin`,r===`win32`\?`node\.exe`:`node`\]\]\)/,
+  );
+  assert.match(
+    patched,
+    /codexLinuxChromeNativeHostRuntimeFile\(u,\[\[r===`win32`\?`node_repl\.exe`:`node_repl`\]\]\)/,
+  );
+});
+
+test("uses Linux managed runtime paths for current Chrome plugin app-server sync", () => {
+  const patched = applyPatchTwice(
+    applyLinuxChromeNativeHostRuntimePatch,
+    currentChromePluginAppServerRuntimeBundleFixture(),
+  );
+
+  assert.match(patched, /ZB\(e\)\?\?codexLinuxChromeNativeHostRuntimeEnv\(`CODEX_CLI_PATH`\)\?\?codexLinuxChromeNativeHostRuntimePath\(`codex`\)/);
+  assert.match(patched, /NM\(e\.resourcesPath\)\?\?codexLinuxChromeNativeHostRuntimeEnv\(`CODEX_BROWSER_USE_NODE_PATH`\)/);
+  assert.match(patched, /codexLinuxChromeNativeHostRuntimeFile\(e\.resourcesPath,\[\[`node-runtime`,`bin`,process\.platform===`win32`\?`node\.exe`:`node`\]\]\)/);
+  assert.match(patched, /MM\(e\.resourcesPath\)\?\?codexLinuxChromeNativeHostRuntimeEnv\(`CODEX_NODE_REPL_PATH`\)/);
 });
 
 test("reports drifted Chrome native host runtime resolver as optional drift", () => {
@@ -4556,6 +4739,25 @@ test("hydrates local chat search results before navigating", () => {
   assert.doesNotMatch(patched, /t\[23\]=s\.threadKey/);
 });
 
+test("hydrates current local chat search route helper before navigating", () => {
+  const source = [
+    "function MF(){let g=[He],b=`abc`,S=9;return $t({queryKey:[`command-menu-thread-search`,g,b,S],queryFn:async()=>(await Promise.allSettled(g.map(e=>_(`search-threads-for-host`,{hostId:e,query:b,limit:S})))).flatMap(e=>e.status===`fulfilled`?e.value:[])})}",
+    "function MI(e,t,n,r){switch(e.kind){case`local`:case`remote`:Yh(e.threadKey,t,n);return;case`chatgpt`:return}}",
+  ].join("");
+
+  const patched = applyPatchTwice(applyLinuxChatSearchHydrationPatch, source);
+
+  assert.match(patched, /function codexLinuxHydrateSearchConversation/);
+  assert.match(
+    patched,
+    /_\(`search-threads-for-host`,\{hostId:e,query:b,limit:S\}\)\.then\(codexLinuxSearchResults=>codexLinuxSearchResults\.map\(codexLinuxSearchResult=>\(\{\.\.\.codexLinuxSearchResult,hostId:e\}\)\)\)/,
+  );
+  assert.match(
+    patched,
+    /async function MI\(e,t,n,r\)\{switch\(e\.kind\)\{case`local`:await codexLinuxHydrateSearchConversation\(e,e\.threadKey\);Yh\(e\.threadKey,t,n\);return;case`remote`:Yh\(e\.threadKey,t,n\);return;case`chatgpt`:return\}\}/,
+  );
+});
+
 test("resolves the requested live Linux Browser Use route window by id", () => {
   const source =
     "var kK=t.Ur(`browser-sidebar-manager`);" +
@@ -4832,6 +5034,22 @@ test("auto-approves the Electron 42 Browser Use node_repl runtime config builder
   assert.match(
     patched,
     /t\.Fa\(\{codexCliPath:c\.codexCliPath,codexHome:m,extraEnv:b,nodeModuleDirs:f,nodePath:c\.nodePath,nodeReplPath:u\?t\.kr\(c\.nodeReplPath\):c\.nodeReplPath,tools:\{js:\{approval_mode:`approve`\}\},platform:c\.platform/,
+  );
+});
+
+test("auto-approves the current $a Browser Use node_repl runtime config builder", () => {
+  const source =
+    "\"use strict\";let l=require(`node:fs`),s=require(`node:path`),u=require(`node:crypto`),d=[`upstream-hash`],t={$a:e=>e,Fr:e=>e},c={codexCliPath:null,nodePath:null,nodeReplPath:null,platform:`linux`},p=null,b=null,f=[],g=null,v=null,_=!1,w=!1;function build(){return t.$a({codexCliPath:c.codexCliPath,codexHome:p,extraEnv:b,nodeModuleDirs:f,nodePath:c.nodePath,nodeReplPath:w?t.Fr(c.nodeReplPath):c.nodeReplPath,platform:c.platform,requestMeta:g,sentryUserId:v,traceMeta:_,trustAllCode:null,trustedBrowserClientSha256s:d,shouldUseWslPaths:w})}";
+
+  const patched = applyPatchTwice(applyBrowserUseNodeReplApprovalPatch, source);
+
+  assert.match(
+    patched,
+    /t\.\$a\(\{codexCliPath:c\.codexCliPath,codexHome:p,extraEnv:b,nodeModuleDirs:f,nodePath:c\.nodePath,nodeReplPath:w\?t\.Fr\(c\.nodeReplPath\):c\.nodeReplPath,tools:\{js:\{approval_mode:`approve`\}\},platform:c\.platform/,
+  );
+  assert.match(
+    patched,
+    /trustedBrowserClientSha256s:codexLinuxTrustedBrowserClientSha256s\(d\),shouldUseWslPaths:w/,
   );
 });
 
@@ -5370,6 +5588,81 @@ test("adds a fallback source for renderer git-origins requests without weakening
   assert.match(patched, /throw Error\(`Missing git operation source for \$\{r\}`\)/);
 });
 
+test("falls back when Electron Owl feature binding is absent on Linux", () => {
+  const source =
+    "var Ge={parse:e=>e};function Qe(){let e=process._linkedBinding;if(typeof e!=`function`)throw Error(`Owl feature binding is unavailable`);return Ge.parse(e.call(process,`electron_common_owl_features`))}";
+
+  const patched = applyPatchTwice(applyLinuxOwlFeatureBindingFallbackPatch, source);
+
+  assert.match(patched, /No such binding was linked/);
+  assert.match(patched, /isOwlFeatureEnabled:\(\)=>!1/);
+  assert.match(patched, /throw t/);
+
+  const sandbox = {
+    process: {
+      _linkedBinding() {
+        throw new Error("No such binding was linked: electron_common_owl_features");
+      },
+    },
+    result: null,
+  };
+  vm.createContext(sandbox);
+  vm.runInContext(`${patched};result=Qe().isOwlFeatureEnabled(\`SomeOwlFlag\`);`, sandbox);
+
+  assert.equal(sandbox.result, false);
+});
+
+test("preserves real Electron Owl feature binding when available", () => {
+  const source =
+    "var Ge={parse:e=>e};function Qe(){let e=process._linkedBinding;if(typeof e!=`function`)throw Error(`Owl feature binding is unavailable`);return Ge.parse(e.call(process,`electron_common_owl_features`))}";
+
+  const patched = applyPatchTwice(applyLinuxOwlFeatureBindingFallbackPatch, source);
+  const sandbox = {
+    process: {
+      _linkedBinding(name) {
+        assert.equal(name, "electron_common_owl_features");
+        return { isOwlFeatureEnabled: (feature) => feature === "EnabledOwlFlag" };
+      },
+    },
+    enabled: null,
+    disabled: null,
+  };
+  vm.createContext(sandbox);
+  vm.runInContext(
+    `${patched};enabled=Qe().isOwlFeatureEnabled(\`EnabledOwlFlag\`);disabled=Qe().isOwlFeatureEnabled(\`OtherOwlFlag\`);`,
+    sandbox,
+  );
+
+  assert.equal(sandbox.enabled, true);
+  assert.equal(sandbox.disabled, false);
+});
+
+test("patches Electron Owl feature binding fallback outside the main bundle", () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "codex-owl-feature-build-"));
+  try {
+    const buildDir = path.join(tempRoot, ".vite", "build");
+    fs.mkdirSync(buildDir, { recursive: true });
+    const bundlePath = path.join(buildDir, "workspace-root-drop-handler-test.js");
+    fs.writeFileSync(
+      bundlePath,
+      "var Ge={parse:e=>e};function Qe(){let e=process._linkedBinding;if(typeof e!=`function`)throw Error(`Owl feature binding is unavailable`);return Ge.parse(e.call(process,`electron_common_owl_features`))}",
+      "utf8",
+    );
+
+    assert.deepEqual(patchLinuxOwlFeatureBindingFallbackAssets(tempRoot), {
+      matched: 1,
+      changed: 1,
+    });
+    assert.match(fs.readFileSync(bundlePath, "utf8"), /isOwlFeatureEnabled:\(\)=>!1/);
+    assert.deepEqual(patchLinuxOwlFeatureBindingFallbackAssets(tempRoot), {
+      matched: 1,
+      changed: 0,
+    });
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
 test("missing icon asset skips only icon patches", () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "codex-patch-test-"));
   try {
@@ -5742,6 +6035,30 @@ test("patch report marks missing required package metadata as required failure",
     assert.ok(
       validateReport(report, "upstream-build").some((failure) =>
         failure.startsWith("package-desktop-name: failed-required"),
+      ),
+    );
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("patch report marks missing Owl feature binding bundle as required failure", () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "codex-patch-report-missing-owl-feature-"));
+  try {
+    const buildDir = path.join(tempRoot, ".vite", "build");
+    fs.mkdirSync(buildDir, { recursive: true });
+    fs.writeFileSync(path.join(buildDir, "main.js"), mainBundlePrefix);
+    fs.writeFileSync(path.join(tempRoot, "package.json"), JSON.stringify({ name: "codex" }));
+
+    const report = createPatchReport();
+    captureWarns(() => patchExtractedApp(tempRoot, { report }));
+
+    const owlPatch = report.patches.find((patch) => patch.name === "linux-owl-feature-binding-fallback");
+    assert.equal(owlPatch.status, "failed-required");
+    assert.match(owlPatch.reason, /Owl feature binding loader bundle missing/);
+    assert.ok(
+      validateReport(report, "upstream-build").some((failure) =>
+        failure.startsWith("linux-owl-feature-binding-fallback: failed-required"),
       ),
     );
   } finally {
