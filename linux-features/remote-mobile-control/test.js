@@ -1682,6 +1682,15 @@ test("Linux remote-control enablement bridge omits params for current host toggl
   assert.equal(calls[0].params, undefined);
 });
 
+test("Linux remote-control enablement bridge warns when host toggle params needle drifts", () => {
+  const source =
+    "var handlers={\"set-remote-control-enabled-for-host\":pU((e,{enabled:t})=>e.sendRequest((t?`remoteControl/enable`:`remoteControl/disable`),null))};";
+  const { result, warnings } = captureWarnings(() => applyLinuxRemoteControlEnablementBridgePatch(source));
+
+  assert.equal(result, source);
+  assert.ok(warnings.some((warning) => warning.includes("enable-for-host params needle")));
+});
+
 test("Linux remote-control enablement bridge migrates old auto-connect cleanup patch", () => {
   const source = syntheticAppMainEnablementBridgeBundle().replace(
     "$o(`set-remote-control-connections-enabled`,{params:{enabled:t}}).catch(e=>{q.warning(`${DF} sync_failed`,{safe:{enabled:t},sensitive:{error:e}})})",

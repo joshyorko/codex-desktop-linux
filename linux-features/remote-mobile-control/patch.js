@@ -1175,10 +1175,17 @@ function applyLinuxRemoteControlEnablementBridgePatch(source) {
   if (!patched.includes(REMOTE_CONTROL_ENABLE_FOR_HOST_PARAMS_MARKER)) {
     const enabledForHostNullParamsPattern =
       /("set-remote-control-enabled-for-host":[A-Za-z_$][\w$]*\(\([A-Za-z_$][\w$]*,\{enabled:[A-Za-z_$][\w$]*\}\)=>[A-Za-z_$][\w$]*\.sendRequest\([A-Za-z_$][\w$]*\?`remoteControl\/enable`:`remoteControl\/disable`,)null(\)\))/u;
+    const beforeEnableForHostParamsPatch = patched;
     patched = patched.replace(
       enabledForHostNullParamsPattern,
       `$1void 0/*${REMOTE_CONTROL_ENABLE_FOR_HOST_PARAMS_MARKER}*/$2`,
     );
+    if (
+      patched === beforeEnableForHostParamsPatch &&
+      patched.includes("set-remote-control-enabled-for-host")
+    ) {
+      console.warn("WARN: Could not find remote-control enable-for-host params needle - skipping Linux remote-control host params patch");
+    }
   }
 
   const markerIndex = patched.indexOf("[remote-connections/slingshot-gate-bridge]");
