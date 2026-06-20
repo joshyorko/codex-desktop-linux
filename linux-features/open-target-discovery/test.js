@@ -927,3 +927,17 @@ test("open-target discovery does not add a second built-in Zed target", () => {
 
   assert.equal((patched.match(/linux:\{label:`Zed`/g) || []).length, 1);
 });
+
+test("open-target discovery keeps built-in IDEs available during deferred open target enrichment", () => {
+  const bundleWithBuiltInDeferredHandler =
+    openTargetsBundle +
+    "function qN(){return [{id:`vscode`,label:`VS Code`,icon:`apps/vscode.png`,kind:`editor`,hidden:false},...Xg.flatMap((target)=>{let platform=target.platforms.linux;return platform?[{id:target.id,label:platform.label,icon:platform.icon,kind:platform.kind,hidden:platform.hidden}]:[]})]}function sj(e){return e}function Dg({n=!1,a=null}){let s={},o={hostConfig:{}};if(n&&a==null){let t=null;return{preferredTarget:t,availableTargets:[],mode:`editor`,targets:sj(qN(s),o.hostConfig).map(({id:e,label:n,icon:r,kind:i,hidden:a})=>({id:e,target:e,label:n,icon:r,kind:i,hidden:a,default:t===e||void 0}))}}}";
+
+  const visibleLabels = evaluatePatched(
+    bundleWithBuiltInDeferredHandler,
+    { platform: "linux", env: {} },
+    "()=>{let result=Dg({n:true});let available=new Set(result.availableTargets);return result.targets.filter((target)=>available.has(target.target)&&!target.hidden).map((target)=>target.label)}",
+  )();
+
+  assert.ok(visibleLabels.includes("VS Code"));
+});

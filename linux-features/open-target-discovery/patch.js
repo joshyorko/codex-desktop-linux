@@ -423,12 +423,12 @@ function applyIdeDiscoveryPatch(currentSource, deps) {
     const previousSource = patchedSource;
     patchedSource = patchedSource.replace(
       deferredAvailableTargetsPattern,
-      "$1$3.filter(e=>typeof e?.id===`string`&&e.id.startsWith(`linux-desktop-`)).map(e=>e.id)/*" +
+      "$1$3.filter(e=>typeof e?.id===`string`&&!e.hidden).map(e=>e.id)/*" +
         deferredAvailableTargetsMarker +
         "*/$2$3$4",
     );
     if (patchedSource === previousSource && currentSource.includes("open-in-targets")) {
-      warn("Could not expose deferred dynamic IDE desktop targets as available");
+      warn("Could not expose deferred Linux open targets as available");
     }
   }
 
