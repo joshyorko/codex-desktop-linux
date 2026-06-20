@@ -45,6 +45,7 @@ const REMOTE_MOBILE_THREAD_RUNTIME_MARKER = "codexLinuxRemoteMobileThreadRuntime
 const REMOTE_MOBILE_UNKNOWN_TURN_MARKER = "codexLinuxRemoteMobileHydrateUnknownTurn";
 const REMOTE_MOBILE_NOTIFICATION_QUEUE_MARKER = "codexLinuxRemoteMobileNotificationQueue";
 const REMOTE_CONTROL_ENABLEMENT_BRIDGE_MARKER = "codexLinuxRemoteControlEnablementBridge";
+const REMOTE_CONTROL_ENABLE_FOR_HOST_PARAMS_MARKER = "codexLinuxRemoteControlEnableForHostParams";
 const REMOTE_CONTROL_AUTO_CONNECT_CLEANUP_MARKER = "codexLinuxRemoteControlAutoConnectCleanup";
 const REMOTE_CONTROL_SELF_AUTO_CONNECT_MARKER = "codexLinuxRemoteControlSelfAutoConnect";
 const REMOTE_MOBILE_ACTIVE_STATUS_MARKER = "codexLinuxRemoteMobileActiveStatus";
@@ -1302,12 +1303,22 @@ function applyLinuxRemoteControlStatusReadGuardPatch(source) {
 }
 
 function applyLinuxRemoteControlEnablementBridgePatch(source) {
-  const markerIndex = source.indexOf("[remote-connections/slingshot-gate-bridge]");
-  if (markerIndex < 0 || source.indexOf("set-remote-control-connections-enabled", markerIndex) < 0) {
-    return source;
+  let patched = source;
+
+  if (!patched.includes(REMOTE_CONTROL_ENABLE_FOR_HOST_PARAMS_MARKER)) {
+    const enabledForHostNullParamsPattern =
+      /("set-remote-control-enabled-for-host":[A-Za-z_$][\w$]*\(\([A-Za-z_$][\w$]*,\{enabled:[A-Za-z_$][\w$]*\}\)=>[A-Za-z_$][\w$]*\.sendRequest\([A-Za-z_$][\w$]*\?`remoteControl\/enable`:`remoteControl\/disable`,)null(\)\))/u;
+    patched = patched.replace(
+      enabledForHostNullParamsPattern,
+      `$1void 0/*${REMOTE_CONTROL_ENABLE_FOR_HOST_PARAMS_MARKER}*/$2`,
+    );
   }
 
-  let patched = source;
+  const markerIndex = patched.indexOf("[remote-connections/slingshot-gate-bridge]");
+  if (markerIndex < 0 || patched.indexOf("set-remote-control-connections-enabled", markerIndex) < 0) {
+    return patched;
+  }
+
   let region = patched.slice(markerIndex, markerIndex + 4_500);
 
   if (!patched.includes(REMOTE_CONTROL_ENABLEMENT_BRIDGE_MARKER)) {
@@ -1321,7 +1332,7 @@ function applyLinuxRemoteControlEnablementBridgePatch(source) {
 
     if (patchedRegion === region) {
       console.warn("WARN: Could not find remote-control enablement bridge needle - skipping Linux remote-control bridge patch");
-      return source;
+      return patched;
     }
 
     patched = patched.slice(0, markerIndex) + patchedRegion + patched.slice(markerIndex + region.length);
