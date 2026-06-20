@@ -45,6 +45,10 @@ function linuxExplicitQuitExpression() {
   return "typeof codexLinuxPrepareForExplicitQuit===`function`?codexLinuxPrepareForExplicitQuit():typeof codexLinuxMarkQuitInProgress===`function`&&codexLinuxMarkQuitInProgress(),";
 }
 
+function linuxCanQuitWithoutPromptExpression(quitControllerVar) {
+  return `(typeof ${quitControllerVar}.canQuitWithoutPrompt===\`function\`&&${quitControllerVar}.canQuitWithoutPrompt())`;
+}
+
 function applyLinuxWillQuitDrainTimeoutPatch(currentSource) {
   let patchedSource = currentSource;
 
@@ -94,7 +98,7 @@ function applyLinuxExplicitQuitPromptBypassPatch(currentSource) {
   const beforeQuitNeedle =
     "if(e||i.canQuitWithoutPrompt()||r||!s&&!c){g=!0,a.markAppQuitting();return}";
   const beforeQuitPatch =
-    `if(${promptBypassExpression}e||i.canQuitWithoutPrompt()||r||!s&&!c){g=!0,a.markAppQuitting();return}`;
+    `if(${promptBypassExpression}e||${linuxCanQuitWithoutPromptExpression("i")}||r||!s&&!c){g=!0,a.markAppQuitting();return}`;
   const beforeQuitRegex =
     /if\(([A-Za-z_$][\w$]*)\|\|([A-Za-z_$][\w$]*)\.canQuitWithoutPrompt\(\)\|\|([A-Za-z_$][\w$]*)\|\|!([A-Za-z_$][\w$]*)&&!([A-Za-z_$][\w$]*)\)\{([A-Za-z_$][\w$]*)=!0,([A-Za-z_$][\w$]*)\.markAppQuitting\(\);return\}/g;
   let patchedAny = false;
@@ -108,7 +112,7 @@ function applyLinuxExplicitQuitPromptBypassPatch(currentSource) {
     beforeQuitRegex,
     (_match, updateInstallVar, quitControllerVar, appQuittingVar, activeConversationVar, automationVar, quittingStateVar, appQuittingControllerVar) => {
       patchedAny = true;
-      return `if(${promptBypassExpression}${updateInstallVar}||${quitControllerVar}.canQuitWithoutPrompt()||${appQuittingVar}||!${activeConversationVar}&&!${automationVar}){${quittingStateVar}=!0,${appQuittingControllerVar}.markAppQuitting();return}`;
+      return `if(${promptBypassExpression}${updateInstallVar}||${linuxCanQuitWithoutPromptExpression(quitControllerVar)}||${appQuittingVar}||!${activeConversationVar}&&!${automationVar}){${quittingStateVar}=!0,${appQuittingControllerVar}.markAppQuitting();return}`;
     },
   );
 

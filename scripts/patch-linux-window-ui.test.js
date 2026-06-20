@@ -18,6 +18,10 @@ process.env.CODEX_LINUX_FEATURES_CONFIG = path.join(
   "features.example.json",
 );
 
+function linuxCanQuitWithoutPromptExpressionForTest(quitControllerVar) {
+  return `(typeof ${quitControllerVar}.canQuitWithoutPrompt===\`function\`&&${quitControllerVar}.canQuitWithoutPrompt())`;
+}
+
 const {
   COMPUTER_USE_UI_ENV_VAR,
   COMPUTER_USE_UI_SETTINGS_KEY,
@@ -1476,8 +1480,38 @@ test("bypasses the upstream before-quit confirmation after a Linux explicit quit
 
   assert.match(
     patched,
-    /if\(\(typeof codexLinuxShouldBypassQuitPrompt===`function`&&codexLinuxShouldBypassQuitPrompt\(\)\)\|\|e\|\|i\.canQuitWithoutPrompt\(\)\|\|r\|\|!s&&!c\)\{g=!0,a\.markAppQuitting\(\);return\}/,
+    /if\(\(typeof codexLinuxShouldBypassQuitPrompt===`function`&&codexLinuxShouldBypassQuitPrompt\(\)\)\|\|e\|\|\(typeof i\.canQuitWithoutPrompt===`function`&&i\.canQuitWithoutPrompt\(\)\)\|\|r\|\|!s&&!c\)\{g=!0,a\.markAppQuitting\(\);return\}/,
   );
+});
+
+test("does not call missing upstream canQuitWithoutPrompt method", () => {
+  const source = `${mainBundlePrefix}${beforeQuitConfirmationBundleFixture()}`;
+  const patched = applyPatchTwice(
+    applyLinuxExplicitQuitPromptBypassPatch,
+    applyLinuxQuitGuardPatch(source),
+  );
+  const beforeQuitSnippet = patched.match(
+    /if\(\(typeof codexLinuxShouldBypassQuitPrompt===`function`&&codexLinuxShouldBypassQuitPrompt\(\)\)\|\|e\|\|\(typeof i\.canQuitWithoutPrompt===`function`&&i\.canQuitWithoutPrompt\(\)\)\|\|r\|\|!s&&!c\)\{g=!0,a\.markAppQuitting\(\);return\}/,
+  )?.[0];
+
+  assert.ok(beforeQuitSnippet, "expected patched before-quit guard");
+
+  const runBeforeQuitCheck = new Function(
+    "codexLinuxShouldBypassQuitPrompt",
+    "e",
+    "i",
+    "r",
+    "s",
+    "c",
+    "a",
+    `let g=!1;${beforeQuitSnippet}return { g, prompted: true };`,
+  );
+  const appQuitting = { markAppQuitting() {} };
+
+  assert.doesNotThrow(() => {
+    const result = runBeforeQuitCheck(() => false, false, {}, false, true, true, appQuitting);
+    assert.deepEqual(result, { g: false, prompted: true });
+  });
 });
 
 test("adds a bounded will-quit drain fallback for Linux explicit quit", () => {
@@ -1498,7 +1532,7 @@ test("adds a bounded will-quit drain fallback for Linux explicit quit", () => {
 test("patches remaining before-quit and drain guards when another copy is already patched", () => {
   const promptBypassExpression =
     "(typeof codexLinuxShouldBypassQuitPrompt===`function`&&codexLinuxShouldBypassQuitPrompt())||";
-  const patchedPrompt = `if(${promptBypassExpression}e||i.canQuitWithoutPrompt()||r||!s&&!c){g=!0,a.markAppQuitting();return}`;
+  const patchedPrompt = `if(${promptBypassExpression}e||${linuxCanQuitWithoutPromptExpressionForTest("i")}||r||!s&&!c){g=!0,a.markAppQuitting();return}`;
   const unpatchedPrompt =
     "if(e||i.canQuitWithoutPrompt()||r||!s&&!c){g=!0,a.markAppQuitting();return}";
   const patchedPromptSource = applyPatchTwice(
@@ -1508,7 +1542,7 @@ test("patches remaining before-quit and drain guards when another copy is alread
   assert.equal((patchedPromptSource.match(/codexLinuxShouldBypassQuitPrompt\(\)/g) ?? []).length, 2);
   assert.match(
     patchedPromptSource,
-    /function secondPrompt\(\)\{if\(\(typeof codexLinuxShouldBypassQuitPrompt===`function`&&codexLinuxShouldBypassQuitPrompt\(\)\)\|\|e\|\|i\.canQuitWithoutPrompt\(\)\|\|r\|\|!s&&!c\)\{g=!0,a\.markAppQuitting\(\);return\}\}/,
+    /function secondPrompt\(\)\{if\(\(typeof codexLinuxShouldBypassQuitPrompt===`function`&&codexLinuxShouldBypassQuitPrompt\(\)\)\|\|e\|\|\(typeof i\.canQuitWithoutPrompt===`function`&&i\.canQuitWithoutPrompt\(\)\)\|\|r\|\|!s&&!c\)\{g=!0,a\.markAppQuitting\(\);return\}\}/,
   );
 
   const unpatchedDrain =
