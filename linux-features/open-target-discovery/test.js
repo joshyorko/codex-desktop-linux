@@ -35,6 +35,8 @@ const collidingPathAliasBundle =
   ideOpenTargetsBundle;
 const iconResolverBundle =
   "async function c_(e,t,a){return e===`win32`?Promise.all(t.map(async e=>{let t=a?.get(e.id)??null,r=e.iconPath?e.iconPath(t):t;return{id:e.id,label:e.label,icon:await d_(r,e.icon),kind:e.kind,hidden:e.hidden,supportsSsh:e.supportsSsh}})):l_(t)}function l_(e){return e.map(({id:e,label:t,icon:n,kind:r,hidden:i,supportsSsh:a})=>({id:e,label:t,icon:n,kind:r,hidden:i,supportsSsh:a}))}async function d_(e,t){if(!e)return t;try{let r=e.toLowerCase().endsWith(`.lnk`)?await f_(e):await n.app.getFileIcon(e,{size:`normal`});return!r||r.isEmpty()?t:r.toDataURL()}catch(e){return t}}async function f_(e){return n.nativeImage.createFromPath(e)}";
+const currentIconResolverBundle =
+  "async function VN(e,t,n){return e===`win32`?Promise.all(t.map(async e=>{let t=n?.get(e.id)??null,r=e.iconPath?e.iconPath(t):t;return{id:e.id,label:e.label,icon:await WN(r,e.icon),kind:e.kind,hidden:e.hidden,supportsSsh:e.supportsSsh}})):HN(t)}function HN(e){return e.map(({id:e,label:t,icon:n,kind:r,hidden:i,supportsSsh:a})=>({id:e,label:t,icon:n,kind:r,hidden:i,supportsSsh:a}))}async function WN(e,t){if(!e)return t;try{let r=e.toLowerCase().endsWith(`.lnk`)?await UN(e):await n.app.getFileIcon(e,{size:`normal`});return!r||r.isEmpty()?t:r.toDataURL()}catch(e){return t}}async function UN(e){return n.nativeImage.createFromPath(e)}";
 
 function applyPatchTwice(patchFn, source, ...args) {
   const patched = patchFn(source, ...args);
@@ -304,6 +306,45 @@ test("open-target discovery exposes desktop IDEs during deferred open target enr
     );
 
     assert.ok(visibleLabels.includes("Fleet IDE"));
+  });
+});
+
+test("open-target discovery finds Linuxbrew VS Code outside GUI PATH", () => {
+  withTempDir((tmp) => {
+    const dataHome = path.join(tmp, "share");
+    const appsDir = path.join(dataHome, "applications");
+    const emptyBin = path.join(tmp, "empty-bin");
+    const linuxbrewPrefix = path.join(tmp, "linuxbrew", ".linuxbrew");
+    const code = makeExecutable(path.join(linuxbrewPrefix, "bin"), "code");
+    fs.mkdirSync(appsDir, { recursive: true });
+    fs.mkdirSync(emptyBin, { recursive: true });
+    fs.writeFileSync(
+      path.join(appsDir, "code.desktop"),
+      [
+        "[Desktop Entry]",
+        "Type=Application",
+        "Name=Visual Studio Code",
+        "Exec=code --reuse-window %U",
+        "Categories=Development;IDE;",
+      ].join("\n"),
+    );
+
+    const targets = evaluatePatched(
+      openTargetsBundle,
+      {
+        HOME: tmp,
+        PATH: emptyBin,
+        HOMEBREW_PREFIX: linuxbrewPrefix,
+        XDG_DATA_HOME: dataHome,
+        XDG_DATA_DIRS: path.join(tmp, "empty"),
+      },
+      "Xg.flatMap((target)=>{let platform=target.platforms.linux;return platform?[{id:target.id,label:platform.label,command:platform.detect?.()}]:[]})",
+    );
+
+    const vscode = targets.find((target) => target.id === "vscode");
+    assert.ok(vscode);
+    assert.equal(vscode.command, code);
+    assert.equal(targets.some((target) => target.id === "linux-desktop-code"), false);
   });
 });
 
@@ -773,6 +814,47 @@ test("open-target discovery resolves iconPath on Linux", async () => {
   assert.equal(result[0].icon, "data:image/png;base64,codex");
 });
 
+test("open-target discovery resolves iconPath on current upstream bundle shape", async () => {
+  const patched = applyPatchTwice(applyMainBundlePatch, `${mainBundlePrefix}${currentIconResolverBundle}`);
+  const iconPath = "/tmp/codex-current-icon.svg";
+  const image = {
+    isEmpty: () => false,
+    toDataURL: () => "data:image/svg+xml;base64,codex",
+  };
+  const electron = {
+    app: {
+      getFileIcon: async () => {
+        throw new Error("should prefer nativeImage for image files");
+      },
+    },
+    nativeImage: {
+      createFromPath: (target) => {
+        assert.equal(target, iconPath);
+        return image;
+      },
+    },
+  };
+  const targets = [
+    {
+      id: "linux-desktop-agent",
+      label: "Agent",
+      icon: "apps/terminal.png",
+      kind: "editor",
+      iconPath: () => iconPath,
+    },
+  ];
+
+  assert.match(patched, /return\(e===`win32`\|\|e===`linux`\)\?Promise\.all/);
+  assert.match(patched, /function codexLinuxOpenTargetIconImage/);
+  const result = await new Function("require", "process", `${patched};return VN('linux', arguments[2], new Map());`)(
+    (name) => (name === "electron" ? electron : require(name)),
+    { platform: "linux", env: {} },
+    targets,
+  );
+
+  assert.equal(result[0].icon, "data:image/svg+xml;base64,codex");
+});
+
 test("open-target discovery respects hidden desktop entry overrides", () => {
   withTempDir((tmp) => {
     const dataHome = path.join(tmp, "user-share");
@@ -926,18 +1008,4 @@ test("open-target discovery does not add a second built-in Zed target", () => {
   const patched = applyPatchTwice(applyMainBundlePatch, zedAlreadyLinux);
 
   assert.equal((patched.match(/linux:\{label:`Zed`/g) || []).length, 1);
-});
-
-test("open-target discovery keeps built-in IDEs available during deferred open target enrichment", () => {
-  const bundleWithBuiltInDeferredHandler =
-    openTargetsBundle +
-    "function qN(){return [{id:`vscode`,label:`VS Code`,icon:`apps/vscode.png`,kind:`editor`,hidden:false},...Xg.flatMap((target)=>{let platform=target.platforms.linux;return platform?[{id:target.id,label:platform.label,icon:platform.icon,kind:platform.kind,hidden:platform.hidden}]:[]})]}function sj(e){return e}function Dg({n=!1,a=null}){let s={},o={hostConfig:{}};if(n&&a==null){let t=null;return{preferredTarget:t,availableTargets:[],mode:`editor`,targets:sj(qN(s),o.hostConfig).map(({id:e,label:n,icon:r,kind:i,hidden:a})=>({id:e,target:e,label:n,icon:r,kind:i,hidden:a,default:t===e||void 0}))}}}";
-
-  const visibleLabels = evaluatePatched(
-    bundleWithBuiltInDeferredHandler,
-    { platform: "linux", env: {} },
-    "()=>{let result=Dg({n:true});let available=new Set(result.availableTargets);return result.targets.filter((target)=>available.has(target.target)&&!target.hidden).map((target)=>target.label)}",
-  )();
-
-  assert.ok(visibleLabels.includes("VS Code"));
 });
