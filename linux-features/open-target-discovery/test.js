@@ -249,66 +249,6 @@ test("open-target discovery finds IDEs from desktop entries", () => {
   });
 });
 
-test("open-target discovery exposes desktop IDEs as available open targets", () => {
-  withTempDir((tmp) => {
-    const dataHome = path.join(tmp, "share");
-    const appsDir = path.join(dataHome, "applications");
-    const editorCommand = makeExecutable(path.join(tmp, "toolbox", "bin"), "fleet");
-    fs.mkdirSync(appsDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(appsDir, "com.example.Fleet.desktop"),
-      [
-        "[Desktop Entry]",
-        "Type=Application",
-        "Name=Fleet IDE",
-        `Exec=${editorCommand} --goto %f`,
-        "Categories=Development;IDE;",
-      ].join("\n"),
-    );
-
-    const bundleWithOpenTargetsHandler =
-      openTargetsBundle +
-      "function Qg({l,p,g=!1,v=!1}){let m=new Set(p),h=null,y=[];return{preferredTarget:h,availableTargets:Array.from(m),mode:g||v?`native`:`editor`,targets:[...l.map(({id:e,label:t,icon:n,kind:r,hidden:i})=>({id:e,target:e,label:t,icon:n,kind:r,hidden:i,available:m.has(e),default:h===e||void 0})),...y]}}";
-    const visibleLabels = evaluatePatched(
-      bundleWithOpenTargetsHandler,
-      { HOME: tmp, PATH: path.join(tmp, "bin"), XDG_DATA_HOME: dataHome, XDG_DATA_DIRS: path.join(tmp, "empty") },
-      "(()=>{let l=Xg.flatMap((target)=>{let platform=target.platforms.linux;return platform?[{id:target.id,label:platform.label,icon:platform.icon,kind:platform.kind,hidden:platform.hidden}]:[]});let result=Qg({l,p:[]});let available=new Set(result.availableTargets);return result.targets.filter((target)=>available.has(target.target)&&!target.hidden).map((target)=>target.label)})()",
-    );
-
-    assert.ok(visibleLabels.includes("Fleet IDE"));
-  });
-});
-
-test("open-target discovery exposes desktop IDEs during deferred open target enrichment", () => {
-  withTempDir((tmp) => {
-    const dataHome = path.join(tmp, "share");
-    const appsDir = path.join(dataHome, "applications");
-    const editorCommand = makeExecutable(path.join(tmp, "toolbox", "bin"), "fleet");
-    fs.mkdirSync(appsDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(appsDir, "com.example.Fleet.desktop"),
-      [
-        "[Desktop Entry]",
-        "Type=Application",
-        "Name=Fleet IDE",
-        `Exec=${editorCommand} --goto %f`,
-        "Categories=Development;IDE;",
-      ].join("\n"),
-    );
-
-    const bundleWithDeferredOpenTargetsHandler =
-      openTargetsBundle +
-      "function qN(){return Xg.flatMap((target)=>{let platform=target.platforms.linux;return platform?[{id:target.id,label:platform.label,icon:platform.icon,kind:platform.kind,hidden:platform.hidden}]:[]})}function sj(e){return e}function Dg({n=!1,a=null}){let s={},o={hostConfig:{}};if(n&&a==null){let t=null;return{preferredTarget:t,availableTargets:[],mode:`editor`,targets:sj(qN(s),o.hostConfig).map(({id:e,label:n,icon:r,kind:i,hidden:a})=>({id:e,target:e,label:n,icon:r,kind:i,hidden:a,default:t===e||void 0}))}}}";
-    const visibleLabels = evaluatePatched(
-      bundleWithDeferredOpenTargetsHandler,
-      { HOME: tmp, PATH: path.join(tmp, "bin"), XDG_DATA_HOME: dataHome, XDG_DATA_DIRS: path.join(tmp, "empty") },
-      "(()=>{let result=Dg({n:true});let available=new Set(result.availableTargets);return result.targets.filter((target)=>available.has(target.target)&&!target.hidden).map((target)=>target.label)})()",
-    );
-
-    assert.ok(visibleLabels.includes("Fleet IDE"));
-  });
-});
-
 test("open-target discovery finds Linuxbrew VS Code outside GUI PATH", () => {
   withTempDir((tmp) => {
     const dataHome = path.join(tmp, "share");

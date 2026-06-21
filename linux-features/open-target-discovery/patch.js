@@ -196,7 +196,7 @@ function insertTerminalHelpers(currentSource, { fsVar, pathVar }) {
     `function codexLinuxTerminalDesktopEntryFiles(e,t=0){let n=[];if(t>4)return n;try{for(let r of (0,${fsVar}.readdirSync)(e,{withFileTypes:!0})){let a=(0,${pathVar}.join)(e,r.name);r.isDirectory()?n.push(...codexLinuxTerminalDesktopEntryFiles(a,t+1)):(r.isFile()||r.isSymbolicLink())&&r.name.endsWith(\`.desktop\`)&&n.push(a)}}catch{}return n}` +
     `function codexLinuxParseTerminalDesktopEntry(e){let t={Id:(0,${pathVar}.basename)(e).replace(/\\.desktop$/u,\`\`)},n=\`\`;try{for(let r of (0,${fsVar}.readFileSync)(e,\`utf8\`).split(/\\r?\\n/u)){let e=r.trim();if(!e||e.startsWith(\`#\`))continue;if(e.startsWith(\`[\`)&&e.endsWith(\`]\`)){n=e.slice(1,-1);continue}if(n&&n!==\`Desktop Entry\`)continue;let i=e.indexOf(\`=\`);if(i<1)continue;let a=e.slice(0,i).replace(/\\[.*\\]$/u,\`\`),o=e.slice(i+1);t[a]??=o}}catch{return null}let r=e=>(e||\`\`).trim().toLowerCase()===\`true\`;return(t.Type&&t.Type!==\`Application\`)||r(t.NoDisplay)||r(t.Hidden)||!t.Exec||!t.Name?null:t}` +
     `function codexLinuxLooksLikeTerminal(e){let t=(e.Categories||\`\`).toLowerCase(),n=[e.Name,e.GenericName,e.Comment,e.Keywords,e.Exec,e.Id].filter(Boolean).join(\` \`).toLowerCase();return/(^|;)terminalemulator(;|$)/u.test(t)||/\\b(terminal|console|shell|pty|ghostty|wezterm|konsole|alacritty|kitty|foot|xterm)\\b/u.test(n)}` +
-    `function codexLinuxTerminalExecutablePath(e){if(!e)return null;if(!(0,${pathVar}.isAbsolute)(e))return codexLinuxFindExecutable(e);try{if((0,${fsVar}.existsSync)(e)){let t=(0,${fsVar}.statSync)(e);if(t.isFile())try{(0,${fsVar}.accessSync)(e,${fsVar}.constants.X_OK);return e}catch{}}}catch{}return null}` +
+    `function codexLinuxTerminalExecutablePath(e){if(!e)return null;if(!(0,${pathVar}.isAbsolute)(e))return e.includes(\`/\`)?null:codexLinuxFindExecutable(e);try{if((0,${fsVar}.existsSync)(e)){let t=(0,${fsVar}.statSync)(e);if(t.isFile())try{(0,${fsVar}.accessSync)(e,${fsVar}.constants.X_OK);return e}catch{}}}catch{}return null}` +
     `function codexLinuxTerminalCleanDesktopArgs(e){return e.map(e=>e.replace(/%%/gu,\`%\`)).filter(e=>!/^%[fFuUdDnNickvm]$/u.test(e))}` +
     `function codexLinuxResolveTerminalDesktopExec(e){let t=codexLinuxTerminalSplitDesktopExec(e);if(t.length===0)return null;for(;;){if((0,${pathVar}.basename)(t[0]||\`\`)===\`env\`){t.shift();continue}if(t[0]&&/^[A-Za-z_][A-Za-z0-9_]*=/u.test(t[0])){t.shift();continue}if(t[0]===\`-u\`||t[0]===\`--unset\`){t.splice(0,2);continue}break}let n=t.shift();if(!n)return null;let r=codexLinuxTerminalExecutablePath(n);return r?{command:r,args:codexLinuxTerminalCleanDesktopArgs(t),base:(0,${pathVar}.basename)(n).replace(/\\.(sh|bin)$/u,\`\`).toLowerCase()}:null}` +
     `function codexLinuxTerminalShellArg(e){if(!e)return\`\`;let t=e[0],n=e[e.length-1],r=(t===\`"\`||t===\`'\`)&&n===t?t:null;r&&(e=e.slice(1,-1));let i=process.env.HOME||\`\`;r==null&&(e=e.replace(/^~(?=\\/|$)/u,i).replace(/\\\\([^$])/gu,\`$1\`));r!==\`'\`&&(e=e.replace(/\\$\\{HOME\\}|\\$HOME/gu,i));return e}` +
@@ -264,11 +264,7 @@ function applyTerminalDiscoveryPatch(currentSource, deps) {
 }
 
 function applyIdeDiscoveryPatch(currentSource, deps) {
-  if (
-    currentSource.includes("...codexLinuxDiscoveredIdeTargets()") &&
-    currentSource.includes("codexLinuxDiscoveredIdeTargetsAvailable") &&
-    currentSource.includes("codexLinuxDiscoveredIdeTargetsDeferredAvailable")
-  ) {
+  if (currentSource.includes("...codexLinuxDiscoveredIdeTargets()")) {
     return currentSource;
   }
 
@@ -398,38 +394,6 @@ function applyIdeDiscoveryPatch(currentSource, deps) {
         patchedSource.slice(targetArrayStart + targetArrayText.length);
     } else {
       warn("Could not append dynamic IDE desktop discovery");
-    }
-  }
-
-  const availableTargetsMarker = "codexLinuxDiscoveredIdeTargetsAvailable";
-  if (!patchedSource.includes(availableTargetsMarker)) {
-    const availableTargetsPattern =
-      /(availableTargets:)Array\.from\(([A-Za-z_$][\w$]*)\)(,mode:[A-Za-z_$][\w$]*\|\|[A-Za-z_$][\w$]*\?`native`:`editor`,targets:\[\.\.\.([A-Za-z_$][\w$]*)\.map\()/u;
-    const previousSource = patchedSource;
-    patchedSource = patchedSource.replace(
-      availableTargetsPattern,
-      "$1[...$2,...$4.filter(e=>typeof e?.id===`string`&&e.id.startsWith(`linux-desktop-`)).map(e=>e.id)]/*" +
-        availableTargetsMarker +
-        "*/$3",
-    );
-    if (patchedSource === previousSource && currentSource.includes("open-in-targets")) {
-      warn("Could not expose dynamic IDE desktop targets as available");
-    }
-  }
-
-  const deferredAvailableTargetsMarker = "codexLinuxDiscoveredIdeTargetsDeferredAvailable";
-  if (!patchedSource.includes(deferredAvailableTargetsMarker)) {
-    const deferredAvailableTargetsPattern =
-      /(availableTargets:)\[\](,mode:`editor`,targets:)([A-Za-z_$][\w$]*\([A-Za-z_$][\w$]*\([A-Za-z_$][\w$]*\),[A-Za-z_$][\w$]*\.hostConfig\))(\.map\()/u;
-    const previousSource = patchedSource;
-    patchedSource = patchedSource.replace(
-      deferredAvailableTargetsPattern,
-      "$1$3.filter(e=>typeof e?.id===`string`&&!e.hidden).map(e=>e.id)/*" +
-        deferredAvailableTargetsMarker +
-        "*/$2$3$4",
-    );
-    if (patchedSource === previousSource && currentSource.includes("open-in-targets")) {
-      warn("Could not expose deferred Linux open targets as available");
     }
   }
 
