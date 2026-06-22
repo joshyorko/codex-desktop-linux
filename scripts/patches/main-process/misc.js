@@ -56,6 +56,84 @@ function applyLinuxFileManagerPatch(currentSource) {
   return patchedSource;
 }
 
+function applyLinuxWorkerFileManagerPatch(currentSource) {
+  const block = findCallBlock(currentSource, "id:`fileManager`");
+  if (block == null) {
+    console.warn("Failed to apply Linux Worker File Manager Patch");
+    return currentSource;
+  }
+
+  if (block.text.includes("linux:{")) {
+    return currentSource;
+  }
+
+  const fsVar = requireName(currentSource, "node:fs");
+  const pathVar = requireName(currentSource, "node:path");
+  if (fsVar == null || pathVar == null) {
+    console.warn("Failed to apply Linux Worker File Manager Patch");
+    return currentSource;
+  }
+
+  const insertionPoint = block.text.lastIndexOf("}});");
+  if (insertionPoint === -1) {
+    console.warn("Failed to apply Linux Worker File Manager Patch");
+    return currentSource;
+  }
+
+  const linuxFileManager =
+    `,linux:{label:\`File Manager\`,icon:\`apps/file-explorer.png\`,detect:()=>\`linux-file-manager\`,args:e=>[e],open:async({path:e})=>{let t=e;for(;;){try{if(${fsVar}.existsSync(t))break}catch{}let e=${pathVar}.dirname(t);if(e===t)break;t=e}try{${fsVar}.existsSync(t)&&${fsVar}.statSync(t).isFile()&&(t=${pathVar}.dirname(t))}catch{}let i=await(await import(\`electron\`)).shell.openPath(t);if(i)throw Error(i)}}`;
+
+  const patchedBlock =
+    block.text.slice(0, insertionPoint + 1) +
+    linuxFileManager +
+    block.text.slice(insertionPoint + 1);
+  const patchedSource =
+    currentSource.slice(0, block.start) + patchedBlock + currentSource.slice(block.end);
+
+  const patchedBlockCheck = patchedSource.slice(block.start, block.start + patchedBlock.length);
+  if (
+    !patchedBlockCheck.includes("linux:{label:`File Manager`") ||
+    !patchedBlockCheck.includes("detect:()=>`linux-file-manager`") ||
+    !patchedBlockCheck.includes("import(`electron`)).shell.openPath(t)")
+  ) {
+    console.warn("Failed to apply Linux Worker File Manager Patch");
+    return currentSource;
+  }
+
+  return patchedSource;
+}
+
+function patchLinuxWorkerFileManagerTarget(extractedDir) {
+  const workerPath = path.join(extractedDir, ".vite", "build", "worker.js");
+  if (!fs.existsSync(workerPath)) {
+    console.warn(
+      `WARN: Could not find worker bundle at ${workerPath} — skipping Linux Worker File Manager Patch`,
+    );
+    return { matched: 0, changed: 0, reason: "worker bundle not found" };
+  }
+
+  const source = fs.readFileSync(workerPath, "utf8");
+  const patchedSource = applyLinuxWorkerFileManagerPatch(source);
+  if (patchedSource === source) {
+    const hasTarget = source.includes("id:`fileManager`");
+    const hasLinuxTarget = source.includes("linux:{label:`File Manager`");
+    const hasPatchableBlock = findCallBlock(source, "id:`fileManager`") != null;
+    return {
+      matched: hasPatchableBlock ? 1 : 0,
+      changed: 0,
+      reason: !hasTarget
+        ? "fileManager target not found"
+        : hasLinuxTarget
+          ? null
+          : hasPatchableBlock
+            ? "fileManager target found but Linux worker patch was not applied"
+            : "fileManager target found but patchable block not found",
+    };
+  }
+  fs.writeFileSync(workerPath, patchedSource, "utf8");
+  return { matched: 1, changed: 1 };
+}
+
 function applyLinuxGitOriginsSourceFallbackPatch(currentSource) {
   const fallbackSource = "linux_git_origins_missing_source_fallback";
   if (currentSource.includes(`source:\`${fallbackSource}\`,requestKind:`)) {
@@ -286,7 +364,9 @@ module.exports = {
   applyLinuxGitOriginsSourceFallbackPatch,
   applyLinuxLocalAppServerFeatureEnablementHandlerPatch,
   applyLinuxOwlFeatureBindingFallbackPatch,
+  applyLinuxWorkerFileManagerPatch,
   patchLinuxOwlFeatureBindingFallbackAssets,
+  patchLinuxWorkerFileManagerTarget,
   applyLinuxRemoteControlConfigPreservationPatch,
   applyLinuxXdgDocumentsDirPatch,
 };

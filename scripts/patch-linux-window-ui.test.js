@@ -47,6 +47,7 @@ const {
   applyLinuxExplicitTrayQuitPatch,
   applyLinuxFileManagerPatch,
   applyLinuxGitOriginsSourceFallbackPatch,
+  applyLinuxWorkerFileManagerPatch,
   applyLinuxQuitGuardPatch,
   applyLinuxHotkeyWindowPrewarmPatch,
   applyLinuxLaunchActionArgsPatch,
@@ -136,6 +137,8 @@ const { featurePatchDescriptors } = require("./patches/registry.js");
 
 const mainBundlePrefix =
   "let n=require(`electron`),i=require(`node:path`),o=require(`node:fs`);";
+const workerBundlePrefix =
+  "let i=require(`node:path`),o=require(`node:fs`);";
 const fileManagerBundle =
   "var lu=jl({id:`fileManager`,label:`Finder`,icon:`apps/finder.png`,kind:`fileManager`,darwin:{detect:()=>`open`,args:e=>il(e)},win32:{label:`File Explorer`,icon:`apps/file-explorer.png`,detect:uu,args:e=>il(e),open:async({path:e})=>du(e)}});function uu(){}";
 const codeEditorOpenTargetsBundle =
@@ -697,9 +700,10 @@ test("default core patch descriptors are grouped and unique", () => {
     "linux-browser-use-non-local-navigation",
     "linux-browser-use-external-availability",
     "linux-chat-search-hydration",
-  "linux-file-manager",
-  "linux-code-editor-open-targets",
-  "linux-tray",
+    "linux-file-manager",
+    "linux-code-editor-open-targets",
+    "linux-worker-file-manager",
+    "linux-tray",
     "linux-build-info-tray",
     "linux-single-instance",
     "linux-computer-use-ui-feature",
@@ -1219,6 +1223,93 @@ test("adds Linux file manager support without relying on exact minified variable
   assert.match(patched, /linux:\{label:`File Manager`/);
   assert.match(patched, /detect:\(\)=>`linux-file-manager`/);
   assert.match(patched, /n\.shell\.openPath\(__codexOpenTarget\)/);
+});
+
+test("adds Linux file manager support to the worker open target registry", () => {
+  const source = `${workerBundlePrefix}${fileManagerBundle}`;
+
+  const patched = applyPatchTwice(applyLinuxWorkerFileManagerPatch, source);
+
+  assert.match(patched, /linux:\{label:`File Manager`/);
+  assert.match(patched, /detect:\(\)=>`linux-file-manager`/);
+  assert.match(patched, /o\.existsSync\(t\)/);
+  assert.match(patched, /i\.dirname\(t\)/);
+  assert.doesNotMatch(patched, /open:async\(\{path:e\}\)=>\{let [^}]*require\(`node:fs`\)/);
+  assert.match(patched, /import\(`electron`\)\)\.shell\.openPath\(t\)/);
+});
+
+test("patchExtractedApp patches worker file manager support", () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "codex-worker-file-manager-"));
+  try {
+    const buildDir = path.join(tempRoot, ".vite", "build");
+    const assetsDir = path.join(tempRoot, "webview", "assets");
+    fs.mkdirSync(buildDir, { recursive: true });
+    fs.mkdirSync(assetsDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(buildDir, "main.js"),
+      [
+        mainBundlePrefix,
+        "process.platform===`win32`&&k.removeMenu(),",
+        alreadyOpaqueBackgroundBundle,
+        fileManagerBundle,
+        trayBundleFixture(),
+        singleInstanceBundleFixture(),
+      ].join(""),
+    );
+    fs.writeFileSync(path.join(buildDir, "worker.js"), `${workerBundlePrefix}${fileManagerBundle}`);
+    fs.writeFileSync(path.join(assetsDir, "app-test.png"), "");
+
+    const report = createPatchReport();
+    captureWarns(() => patchExtractedApp(tempRoot, { report }));
+
+    const worker = fs.readFileSync(path.join(buildDir, "worker.js"), "utf8");
+    assert.match(worker, /linux:\{label:`File Manager`/);
+    assert.match(worker, /o\.existsSync\(t\)/);
+    assert.match(worker, /i\.dirname\(t\)/);
+    assert.doesNotMatch(worker, /open:async\(\{path:e\}\)=>\{let [^}]*require\(`node:fs`\)/);
+    assert.match(worker, /import\(`electron`\)\)\.shell\.openPath\(t\)/);
+    assert.equal(
+      report.patches.find((patch) => patch.name === "linux-worker-file-manager")?.status,
+      "applied",
+    );
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("patchExtractedApp reports worker file manager patch drift", () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "codex-worker-file-manager-drift-"));
+  try {
+    const buildDir = path.join(tempRoot, ".vite", "build");
+    const assetsDir = path.join(tempRoot, "webview", "assets");
+    fs.mkdirSync(buildDir, { recursive: true });
+    fs.mkdirSync(assetsDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(buildDir, "main.js"),
+      [
+        mainBundlePrefix,
+        "process.platform===`win32`&&k.removeMenu(),",
+        alreadyOpaqueBackgroundBundle,
+        fileManagerBundle,
+        trayBundleFixture(),
+        singleInstanceBundleFixture(),
+      ].join(""),
+    );
+    fs.writeFileSync(
+      path.join(buildDir, "worker.js"),
+      "const workerRegistry={target:`other`,note:`id:`fileManager``};",
+    );
+    fs.writeFileSync(path.join(assetsDir, "app-test.png"), "");
+
+    const report = createPatchReport();
+    captureWarns(() => patchExtractedApp(tempRoot, { report }));
+
+    const workerPatch = report.patches.find((patch) => patch.name === "linux-worker-file-manager");
+    assert.equal(workerPatch?.status, "skipped-optional");
+    assert.equal(workerPatch?.reason, "fileManager target found but patchable block not found");
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
 });
 
 test("uses XDG user documents directory for projectless Codex folders on Linux", () => {

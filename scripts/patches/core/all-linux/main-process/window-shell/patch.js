@@ -11,6 +11,7 @@ const {
   applyLinuxOpaqueBackgroundPatch,
   applyLinuxFileManagerPatch,
   applyLinuxCodeEditorOpenTargetPatch,
+  patchLinuxWorkerFileManagerTarget,
   applyLinuxBuildInfoTrayPatch,
   applyLinuxTrayPatch,
   applyLinuxSingleInstancePatch,
@@ -95,6 +96,22 @@ module.exports = [
     order: 105,
     ciPolicy: "required-upstream",
     apply: applyLinuxCodeEditorOpenTargetPatch,
+  },
+  {
+    id: "linux-worker-file-manager",
+    phase: "extracted-app",
+    order: 101,
+    ciPolicy: "optional",
+    apply: patchLinuxWorkerFileManagerTarget,
+    status: (result, warnings) => {
+      if (result?.changed) {
+        return warnings.length > 0 ? "applied-with-warnings" : "applied";
+      }
+      if (warnings.length > 0 || result?.matched === 0 || result?.reason != null) {
+        return { status: "skipped-optional", reason: result?.reason ?? warnings[0] };
+      }
+      return "already-applied";
+    },
   },
   {
     id: "linux-tray",

@@ -79,6 +79,7 @@ const {
   applyLinuxExplicitTrayQuitPatch,
   applyLinuxFileManagerPatch,
   applyLinuxGitOriginsSourceFallbackPatch,
+  applyLinuxWorkerFileManagerPatch,
   applyLinuxMenuPatch,
   applyLinuxNativeTitlebarPatch,
   applyLinuxLocalAppServerFeatureEnablementHandlerPatch,
@@ -95,6 +96,7 @@ const {
   applyLinuxWindowOptionsPatch,
   applyLinuxXdgDocumentsDirPatch,
   patchLinuxOwlFeatureBindingFallbackAssets,
+  patchLinuxWorkerFileManagerTarget,
 } = require("./patches/main-process.js");
 const {
   applyLinuxAvatarOverlayMousePassthroughPatch,
@@ -229,6 +231,7 @@ module.exports = {
   applyLinuxExplicitTrayQuitPatch,
   applyLinuxFileManagerPatch,
   applyLinuxGitOriginsSourceFallbackPatch,
+  applyLinuxWorkerFileManagerPatch,
   applyLinuxHotkeyWindowPrewarmPatch,
   applyLinuxKeybindOverridesRuntimePatch,
   applyLinuxLaunchActionArgsPatch,
@@ -277,6 +280,7 @@ module.exports = {
   patchLinuxAppUpdaterBridge,
   patchLinuxChromeNativeHostRuntimeAssets,
   patchLinuxOwlFeatureBindingFallbackAssets,
+  patchLinuxWorkerFileManagerTarget,
   patchProjectlessDocumentsAssets,
   patchMainBundleSource,
   patchPackageJson,
