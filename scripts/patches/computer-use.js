@@ -430,7 +430,7 @@ function applyLinuxComputerUseRendererAvailabilityPatch(currentSource) {
     ) => {
       const contextStart = Math.max(0, offset - 1200);
       const context = patchedSource.slice(contextStart, offset + match.length);
-      if (!context.includes(computerUseFeatureNeedle) || !context.includes("featureName:`windows_computer_use`")) {
+      if (!context.includes(computerUseFeatureNeedle) && !context.includes("featureName:`windows_computer_use`")) {
         return match;
       }
       availabilityGateFound = true;

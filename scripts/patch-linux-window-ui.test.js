@@ -702,6 +702,7 @@ test("default core patch descriptors are grouped and unique", () => {
     "linux-chat-search-hydration",
     "linux-file-manager",
     "linux-code-editor-open-targets",
+    "linux-open-target-selection-native-mode",
     "linux-worker-file-manager",
     "linux-tray",
     "linux-build-info-tray",
@@ -5066,6 +5067,40 @@ test("patches all Computer Use renderer availability gates in one pass", () => {
 
   assert.match(patched, /c===`linux`\|\|l&&\(o\|\|m\)/);
   assert.doesNotMatch(patched, /let _=a&&i&&l&&\(o\|\|m\)/);
+});
+
+test("patches current Computer Use required-feature availability gate without Windows companion gate", () => {
+  const source =
+    "function b(e){return e===`macOS`||e===`windows`}" +
+    "function x(e){let t=(0,_.c)(16),{enabled:n,hostId:r}=e,i=n===void 0?!0:n,{isLoading:a,platform:o}=m(),s=u(`1506311413`),c;" +
+    "t[0]===r?c=t[1]:(c={featureName:`computer_use`,hostId:r},t[0]=r,t[1]=c);let l=v(c),d=o===`windows`&&!a,f=i&&d,p;" +
+    "t[2]===f?p=t[3]:(p={enabled:f},t[2]=f,t[3]=p);let h=S(p),g=l.isLoading||d&&h.isLoading,y=l.enabled&&(!d||h.enabled),x;" +
+    "x=w({areRequiredFeaturesEnabled:y,enabled:i,isAnyFeatureLoading:g,isComputerUseGateEnabled:s,isHostCompatiblePlatform:b(o),isPlatformLoading:a,windowType:`electron`});return x}";
+
+  const patched = applyPatchTwice(
+    applyLinuxComputerUseRendererAvailabilityPatch,
+    source,
+    /x=w\(\{areRequiredFeaturesEnabled:o===`linux`\|\|y,enabled:i,isAnyFeatureLoading:o===`linux`\?!1:g,isComputerUseGateEnabled:o===`linux`\|\|s,isHostCompatiblePlatform:o===`linux`\|\|b\(o\),isPlatformLoading:a,windowType:`electron`\}\)/,
+  );
+
+  assert.match(patched, /function b\(e\)\{return e===`macOS`\|\|e===`windows`\|\|e===`linux`\}/);
+});
+
+test("linux Open In native target selector keeps discovered targets visible", () => {
+  const { applyLinuxOpenTargetSelectionNativeModePatch } = require("./patches/core/all-linux/webview/open-target-selection/patch.js");
+  const source =
+    "function e({targets:e,availableTargets:t,includeHiddenTargets:n=!1,mode:r=`editor`}){let i=e.filter(e=>e.appPath!=null);if(i.length>0)return i;if(r===`native`)return e.filter(e=>e.target===`systemDefault`||e.target===`fileManager`);let a=new Set(t);return e.filter(e=>a.has(e.target)&&(n||!e.hidden))}";
+
+  const patched = applyPatchTwice(
+    applyLinuxOpenTargetSelectionNativeModePatch,
+    source,
+    /let a=new Set\(t\);if\(r===`native`\)return e\.filter\(e=>e\.target===`systemDefault`\|\|e\.target===`fileManager`\|\|a\.has\(e\.target\)&&\(n\|\|!e\.hidden\)\);return e\.filter\(e=>a\.has\(e\.target\)&&\(n\|\|!e\.hidden\)\)/,
+  );
+
+  assert.doesNotMatch(
+    patched,
+    /if\(r===`native`\)return e\.filter\(e=>e\.target===`systemDefault`\|\|e\.target===`fileManager`\);/,
+  );
 });
 
 test("allows Computer Use install flow on Linux", () => {
