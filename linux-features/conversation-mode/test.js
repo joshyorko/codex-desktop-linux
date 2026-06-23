@@ -1836,7 +1836,7 @@ test("conversation mode patches matching app assets and records report entries",
         fs.writeFileSync(path.join(tempApp, "package.json"), JSON.stringify({ name: "codex" }));
         fs.writeFileSync(path.join(assetsDir, "browser-sidebar-comment-light-dismiss-test.js"), dictationSource);
         fs.writeFileSync(path.join(assetsDir, "composer-test.js"), composerControlSource);
-        fs.writeFileSync(path.join(assetsDir, "local-conversation-thread-test.js"), assistantRenderSource);
+        fs.writeFileSync(path.join(assetsDir, "local-conversation-turn-test.js"), assistantRenderSource);
 
         const report = createPatchReport();
         const { warnings } = captureWarns(() => patchExtractedApp(tempApp, { report }));
@@ -1857,7 +1857,7 @@ test("conversation mode patches matching app assets and records report entries",
           /codexLinuxConversationToggle/,
         );
         assert.match(
-          fs.readFileSync(path.join(assetsDir, "local-conversation-thread-test.js"), "utf8"),
+          fs.readFileSync(path.join(assetsDir, "local-conversation-turn-test.js"), "utf8"),
           /codexLinuxConversationAssistant/,
         );
         for (const name of [

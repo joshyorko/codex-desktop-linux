@@ -511,7 +511,7 @@ module.exports = {
       phase: "webview-asset",
       order: 20710,
       ciPolicy: "optional",
-      pattern: /^(index|local-conversation-thread)-.*\.js$/,
+      pattern: /^(index|local-conversation-thread|local-conversation-turn)-.*\.js$/,
       missingDescription: "conversation thread bundle",
       skipDescription: "conversation mode assistant observer patch",
       apply: applyAssistantRenderPatch,
