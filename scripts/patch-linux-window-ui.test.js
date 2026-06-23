@@ -748,6 +748,7 @@ test("default core patch descriptors are grouped and unique", () => {
     "composer-persistent-rate-limit-footer",
     "keybinds-settings",
     "package-desktop-name",
+    "linux-workspace-root-open-targets",
   ];
 
   assert.equal(new Set(ids).size, ids.length);
