@@ -19,6 +19,7 @@ const {
   applySettingsPatch,
   applySettingsSectionsNavPatch,
   applySettingsSharedNavPatch,
+  patches: featurePatches,
 } = require("./patch.js");
 
 function twice(fn, source) {
@@ -862,6 +863,14 @@ test("assistant render patch preserves the current JSX runtime alias", () => {
   assert.match(patched, /Q\.Fragment/);
   assert.match(patched, /\(0,Q\.jsx\)\("button"/);
   assert.match(patched, /globalThis\.codexLinuxReadAloudClick\?\.\(n,p,o,e\.currentTarget\)/);
+});
+
+test("assistant runtime descriptor targets split local conversation turn bundles", () => {
+  const descriptor = featurePatches.find((patch) => patch.id === "assistant-runtime");
+  assert.ok(descriptor);
+  assert.equal(descriptor.pattern.test("index-current.js"), true);
+  assert.equal(descriptor.pattern.test("local-conversation-thread-current.js"), true);
+  assert.equal(descriptor.pattern.test("local-conversation-turn-current.js"), true);
 });
 
 test("settings patch does not add the legacy normal settings toggle", () => {
