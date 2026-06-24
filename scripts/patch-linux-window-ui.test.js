@@ -5102,6 +5102,32 @@ test("linux Open In native target selector keeps discovered targets visible", ()
     patched,
     /if\(r===`native`\)return e\.filter\(e=>e\.target===`systemDefault`\|\|e\.target===`fileManager`\);/,
   );
+  assert.doesNotMatch(patched, /if\(i\.length>0\)return i;/);
+
+  const selectedTargets = JSON.parse(vm.runInNewContext(`
+    ${patched};
+    JSON.stringify(e({
+      targets: [
+        { target: "vscode", kind: "editor", hidden: false },
+        { target: "vscodeInsiders", kind: "editor", hidden: false },
+        { target: "codium", kind: "editor", hidden: false },
+        { target: "zed", kind: "editor", hidden: false },
+        { target: "cursor", kind: "editor", hidden: true },
+        { target: "fileManager", kind: "fileManager", hidden: false },
+        { target: "linux-desktop-file-manager", kind: "editor", appPath: "/usr/share/applications/file-manager.desktop" },
+      ],
+      availableTargets: ["vscode", "vscodeInsiders", "codium", "zed", "cursor", "fileManager"],
+      includeHiddenTargets: false,
+      mode: "native",
+    }).map((target) => target.target))
+  `));
+  assert.deepEqual(selectedTargets, [
+    "vscode",
+    "vscodeInsiders",
+    "codium",
+    "zed",
+    "linux-desktop-file-manager",
+  ]);
 });
 
 test("allows Computer Use install flow on Linux", () => {

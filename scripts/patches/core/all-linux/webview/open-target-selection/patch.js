@@ -9,44 +9,85 @@ function warn(message) {
 function applyLinuxOpenTargetSelectionNativeModePatch(currentSource) {
   const patchedNeedle =
     "let a=new Set(t);if(r===`native`)return e.filter(e=>e.target===`systemDefault`||e.target===`fileManager`||a.has(e.target)&&(n||!e.hidden));return e.filter(e=>a.has(e.target)&&(n||!e.hidden))";
-  if (currentSource.includes(patchedNeedle)) {
-    return currentSource;
-  }
-
   const currentNeedle =
     "if(r===`native`)return e.filter(e=>e.target===`systemDefault`||e.target===`fileManager`);let a=new Set(t);return e.filter(e=>a.has(e.target)&&(n||!e.hidden))";
-  if (currentSource.includes(currentNeedle)) {
-    return currentSource.split(currentNeedle).join(patchedNeedle);
+  let nextSource = currentSource;
+  let patchedNativeMode = nextSource.includes(patchedNeedle);
+  if (!nextSource.includes(patchedNeedle) && nextSource.includes(currentNeedle)) {
+    nextSource = nextSource.split(currentNeedle).join(patchedNeedle);
+    patchedNativeMode = true;
   }
 
   const nativeFilterPattern =
     /if\(([A-Za-z_$][\w$]*)===`native`\)return ([A-Za-z_$][\w$]*)\.filter\(([A-Za-z_$][\w$]*)=>\3\.target===`systemDefault`\|\|\3\.target===`fileManager`\);let ([A-Za-z_$][\w$]*)=new Set\(([A-Za-z_$][\w$]*)\);return \2\.filter\(\3=>\4\.has\(\3\.target\)&&\(([A-Za-z_$][\w$]*)\|\|!\3\.hidden\)\)/;
-  let patched = false;
-  const nextSource = currentSource.replace(
-    nativeFilterPattern,
-    (
-      match,
-      modeVar,
-      targetsVar,
-      targetVar,
-      availableSetVar,
-      availableTargetsVar,
-      includeHiddenTargetsVar,
-    ) => {
-      patched = true;
-      return (
-        `let ${availableSetVar}=new Set(${availableTargetsVar});` +
-        `if(${modeVar}===\`native\`)return ${targetsVar}.filter(${targetVar}=>` +
-        `${targetVar}.target===\`systemDefault\`||${targetVar}.target===\`fileManager\`||` +
-        `${availableSetVar}.has(${targetVar}.target)&&(${includeHiddenTargetsVar}||!${targetVar}.hidden));` +
-        `return ${targetsVar}.filter(${targetVar}=>${availableSetVar}.has(${targetVar}.target)&&` +
-        `(${includeHiddenTargetsVar}||!${targetVar}.hidden))`
-      );
-    },
-  );
+  if (!nextSource.includes(patchedNeedle)) {
+    nextSource = nextSource.replace(
+      nativeFilterPattern,
+      (
+        match,
+        modeVar,
+        targetsVar,
+        targetVar,
+        availableSetVar,
+        availableTargetsVar,
+        includeHiddenTargetsVar,
+      ) => {
+        patchedNativeMode = true;
+        return (
+          `let ${availableSetVar}=new Set(${availableTargetsVar});` +
+          `if(${modeVar}===\`native\`)return ${targetsVar}.filter(${targetVar}=>` +
+          `${targetVar}.target===\`systemDefault\`||${targetVar}.target===\`fileManager\`||` +
+          `${availableSetVar}.has(${targetVar}.target)&&(${includeHiddenTargetsVar}||!${targetVar}.hidden));` +
+          `return ${targetsVar}.filter(${targetVar}=>${availableSetVar}.has(${targetVar}.target)&&` +
+          `(${includeHiddenTargetsVar}||!${targetVar}.hidden))`
+        );
+      },
+    );
+  }
 
-  if (!patched && currentSource.includes("mode:") && currentSource.includes("fileManager")) {
+  const patchedAppPathNeedle =
+    "let i=e.filter(e=>e.appPath!=null),a=new Set(t);if(i.length>0)return e.filter(e=>e.appPath==null&&e.kind===`editor`&&a.has(e.target)&&(n||!e.hidden)).concat(i);if(r===`native`)return e.filter(e=>e.target===`systemDefault`||e.target===`fileManager`||a.has(e.target)&&(n||!e.hidden));return e.filter(e=>a.has(e.target)&&(n||!e.hidden))";
+  let patchedAppPathShortcut = nextSource.includes(patchedAppPathNeedle);
+  const appPathShortcutPattern =
+    /let ([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)\.filter\(([A-Za-z_$][\w$]*)=>\3\.appPath!=null\);if\(\1\.length>0\)return \1;let ([A-Za-z_$][\w$]*)=new Set\(([A-Za-z_$][\w$]*)\);if\(([A-Za-z_$][\w$]*)===`native`\)return \2\.filter\(\3=>\3\.target===`systemDefault`\|\|\3\.target===`fileManager`\|\|\4\.has\(\3\.target\)&&\(([A-Za-z_$][\w$]*)\|\|!\3\.hidden\)\);/;
+  if (!patchedAppPathShortcut) {
+    nextSource = nextSource.replace(
+      appPathShortcutPattern,
+      (
+        match,
+        appTargetsVar,
+        targetsVar,
+        targetVar,
+        availableSetVar,
+        availableTargetsVar,
+        modeVar,
+        includeHiddenTargetsVar,
+      ) => {
+        patchedAppPathShortcut = true;
+        return (
+          `let ${appTargetsVar}=${targetsVar}.filter(${targetVar}=>${targetVar}.appPath!=null),` +
+          `${availableSetVar}=new Set(${availableTargetsVar});` +
+          `if(${appTargetsVar}.length>0)return ${targetsVar}.filter(${targetVar}=>` +
+          `${targetVar}.appPath==null&&${targetVar}.kind===\`editor\`&&` +
+          `${availableSetVar}.has(${targetVar}.target)&&(${includeHiddenTargetsVar}||!${targetVar}.hidden))` +
+          `.concat(${appTargetsVar});` +
+          `if(${modeVar}===\`native\`)return ${targetsVar}.filter(${targetVar}=>` +
+          `${targetVar}.target===\`systemDefault\`||${targetVar}.target===\`fileManager\`||` +
+          `${availableSetVar}.has(${targetVar}.target)&&(${includeHiddenTargetsVar}||!${targetVar}.hidden));`
+        );
+      },
+    );
+  }
+
+  if (!patchedNativeMode && !patchedAppPathShortcut && currentSource.includes("mode:") && currentSource.includes("fileManager")) {
     warn("Could not find native Open In target selector — skipping native selection patch");
+  }
+  if (
+    !patchedAppPathShortcut &&
+    currentSource.includes("appPath!=null") &&
+    currentSource.includes("fileManager")
+  ) {
+    warn("Could not find native Open In appPath shortcut — skipping appPath selection patch");
   }
   return nextSource;
 }
