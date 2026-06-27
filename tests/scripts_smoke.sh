@@ -142,6 +142,42 @@ make_stub_bin_dir() {
     mkdir -p "$bin_dir"
 }
 
+test_extract_webview_replaces_linux_icon_assets() {
+    info "Checking webview extraction applies the Linux icon asset"
+    local workspace="$TMP_DIR/webview-icon"
+    local install_dir="$workspace/install"
+    local work_dir="$workspace/work"
+    local icon_source="$workspace/codex-linux.png"
+    local assets_dir="$install_dir/content/webview/assets"
+    local output_log="$workspace/output.log"
+
+    mkdir -p "$work_dir/app-extracted/webview/assets" "$install_dir"
+    printf '%s\n' 'linux-icon' > "$icon_source"
+    printf '%s\n' 'upstream-main' > "$work_dir/app-extracted/webview/assets/app-main.png"
+    printf '%s\n' 'upstream-alt' > "$work_dir/app-extracted/webview/assets/app-alt.png"
+    printf '%s\n' '<style>--startup-background: transparent</style>' > "$work_dir/app-extracted/webview/index.html"
+
+    (
+        SCRIPT_DIR="$REPO_DIR"
+        INSTALL_DIR="$install_dir"
+        WORK_DIR="$work_dir"
+        ICON_SOURCE="$icon_source"
+        CODEX_LINUX_ICON_SOURCE="$icon_source"
+        # shellcheck disable=SC1091
+        source "$REPO_DIR/scripts/lib/webview-install.sh"
+        extract_webview "$workspace/Codex.app"
+    ) >"$output_log" 2>&1
+
+    assert_file_exists "$assets_dir/app-main.png"
+    assert_file_exists "$assets_dir/app-alt.png"
+    cmp -s "$icon_source" "$assets_dir/app-main.png" \
+        || fail "Expected extracted app-main.png to be replaced with the Linux icon"
+    cmp -s "$icon_source" "$assets_dir/app-alt.png" \
+        || fail "Expected extracted app-alt.png to be replaced with the Linux icon"
+    assert_contains "$install_dir/content/webview/index.html" "--startup-background: #1e1e1e"
+    assert_contains "$output_log" "Linux app icon applied to 2 webview asset(s)"
+}
+
 test_common_helper_sourcing() {
     info "Checking shared packaging helpers"
     local probe_file="$TMP_DIR/probe.txt"
@@ -1577,6 +1613,7 @@ test_fresh_install_removes_cached_dmg_metadata() {
     local source_dir="$workspace/source"
 
     mkdir -p "$source_dir"
+    printf '%s' "cached" >"$source_dir/Codex.dmg"
     printf '%s' "metadata" >"$source_dir/Codex.dmg.metadata"
 
     TEST_SOURCE_DIR="$source_dir" REPO_DIR="$REPO_DIR" bash <<'SCRIPT'
@@ -1595,6 +1632,94 @@ SCRIPT
 
     assert_file_not_exists "$source_dir/Codex.dmg"
     assert_file_not_exists "$source_dir/Codex.dmg.metadata"
+}
+
+test_fresh_reuse_dmg_uses_cache_when_metadata_matches() {
+    info "Checking --fresh --reuse-dmg reuses cached DMG when metadata matches"
+    local workspace="$TMP_DIR/fresh-reuse-dmg-metadata"
+    local bin_dir="$workspace/bin"
+    local source_dir="$workspace/source"
+    local output_log="$workspace/output.log"
+    local url="https://persistent.oaistatic.com/codex-app-prod/Codex.dmg"
+    local url_sha256
+
+    url_sha256="$(printf '%s' "$url" | sha256sum | awk '{print $1}')"
+
+    mkdir -p "$bin_dir" "$source_dir"
+    printf '%s' "cached" >"$source_dir/Codex.dmg"
+    cat >"$source_dir/Codex.dmg.metadata" <<EOF
+url_sha256=$url_sha256
+etag=same-etag
+last_modified=Thu, 04 Jun 2026 00:00:00 GMT
+content_length=6
+EOF
+
+    cat >"$bin_dir/curl" <<'SCRIPT'
+#!/usr/bin/env bash
+set -eu
+
+is_head=0
+for arg in "$@"; do
+    if [ "$arg" = "-fsSLI" ]; then
+        is_head=1
+    fi
+done
+
+if [ "$is_head" -eq 1 ]; then
+    printf '%s\n' "HEAD" >> "$TEST_CURL_LOG"
+    printf 'HTTP/2 200\r\n'
+    printf 'ETag: same-etag\r\n'
+    printf 'Last-Modified: Thu, 04 Jun 2026 00:00:00 GMT\r\n'
+    printf 'Content-Length: 6\r\n'
+    printf '\r\n'
+    exit 0
+fi
+
+printf '%s\n' "GET" >> "$TEST_CURL_LOG"
+out=""
+while [ "$#" -gt 0 ]; do
+    if [ "$1" = "-o" ]; then
+        shift
+        out="$1"
+    fi
+    shift || true
+done
+
+[ -n "$out" ] || exit 2
+printf '%s' "downloaded" >"$out"
+SCRIPT
+    chmod +x "$bin_dir/curl"
+    : >"$source_dir/curl.log"
+
+    PATH="$bin_dir:$PATH" \
+    TEST_CURL_LOG="$source_dir/curl.log" \
+    TEST_SOURCE_DIR="$source_dir" \
+    REPO_DIR="$REPO_DIR" \
+        bash <<'SCRIPT' >"$output_log" 2>&1
+set -Eeuo pipefail
+
+SCRIPT_DIR="$TEST_SOURCE_DIR"
+WORK_DIR="$(mktemp -d)"
+INSTALL_DIR="$TEST_SOURCE_DIR/codex-app"
+# shellcheck disable=SC1091
+source "$REPO_DIR/scripts/lib/install-helpers.sh"
+# shellcheck disable=SC1091
+source "$REPO_DIR/scripts/lib/dmg.sh"
+
+FRESH_INSTALL=1
+REUSE_CACHED_DMG=1
+prepare_install
+
+dmg_path="$(get_dmg)"
+[ "$dmg_path" = "$TEST_SOURCE_DIR/Codex.dmg" ]
+SCRIPT
+
+    assert_file_exists "$source_dir/Codex.dmg"
+    assert_file_exists "$source_dir/Codex.dmg.metadata"
+    [ "$(cat "$source_dir/Codex.dmg")" = "cached" ] || fail "Expected matching metadata to keep cached DMG"
+    assert_contains "$source_dir/curl.log" "HEAD"
+    assert_not_contains "$source_dir/curl.log" "GET"
+    assert_contains "$output_log" "Using cached DMG"
 }
 
 test_rebuild_candidate_uses_validated_default_dmg() {
@@ -1653,7 +1778,7 @@ test_native_shortcut_targets_compose_existing_flows() {
     local setup_log="$TMP_DIR/make-setup-native.log"
 
     make -n -C "$REPO_DIR" install-native >"$install_log"
-    assert_contains "$install_log" './install.sh --fresh'
+    assert_contains "$install_log" './install.sh --fresh --reuse-dmg'
     assert_contains "$install_log" 'Building native package'
     assert_contains "$install_log" 'Installing latest native package'
 
@@ -1672,7 +1797,7 @@ test_native_shortcut_targets_compose_existing_flows() {
 }
 
 test_fedora_dependency_bootstrap_installs_rpmbuild() {
-    info "Checking Fedora dependency bootstrap includes rpmbuild"
+    info "Checking Fedora dependency bootstrap includes rpmbuild and C++ build tools"
     local install_deps="$REPO_DIR/scripts/install-deps.sh"
     local helper="$REPO_DIR/scripts/lib/install-helpers.sh"
     local readme="$REPO_DIR/README.md"
@@ -1681,13 +1806,17 @@ test_fedora_dependency_bootstrap_installs_rpmbuild() {
         || fail "install_dnf5 must install rpm-build for rpmbuild"
     awk '/^install_dnf\(\) \{/,/^}/' "$install_deps" | grep -q -- "rpm-build" \
         || fail "install_dnf must install rpm-build for rpmbuild"
+    awk '/^install_dnf5\(\) \{/,/^}/' "$install_deps" | grep -q -- "gcc-c++" \
+        || fail "install_dnf5 must install gcc-c++ for g++"
+    awk '/^install_dnf\(\) \{/,/^}/' "$install_deps" | grep -q -- "gcc-c++" \
+        || fail "install_dnf must install gcc-c++ for g++"
 
-    assert_contains "$install_deps" "sudo dnf install python3 7zip curl unzip rpm-build @development-tools"
-    assert_contains "$install_deps" "sudo dnf install nodejs npm python3 p7zip p7zip-plugins curl unzip rpm-build"
-    assert_contains "$helper" "sudo dnf install python3 7zip curl unzip rpm-build @development-tools"
-    assert_contains "$helper" "sudo dnf install nodejs npm python3 p7zip p7zip-plugins curl unzip rpm-build"
-    assert_contains "$readme" "sudo dnf install python3 7zip curl unzip rpm-build @development-tools"
-    assert_contains "$readme" "sudo dnf install python3 p7zip p7zip-plugins curl unzip rpm-build"
+    assert_contains "$install_deps" "sudo dnf install python3 7zip curl unzip rpm-build make gcc-c++ @development-tools"
+    assert_contains "$install_deps" "sudo dnf install nodejs npm python3 p7zip p7zip-plugins curl unzip rpm-build make gcc-c++"
+    assert_contains "$helper" "sudo dnf install python3 7zip curl unzip rpm-build make gcc-c++ @development-tools"
+    assert_contains "$helper" "sudo dnf install nodejs npm python3 p7zip p7zip-plugins curl unzip rpm-build make gcc-c++"
+    assert_contains "$readme" "sudo dnf install python3 7zip curl unzip rpm-build make gcc-c++ @development-tools"
+    assert_contains "$readme" "sudo dnf install python3 p7zip p7zip-plugins curl unzip rpm-build make gcc-c++"
 }
 
 test_setup_native_wizard_noninteractive_feature_writer() {
@@ -5251,7 +5380,7 @@ EOF
     assert_contains "$REPO_DIR/contrib/user-local-install/files/.local/bin/codex-desktop" 'exec "${APP_DIR}/start.sh" --wayland "$@"'
     assert_contains "$REPO_DIR/contrib/user-local-install/install-user-local.sh" "--force-x11"
     assert_contains "$REPO_DIR/contrib/user-local-install/install-user-local.sh" "user-local.env"
-    assert_contains "$REPO_DIR/contrib/user-local-install/files/.local/lib/codex-desktop-linux/common.sh" "assets/codex.png"
+    assert_contains "$REPO_DIR/contrib/user-local-install/files/.local/lib/codex-desktop-linux/common.sh" "assets/codex-linux.png"
     assert_contains "$REPO_DIR/contrib/user-local-install/files/.local/lib/codex-desktop-linux/common.sh" "CODEX_USER_LOCAL_RECORD_DMG_FINGERPRINT"
     assert_contains "$REPO_DIR/contrib/user-local-install/README.md" "--force-x11"
 
@@ -5323,17 +5452,23 @@ test_side_by_side_launcher_identity() {
     local bin_dir="$workspace/bin"
     local help_log="$workspace/help.log"
     local symlink_help_log="$workspace/symlink-help.log"
+    local linux_icon_source="$workspace/codex-linux.png"
 
     mkdir -p "$app_dir" "$bin_dir"
+    printf '%s\n' 'linux-icon' > "$linux_icon_source"
 
     CODEX_INSTALLER_SOURCE_ONLY=1 \
     CODEX_APP_ID="codex-cua-lab" \
     CODEX_APP_DISPLAY_NAME="Codex CUA Lab" \
     CODEX_INSTALL_DIR="$app_dir" \
+    CODEX_LINUX_ICON_SOURCE="$linux_icon_source" \
     bash -c 'source "$1"; validate_app_identity; create_start_script' _ "$REPO_DIR/install.sh"
 
     assert_file_exists "$app_dir/start.sh"
     assert_file_exists "$app_dir/.codex-linux/webview-server.py"
+    assert_file_exists "$app_dir/.codex-linux/codex-cua-lab.png"
+    cmp -s "$linux_icon_source" "$app_dir/.codex-linux/codex-cua-lab.png" \
+        || fail "Expected side-by-side launcher icon to use CODEX_LINUX_ICON_SOURCE"
     assert_contains "$app_dir/start.sh" "CODEX_LINUX_APP_ID=codex-cua-lab"
     assert_contains "$app_dir/start.sh" "CODEX_LINUX_APP_DISPLAY_NAME=Codex\\\\ CUA\\\\ Lab"
     assert_contains "$app_dir/start.sh" 'CODEX_LINUX_WEBVIEW_PORT=${CODEX_WEBVIEW_PORT:-5176}'
@@ -6280,7 +6415,8 @@ JS
     assert_contains "$extracted/.vite/build/main-test.js" 'codexLinuxShouldBypassQuitPrompt=()=>codexLinuxExplicitQuitApproved===!0'
     assert_contains "$extracted/.vite/build/main-test.js" '{label:rB(this.appName),click:()=>{typeof codexLinuxPrepareForExplicitQuit===`function`?codexLinuxPrepareForExplicitQuit():typeof codexLinuxMarkQuitInProgress===`function`&&codexLinuxMarkQuitInProgress(),n.app.quit()}}'
     assert_contains "$extracted/.vite/build/main-test.js" 'if(o.type===`quit-app`){typeof codexLinuxPrepareForExplicitQuit===`function`?codexLinuxPrepareForExplicitQuit():typeof codexLinuxMarkQuitInProgress===`function`&&codexLinuxMarkQuitInProgress(),n.app.quit();return}'
-    assert_contains "$extracted/.vite/build/main-test.js" 'if((typeof codexLinuxShouldBypassQuitPrompt===`function`&&codexLinuxShouldBypassQuitPrompt())||e||(typeof i.canQuitWithoutPrompt===`function`&&i.canQuitWithoutPrompt())||r||!s&&!c){g=!0,a.markAppQuitting();return}'
+    assert_contains "$extracted/.vite/build/main-test.js" 'if((typeof codexLinuxShouldBypassQuitPrompt===`function`&&codexLinuxShouldBypassQuitPrompt())||e||(typeof i.canQuitWithoutPrompt===`function`&&i.canQuitWithoutPrompt())||r||!s&&!c){process.platform===`linux`&&typeof codexLinuxMarkQuitInProgress===`function`&&codexLinuxMarkQuitInProgress(),g=!0,a.markAppQuitting();return}'
+    assert_contains "$extracted/.vite/build/main-test.js" 'process.platform===`linux`&&typeof codexLinuxMarkQuitInProgress===`function`&&codexLinuxMarkQuitInProgress(),i.markQuitApproved(),g=!0,a.markAppQuitting()'
     assert_contains "$extracted/.vite/build/main-test.js" 'codexLinuxFinalizeQuit=()=>{d(),f.dispose(),n.app.quit()},codexLinuxDrainPromise=Promise.all('
     assert_contains "$extracted/.vite/build/main-test.js" 'codexLinuxExplicitQuitDrainTimeoutMs'
     assert_contains "$extracted/.vite/build/main-test.js" 'setTimeout(e,typeof codexLinuxExplicitQuitDrainTimeoutMs'
@@ -6297,7 +6433,7 @@ const source = fs.readFileSync(process.argv[2], "utf8");
 const helperSnippet = source.match(/let codexLinuxQuitInProgress=!1,[^;]*codexLinuxShouldBypassQuitPrompt=\(\)=>codexLinuxExplicitQuitApproved===!0,[^;]*codexLinuxIsQuitInProgress=\(\)=>codexLinuxQuitInProgress===!0;/)?.[0];
 const traySnippet = source.match(/\{label:rB\(this\.appName\),click:\(\)=>\{typeof codexLinuxPrepareForExplicitQuit===`function`\?codexLinuxPrepareForExplicitQuit\(\):typeof codexLinuxMarkQuitInProgress===`function`&&codexLinuxMarkQuitInProgress\(\),n\.app\.quit\(\)\}\}/)?.[0];
 const quitAppSnippet = source.match(/if\(o\.type===`quit-app`\)\{typeof codexLinuxPrepareForExplicitQuit===`function`\?codexLinuxPrepareForExplicitQuit\(\):typeof codexLinuxMarkQuitInProgress===`function`&&codexLinuxMarkQuitInProgress\(\),n\.app\.quit\(\);return\}/)?.[0];
-const beforeQuitSnippet = source.match(/if\(\(typeof codexLinuxShouldBypassQuitPrompt===`function`&&codexLinuxShouldBypassQuitPrompt\(\)\)\|\|e\|\|\(typeof i\.canQuitWithoutPrompt===`function`&&i\.canQuitWithoutPrompt\(\)\)\|\|r\|\|!s&&!c\)\{g=!0,a\.markAppQuitting\(\);return\}/)?.[0];
+const beforeQuitSnippet = source.match(/if\(\(typeof codexLinuxShouldBypassQuitPrompt===`function`&&codexLinuxShouldBypassQuitPrompt\(\)\)\|\|e\|\|\(typeof i\.canQuitWithoutPrompt===`function`&&i\.canQuitWithoutPrompt\(\)\)\|\|r\|\|!s&&!c\)\{process\.platform===`linux`&&typeof codexLinuxMarkQuitInProgress===`function`&&codexLinuxMarkQuitInProgress\(\),g=!0,a\.markAppQuitting\(\);return\}/)?.[0];
 if (!helperSnippet || !traySnippet || !quitAppSnippet || !beforeQuitSnippet) {
   throw new Error("Could not extract explicit quit snippets");
 }
@@ -6340,7 +6476,7 @@ function runBeforeQuitBypass() {
   const scope = new Function(
     "BI",
     "t",
-    `${helperSnippet}return {runBeforeQuitCheck(e,i,r,a){let s=BI(),c=t.sr().some(e=>e.status===\`ACTIVE\`);${beforeQuitSnippet}return \`prompt\`;},prepare:codexLinuxPrepareForExplicitQuit,bypass:codexLinuxShouldBypassQuitPrompt};`,
+    `${helperSnippet}return {runBeforeQuitCheck(e,i,r,a){let s=BI(),c=t.sr().some(e=>e.status===\`ACTIVE\`);${beforeQuitSnippet}return \`prompt\`;},prepare:codexLinuxPrepareForExplicitQuit,bypass:codexLinuxShouldBypassQuitPrompt,marked:codexLinuxIsQuitInProgress};`,
   )(
     () => true,
     { sr: () => [{ status: "ACTIVE" }] },
@@ -6352,7 +6488,7 @@ function runBeforeQuitBypass() {
   const appQuitting = { markAppQuitting() { state.markCalls += 1; } };
   scope.prepare();
   const bypassed = scope.runBeforeQuitCheck(false, controller, false, appQuitting);
-  return { state, bypassed, shouldBypass: scope.bypass() };
+  return { state, bypassed, shouldBypass: scope.bypass(), marked: scope.marked() };
 }
 
 function runBeforeQuitWithoutCanQuitWithoutPrompt() {
@@ -6388,7 +6524,7 @@ if (state.prepareCalls !== 0 || state.markCalls !== 1 || state.quitCalls !== 1) 
 }
 
 state = runBeforeQuitBypass();
-if (!state.shouldBypass || state.bypassed !== undefined || state.state.markCalls !== 1) {
+if (!state.shouldBypass || state.bypassed !== undefined || state.state.markCalls !== 1 || !state.marked) {
   throw new Error("before-quit should bypass the Linux quit confirmation after an explicit quit");
 }
 
@@ -8018,6 +8154,7 @@ EOF
 
 main() {
     test_common_helper_sourcing
+    test_extract_webview_replaces_linux_icon_assets
     test_package_payload_permission_normalization
     test_deb_builder_smoke
     test_deb_builder_rebuilds_deleted_updater_source
@@ -8038,6 +8175,7 @@ main() {
     test_installer_refreshes_stale_cached_dmg_metadata
     test_extract_dmg_repairs_safe_7z_link_warnings
     test_fresh_install_removes_cached_dmg_metadata
+    test_fresh_reuse_dmg_uses_cache_when_metadata_matches
     test_rebuild_candidate_uses_validated_default_dmg
     test_native_shortcut_targets_compose_existing_flows
     test_fedora_dependency_bootstrap_installs_rpmbuild

@@ -556,7 +556,6 @@ function applyLinuxRemoteControlClientRevokeSetupResetPatch(source) {
   ) {
     const helperNeedle = source.match(/var [A-Za-z_$][\w$]*=`remote-control-client-revoke-success`/u)?.[0] ?? null;
     if (helperNeedle == null) {
-      console.warn("WARN: Could not find remote-control revoke toast marker - skipping setup reset helper insertion");
       return source;
     }
     const helper = [
@@ -578,14 +577,12 @@ function applyLinuxRemoteControlClientRevokeSetupResetPatch(source) {
     /mutationFn:[A-Za-z_$][\w$]*=>([A-Za-z_$][\w$]*)\([A-Za-z_$][\w$]*,[A-Za-z_$][\w$]*\.ADDED_REMOTE_CONTROL_ENV_IDS,/u,
   );
   if (setGlobalStateMatch == null) {
-    console.warn("WARN: Could not find global-state setter alias - skipping remote-control revoke setup reset patch");
     return source;
   }
 
   const setGlobalStateFn = setGlobalStateMatch[1];
   const helperNeedle = source.match(/var [A-Za-z_$][\w$]*=`remote-control-client-revoke-success`/u)?.[0] ?? null;
   if (helperNeedle == null) {
-    console.warn("WARN: Could not find remote-control revoke toast marker - skipping setup reset helper insertion");
     return source;
   }
 
@@ -600,7 +597,6 @@ function applyLinuxRemoteControlClientRevokeSetupResetPatch(source) {
   const successPattern =
     /([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*),\{eventName:`codex_remote_control_client_revoke_result`,metadata:\{result:`succeeded`\}\}\),([A-Za-z_$][\w$]*)\.setData\(([A-Za-z_$][\w$]*)=>\4\?\.filter\(\4=>\4\.client_id!==([A-Za-z_$][\w$]*)\)\)/u;
   if (!successPattern.test(patched)) {
-    console.warn("WARN: Could not find remote-control revoke success cache update - skipping setup reset patch");
     return source;
   }
 
@@ -1320,6 +1316,10 @@ function applyLinuxRemoteMobileChromeBridgePatch(source) {
     return source;
   }
 
+  if (browserClientHasNativeChromeBackendPreferenceRouting(source)) {
+    return source;
+  }
+
   // 26.527.x moved the browser-use backend allowlist from the
   // x-codex-browser-use-available-backends request-meta header to the
   // BROWSER_USE_AVAILABLE_BACKENDS config value (var dy), renamed the allowlist
@@ -1361,6 +1361,15 @@ function applyLinuxRemoteMobileChromeBridgePatch(source) {
 
   console.warn("WARN: Could not find Chrome browser-client backend allowlist needles - skipping remote-mobile Chrome bridge patch");
   return source;
+}
+
+function browserClientHasNativeChromeBackendPreferenceRouting(source) {
+  return (
+    source.includes("BROWSER_USE_AVAILABLE_BACKENDS") &&
+    source.includes("browserPreference") &&
+    source.includes("preferredWindowIdFor") &&
+    /var [A-Za-z_$][\w$]*=\["chrome","iab","cdp"\];function [A-Za-z_$][\w$]*\([A-Za-z_$][\w$]*\)\{return [A-Za-z_$][\w$]*\.some\([A-Za-z_$][\w$]*=>[A-Za-z_$][\w$]*===[A-Za-z_$][\w$]*\)\}/u.test(source)
+  );
 }
 
 function applyLinuxRemoteMobileConversationHydrationPatch(source) {
@@ -1705,7 +1714,7 @@ module.exports = [
   {
     id: "linux-remote-control-load-gate",
     phase: "webview-asset",
-    pattern: /^remote-connection-visibility-.*\.js$/,
+    pattern: /^(?:remote-connection-visibility|app-initial~app-main~worktree-init-v2-page~remote-conversation-page~new-thread-panel-page~o~).*\.js$/,
     order: 20_118,
     ciPolicy: "optional",
     missingDescription: "remote-control loader gate bundle",
@@ -1785,7 +1794,7 @@ module.exports = [
   {
     id: "linux-remote-mobile-conversation-hydration",
     phase: "webview-asset",
-    pattern: /^(?:app-server-manager-signals|thread-context-inputs)-.*\.js$/,
+    pattern: /^(?:app-server-manager-signals|thread-context-inputs|app-initial~app-main~worktree-init-v2-page~remote-conversation-page~new-thread-panel-page~o~).*\.js$/,
     order: 20_150,
     ciPolicy: "optional",
     missingDescription: "app-server manager signals bundle",
@@ -1795,7 +1804,7 @@ module.exports = [
   {
     id: "linux-remote-control-status-read-guard",
     phase: "webview-asset",
-    pattern: /^(?:app-server-manager-signals|thread-context-inputs)-.*\.js$/,
+    pattern: /^(?:app-server-manager-signals|thread-context-inputs|app-initial~app-main~worktree-init-v2-page~remote-conversation-page~new-thread-panel-page~o~).*\.js$/,
     order: 20_151,
     ciPolicy: "optional",
     missingDescription: "app-server manager signals bundle",
@@ -1825,7 +1834,7 @@ module.exports = [
   {
     id: "linux-remote-mobile-projectless-remote-task",
     phase: "webview-asset",
-    pattern: /^sidebar-project-groups-.*\.js$/,
+    pattern: /^(?:sidebar-project-groups|app-initial~app-main~worktree-init-v2-page~remote-conversation-page~pull-requests-page~plug~).*\.js$/,
     order: 20_170,
     ciPolicy: "optional",
     missingDescription: "sidebar project groups bundle",

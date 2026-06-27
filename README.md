@@ -37,18 +37,19 @@ If dependencies are already installed:
 make install-native
 ```
 
-`make bootstrap-native` installs build dependencies, downloads a fresh upstream
-`Codex.dmg`, builds `codex-app/`, packages it for your distro, and installs the
-newest artifact from `dist/`.
+`make bootstrap-native` installs build dependencies, validates the cached
+upstream `Codex.dmg`, downloads it only when missing or stale, builds
+`codex-app/`, packages it for your distro, and installs the newest artifact
+from `dist/`.
 
 If you are installing dependencies manually on Fedora:
 
 ```bash
 # Fedora 41+
-sudo dnf install python3 7zip curl unzip rpm-build @development-tools
+sudo dnf install python3 7zip curl unzip rpm-build make gcc-c++ @development-tools
 
 # Fedora < 41
-sudo dnf install python3 p7zip p7zip-plugins curl unzip rpm-build
+sudo dnf install python3 p7zip p7zip-plugins curl unzip rpm-build make gcc-c++
 sudo dnf groupinstall 'Development Tools'
 ```
 
