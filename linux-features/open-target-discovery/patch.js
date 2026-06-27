@@ -511,7 +511,14 @@ function applyOpenInTargetRegistryCommandPatch(currentSource) {
     return currentSource;
   }
 
-  const insertionIndex = currentSource.indexOf("async function");
+  const insertionIndex = [
+    currentSource.indexOf("async function"),
+    currentSource.indexOf("function "),
+    currentSource.indexOf("class "),
+    currentSource.indexOf("var "),
+    currentSource.indexOf("let "),
+    currentSource.indexOf("const "),
+  ].filter((index) => index >= 0).sort((a, b) => a - b)[0] ?? -1;
   if (insertionIndex === -1) {
     warn("Could not find insertion point for Linux open target registry helper");
     return currentSource;
@@ -533,7 +540,7 @@ function applyOpenInTargetCommandPatch(currentSource) {
     "async getOpenInTargetCommand(e){if(this.requestOpenInWorker==null)return;let{command:t}=await this.requestOpenInWorker({method:`get-target-command`,params:JN(this.getSettingsStore(),e)});return t}",
   ];
   const replacement =
-    "async getOpenInTargetCommand(e){let t=await codexLinuxOpenTargetRegistryCommand(this.getSettingsStore(),e);if(process.platform===`linux`){if(t==null)throw Error(`Open target \"${e}\" is not available`);return t}if(this.requestOpenInWorker==null)return;let{command:n}=await this.requestOpenInWorker({method:`get-target-command`,params:JN(this.getSettingsStore(),e)});if(n==null)throw Error(`Open target \"${e}\" is not available`);return n}";
+    "async getOpenInTargetCommand(e){let t=await codexLinuxOpenTargetRegistryCommand(this.getSettingsStore(),e);if(t!=null)return t;if(this.requestOpenInWorker==null){if(process.platform===`linux`)throw Error(`Open target \"${e}\" is not available`);return}let{command:n}=await this.requestOpenInWorker({method:`get-target-command`,params:JN(this.getSettingsStore(),e)});if(n==null)throw Error(`Open target \"${e}\" is not available`);return n}";
 
   for (const needle of needles) {
     if (currentSource.includes(needle)) {
@@ -547,7 +554,7 @@ function applyOpenInTargetCommandPatch(currentSource) {
     return currentSource.replace(
       currentCommandPattern,
       (_match, _commandVar, paramsFn) =>
-        `async getOpenInTargetCommand(e){let t=await codexLinuxOpenTargetRegistryCommand(this.getSettingsStore(),e);if(process.platform===\`linux\`){if(t==null)throw Error(\`Open target "\${e}" is not available\`);return t}let{command:n}=await this.getOpenInWorker()({method:\`get-target-command\`,params:${paramsFn}(this.getSettingsStore(),e)});if(n==null)throw Error(\`Open target "\${e}" is not available\`);return n}`,
+        `async getOpenInTargetCommand(e){let t=await codexLinuxOpenTargetRegistryCommand(this.getSettingsStore(),e);if(t!=null)return t;let{command:n}=await this.getOpenInWorker()({method:\`get-target-command\`,params:${paramsFn}(this.getSettingsStore(),e)});if(n==null)throw Error(\`Open target "\${e}" is not available\`);return n}`,
     );
   }
 
@@ -566,7 +573,7 @@ function applyOpenInTargetsBridgeDetectionPatch(currentSource) {
   const needle =
     "openInTargets:{detectTarget:async({target:e})=>{if(this.options.requestOpenInWorker==null)throw Error(`Open in worker unavailable`);let{command:t}=await this.options.requestOpenInWorker({method:`get-target-command`,params:JN(this.options.settingsStore,e)});return{available:t!=null}},loadTargetIcon:";
   const replacement =
-    "openInTargets:{detectTarget:async({target:e})=>{let t=await codexLinuxOpenTargetRegistryCommand(this.options.settingsStore,e);if(process.platform===`linux`)return{available:t!=null};if(this.options.requestOpenInWorker==null)throw Error(`Open in worker unavailable`);let{command:n}=await this.options.requestOpenInWorker({method:`get-target-command`,params:JN(this.options.settingsStore,e)});return{available:n!=null}},loadTargetIcon:";
+    "openInTargets:{detectTarget:async({target:e})=>{let t=await codexLinuxOpenTargetRegistryCommand(this.options.settingsStore,e);if(t!=null)return{available:!0};if(this.options.requestOpenInWorker==null){if(process.platform===`linux`)return{available:!1};throw Error(`Open in worker unavailable`)}let{command:n}=await this.options.requestOpenInWorker({method:`get-target-command`,params:JN(this.options.settingsStore,e)});return{available:n!=null}},loadTargetIcon:";
 
   if (currentSource.includes(needle)) {
     return currentSource.replace(needle, replacement);
@@ -575,7 +582,7 @@ function applyOpenInTargetsBridgeDetectionPatch(currentSource) {
   const currentNeedle =
     "openInTargets:{detectTarget:async({target:e})=>{if(this.options.requestOpenInWorker==null)throw Error(`Open in worker unavailable`);let{command:t}=await this.options.requestOpenInWorker({method:`get-target-command`,params:iP(this.options.settingsStore,e)});return{available:t!=null}},loadTargetIcon:";
   const currentReplacement =
-    "openInTargets:{detectTarget:async({target:e})=>{let t=await codexLinuxOpenTargetRegistryCommand(this.options.settingsStore,e);if(process.platform===`linux`)return{available:t!=null};if(this.options.requestOpenInWorker==null)throw Error(`Open in worker unavailable`);let{command:n}=await this.options.requestOpenInWorker({method:`get-target-command`,params:iP(this.options.settingsStore,e)});return{available:n!=null}},loadTargetIcon:";
+    "openInTargets:{detectTarget:async({target:e})=>{let t=await codexLinuxOpenTargetRegistryCommand(this.options.settingsStore,e);if(t!=null)return{available:!0};if(this.options.requestOpenInWorker==null){if(process.platform===`linux`)return{available:!1};throw Error(`Open in worker unavailable`)}let{command:n}=await this.options.requestOpenInWorker({method:`get-target-command`,params:iP(this.options.settingsStore,e)});return{available:n!=null}},loadTargetIcon:";
   if (currentSource.includes(currentNeedle)) {
     return currentSource.replace(currentNeedle, currentReplacement);
   }

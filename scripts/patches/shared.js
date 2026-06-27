@@ -153,11 +153,25 @@ function findCodexRequestExportName(source) {
   const match = source.match(
     /async function\s+([A-Za-z_$][\w$]*)\(\.\.\.[^)]+\)\{let\[[^\]]+\]=[^;]+,\{params:[^}]+source:[^}]+\}=[^;]+;return\s+[A-Za-z_$][\w$]*\([^)]*\)\}/,
   );
-  if (match == null) {
-    return null;
+  if (match != null) {
+    return findExportedAlias(source, match[1]);
   }
 
-  return findExportedAlias(source, match[1]);
+  const functionPattern = /(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\(/g;
+  let functionMatch;
+  while ((functionMatch = functionPattern.exec(source)) != null) {
+    const bodyStart = source.indexOf("{", functionPattern.lastIndex);
+    const bodyEnd = findMatchingBrace(source, bodyStart);
+    if (bodyStart === -1 || bodyEnd === -1) {
+      continue;
+    }
+    if (source.slice(bodyStart, bodyEnd + 1).includes("vscode://codex/")) {
+      return findExportedAlias(source, functionMatch[1]);
+    }
+    functionPattern.lastIndex = bodyEnd + 1;
+  }
+
+  return null;
 }
 
 function findCodexRequestWebviewAsset(webviewAssetsDir) {

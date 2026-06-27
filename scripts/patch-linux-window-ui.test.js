@@ -4155,6 +4155,32 @@ test("adds Linux desktop settings when current upstream omits legacy settings ch
   }
 });
 
+test("adds Linux desktop settings when Codex request bridge wrapper changes shape", () => {
+  const { extractedDir, assetsDir } = createCurrentNativeKeyboardShortcutsSettingsFixture();
+  try {
+    fs.writeFileSync(
+      path.join(assetsDir, "setting-storage-A.js"),
+      'async function requestCodexMessage(request){return send("vscode://codex/",request?.params)}export{requestCodexMessage as q};',
+      "utf8",
+    );
+
+    const { value: result, warnings } = captureWarns(() => patchKeybindsSettingsAssets(extractedDir));
+
+    assert.equal(result.matched, true);
+    assert.match(result.reason, /integrated settings router/);
+    assert.deepEqual(warnings, []);
+
+    const linuxDesktopSource = fs.readFileSync(
+      path.join(assetsDir, linuxDesktopSettingsAsset),
+      "utf8",
+    );
+    assert.match(linuxDesktopSource, /import\{q as __post\}from"\.\/setting-storage-A\.js"/);
+    assert.match(linuxDesktopSource, /Linux desktop/);
+  } finally {
+    fs.rmSync(extractedDir, { recursive: true, force: true });
+  }
+});
+
 test("adds Linux desktop section to current native Keyboard Shortcuts sections bundle", () => {
   const source =
     "var e=[`general-settings`,`profile`,`keyboard-shortcuts`,`account`],t=`general-settings`,n=function(){},r=[{slug:`general-settings`},{slug:`profile`},{slug:`appearance`},{slug:`keyboard-shortcuts`}];";

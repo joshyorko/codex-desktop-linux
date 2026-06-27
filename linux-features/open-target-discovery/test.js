@@ -46,13 +46,13 @@ const iconResolverBundle =
 const currentIconResolverBundle =
   "async function VN(e,t,n){return e===`win32`?Promise.all(t.map(async e=>{let t=n?.get(e.id)??null,r=e.iconPath?e.iconPath(t):t;return{id:e.id,label:e.label,icon:await WN(r,e.icon),kind:e.kind,hidden:e.hidden,supportsSsh:e.supportsSsh}})):HN(t)}function HN(e){return e.map(({id:e,label:t,icon:n,kind:r,hidden:i,supportsSsh:a})=>({id:e,label:t,icon:n,kind:r,hidden:i,supportsSsh:a}))}async function WN(e,t){if(!e)return t;try{let r=e.toLowerCase().endsWith(`.lnk`)?await UN(e):await n.app.getFileIcon(e,{size:`normal`});return!r||r.isEmpty()?t:r.toDataURL()}catch(e){return t}}async function UN(e){return n.nativeImage.createFromPath(e)}";
 const openInCommandBundle =
-  "async function JN(){}function iP(e){return e.targets}var IN={};class App{constructor(){this.requestOpenInWorker=async()=>({command:`worker-command`});this.settingsStore={targets:[{id:`linux-desktop-agent`,detect:async()=>`main-command`},{id:`missing`,detect:async()=>null}]}}getSettingsStore(){return this.settingsStore}async getOpenInTargetCommand(e){if(this.requestOpenInWorker==null)return;let{command:t}=await this.requestOpenInWorker({method:`get-target-command`,params:JN(this.getSettingsStore(),e)});return t}}";
+  "function JN(e,t){return t}function iP(e){return e.targets}var IN={};class App{constructor(){this.requestOpenInWorker=async({params:e})=>({command:e===`vscode`?`worker-command`:null});this.settingsStore={targets:[{id:`linux-desktop-agent`,detect:async()=>`main-command`},{id:`missing`,detect:async()=>null}]}}getSettingsStore(){return this.settingsStore}async getOpenInTargetCommand(e){if(this.requestOpenInWorker==null)return;let{command:t}=await this.requestOpenInWorker({method:`get-target-command`,params:JN(this.getSettingsStore(),e)});return t}}";
 const currentOpenInCommandBundle =
   "async function JN(){}function iP(e){return e.targets}var IN={};class App{constructor(){this.requestOpenInWorker=async()=>({command:null});this.settingsStore={targets:[{id:`linux-desktop-agent`,detect:async()=>`main-command`},{id:`missing`,detect:async()=>null}]}}getSettingsStore(){return this.settingsStore}async getOpenInTargetCommand(e){if(this.requestOpenInWorker==null)return;let{command:t}=await this.requestOpenInWorker({method:`get-target-command`,params:JN(this.getSettingsStore(),e)});if(t==null)throw Error(`Open target \"${e}\" is not available`);return t}}";
 const latestOpenInCommandBundle =
   "async function JN(){}function iP(e){return e.targets}var IN={};class App{constructor(){this.requestOpenInWorker=async()=>({command:null});this.settingsStore={targets:[{id:`linux-desktop-agent`,detect:async()=>`main-command`},{id:`missing`,detect:async()=>null}]}}getSettingsStore(){return this.settingsStore}getOpenInWorker(){if(this.requestOpenInWorker==null)throw Error(`Open in worker unavailable`);return this.requestOpenInWorker}async getOpenInTargetCommand(e){let{command:t}=await this.getOpenInWorker()({method:`get-target-command`,params:iP(this.getSettingsStore(),e)});if(t==null)throw Error(`Open target \"${e}\" is not available`);return t}}";
 const openInBridgeBundle =
-  "async function JN(){}function iP(e){return e.targets}var IN={};var bridge={options:{settingsStore:{targets:[{id:`linux-desktop-agent`,detect:async()=>`main-command`},{id:`missing`,detect:async()=>null}]},requestOpenInWorker:async()=>({command:`worker-command`})},openInTargets:{detectTarget:async({target:e})=>{if(this.options.requestOpenInWorker==null)throw Error(`Open in worker unavailable`);let{command:t}=await this.options.requestOpenInWorker({method:`get-target-command`,params:JN(this.options.settingsStore,e)});return{available:t!=null}},loadTargetIcon:()=>{}}}";
+  "function JN(e,t){return t}function iP(e){return e.targets}var IN={};var bridge={options:{settingsStore:{targets:[{id:`linux-desktop-agent`,detect:async()=>`main-command`},{id:`missing`,detect:async()=>null}]},requestOpenInWorker:async({params:e})=>({command:e===`vscode`?`worker-command`:null})},openInTargets:{detectTarget:async({target:e})=>{if(this.options.requestOpenInWorker==null)throw Error(`Open in worker unavailable`);let{command:t}=await this.options.requestOpenInWorker({method:`get-target-command`,params:JN(this.options.settingsStore,e)});return{available:t!=null}},loadTargetIcon:()=>{}}}";
 const currentOpenInBridgeBundle =
   "async function JN(){}function iP(e){return e.targets}var IN={};var bridge={options:{settingsStore:{targets:[{id:`linux-desktop-agent`,detect:async()=>`main-command`},{id:`missing`,detect:async()=>null}]},requestOpenInWorker:async()=>({command:null})},openInTargets:{detectTarget:async({target:e})=>{if(this.options.requestOpenInWorker==null)throw Error(`Open in worker unavailable`);let{command:t}=await this.options.requestOpenInWorker({method:`get-target-command`,params:iP(this.options.settingsStore,e)});return{available:t!=null}},loadTargetIcon:()=>{}}}";
 const openInExecuteBundle =
@@ -1154,7 +1154,7 @@ test("open-target discovery uses main registry for Linux command lookup", async 
   const app = new Function(`${patched};return new App();`)();
 
   assert.equal(await app.getOpenInTargetCommand("linux-desktop-agent"), "main-command");
-  await assert.rejects(() => app.getOpenInTargetCommand("vscode"), /not available/);
+  assert.equal(await app.getOpenInTargetCommand("vscode"), "worker-command");
   await assert.rejects(() => app.getOpenInTargetCommand("missing"), /not available/);
 });
 
@@ -1183,7 +1183,9 @@ test("open-target discovery bridge detection uses main registry on Linux", async
         { id: "missing", detect: async () => null },
       ],
     },
-    requestOpenInWorker: async () => ({ command: "worker-command" }),
+    requestOpenInWorker: async ({ params: target }) => ({
+      command: target === "vscode" ? "worker-command" : null,
+    }),
   };
   const bridge = new Function(`${patched};return bridge;`).call({ options });
 
@@ -1194,7 +1196,7 @@ test("open-target discovery bridge detection uses main registry on Linux", async
     available: false,
   });
   assert.deepEqual(await bridge.openInTargets.detectTarget.call(bridge, { target: "vscode" }), {
-    available: false,
+    available: true,
   });
 });
 
