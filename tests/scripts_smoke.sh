@@ -5445,6 +5445,69 @@ test_process_detection_helper_cmdline_shapes() {
     ) || fail "Electron helper detection must handle NUL-separated and space-joined cmdline formats"
 }
 
+test_launcher_seeds_computer_use_ui_for_remote_mobile_build() {
+    info "Checking launcher seeds Computer Use UI for remote-mobile self-hosted builds"
+    local workspace="$TMP_DIR/computer-use-ui-launcher-seed"
+    local app_dir="$workspace/app"
+    local fake_home="$workspace/home"
+    local settings="$fake_home/.config/codex-desktop/settings.json"
+    local probe="$workspace/probe.sh"
+
+    mkdir -p "$app_dir/.codex-linux" "$(dirname "$settings")"
+    cat > "$probe" <<'SCRIPT'
+#!/usr/bin/env bash
+set -euo pipefail
+early_truthy_env_value() {
+    case "${1:-}" in
+        1|true|TRUE|yes|YES|on|ON) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+SCRIPT
+    awk '
+        /^computer_use_ui_seed_requested\(\) \{/ { emit = 1 }
+        /^load_packaged_runtime_helper\(\) \{/ { if (emit) exit }
+        emit { print }
+    ' "$REPO_DIR/launcher/start.sh.template" >> "$probe"
+    cat >> "$probe" <<'SCRIPT'
+seed_self_hosted_computer_use_ui_setting
+SCRIPT
+    chmod +x "$probe"
+
+    printf '%s\n' 'remote-mobile-control' > "$app_dir/.codex-linux/remote-mobile-control-enabled"
+    SCRIPT_DIR="$app_dir" APP_SETTINGS_FILE="$settings" bash "$probe"
+    python3 - "$settings" <<'PY'
+import json
+import sys
+with open(sys.argv[1], "r", encoding="utf-8") as handle:
+    data = json.load(handle)
+raise SystemExit(0 if data.get("codex-linux-computer-use-ui-enabled") is True else 1)
+PY
+
+    printf '%s\n' '{"codex-linux-computer-use-ui-enabled": false}' > "$settings"
+    SCRIPT_DIR="$app_dir" APP_SETTINGS_FILE="$settings" bash "$probe"
+    python3 - "$settings" <<'PY'
+import json
+import sys
+with open(sys.argv[1], "r", encoding="utf-8") as handle:
+    data = json.load(handle)
+raise SystemExit(0 if data.get("codex-linux-computer-use-ui-enabled") is False else 1)
+PY
+
+    rm -f "$app_dir/.codex-linux/remote-mobile-control-enabled" "$settings"
+    SCRIPT_DIR="$app_dir" APP_SETTINGS_FILE="$settings" bash "$probe"
+    assert_file_not_exists "$settings"
+
+    CODEX_LINUX_ENABLE_COMPUTER_USE_UI=1 SCRIPT_DIR="$app_dir" APP_SETTINGS_FILE="$settings" bash "$probe"
+    python3 - "$settings" <<'PY'
+import json
+import sys
+with open(sys.argv[1], "r", encoding="utf-8") as handle:
+    data = json.load(handle)
+raise SystemExit(0 if data.get("codex-linux-computer-use-ui-enabled") is True else 1)
+PY
+}
+
 test_side_by_side_launcher_identity() {
     info "Checking side-by-side launcher identity"
     local workspace="$TMP_DIR/side-by-side-launcher"
@@ -8235,6 +8298,7 @@ main() {
     test_chrome_native_host_manifest_writer
     test_launcher_template_sanity
     test_process_detection_helper_cmdline_shapes
+    test_launcher_seeds_computer_use_ui_for_remote_mobile_build
     test_webview_probe_equivalence
     test_side_by_side_launcher_identity
     test_linux_file_manager_patch_smoke

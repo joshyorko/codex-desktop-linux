@@ -1192,8 +1192,29 @@ function createModernNativeKeyboardShortcutsSettingsFixture() {
 
   writeAsset("keyboard-shortcuts-settings-A.js", "slug:`keyboard-shortcuts`");
   writeAsset(
+    "app-initial~settings-metadata-A.js",
+    "var c=`general-settings.import.profile.keyboard-shortcuts.mcp-settings.computer-use`.split(`.`),f=[{slug:`general-settings`},{slug:`profile`},{slug:`keyboard-shortcuts`},{slug:`computer-use`}];",
+  );
+  writeAsset(
+    "app-initial~settings-labels-A.js",
+    [
+      'appearance:{id:`settings.nav.appearance`,defaultMessage:`Appearance`,description:`Title for appearance settings section`},"general-settings":{id:`settings.nav.general-settings`,defaultMessage:`General`,description:`Title for general settings section`},"keyboard-shortcuts":{id:`settings.nav.keyboard-shortcuts`,defaultMessage:`Keyboard shortcuts`,description:`Title for keyboard shortcuts settings section`},"computer-use":{id:`settings.nav.computer-use`,defaultMessage:`Computer Use`,description:`Title for Computer Use settings section`},',
+      "function y(e){switch(e){case`general-settings`:{let e;return o[5]===Symbol.for(`react.memo_cache_sentinel`)?(e=(0,d.jsx)(r,{id:`settings.section.general-settings`,defaultMessage:`General`,description:`Title for general settings section`}),o[5]=e):e=o[5],e}case`keyboard-shortcuts`:return (0,d.jsx)(r,{id:`settings.section.keyboard-shortcuts`,defaultMessage:`Keyboard shortcuts`,description:`Title for keyboard shortcuts settings section`})}}",
+    ].join(""),
+  );
+  writeAsset(
     "settings-page-A.js",
-    'var Hn={"general-settings":wt,"keyboard-shortcuts":xn};var Wn=[`general-settings`,`profile`,`keyboard-shortcuts`];',
+    [
+      'var Hn={"general-settings":wt,"keyboard-shortcuts":xn,"computer-use":k};',
+      "var Wn=[`general-settings`,`profile`,`keyboard-shortcuts`,`computer-use`];",
+      "var Gn=[{key:`personal`,slugs:[`general-settings`,`profile`,`keyboard-shortcuts`]},{key:`integrations`,slugs:[`computer-use`]}];",
+      "function sr(e){switch(e.slug){case`appearance`:return!0;case`general-settings`:case`agent`:case`personalization`:return!0;case`keyboard-shortcuts`:case`computer-use`:return!0}}",
+      "function lr(H){let S=!0;if(H)bb0:switch(H.slug){case`appearance`:case`general-settings`:case`agent`:case`git-settings`:case`data-controls`:case`personalization`:S=!1;break bb0;case`keyboard-shortcuts`:S=!1;break bb0}return S}",
+    ].join(""),
+  );
+  writeAsset(
+    "app-initial~app-main~automations-page-A.js",
+    "var MW,NW,PW,FW,IW=e((()=>{MW=s(),NW=t(f(),1),PW=o(),FW={\"general-settings\":(0,NW.lazy)(()=>G(()=>import(`./general-settings-CuPItQSl.js`).then(e=>({default:e.GeneralSettings})),[],import.meta.url)),\"keyboard-shortcuts\":(0,NW.lazy)(()=>G(()=>import(`./keyboard-shortcuts-settings-B7yKcmRD.js`).then(e=>({default:e.KeyboardShortcutsSettings})),[],import.meta.url))}}));",
   );
 
   return { extractedDir, assetsDir };
@@ -3878,17 +3899,46 @@ test("keeps Linux desktop toggles visible with native Keyboard Shortcuts", () =>
   }
 });
 
-test("skips Linux desktop settings injection when native shortcuts use unsupported settings router", () => {
+test("adds Linux desktop settings injection to current integrated settings router", () => {
   const { extractedDir, assetsDir } = createModernNativeKeyboardShortcutsSettingsFixture();
   try {
     const { value: result, warnings } = captureWarns(() => patchKeybindsSettingsAssets(extractedDir));
 
     assert.equal(result.matched, true);
-    assert.equal(result.changed, 0);
-    assert.match(result.reason, /extension point is unavailable/);
+    assert.ok(result.changed >= 4);
+    assert.match(result.reason, /integrated settings router/);
     assert.deepEqual(warnings, []);
     assert.equal(fs.existsSync(path.join(assetsDir, keybindsSettingsAsset)), false);
     assert.equal(fs.existsSync(path.join(assetsDir, linuxDesktopSettingsAsset)), false);
+
+    assert.match(
+      fs.readFileSync(path.join(assetsDir, "app-initial~settings-metadata-A.js"), "utf8"),
+      /general-settings\.linux-desktop\.import/,
+    );
+    assert.match(
+      fs.readFileSync(path.join(assetsDir, "app-initial~settings-metadata-A.js"), "utf8"),
+      /\{slug:`linux-desktop`\}/,
+    );
+    assert.match(
+      fs.readFileSync(path.join(assetsDir, "app-initial~settings-labels-A.js"), "utf8"),
+      /settings\.nav\.linux-desktop/,
+    );
+    const settingsPageSource = fs.readFileSync(path.join(assetsDir, "settings-page-A.js"), "utf8");
+    assert.match(settingsPageSource, /"linux-desktop":wt,"general-settings":wt/);
+    assert.match(settingsPageSource, /Wn=\[`general-settings`,`linux-desktop`,`profile`/);
+    assert.match(settingsPageSource, /slugs:\[`general-settings`,`linux-desktop`,`profile`/);
+    assert.match(settingsPageSource, /case`linux-desktop`:case`general-settings`/);
+
+    const routeSource = fs.readFileSync(
+      path.join(assetsDir, "app-initial~app-main~automations-page-A.js"),
+      "utf8",
+    );
+    assert.match(routeSource, /"linux-desktop":\(0,NW\.lazy\)\(async\(\)=>\(\{default:\(\)=>/);
+    assert.doesNotMatch(routeSource, /linux-desktop-settings-linux\.js/);
+
+    const secondResult = patchKeybindsSettingsAssets(extractedDir);
+    assert.equal(secondResult.matched, true);
+    assert.equal(secondResult.changed, 0);
   } finally {
     fs.rmSync(extractedDir, { recursive: true, force: true });
   }

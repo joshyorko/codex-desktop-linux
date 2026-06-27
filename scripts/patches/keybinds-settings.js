@@ -362,6 +362,59 @@ function collectLinuxDesktopRouteAndNavigationPatches(extractedDir) {
   return patches;
 }
 
+function collectIntegratedLinuxDesktopSettingsPatches(extractedDir) {
+  const webviewAssetsDir = path.join(extractedDir, "webview", "assets");
+  if (!fs.existsSync(webviewAssetsDir)) {
+    throw new Error(`Required Keybinds settings patch failed: missing webview assets directory ${webviewAssetsDir}`);
+  }
+
+  const candidates = fs
+    .readdirSync(webviewAssetsDir)
+    .filter((name) => name.endsWith(".js"))
+    .sort();
+
+  let sectionsMatched = false;
+  let sharedMatched = false;
+  let navigationMatched = false;
+  let routeMatched = false;
+  const patches = [];
+  for (const candidate of candidates) {
+    const filePath = path.join(webviewAssetsDir, candidate);
+    const currentSource = fs.readFileSync(filePath, "utf8");
+    let patchedSource = currentSource;
+    if (isIntegratedSettingsSectionsBundleSource(currentSource)) {
+      sectionsMatched = true;
+      patchedSource = applyLinuxDesktopSettingsSectionsPatch(patchedSource);
+    }
+    if (isIntegratedSettingsSharedBundleSource(currentSource)) {
+      sharedMatched = true;
+      patchedSource = applyLinuxDesktopSettingsSharedPatch(patchedSource);
+    }
+    if (isSettingsNavigationBundleSource(currentSource)) {
+      navigationMatched = true;
+      patchedSource = applyLinuxDesktopSettingsNavigationPatch(patchedSource);
+    }
+    if (isIntegratedSettingsRouteBundleSource(currentSource)) {
+      routeMatched = true;
+      patchedSource = applyIntegratedLinuxDesktopSettingsRoutePatch(patchedSource);
+    }
+    if (patchedSource !== currentSource) {
+      patches.push({ filePath, currentSource, patchedSource });
+    }
+  }
+
+  const missing = [];
+  if (!sectionsMatched) missing.push("metadata");
+  if (!sharedMatched) missing.push("labels");
+  if (!navigationMatched) missing.push("navigation");
+  if (!routeMatched) missing.push("route");
+  if (missing.length > 0) {
+    throw new Error(`Required Keybinds settings patch failed: could not find integrated settings router ${missing.join(", ")} bundle`);
+  }
+
+  return patches;
+}
+
 function hasNativeKeyboardShortcutsSettings(extractedDir) {
   const webviewAssetsDir = path.join(extractedDir, "webview", "assets");
   if (!fs.existsSync(webviewAssetsDir)) {
@@ -421,10 +474,18 @@ function patchKeybindsSettingsAssets(extractedDir) {
       hasNativeSettings &&
       !hasLegacyLinuxDesktopSettingsExtensionPoints(extractedDir)
     ) {
+      const patches = collectIntegratedLinuxDesktopSettingsPatches(extractedDir);
+      let changed = 0;
+      for (const patch of patches) {
+        if (patch.patchedSource !== patch.currentSource) {
+          fs.writeFileSync(patch.filePath, patch.patchedSource, "utf8");
+          changed += 1;
+        }
+      }
       return {
         matched: true,
-        changed: 0,
-        reason: "upstream keyboard shortcuts settings are present; Linux desktop settings extension point is unavailable",
+        changed,
+        reason: "upstream keyboard shortcuts settings are present; added Linux desktop settings to integrated settings router",
       };
     }
 
@@ -517,9 +578,22 @@ function applyLinuxDesktopSettingsSectionsPatch(currentSource) {
 
   if (
     patchedSource.includes("slug:`linux-desktop`") &&
-    /=\[`general-settings`,`linux-desktop`/.test(patchedSource)
+    (
+      /=\[`general-settings`,`linux-desktop`/.test(patchedSource) ||
+      patchedSource.includes("`general-settings.linux-desktop.")
+    )
   ) {
     return patchedSource;
+  }
+
+  if (
+    !patchedSource.includes("`general-settings.linux-desktop.") &&
+    patchedSource.includes(".split(`.`)")
+  ) {
+    const splitPattern = /(`general-settings\.)(?!linux-desktop\.)/;
+    if (splitPattern.test(patchedSource)) {
+      patchedSource = patchedSource.replace(splitPattern, "$1linux-desktop.");
+    }
   }
 
   if (!/=\[`general-settings`,`linux-desktop`/.test(patchedSource)) {
@@ -618,14 +692,15 @@ function applyLinuxDesktopSettingsSharedPatch(currentSource) {
   let patchedSource = currentSource;
 
   if (!patchedSource.includes("settings.nav.linux-desktop")) {
-    const navNeedle =
-      '"general-settings":{id:`settings.nav.general-settings`,defaultMessage:`General`,description:`Title for general settings section`},';
-    const navPatch =
-      '"general-settings":{id:`settings.nav.general-settings`,defaultMessage:`General`,description:`Title for general settings section`},"linux-desktop":{id:`settings.nav.linux-desktop`,defaultMessage:`Linux desktop`,description:`Title for Linux desktop settings section`},';
-    if (!patchedSource.includes(navNeedle)) {
+    const navPattern =
+      /("general-settings":\{id:`settings\.nav\.general-settings`,defaultMessage:`General`,description:`Title for general settings section`\},)/;
+    if (!navPattern.test(patchedSource)) {
       throw new Error("Required Keybinds settings patch failed: could not add Linux desktop nav label");
     }
-    patchedSource = patchedSource.replace(navNeedle, navPatch);
+    patchedSource = patchedSource.replace(
+      navPattern,
+      '"linux-desktop":{id:`settings.nav.linux-desktop`,defaultMessage:`Linux desktop`,description:`Title for Linux desktop settings section`},$1',
+    );
   }
 
   if (!patchedSource.includes("settings.section.linux-desktop")) {
@@ -727,6 +802,27 @@ function isSettingsRouteBundleSource(currentSource) {
     || /"general-settings":\(0,[A-Za-z_$][\w$]*\.lazy\)\(\(\)=>[A-Za-z_$][\w$]*\(/.test(currentSource);
 }
 
+function isIntegratedSettingsRouteBundleSource(currentSource) {
+  return !currentSource.includes(linuxDesktopSettingsAsset)
+    && /"general-settings":\(0,[A-Za-z_$][\w$]*\.lazy\)\(\(\)=>/.test(currentSource)
+    && /"keyboard-shortcuts":\(0,[A-Za-z_$][\w$]*\.lazy\)\(\(\)=>/.test(currentSource);
+}
+
+function isIntegratedSettingsSectionsBundleSource(currentSource) {
+  return currentSource.includes("slug:`keyboard-shortcuts`")
+    && (
+      currentSource.includes("`general-settings.") ||
+      /\[\{slug:`general-settings`\}/.test(currentSource)
+    );
+}
+
+function isIntegratedSettingsSharedBundleSource(currentSource) {
+  return currentSource.includes("settings.nav.keyboard-shortcuts")
+    && currentSource.includes("settings.section.general-settings")
+    && currentSource.includes("defaultMessage:")
+    && currentSource.includes("description:");
+}
+
 function isSettingsNavigationBundleSource(currentSource) {
   return (
     /[A-Za-z_$][\w$]*=\{[^;]*"linux-desktop":[A-Za-z_$][\w$]*,/.test(currentSource)
@@ -752,6 +848,31 @@ function applyLinuxDesktopSettingsRoutePatch(currentSource) {
         `var ${routeMap}={"linux-desktop":(0,${lazyAlias}.lazy)(()=>${preloadAlias}(()=>import(\`./${linuxDesktopSettingsAsset}\`),[],import.meta.url)),${beforeGeneralSettings}"general-settings":`,
     );
   }
+
+  return patchedSource;
+}
+
+function applyIntegratedLinuxDesktopSettingsRoutePatch(currentSource) {
+  let patchedSource = currentSource;
+
+  if (/"linux-desktop":\(0,[A-Za-z_$][\w$]*\.lazy\)\(async\(\)=>/.test(patchedSource)) {
+    return patchedSource;
+  }
+
+  const routePattern =
+    /([A-Za-z_$][\w$]*)=\{([^;]*?)"general-settings":(?=\(0,([A-Za-z_$][\w$]*)\.lazy\)\(\(\)=>)/;
+  if (!routePattern.test(patchedSource)) {
+    throw new Error("Required Keybinds settings patch failed: could not add integrated Linux desktop route");
+  }
+
+  const routeBody = JSON.stringify(
+    "Linux desktop settings are enabled for this build. Runtime toggles are stored in your Codex Desktop settings file.",
+  );
+  patchedSource = patchedSource.replace(
+    routePattern,
+    (_match, routeMap, beforeGeneralSettings, lazyAlias) =>
+      `${routeMap}={${beforeGeneralSettings}"linux-desktop":(0,${lazyAlias}.lazy)(async()=>({default:()=>${routeBody}})),"general-settings":`,
+  );
 
   return patchedSource;
 }

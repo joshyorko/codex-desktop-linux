@@ -541,6 +541,16 @@ function applyOpenInTargetCommandPatch(currentSource) {
     }
   }
 
+  const currentCommandPattern =
+    /async getOpenInTargetCommand\(e\)\{let\{command:([A-Za-z_$][\w$]*)\}=await this\.getOpenInWorker\(\)\(\{method:`get-target-command`,params:([A-Za-z_$][\w$]*)\(this\.getSettingsStore\(\),e\)\}\);if\(\1==null\)throw Error\(`Open target "\$\{e\}" is not available`\);return \1\}/;
+  if (currentCommandPattern.test(currentSource)) {
+    return currentSource.replace(
+      currentCommandPattern,
+      (_match, _commandVar, paramsFn) =>
+        `async getOpenInTargetCommand(e){let t=await codexLinuxOpenTargetRegistryCommand(this.getSettingsStore(),e);if(process.platform===\`linux\`){if(t==null)throw Error(\`Open target "\${e}" is not available\`);return t}let{command:n}=await this.getOpenInWorker()({method:\`get-target-command\`,params:${paramsFn}(this.getSettingsStore(),e)});if(n==null)throw Error(\`Open target "\${e}" is not available\`);return n}`,
+    );
+  }
+
   if (currentSource.includes("getOpenInTargetCommand")) {
     warn("Could not find getOpenInTargetCommand worker fallback");
   }
@@ -558,13 +568,22 @@ function applyOpenInTargetsBridgeDetectionPatch(currentSource) {
   const replacement =
     "openInTargets:{detectTarget:async({target:e})=>{let t=await codexLinuxOpenTargetRegistryCommand(this.options.settingsStore,e);if(process.platform===`linux`)return{available:t!=null};if(this.options.requestOpenInWorker==null)throw Error(`Open in worker unavailable`);let{command:n}=await this.options.requestOpenInWorker({method:`get-target-command`,params:JN(this.options.settingsStore,e)});return{available:n!=null}},loadTargetIcon:";
 
-  if (!currentSource.includes(needle)) {
-    if (currentSource.includes("openInTargets:{detectTarget")) {
-      warn("Could not find open-in bridge target detection");
-    }
-    return currentSource;
+  if (currentSource.includes(needle)) {
+    return currentSource.replace(needle, replacement);
   }
-  return currentSource.replace(needle, replacement);
+
+  const currentNeedle =
+    "openInTargets:{detectTarget:async({target:e})=>{if(this.options.requestOpenInWorker==null)throw Error(`Open in worker unavailable`);let{command:t}=await this.options.requestOpenInWorker({method:`get-target-command`,params:iP(this.options.settingsStore,e)});return{available:t!=null}},loadTargetIcon:";
+  const currentReplacement =
+    "openInTargets:{detectTarget:async({target:e})=>{let t=await codexLinuxOpenTargetRegistryCommand(this.options.settingsStore,e);if(process.platform===`linux`)return{available:t!=null};if(this.options.requestOpenInWorker==null)throw Error(`Open in worker unavailable`);let{command:n}=await this.options.requestOpenInWorker({method:`get-target-command`,params:iP(this.options.settingsStore,e)});return{available:n!=null}},loadTargetIcon:";
+  if (currentSource.includes(currentNeedle)) {
+    return currentSource.replace(currentNeedle, currentReplacement);
+  }
+
+  if (currentSource.includes("openInTargets:{detectTarget")) {
+    warn("Could not find open-in bridge target detection");
+  }
+  return currentSource;
 }
 
 function applyOpenInTargetExecutePatch(currentSource) {
@@ -588,10 +607,16 @@ function applyOpenInTargetExecutePatch(currentSource) {
 
 function applyOpenInTargetsDirectoryModePatch(currentSource) {
   const helper = "function codexLinuxOpenTargetIsDirectory(";
-  const directoryNeedle =
-    "g=d||f!=null&&t.wo(f),_=f!=null&&UA(f),v=f!=null&&GA(f),y=g?await gF({nativeBrowserDiscovery:i}):_?await hF({filePath:f}):[]";
-  const directoryReplacement =
-    "w=f!=null&&codexLinuxOpenTargetIsDirectory(f),g=d||w||f!=null&&t.wo(f),_=f!=null&&UA(f),v=f!=null&&GA(f),y=g?await gF({nativeBrowserDiscovery:i}):_?await hF({filePath:f}):[]";
+  const directoryShapes = [
+    [
+      "g=d||f!=null&&t.wo(f),_=f!=null&&UA(f),v=f!=null&&GA(f),y=g?await gF({nativeBrowserDiscovery:i}):_?await hF({filePath:f}):[]",
+      "w=f!=null&&codexLinuxOpenTargetIsDirectory(f),g=d||w||f!=null&&t.wo(f),_=f!=null&&UA(f),v=f!=null&&GA(f),y=g?await gF({nativeBrowserDiscovery:i}):_?await hF({filePath:f}):[]",
+    ],
+    [
+      "g=d||f!=null&&t.rs(f),_=f!=null&&cj(f),v=f!=null&&uj(f),y=g?await MF(i):_?await jF({filePath:f}):[]",
+      "w=f!=null&&codexLinuxOpenTargetIsDirectory(f),g=d||w||f!=null&&t.rs(f),_=f!=null&&cj(f),v=f!=null&&uj(f),y=g?await MF(i):_?await jF({filePath:f}):[]",
+    ],
+  ];
 
   if (currentSource.includes(helper)) {
     return currentSource;
@@ -599,11 +624,13 @@ function applyOpenInTargetsDirectoryModePatch(currentSource) {
   if (!currentSource.includes('"open-in-targets":async')) {
     return currentSource;
   }
-  if (!currentSource.includes(directoryNeedle)) {
+  const directoryShape = directoryShapes.find(([needle]) => currentSource.includes(needle));
+  if (directoryShape == null) {
     warn("Could not find open-in-targets path mode expression");
     return currentSource;
   }
 
+  const [directoryNeedle, directoryReplacement] = directoryShape;
   const helperSource =
     `function codexLinuxOpenTargetIsDirectory(e){if(process.platform!==\`linux\`||typeof e!==\`string\`)return!1;try{return(0,codexLinuxNodeFs().existsSync)(e)&&(0,codexLinuxNodeFs().statSync)(e).isDirectory()}catch{return!1}}`;
   const patchedSource = helperSource + currentSource;
