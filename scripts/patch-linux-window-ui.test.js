@@ -4181,6 +4181,45 @@ test("adds Linux desktop settings when Codex request bridge wrapper changes shap
   }
 });
 
+test("adds Linux desktop settings when current Codex request bridge lives in shared app chunk", () => {
+  const { extractedDir, assetsDir } = createCurrentNativeKeyboardShortcutsSettingsFixture();
+  try {
+    fs.rmSync(path.join(assetsDir, "setting-storage-A.js"), { force: true });
+    fs.writeFileSync(
+      path.join(
+        assetsDir,
+        "app-initial~app-main~worktree-init-v2-page~remote-conversation-page~new-thread-panel-page~o~dv5z3ftk-BhBbJNnt.js",
+      ),
+      [
+        "async function kP(e,t,n,r,i){let a=(await xP.getInstance().post(`vscode://codex/${e}`,JSON.stringify(t),jP(i),r)).body;return n?n(a):a}",
+        "async function OP(...e){let[t,n]=e,{params:r,select:i,signal:a,source:o}=n??{};return kP(t,r,i,a,o)}",
+        "function DP(e,t){return query(`vscode://codex/${e}`,t)}",
+        "function AP(e,t){return mutation(`vscode://codex/${e}`,t)}",
+        "export{OP as a,DP as u,AP as d};",
+      ].join(""),
+      "utf8",
+    );
+
+    const { value: result, warnings } = captureWarns(() => patchKeybindsSettingsAssets(extractedDir));
+
+    assert.equal(result.matched, true);
+    assert.match(result.reason, /integrated settings router/);
+    assert.deepEqual(warnings, []);
+
+    const linuxDesktopSource = fs.readFileSync(
+      path.join(assetsDir, linuxDesktopSettingsAsset),
+      "utf8",
+    );
+    assert.match(
+      linuxDesktopSource,
+      /import\{a as __post\}from"\.\/app-initial~app-main~worktree-init-v2-page~remote-conversation-page~new-thread-panel-page~o~dv5z3ftk-BhBbJNnt\.js"/,
+    );
+    assert.match(linuxDesktopSource, /codex-linux-get-build-info/);
+  } finally {
+    fs.rmSync(extractedDir, { recursive: true, force: true });
+  }
+});
+
 test("adds Linux desktop section to current native Keyboard Shortcuts sections bundle", () => {
   const source =
     "var e=[`general-settings`,`profile`,`keyboard-shortcuts`,`account`],t=`general-settings`,n=function(){},r=[{slug:`general-settings`},{slug:`profile`},{slug:`appearance`},{slug:`keyboard-shortcuts`}];";

@@ -14,6 +14,7 @@ const {
   applyOpenInTargetCommandPatch,
   applyOpenInTargetExecutePatch,
   applyOpenInTargetRegistryCommandPatch,
+  applyOpenInTargetsAvailablePatch,
   applyOpenInTargetsBridgeDetectionPatch,
   applyOpenInTargetsDirectoryModePatch,
 } = require("./patch.js");
@@ -57,6 +58,8 @@ const currentOpenInBridgeBundle =
   "async function JN(){}function iP(e){return e.targets}var IN={};var bridge={options:{settingsStore:{targets:[{id:`linux-desktop-agent`,detect:async()=>`main-command`},{id:`missing`,detect:async()=>null}]},requestOpenInWorker:async()=>({command:null})},openInTargets:{detectTarget:async({target:e})=>{if(this.options.requestOpenInWorker==null)throw Error(`Open in worker unavailable`);let{command:t}=await this.options.requestOpenInWorker({method:`get-target-command`,params:iP(this.options.settingsStore,e)});return{available:t!=null}},loadTargetIcon:()=>{}}}";
 const openInExecuteBundle =
   "function iP(e){return e.targets}async function BN(e,t,n){return n}async function ZN(e,t,n,{appPath:r,detectedCommand:i,hostConfig:a,location:o,remotePath:s,remoteWorkspaceRoot:c}={}){await BN(t,n,{appPath:r,detectedCommand:i,hostConfig:a,location:o,remotePath:s,remoteWorkspaceRoot:c})}";
+const openInAvailableTargetsBundle =
+  "function iP(e,t){return{target:t}}function rP(e){return e.targets.map(({id:e,label:t,icon:n,kind:r,hidden:i,supportsSsh:a})=>({id:e,label:t,icon:n,kind:r,hidden:i,supportsSsh:a}))}function tP(){return{error(){},warning(){}}}async function codexLinuxOpenTargetRegistryCommand(e,t){let n=e.targets.find(e=>e.id===t);return typeof n?.detect===`function`?await n.detect():null}async function aP(e,t){let n=await Promise.all(rP(e).map(async n=>{let r=iP(e,n.id),[i,a]=await Promise.all([t({method:`get-target-command`,params:r}).then(e=>e.command).catch(e=>(tP().error(`Failed to detect open target`,{safe:{},sensitive:{id:n.id,error:e}}),null)),process.platform===`win32`?t({method:`load-target-icon`,params:r}).then(e=>e.icon).catch(e=>(tP().warning(`Failed to resolve open target icon`,{safe:{},sensitive:{id:n.id,error:e}}),n.icon)):n.icon]);return{command:i,metadata:{...n,icon:a}}}));return{allAvailableTargets:n.flatMap(({command:e,metadata:t})=>e==null?[]:[t.id]),targetMetadata:n.map(({metadata:e})=>e)}}";
 const openInTargetsBundle =
   '"open-in-targets":async({cwd:e,deferEnrichment:n=!1,hostId:r,nativeBrowserDiscovery:i=`scan`,path:a})=>{let o=this.getRequestAppServerClient(r??void 0),s=this.getSettingsStore();let[c,l]=await Promise.all([XN(s),YN(s)]),u=a?.replace(/^([ab])[\\\\/]/,``)??null,d=u!=null&&_F(u)&&!t.Ta(o.hostConfig),f=u==null||d||t.Ta(o.hostConfig)?null:this.resolveOpenFilePath(this.mapAgentPathToLocalPath(u,o.hostConfig)??u,this.mapAgentPathToLocalPath(e,o.hostConfig)??this.getWorkspaceRoot()),p=oj(o.hostConfig,c,l),m=new Set(p),h=tP(s,e,m),g=d||f!=null&&t.wo(f),_=f!=null&&UA(f),v=f!=null&&GA(f),y=g?await gF({nativeBrowserDiscovery:i}):_?await hF({filePath:f}):[];return{preferredTarget:h,availableTargets:Array.from(m),mode:g||v?`native`:`editor`,targets:[...l.map(({id:e,label:t,icon:n,kind:r,hidden:i})=>({id:e,target:e,label:t,icon:n,kind:r,hidden:i,available:m.has(e),default:h===e||void 0})),...y]}}';
 const currentOpenInTargetsBundle =
@@ -1233,6 +1236,23 @@ test("open-target discovery passes main registry into open execution", () => {
   const patched = applyPatchTwice(applyOpenInTargetExecutePatch, openInExecuteBundle);
 
   assert.match(patched, /targets:iP\(e\)/);
+});
+
+test("open-target discovery uses main registry for available target detection", async () => {
+  const patched = applyPatchTwice(applyOpenInTargetsAvailablePatch, openInAvailableTargetsBundle);
+  const settingsStore = {
+    targets: [
+      { id: "vscode", label: "VS Code", icon: "apps/vscode.png", kind: "editor", detect: async () => "/usr/bin/code" },
+      { id: "missing", label: "Missing", icon: "apps/missing.png", kind: "editor", detect: async () => null },
+    ],
+  };
+  const result = await new Function(`${patched};return aP(arguments[0], arguments[1]);`)(
+    settingsStore,
+    async () => ({ command: null }),
+  );
+
+  assert.match(patched, /codexLinuxOpenTargetAvailableCommand/);
+  assert.deepEqual(result.allAvailableTargets, ["vscode"]);
 });
 
 test("open-target discovery treats directories as native open targets", () => {

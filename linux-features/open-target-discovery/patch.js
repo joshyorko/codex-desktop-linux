@@ -612,6 +612,60 @@ function applyOpenInTargetExecutePatch(currentSource) {
   return currentSource.replace(needle, replacement);
 }
 
+function applyOpenInTargetsAvailablePatch(currentSource) {
+  if (currentSource.includes("async function codexLinuxOpenTargetAvailableCommand(")) {
+    return currentSource;
+  }
+
+  const helper =
+    "async function codexLinuxOpenTargetAvailableCommand(e,t){try{return await codexLinuxOpenTargetRegistryCommand(e,t)}catch{return null}}";
+  const helperInsertionIndex = currentSource.indexOf("async function codexLinuxOpenTargetRegistryCommand(");
+  if (helperInsertionIndex === -1) {
+    warn("Could not find Linux open target registry helper for availability");
+    return currentSource;
+  }
+
+  const currentAvailablePattern =
+    /let ([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*),([A-Za-z_$][\w$]*)\.id\),\[([A-Za-z_$][\w$]*),([A-Za-z_$][\w$]*)\]=await Promise\.all\(\[([A-Za-z_$][\w$]*)\(\{method:`get-target-command`,params:\1\}\)\.then\(([A-Za-z_$][\w$]*)=>\8\.command\)\.catch\(([A-Za-z_$][\w$]*)=>\(([A-Za-z_$][\w$]*)\(\)\.error\(`Failed to detect open target`,\{safe:\{\},sensitive:\{id:\4\.id,error:\9\}\}\),null\)\),process\.platform===`win32`\?\7\(\{method:`load-target-icon`,params:\1\}\)\.then\(([A-Za-z_$][\w$]*)=>\11\.icon\)\.catch\(([A-Za-z_$][\w$]*)=>\(\10\(\)\.warning\(`Failed to resolve open target icon`,\{safe:\{\},sensitive:\{id:\4\.id,error:\12\}\}\),\4\.icon\)\):\4\.icon\]\)/;
+  let patched = false;
+  const nextSource = currentSource.replace(
+    currentAvailablePattern,
+    (
+      match,
+      paramsVar,
+      paramsFn,
+      settingsVar,
+      targetVar,
+      commandVar,
+      iconVar,
+      workerVar,
+      commandResultVar,
+      commandErrorVar,
+      loggerFn,
+      iconResultVar,
+      iconErrorVar,
+    ) => {
+      patched = true;
+      return (
+        `let ${paramsVar}=${paramsFn}(${settingsVar},${targetVar}.id),` +
+        `_codexLinuxCommand=await codexLinuxOpenTargetAvailableCommand(${settingsVar},${targetVar}.id),` +
+        `[${commandVar},${iconVar}]=await Promise.all([_codexLinuxCommand!=null?Promise.resolve(_codexLinuxCommand):` +
+        `${workerVar}({method:\`get-target-command\`,params:${paramsVar}}).then(${commandResultVar}=>${commandResultVar}.command).catch(${commandErrorVar}=>(${loggerFn}().error(\`Failed to detect open target\`,{safe:{},sensitive:{id:${targetVar}.id,error:${commandErrorVar}}}),null)),` +
+        `process.platform===\`win32\`?${workerVar}({method:\`load-target-icon\`,params:${paramsVar}}).then(${iconResultVar}=>${iconResultVar}.icon).catch(${iconErrorVar}=>(${loggerFn}().warning(\`Failed to resolve open target icon\`,{safe:{},sensitive:{id:${targetVar}.id,error:${iconErrorVar}}}),${targetVar}.icon)):${targetVar}.icon])`
+      );
+    },
+  );
+
+  if (!patched) {
+    if (currentSource.includes("Failed to detect open target")) {
+      warn("Could not find open-in available target detection");
+    }
+    return currentSource;
+  }
+
+  return nextSource.slice(0, helperInsertionIndex) + helper + nextSource.slice(helperInsertionIndex);
+}
+
 function applyOpenInTargetsDirectoryModePatch(currentSource) {
   const helper = "function codexLinuxOpenTargetIsDirectory(";
   const directoryShapes = [
@@ -730,6 +784,7 @@ function applyMainBundlePatch(currentSource) {
   patchedSource = applyOpenInTargetCommandPatch(patchedSource);
   patchedSource = applyOpenInTargetsBridgeDetectionPatch(patchedSource);
   patchedSource = applyOpenInTargetExecutePatch(patchedSource);
+  patchedSource = applyOpenInTargetsAvailablePatch(patchedSource);
   patchedSource = applyOpenInTargetsDirectoryModePatch(patchedSource);
   return patchedSource;
 }
@@ -741,6 +796,7 @@ module.exports = {
   applyOpenInTargetExecutePatch,
   applyOpenInTargetCommandPatch,
   applyOpenInTargetsBridgeDetectionPatch,
+  applyOpenInTargetsAvailablePatch,
   applyOpenInTargetsDirectoryModePatch,
   descriptors: [
     {

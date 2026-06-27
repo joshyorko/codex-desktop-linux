@@ -157,18 +157,64 @@ function findCodexRequestExportName(source) {
     return findExportedAlias(source, match[1]);
   }
 
-  const functionPattern = /(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\(/g;
+  const directRequestNames = new Set();
+  const asyncFunctionPattern = /async\s+function\s+([A-Za-z_$][\w$]*)\s*\(/g;
   let functionMatch;
-  while ((functionMatch = functionPattern.exec(source)) != null) {
-    const bodyStart = source.indexOf("{", functionPattern.lastIndex);
+  while ((functionMatch = asyncFunctionPattern.exec(source)) != null) {
+    const bodyStart = source.indexOf("{", asyncFunctionPattern.lastIndex);
+    const bodyEnd = findMatchingBrace(source, bodyStart);
+    if (bodyStart === -1 || bodyEnd === -1) {
+      continue;
+    }
+    const body = source.slice(bodyStart, bodyEnd + 1);
+    if (
+      body.includes("vscode://codex/${") ||
+      body.includes("vscode://codex/\"+") ||
+      body.includes("vscode://codex/`+")
+    ) {
+      directRequestNames.add(functionMatch[1]);
+    }
+    asyncFunctionPattern.lastIndex = bodyEnd + 1;
+  }
+
+  for (const requestName of directRequestNames) {
+    const exportedDirectName = findExportedAlias(source, requestName);
+    if (exportedDirectName != null) {
+      return exportedDirectName;
+    }
+  }
+
+  asyncFunctionPattern.lastIndex = 0;
+  while ((functionMatch = asyncFunctionPattern.exec(source)) != null) {
+    const bodyStart = source.indexOf("{", asyncFunctionPattern.lastIndex);
+    const bodyEnd = findMatchingBrace(source, bodyStart);
+    if (bodyStart === -1 || bodyEnd === -1) {
+      continue;
+    }
+    const body = source.slice(bodyStart, bodyEnd + 1);
+    if ([...directRequestNames].some((requestName) => body.includes(`${requestName}(`))) {
+      const exportedWrapperName = findExportedAlias(source, functionMatch[1]);
+      if (exportedWrapperName != null) {
+        return exportedWrapperName;
+      }
+    }
+    asyncFunctionPattern.lastIndex = bodyEnd + 1;
+  }
+
+  asyncFunctionPattern.lastIndex = 0;
+  while ((functionMatch = asyncFunctionPattern.exec(source)) != null) {
+    const bodyStart = source.indexOf("{", asyncFunctionPattern.lastIndex);
     const bodyEnd = findMatchingBrace(source, bodyStart);
     if (bodyStart === -1 || bodyEnd === -1) {
       continue;
     }
     if (source.slice(bodyStart, bodyEnd + 1).includes("vscode://codex/")) {
-      return findExportedAlias(source, functionMatch[1]);
+      const exportedName = findExportedAlias(source, functionMatch[1]);
+      if (exportedName != null) {
+        return exportedName;
+      }
     }
-    functionPattern.lastIndex = bodyEnd + 1;
+    asyncFunctionPattern.lastIndex = bodyEnd + 1;
   }
 
   return null;
@@ -190,7 +236,7 @@ function findCodexRequestWebviewAsset(webviewAssetsDir) {
 
   const modernCandidates = fs
     .readdirSync(webviewAssetsDir)
-    .filter((name) => regexpTest(/^setting-storage-.*\.js$/, name))
+    .filter((name) => name.endsWith(".js"))
     .sort();
   for (const candidate of modernCandidates) {
     const source = readWebviewAsset(webviewAssetsDir, candidate);
