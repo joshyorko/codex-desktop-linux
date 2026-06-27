@@ -659,7 +659,13 @@ function applyNativeOpenTargetSelectionPatch(currentSource) {
     },
   );
   if (!patchedCore) {
-    warn("Could not find native open-target selection logic");
+    if (
+      /function [A-Za-z_$][\w$]*\(\{targets:[A-Za-z_$][\w$]*,availableTargets:[A-Za-z_$][\w$]*,includeHiddenTargets:[A-Za-z_$][\w$]*=!1,mode:[A-Za-z_$][\w$]*=`editor`\}\)/.test(
+        currentSource,
+      )
+    ) {
+      warn("Could not find native open-target selection logic");
+    }
     return currentSource;
   }
   return nextSource;
