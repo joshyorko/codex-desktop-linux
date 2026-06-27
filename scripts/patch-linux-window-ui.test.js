@@ -5458,6 +5458,41 @@ test("linux Open In native target selector keeps discovered targets visible", ()
   ]);
 });
 
+test("linux Open In native target selector patches shared app chunk", () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "codex-open-target-shared-chunk-"));
+  try {
+    const buildDir = path.join(tempRoot, ".vite", "build");
+    const assetsDir = path.join(tempRoot, "webview", "assets");
+    const sharedBundleName =
+      "app-initial~app-main~worktree-init-v2-page~appgen-publication-terms-route~remote-conversati~test.js";
+    fs.mkdirSync(buildDir, { recursive: true });
+    fs.mkdirSync(assetsDir, { recursive: true });
+    fs.writeFileSync(path.join(buildDir, "main.js"), mainBundlePrefix);
+    fs.writeFileSync(path.join(assetsDir, "app-test.png"), "");
+    fs.writeFileSync(
+      path.join(assetsDir, sharedBundleName),
+      "function e({targets:e,availableTargets:t,includeHiddenTargets:n=!1,mode:r=`editor`}){let i=e.filter(e=>e.appPath!=null);if(i.length>0)return i;if(r===`native`)return e.filter(e=>e.target===`systemDefault`||e.target===`fileManager`);let a=new Set(t);return e.filter(e=>a.has(e.target)&&(n||!e.hidden))}",
+    );
+    fs.writeFileSync(path.join(tempRoot, "package.json"), JSON.stringify({ name: "codex" }));
+
+    const report = createPatchReport();
+    captureWarns(() => patchExtractedApp(tempRoot, { report }));
+    const patched = fs.readFileSync(path.join(assetsDir, sharedBundleName), "utf8");
+    const descriptorReport = report.patches.find(
+      (patch) => patch.name === "linux-open-target-selection-native-mode",
+    );
+
+    assert.equal(descriptorReport?.status, "applied");
+    assert.doesNotMatch(patched, /if\(i\.length>0\)return i;/);
+    assert.match(
+      patched,
+      /if\(i\.length>0\)return e\.filter\(e=>e\.appPath==null&&e\.kind===`editor`&&a\.has\(e\.target\)&&\(n\|\|!e\.hidden\)\)\.concat\(i\);/,
+    );
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
 test("allows Computer Use install flow on Linux", () => {
   const patched = applyPatchTwice(
     applyLinuxComputerUseInstallFlowPatch,

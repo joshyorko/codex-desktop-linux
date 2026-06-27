@@ -1356,19 +1356,32 @@ test("open-target discovery participates in feature loading and patch reports", 
         fs.mkdirSync(assetsDir, { recursive: true });
         fs.writeFileSync(path.join(buildDir, "main.js"), openTargetsBundle);
         fs.writeFileSync(path.join(tempApp, "package.json"), JSON.stringify({ name: "codex" }));
+        const sharedBundleName =
+          "app-initial~app-main~worktree-init-v2-page~remote-conversati~appgen-publication-terms-route~remote-conversation.js";
+        fs.writeFileSync(
+          path.join(assetsDir, sharedBundleName),
+          openTargetSelectionBundle,
+        );
 
         const report = createPatchReport();
         captureWarns(() => patchExtractedApp(tempApp, { report }));
         const patched = fs.readFileSync(path.join(buildDir, "main.js"), "utf8");
+        const patchedSelection = fs.readFileSync(path.join(assetsDir, sharedBundleName), "utf8");
 
         assert.match(patched, /linux:\{label:`Terminal`/);
         assert.match(patched, /\.\.\.codexLinuxDiscoveredIdeTargets\(\)/);
+        assert.match(patchedSelection, /codexLinuxDirectoryOpenTarget/);
         assert.ok(
           report.patches.some((patch) =>
             patch.name === "feature:open-target-discovery:main-bundle-open-target-discovery" &&
             patch.status === "applied",
           ),
         );
+        const webviewPatch = report.patches.find(
+          (patch) => patch.name === "feature:open-target-discovery:webview-native-open-target-selection",
+        );
+        assert.ok(webviewPatch);
+        assert.equal(webviewPatch.status, "applied");
       } finally {
         fs.rmSync(tempApp, { recursive: true, force: true });
       }

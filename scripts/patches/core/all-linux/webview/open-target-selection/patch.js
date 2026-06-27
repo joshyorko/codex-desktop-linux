@@ -79,13 +79,17 @@ function applyLinuxOpenTargetSelectionNativeModePatch(currentSource) {
     );
   }
 
-  if (!patchedNativeMode && !patchedAppPathShortcut && currentSource.includes("mode:") && currentSource.includes("fileManager")) {
+  const hasOpenTargetSelectorShape =
+    currentSource.includes("availableTargets:") &&
+    currentSource.includes("includeHiddenTargets") &&
+    currentSource.includes("fileManager");
+  if (!patchedNativeMode && !patchedAppPathShortcut && hasOpenTargetSelectorShape) {
     warn("Could not find native Open In target selector — skipping native selection patch");
   }
   if (
     !patchedAppPathShortcut &&
-    currentSource.includes("appPath!=null") &&
-    currentSource.includes("fileManager")
+    hasOpenTargetSelectorShape &&
+    currentSource.includes("appPath!=null")
   ) {
     warn("Could not find native Open In appPath shortcut — skipping appPath selection patch");
   }
@@ -97,7 +101,7 @@ module.exports = {
   phase: "webview-asset",
   order: 1120,
   ciPolicy: "optional",
-  pattern: /^open-target-selection-.*\.js$/,
+  pattern: /^(?:open-target-selection-.*|app-initial~app-main~.*)\.js$/,
   missingDescription: "Open In target selection bundle",
   skipDescription: "Linux Open In native target selection patch",
   apply: applyLinuxOpenTargetSelectionNativeModePatch,

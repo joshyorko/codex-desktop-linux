@@ -620,11 +620,49 @@ function applyNativeOpenTargetSelectionPatch(currentSource) {
   const patched =
     "function codexLinuxDirectoryOpenTarget(e){return e?.available===!0&&(e.kind===`editor`||e.kind===`terminal`)}function e({targets:e,availableTargets:t,includeHiddenTargets:n=!1,mode:r=`editor`}){if(r===`native`)return e.filter(e=>e.target===`systemDefault`||e.target===`fileManager`||codexLinuxDirectoryOpenTarget(e));let i=e.filter(e=>e.appPath!=null);if(i.length>0)return i;let a=new Set(t);return e.filter(e=>a.has(e.target)&&(n||!e.hidden))}";
 
-  if (!currentSource.includes(original)) {
+  if (currentSource.includes(original)) {
+    return currentSource.replace(original, patched);
+  }
+
+  const corePatchedPattern =
+    /function ([A-Za-z_$][\w$]*)\(\{targets:([A-Za-z_$][\w$]*),availableTargets:([A-Za-z_$][\w$]*),includeHiddenTargets:([A-Za-z_$][\w$]*)=!1,mode:([A-Za-z_$][\w$]*)=`editor`\}\)\{let ([A-Za-z_$][\w$]*)=\2\.filter\(([A-Za-z_$][\w$]*)=>\7\.appPath!=null\),([A-Za-z_$][\w$]*)=new Set\(\3\);if\(\6\.length>0\)return \2\.filter\(\7=>\7\.appPath==null&&\7\.kind===`editor`&&\8\.has\(\7\.target\)&&\(\4\|\|!\7\.hidden\)\)\.concat\(\6\);if\(\5===`native`\)return \2\.filter\(\7=>\7\.target===`systemDefault`\|\|\7\.target===`fileManager`\|\|\8\.has\(\7\.target\)&&\(\4\|\|!\7\.hidden\)\);return \2\.filter\(\7=>\8\.has\(\7\.target\)&&\(\4\|\|!\7\.hidden\)\)\}/;
+  let patchedCore = false;
+  const nextSource = currentSource.replace(
+    corePatchedPattern,
+    (
+      match,
+      selectorFn,
+      targetsVar,
+      availableTargetsVar,
+      includeHiddenTargetsVar,
+      modeVar,
+      appTargetsVar,
+      targetVar,
+      availableSetVar,
+    ) => {
+      patchedCore = true;
+      return (
+        "function codexLinuxDirectoryOpenTarget(e){return e?.available===!0&&(e.kind===`editor`||e.kind===`terminal`)}" +
+        `function ${selectorFn}({targets:${targetsVar},availableTargets:${availableTargetsVar},includeHiddenTargets:${includeHiddenTargetsVar}=!1,mode:${modeVar}=\`editor\`}){` +
+        `if(${modeVar}===\`native\`)return ${targetsVar}.filter(${targetVar}=>` +
+        `${targetVar}.target===\`systemDefault\`||${targetVar}.target===\`fileManager\`||` +
+        `codexLinuxDirectoryOpenTarget(${targetVar}));` +
+        `let ${appTargetsVar}=${targetsVar}.filter(${targetVar}=>${targetVar}.appPath!=null),` +
+        `${availableSetVar}=new Set(${availableTargetsVar});` +
+        `if(${appTargetsVar}.length>0)return ${targetsVar}.filter(${targetVar}=>` +
+        `${targetVar}.appPath==null&&${targetVar}.kind===\`editor\`&&` +
+        `${availableSetVar}.has(${targetVar}.target)&&(${includeHiddenTargetsVar}||!${targetVar}.hidden))` +
+        `.concat(${appTargetsVar});` +
+        `return ${targetsVar}.filter(${targetVar}=>${availableSetVar}.has(${targetVar}.target)&&` +
+        `(${includeHiddenTargetsVar}||!${targetVar}.hidden))}`
+      );
+    },
+  );
+  if (!patchedCore) {
     warn("Could not find native open-target selection logic");
     return currentSource;
   }
-  return currentSource.replace(original, patched);
+  return nextSource;
 }
 
 function applyMainBundlePatch(currentSource) {
@@ -677,7 +715,7 @@ module.exports = {
       phase: "webview-asset",
       order: 20520,
       ciPolicy: "optional",
-      pattern: /^open-target-selection-.*\.js$/,
+      pattern: /^(?:open-target-selection-.*|app-initial~app-main~.*)\.js$/,
       missingDescription: "open target selection webview bundle",
       skipDescription: "native open-target selection patch",
       apply: applyNativeOpenTargetSelectionPatch,
