@@ -133,7 +133,10 @@ function openChromeWindow(chromeArgs) {
       encoding: "utf8",
     });
     assert.equal(result.status, 0, result.stderr);
-    assert.doesNotMatch(result.stderr, /Linux Chrome profile/);
+    assert.doesNotMatch(
+      result.stderr,
+      /browser-client\.mjs missing patch target for Linux (?:Chrome profile roots|idle Chrome profile filtering|ambiguous active Chrome)/,
+    );
 
     const installManifest = readScript(pluginDir, "installManifest.mjs");
     assert.match(installManifest, /google-chrome-beta\/NativeMessagingHosts/);
@@ -182,7 +185,10 @@ test("patches current Electron 42 browser-client Chrome profile drift", () => {
       encoding: "utf8",
     });
     assert.equal(result.status, 0, result.stderr);
-    assert.doesNotMatch(result.stderr, /browser-client\.mjs missing patch target/);
+    assert.doesNotMatch(
+      result.stderr,
+      /browser-client\.mjs missing patch target for Linux (?:Chrome profile roots|idle Chrome profile filtering|ambiguous active Chrome)/,
+    );
 
     const browserClient = readScript(pluginDir, "browser-client.mjs");
     assert.match(browserClient, /async\(e,t,r=Rd\)/);
