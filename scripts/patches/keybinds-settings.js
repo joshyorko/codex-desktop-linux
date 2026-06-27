@@ -474,8 +474,14 @@ function patchKeybindsSettingsAssets(extractedDir) {
       hasNativeSettings &&
       !hasLegacyLinuxDesktopSettingsExtensionPoints(extractedDir)
     ) {
+      const settingsAsset = resolveLinuxDesktopSettingsAsset(extractedDir);
+      const settingsAssetExists = fs.existsSync(settingsAsset.filePath);
+      const previousSettingsSource = settingsAssetExists
+        ? fs.readFileSync(settingsAsset.filePath, "utf8")
+        : null;
       const patches = collectIntegratedLinuxDesktopSettingsPatches(extractedDir);
-      let changed = 0;
+      fs.writeFileSync(settingsAsset.filePath, settingsAsset.source, "utf8");
+      let changed = previousSettingsSource !== settingsAsset.source ? 1 : 0;
       for (const patch of patches) {
         if (patch.patchedSource !== patch.currentSource) {
           fs.writeFileSync(patch.filePath, patch.patchedSource, "utf8");
@@ -803,9 +809,14 @@ function isSettingsRouteBundleSource(currentSource) {
 }
 
 function isIntegratedSettingsRouteBundleSource(currentSource) {
-  return !currentSource.includes(linuxDesktopSettingsAsset)
+  return (
+    currentSource.includes(linuxDesktopSettingsAsset) &&
+    /"linux-desktop":\(0,[A-Za-z_$][\w$]*\.lazy\)\(\(\)=>/.test(currentSource)
+  ) || (
+    !currentSource.includes(linuxDesktopSettingsAsset)
     && /"general-settings":\(0,[A-Za-z_$][\w$]*\.lazy\)\(\(\)=>/.test(currentSource)
-    && /"keyboard-shortcuts":\(0,[A-Za-z_$][\w$]*\.lazy\)\(\(\)=>/.test(currentSource);
+    && /"keyboard-shortcuts":\(0,[A-Za-z_$][\w$]*\.lazy\)\(\(\)=>/.test(currentSource)
+  );
 }
 
 function isIntegratedSettingsSectionsBundleSource(currentSource) {
@@ -855,8 +866,23 @@ function applyLinuxDesktopSettingsRoutePatch(currentSource) {
 function applyIntegratedLinuxDesktopSettingsRoutePatch(currentSource) {
   let patchedSource = currentSource;
 
-  if (/"linux-desktop":\(0,[A-Za-z_$][\w$]*\.lazy\)\(async\(\)=>/.test(patchedSource)) {
+  if (patchedSource.includes(`${linuxDesktopSettingsAsset}`)) {
     return patchedSource;
+  }
+
+  const generalRouteMatch = patchedSource.match(
+    /"general-settings":\(0,([A-Za-z_$][\w$]*)\.lazy\)\(\(\)=>([A-Za-z_$][\w$]*)\(/,
+  );
+  if (generalRouteMatch == null) {
+    throw new Error("Required Keybinds settings patch failed: could not find integrated Linux desktop route loader");
+  }
+  const [, lazyAlias, preloadAlias] = generalRouteMatch;
+  const routeEntry =
+    `"linux-desktop":(0,${lazyAlias}.lazy)(()=>${preloadAlias}(()=>import(\`./${linuxDesktopSettingsAsset}\`),[],import.meta.url)),`;
+  const placeholderPattern =
+    /"linux-desktop":\(0,[A-Za-z_$][\w$]*\.lazy\)\(async\(\)=>\(\{default:\(\)=>"Linux desktop settings are enabled for this build\. Runtime toggles are stored in your Codex Desktop settings file\."\}\)\),/;
+  if (placeholderPattern.test(patchedSource)) {
+    return patchedSource.replace(placeholderPattern, routeEntry);
   }
 
   const routePattern =
@@ -865,13 +891,10 @@ function applyIntegratedLinuxDesktopSettingsRoutePatch(currentSource) {
     throw new Error("Required Keybinds settings patch failed: could not add integrated Linux desktop route");
   }
 
-  const routeBody = JSON.stringify(
-    "Linux desktop settings are enabled for this build. Runtime toggles are stored in your Codex Desktop settings file.",
-  );
   patchedSource = patchedSource.replace(
     routePattern,
-    (_match, routeMap, beforeGeneralSettings, lazyAlias) =>
-      `${routeMap}={${beforeGeneralSettings}"linux-desktop":(0,${lazyAlias}.lazy)(async()=>({default:()=>${routeBody}})),"general-settings":`,
+    (_match, routeMap, beforeGeneralSettings) =>
+      `${routeMap}={${beforeGeneralSettings}${routeEntry}"general-settings":`,
   );
 
   return patchedSource;

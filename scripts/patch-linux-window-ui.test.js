@@ -980,6 +980,15 @@ function currentChromePluginAppServerRuntimeBundleFixture() {
   ].join("");
 }
 
+function currentChromePluginAppServerCodexRuntimeBundleFixture() {
+  return [
+    "let r=require(`node:path`),o=require(`node:fs`);",
+    "async function VH(e){let t=_U(e);if(t==null)throw Error(`Missing bundled Electron Codex runtime required to sync Chrome plugin app server for ${e.nativeHostName} (resourcesPath: ${e.resourcesPath??`<none>`}).`);return AV({codexCliPath:t,codexHome:e.codexHome,nativeHostName:e.nativeHostName})}",
+    "function _U(e){return tM(e.resourcesPath)??vU(e.devRuntimeRepoRoot,[`extension`,`bin`,process.platform===`win32`?`codex.exe`:`codex`])}",
+    "function tM(e){return null}function vU(e,t){return null}async function AV({codexCliPath:e}){return e}",
+  ].join("");
+}
+
 function computerUseFeatureBundleFixture() {
   return "function me(e,{env:t=process.env,platform:n=process.platform}={}){return n!==`win32`||t.CODEX_ELECTRON_ENABLE_WINDOWS_COMPUTER_USE!==`1`?e:{...e,computerUse:!0,computerUseNodeRepl:!0}}";
 }
@@ -1191,6 +1200,23 @@ function createModernNativeKeyboardShortcutsSettingsFixture() {
   };
 
   writeAsset("keyboard-shortcuts-settings-A.js", "slug:`keyboard-shortcuts`");
+  writeAsset("chunk-A.js", "");
+  writeAsset(
+    "jsx-runtime-A.js",
+    'import{s as s}from"./chunk-A.js";function n(){return{}}function t(){return{jsx(){},jsxs(){},Fragment:"Fragment"}}react.transitional.element;export{n,t};',
+  );
+  writeAsset(
+    "setting-storage-A.js",
+    'async function requestCodex(...args){let[request]=args,{params:params,source:source}=request;return send("vscode://codex/",params)}export{requestCodex as z};',
+  );
+  writeAsset("toggle-A.js", "export{t};");
+  writeAsset(
+    "settings-row-A.js",
+    "function a(e){let{label:t,description:n,control:r}=e;return null}function s(e){let{label:t,children:n}=e;return null}export{s as n,a as r};",
+  );
+  writeAsset("settings-content-layout-A.js", "export{n,r,t};");
+  writeAsset("settings-group-A.js", "export{n,t};");
+  writeAsset("settings-surface-A.js", "export{t};");
   writeAsset(
     "app-initial~settings-metadata-A.js",
     "var c=`general-settings.import.profile.keyboard-shortcuts.mcp-settings.computer-use`.split(`.`),f=[{slug:`general-settings`},{slug:`profile`},{slug:`keyboard-shortcuts`},{slug:`computer-use`}];",
@@ -1345,6 +1371,67 @@ test("adds Linux file manager support to the worker open target registry", () =>
   assert.match(patched, /i\.dirname\(t\)/);
   assert.doesNotMatch(patched, /open:async\(\{path:e\}\)=>\{let [^}]*require\(`node:fs`\)/);
   assert.match(patched, /import\(`electron`\)\)\.shell\.openPath\(t\)/);
+});
+
+test("adds Linux worker fallbacks for discovered Open In targets", async () => {
+  const source = [
+    workerBundlePrefix,
+    "function jl(e){return e}",
+    fileManagerBundle,
+    "var gle=new Map();",
+    "function W9(e){let t=gle.get(e);if(t==null)throw Error(`Unknown open target \"${e}\"`);return t}",
+  ].join("");
+
+  const patched = applyPatchTwice(applyLinuxWorkerFileManagerPatch, source);
+  const executableFiles = new Set(["/usr/bin/code", "/usr/bin/kgx"]);
+
+  assert.match(patched, /codexLinuxWorkerOpenTargetFallback/);
+
+  const result = await vm.runInNewContext(
+    `${patched};(async()=>({vscode:await W9(\`vscode\`).detect(),zed:await W9(\`zed\`).detect(),terminal:await W9(\`terminal\`).detect(),desktop:await W9(\`linux-desktop-org-gnome-builder\`).detect(),missing:(()=>{try{W9(\`missing\`);return false}catch{return true}})()}))()`,
+    {
+      require(moduleName) {
+        if (moduleName === "node:path") {
+          return path;
+        }
+        if (moduleName === "node:fs") {
+          return {
+            constants: { X_OK: 1 },
+            existsSync(filePath) {
+              return executableFiles.has(filePath);
+            },
+            statSync(filePath) {
+              if (!executableFiles.has(filePath)) {
+                throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+              }
+              return { isFile: () => true };
+            },
+            accessSync(filePath) {
+              if (!executableFiles.has(filePath)) {
+                throw Object.assign(new Error("EACCES"), { code: "EACCES" });
+              }
+            },
+          };
+        }
+        return require(moduleName);
+      },
+      process: {
+        platform: "linux",
+        env: {
+          HOME: "/home/josh",
+          PATH: "/usr/bin:/bin",
+        },
+      },
+    },
+  );
+
+  assert.deepEqual(JSON.parse(JSON.stringify(result)), {
+    vscode: "/usr/bin/code",
+    zed: null,
+    terminal: "/usr/bin/kgx",
+    desktop: "linux-desktop-org-gnome-builder",
+    missing: true,
+  });
 });
 
 test("patchExtractedApp patches worker file manager support", () => {
@@ -3909,7 +3996,20 @@ test("adds Linux desktop settings injection to current integrated settings route
     assert.match(result.reason, /integrated settings router/);
     assert.deepEqual(warnings, []);
     assert.equal(fs.existsSync(path.join(assetsDir, keybindsSettingsAsset)), false);
-    assert.equal(fs.existsSync(path.join(assetsDir, linuxDesktopSettingsAsset)), false);
+    assert.equal(fs.existsSync(path.join(assetsDir, linuxDesktopSettingsAsset)), true);
+
+    const linuxDesktopSource = fs.readFileSync(
+      path.join(assetsDir, linuxDesktopSettingsAsset),
+      "utf8",
+    );
+    assert.match(linuxDesktopSource, /Linux desktop/);
+    assert.match(linuxDesktopSource, /Compact prompt window/);
+    assert.match(linuxDesktopSource, /System tray/);
+    assert.match(linuxDesktopSource, /Warm start/);
+    assert.match(linuxDesktopSource, /Install updates when you close Codex/);
+    assert.match(linuxDesktopSource, /Build information/);
+    assert.match(linuxDesktopSource, /codex-linux-get-build-info/);
+    assert.match(linuxDesktopSource, /codex-linux-system-tray-enabled/);
 
     assert.match(
       fs.readFileSync(path.join(assetsDir, "app-initial~settings-metadata-A.js"), "utf8"),
@@ -3933,8 +4033,11 @@ test("adds Linux desktop settings injection to current integrated settings route
       path.join(assetsDir, "app-initial~app-main~automations-page-A.js"),
       "utf8",
     );
-    assert.match(routeSource, /"linux-desktop":\(0,NW\.lazy\)\(async\(\)=>\(\{default:\(\)=>/);
-    assert.doesNotMatch(routeSource, /linux-desktop-settings-linux\.js/);
+    assert.match(
+      routeSource,
+      /"linux-desktop":\(0,NW\.lazy\)\(\(\)=>G\(\(\)=>import\(`\.\/linux-desktop-settings-linux\.js`\)/,
+    );
+    assert.doesNotMatch(routeSource, /Linux desktop settings are enabled/);
 
     const secondResult = patchKeybindsSettingsAssets(extractedDir);
     assert.equal(secondResult.matched, true);
@@ -4938,6 +5041,49 @@ test("uses Linux managed runtime paths for current Chrome plugin app-server sync
   assert.match(patched, /NM\(e\.resourcesPath\)\?\?codexLinuxChromeNativeHostRuntimeEnv\(`CODEX_BROWSER_USE_NODE_PATH`\)/);
   assert.match(patched, /codexLinuxChromeNativeHostRuntimeFile\(e\.resourcesPath,\[\[`node-runtime`,`bin`,process\.platform===`win32`\?`node\.exe`:`node`\]\]\)/);
   assert.match(patched, /MM\(e\.resourcesPath\)\?\?codexLinuxChromeNativeHostRuntimeEnv\(`CODEX_NODE_REPL_PATH`\)/);
+});
+
+test("uses Linux PATH fallback for current Chrome plugin app-server Codex runtime copy", async () => {
+  const patched = applyPatchTwice(
+    applyLinuxChromeNativeHostRuntimePatch,
+    currentChromePluginAppServerCodexRuntimeBundleFixture(),
+  );
+  const files = new Set(["/home/linuxbrew/.linuxbrew/bin/codex"]);
+
+  assert.match(
+    patched,
+    /_U\(e\)\?\?codexLinuxChromeNativeHostRuntimeEnv\(`CODEX_CLI_PATH`\)\?\?codexLinuxChromeNativeHostRuntimePath\(`codex`\)/,
+  );
+
+  const result = await vm.runInNewContext(
+    `${patched};VH({resourcesPath:"/opt/codex/resources",devRuntimeRepoRoot:null,nativeHostName:"com.openai.codexextension"});`,
+    {
+      require(moduleName) {
+        if (moduleName === "node:path") {
+          return path;
+        }
+        if (moduleName === "node:fs") {
+          return {
+            statSync(filePath) {
+              if (!files.has(filePath)) {
+                throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+              }
+              return { isFile: () => true };
+            },
+          };
+        }
+        return require(moduleName);
+      },
+      process: {
+        platform: "linux",
+        env: {
+          PATH: "/home/linuxbrew/.linuxbrew/bin:/usr/bin",
+        },
+      },
+    },
+  );
+
+  assert.equal(result, "/home/linuxbrew/.linuxbrew/bin/codex");
 });
 
 test("reports drifted Chrome native host runtime resolver as optional drift", () => {
