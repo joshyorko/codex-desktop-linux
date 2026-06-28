@@ -4592,6 +4592,17 @@ echo "npx should not be used for electron-rebuild" >&2
 exit 99
 SCRIPT
     chmod +x "$fake_bin/npx"
+    cat > "$fake_bin/c++" <<'SCRIPT'
+#!/usr/bin/env bash
+set -euo pipefail
+for arg in "$@"; do
+    if [ -f "$arg" ]; then
+        cat "$arg" >/dev/null
+    fi
+done
+exit 0
+SCRIPT
+    chmod +x "$fake_bin/c++"
 
     (
         PATH="$fake_bin:$PATH"
@@ -5422,6 +5433,24 @@ assertCacheLinks({
 });
 if (!launcher.includes('ln -sfnT "$target" "$link_path"')) {
   throw new Error("replace_symlink must replace plugin links as paths, not as directory children");
+}
+NODE
+
+    node - "$REPO_DIR/launcher/web-mode-server.mjs" <<'NODE' || fail "Web mode bundled plugin sync must use current bundled plugin ids"
+const fs = require("node:fs");
+const source = fs.readFileSync(process.argv[2], "utf8");
+const match = source.match(/const BUNDLED_PLUGIN_NAMES = (\[[^\]]+\]);/);
+if (match == null) {
+  throw new Error("missing BUNDLED_PLUGIN_NAMES");
+}
+const names = JSON.parse(match[1]);
+for (const name of ["browser", "chrome", "computer-use", "read-aloud"]) {
+  if (!names.includes(name)) {
+    throw new Error(`missing bundled plugin id ${name}`);
+  }
+}
+if (names.includes("browser-use")) {
+  throw new Error("stale browser-use bundled plugin id would prune Browser from runtime sync");
 }
 NODE
 }

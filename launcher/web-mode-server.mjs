@@ -48,7 +48,7 @@ const WEB_MODE_API_PREFIXES = [
   "/wham/",
 ];
 
-const BUNDLED_PLUGIN_NAMES = ["browser-use", "chrome", "computer-use"];
+const BUNDLED_PLUGIN_NAMES = ["browser", "chrome", "computer-use", "read-aloud"];
 const SHUTDOWN_TIMEOUT_MS = 3000;
 const REMOTE_CONTROL_ENROLLMENTS_KEY = "electron-remote-control-client-enrollments";
 const REMOTE_CONTROL_PROTOCOL_VERSION = "3";

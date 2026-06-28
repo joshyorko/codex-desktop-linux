@@ -5069,9 +5069,18 @@ test("patches the Electron 42 Computer Use gate with descriptor metadata fields"
 
   const patched = applyPatchTwice(applyLinuxComputerUsePluginGatePatch, source);
 
-  assert.match(patched, /autoInstallOptOutKey:t\.No\(t\.Oo\),installWhenMissing:!0,installWhenMissingRequiresOptIn:!0,name:t\.Oo/);
-  assert.match(patched, /isAvailable:\(\{features:e,platform:t\}\)=>\(t===`darwin`\|\|t===`linux`\)&&e\.computerUse,migrate:ha/);
-  assert.match(patched, /isAvailable:\(\{features:e,platform:t\}\)=>t===`win32`&&e\.computerUse/);
+  assert.match(
+    patched,
+    /autoInstallOptOutKey:t\.No\(t\.Oo\),installWhenMissing:!0,name:t\.Oo,isAvailable:\(\{features:e,platform:t\}\)=>\(t===`darwin`\|\|t===`linux`\)&&e\.computerUse,migrate:ha/,
+  );
+  assert.doesNotMatch(
+    patched,
+    /autoInstallOptOutKey:t\.No\(t\.Oo\),installWhenMissing:!0,installWhenMissingRequiresOptIn:!0,name:t\.Oo,isAvailable:\(\{features:e,platform:t\}\)=>\(t===`darwin`\|\|t===`linux`\)&&e\.computerUse,migrate:ha/,
+  );
+  assert.match(
+    patched,
+    /autoInstallOptOutKey:t\.No\(t\.Oo\),installWhenMissing:!0,installWhenMissingRequiresOptIn:!0,name:t\.Oo,isAvailable:\(\{features:e,platform:t\}\)=>t===`win32`&&e\.computerUse/,
+  );
 });
 
 test("auto-installs the current Chrome plugin gate shape", () => {

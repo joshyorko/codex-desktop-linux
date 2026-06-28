@@ -1259,6 +1259,34 @@ test("settings asset patch leaves current keybinds settings file alone", () => {
   }
 });
 
+test("settings asset patch adds read aloud controls to generated Linux desktop settings", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-read-aloud-settings-"));
+  try {
+    const assets = path.join(root, "webview", "assets");
+    fs.mkdirSync(assets, { recursive: true });
+    const asset = path.join(assets, "linux-desktop-settings-linux.js");
+    fs.writeFileSync(
+      asset,
+      'var React={Fragment:{}},$={jsx(){},jsxs(){}},KEYS={promptWindow:"codex-linux-prompt-window-enabled",systemTray:"codex-linux-system-tray-enabled",warmStart:"codex-linux-warm-start-enabled",autoUpdateOnExit:"codex-linux-auto-update-on-exit"};function useLinuxSetting(){}function LinuxSettingsRow(){}function LinuxSettingsSection(){}function LinuxToggle(){}function LinuxBuildInfoPanel(){}function LinuxDesktopSettings(){return $.jsxs("div",{children:[$.jsx(LinuxSettingsSection,{title:"Updates",children:$.jsx(LinuxToggle,{settingKey:KEYS.autoUpdateOnExit,label:"Install updates when you close Codex",description:"When on, a ready update waits for Codex to close and then installs. When off, updates wait until you click Update."})}),$.jsx(LinuxSettingsSection,{title:"Build",children:$.jsx(LinuxBuildInfoPanel,{})})]})}export{LinuxDesktopSettings,LinuxDesktopSettings as default};',
+    );
+
+    assert.deepEqual(applySettingsAssetPatch(root), { matched: true, changed: 1 });
+    const patched = fs.readFileSync(asset, "utf8");
+    assert.match(patched, /readAloud:"codex-linux-read-aloud-enabled"/);
+    assert.match(patched, /readAloudSpeed:"codex-linux-read-aloud-kokoro-speed"/);
+    assert.match(patched, /function LinuxReadAloudSettings\(\)/);
+    assert.match(patched, /title:"Read Aloud"/);
+    assert.match(patched, /label:"Read aloud responses"/);
+    assert.match(patched, /children:"Choose folder"/);
+    assert.match(patched, /children:"Download voice"/);
+    assert.match(patched, /label:"Speech pace"/);
+    assert.match(patched, /\$\.jsx\(LinuxReadAloudSettings,\{\}\),\$\.jsx\(LinuxSettingsSection,\{title:"Build"/);
+    assert.deepEqual(applySettingsAssetPatch(root), { matched: true, changed: 0 });
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("settings asset patch removes an older generated keybinds read aloud toggle", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-read-aloud-settings-"));
   try {

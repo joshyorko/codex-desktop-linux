@@ -95,6 +95,14 @@ function buildComputerUseGate({ nameExpr, availabilityProp, featuresVar, platfor
   return `{installWhenMissing:!0,name:${nameExpr},${availabilityProp}:({features:${featuresVar},platform:${platformVar}})=>(${platformVar}===\`darwin\`||${platformVar}===\`linux\`)&&${featuresVar}.computerUse,migrate:${migrateVar}}`;
 }
 
+function stripInstallWhenMissingRequiresOptIn(value) {
+  return value.replace(/installWhenMissingRequiresOptIn:!0,/g, "");
+}
+
+function hasInstallWhenMissingRequiresOptIn(value) {
+  return value.includes("installWhenMissingRequiresOptIn:!0,");
+}
+
 function buildFlexibleComputerUseGate({
   availabilityProp,
   expressionSuffix,
@@ -104,12 +112,15 @@ function buildFlexibleComputerUseGate({
   platformVar,
   prefix,
 }) {
-  const installField = prefix.includes("installWhenMissing:!0,") ||
-      middleFields.includes("installWhenMissing:!0,") ||
-      expressionSuffix.includes("installWhenMissing:!0,")
+  const sanitizedPrefix = stripInstallWhenMissingRequiresOptIn(prefix);
+  const sanitizedMiddleFields = stripInstallWhenMissingRequiresOptIn(middleFields);
+  const sanitizedExpressionSuffix = stripInstallWhenMissingRequiresOptIn(expressionSuffix);
+  const installField = sanitizedPrefix.includes("installWhenMissing:!0,") ||
+      sanitizedMiddleFields.includes("installWhenMissing:!0,") ||
+      sanitizedExpressionSuffix.includes("installWhenMissing:!0,")
     ? ""
     : "installWhenMissing:!0,";
-  return `{${prefix}${installField}name:${nameExpr},${middleFields}${availabilityProp}:({features:${featuresVar},platform:${platformVar}})=>(${platformVar}===\`darwin\`||${platformVar}===\`linux\`)&&${featuresVar}.computerUse${expressionSuffix}}`;
+  return `{${sanitizedPrefix}${installField}name:${nameExpr},${sanitizedMiddleFields}${availabilityProp}:({features:${featuresVar},platform:${platformVar}})=>(${platformVar}===\`darwin\`||${platformVar}===\`linux\`)&&${featuresVar}.computerUse${sanitizedExpressionSuffix}}`;
 }
 
 function hasComputerUseLiteral(source) {
@@ -155,7 +166,7 @@ function applyLinuxComputerUsePluginGatePatch(currentSource) {
 
       const darwinOnlyExpression = `${platformVar}===\`darwin\`&&${featuresVar}.computerUse`;
       const linuxExpression = `(${platformVar}===\`darwin\`||${platformVar}===\`linux\`)&&${featuresVar}.computerUse`;
-      if (installWhenMissing != null && expression === linuxExpression) {
+      if (installWhenMissing != null && expression === linuxExpression && !hasInstallWhenMissingRequiresOptIn(gateSource)) {
         sawEnabledGate = true;
         return gateSource;
       }
@@ -192,7 +203,11 @@ function applyLinuxComputerUsePluginGatePatch(currentSource) {
 
       const darwinOnlyExpression = `${platformVar}===\`darwin\`&&${featuresVar}.computerUse`;
       const linuxExpression = `(${platformVar}===\`darwin\`||${platformVar}===\`linux\`)&&${featuresVar}.computerUse`;
-      if (prefix.includes("installWhenMissing:!0,") && expression === linuxExpression) {
+      if (
+        prefix.includes("installWhenMissing:!0,") &&
+        expression === linuxExpression &&
+        !hasInstallWhenMissingRequiresOptIn(gateSource)
+      ) {
         sawEnabledGate = true;
         return gateSource;
       }

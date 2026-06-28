@@ -4,6 +4,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 
 const {
+  linuxSettingsKeys,
   requireName,
 } = require("../../scripts/patches/shared.js");
 
@@ -198,6 +199,41 @@ function applySettingsPatch(source) {
       ',$.jsx(LinuxToggle,{settingKey:KEYS.readAloud,label:"Read aloud responses",description:"Show a Read aloud button on assistant responses.",defaultValue:!1})',
       "",
     );
+}
+
+function linuxDesktopReadAloudSettingsSource() {
+  return `function codexLinuxReadAloudPaceValue(e){let t=Number(e);return Number.isFinite(t)?Math.min(1.4,Math.max(.7,Math.round(t*20)/20)):1.05}function LinuxReadAloudSettings(){let e=useLinuxSetting(KEYS.readAloud,!1),t=useLinuxSetting(KEYS.readAloudSpeed,1.05),n=codexLinuxReadAloudPaceValue(t.value),r="rounded-md border border-token-border px-2 py-1 text-sm text-token-text-primary hover:bg-token-surface-secondary disabled:opacity-60",i=e.error?$.jsxs("div",{className:"flex flex-col gap-1",children:[$.jsx("span",{children:"Show a read aloud button under assistant responses."}),$.jsx("span",{className:"text-token-error-foreground",children:e.error})]}):"Show a read aloud button under assistant responses.",a=t.error?$.jsxs("div",{className:"flex flex-col gap-1",children:[$.jsx("span",{children:"Adjust the read aloud speed."}),$.jsx("span",{className:"text-token-error-foreground",children:t.error})]}):"Adjust the read aloud speed.";return $.jsx(LinuxSettingsSection,{title:"Read Aloud",children:$.jsxs(React.Fragment,{children:[$.jsx(LinuxSettingsRow,{label:"Read aloud responses",description:i,control:$.jsxs("div",{className:"flex flex-wrap items-center justify-end gap-2",children:[$.jsx("label",{className:"inline-flex cursor-pointer items-center gap-2 text-sm text-token-text-primary",children:$.jsx("input",{type:"checkbox",className:"h-4 w-4 accent-token-text-primary",checked:!!e.value,disabled:e.isLoading,onChange:t=>e.update(t.currentTarget.checked),"aria-label":"Read aloud responses"})}),e.value?$.jsxs("div",{className:"flex flex-wrap items-center justify-end gap-2",children:[$.jsx("button",{type:"button",className:r,onClick:e=>globalThis.${SETUP_MARKER}?.("choose-folder",e.currentTarget),children:"Choose folder"}),$.jsx("button",{type:"button",className:r,onClick:e=>globalThis.${SETUP_MARKER}?.("download",e.currentTarget),children:"Download voice"}),$.jsx("span",{className:"inline-flex h-7 w-7 select-none items-center justify-center rounded-full border border-token-border text-sm text-token-text-secondary",title:"Choose folder expects kokoro-v1.0.onnx and voices-v1.0.bin. Download voice creates a managed Python runtime and downloads the Kokoro files from Hugging Face.","aria-label":"Choose folder expects kokoro-v1.0.onnx and voices-v1.0.bin. Download voice creates a managed Python runtime and downloads the Kokoro files from Hugging Face.",children:"?"})]}):null]})}),e.value?$.jsx(LinuxSettingsRow,{label:"Speech pace",description:a,control:$.jsxs("div",{className:"flex items-center justify-end gap-2",children:[$.jsx("input",{type:"range",min:.7,max:1.4,step:.05,value:n,disabled:t.isLoading,onChange:e=>t.update(codexLinuxReadAloudPaceValue(e.currentTarget.value)),"aria-label":"Speech pace",className:"h-2 w-36 accent-token-text-primary"}),$.jsx("span",{className:"w-12 text-right text-sm text-token-text-secondary",children:\`\${n.toFixed(2)}x\`})]})}):null]})})}`;
+}
+
+function applyLinuxDesktopSettingsPatch(source) {
+  if (!source.includes("function LinuxDesktopSettings(){")) {
+    return source;
+  }
+
+  let patched = source;
+  if (!patched.includes(`readAloud:${JSON.stringify(SETTINGS_KEY)}`)) {
+    const keyNeedle = `autoUpdateOnExit:${JSON.stringify(linuxSettingsKeys.autoUpdateOnExit)}`;
+    patched = patched.replace(
+      `${keyNeedle}};function useLinuxSetting`,
+      `${keyNeedle},readAloud:${JSON.stringify(SETTINGS_KEY)},readAloudSpeed:${JSON.stringify(KOKORO_SPEED_KEY)}};function useLinuxSetting`,
+    );
+  }
+
+  if (!patched.includes("function LinuxReadAloudSettings(){")) {
+    patched = patched.replace(
+      "function LinuxDesktopSettings(){",
+      `${linuxDesktopReadAloudSettingsSource()}function LinuxDesktopSettings(){`,
+    );
+  }
+
+  if (!patched.includes("$.jsx(LinuxReadAloudSettings,{}),$.jsx(LinuxSettingsSection,{title:\"Build\"")) {
+    patched = patched.replace(
+      '$.jsx(LinuxSettingsSection,{title:"Build",children:$.jsx(LinuxBuildInfoPanel,{})})',
+      '$.jsx(LinuxReadAloudSettings,{}),$.jsx(LinuxSettingsSection,{title:"Build",children:$.jsx(LinuxBuildInfoPanel,{})})',
+    );
+  }
+
+  return patched;
 }
 
 function generalSettingsReadAloudRowSource() {
@@ -629,6 +665,19 @@ function applySettingsAssetPatch(extractedDir) {
     return { matched, changed, reason: "webview assets directory not found" };
   }
 
+  const linuxDesktopAssetPath = path.join(assetsDir, "linux-desktop-settings-linux.js");
+  if (fs.existsSync(linuxDesktopAssetPath)) {
+    const source = fs.readFileSync(linuxDesktopAssetPath, "utf8");
+    const patched = applyLinuxDesktopSettingsPatch(source);
+    if (patched !== source) {
+      fs.writeFileSync(linuxDesktopAssetPath, patched, "utf8");
+      changed += 1;
+      matched = true;
+    } else if (source.includes(SETTINGS_KEY) || source.includes("LinuxReadAloudSettings")) {
+      matched = true;
+    }
+  }
+
   const generalCandidates = fs
     .readdirSync(assetsDir)
     .filter((name) => /^general-settings-.*\.js$/.test(name))
@@ -676,6 +725,7 @@ module.exports = {
   applyMainBundlePatch,
   applySettingsAssetPatch,
   applySettingsPageNavPatch,
+  applyLinuxDesktopSettingsPatch,
   applySettingsPatch,
   applySettingsSectionsNavPatch,
   applySettingsSharedNavPatch,
