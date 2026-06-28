@@ -106,7 +106,8 @@ function enabledWorkspaceRootTargets(mainSource) {
 }
 
 function findItemAssignment(source, onSelectName, searchStart) {
-  const pattern = /([A-Za-z_$][\w$]*)=\(0,([A-Za-z_$][\w$]*)\.jsx\)\(([A-Za-z_$][\w$]*)\.Item,\{/g;
+  const pattern =
+    /([A-Za-z_$][\w$]*)=[^;]*?\(0,([A-Za-z_$][\w$]*)\.jsx\)\(([A-Za-z_$][\w$]*)\.Item,\{/g;
   let match = null;
   const prefix = source.slice(0, searchStart);
   for (let next; (next = pattern.exec(prefix)) != null;) {
@@ -128,7 +129,8 @@ function findItemAssignment(source, onSelectName, searchStart) {
     return null;
   }
 
-  const value = source.slice(valueStart, callParenEnd + 1);
+  const valuePrefix = source.slice(valueStart, firstParenStart);
+  const value = source.slice(firstParenStart, callParenEnd + 1);
   if (!value.includes(`onSelect:${onSelectName}`)) {
     return null;
   }
@@ -140,7 +142,30 @@ function findItemAssignment(source, onSelectName, searchStart) {
     jsxVar: match[2],
     menuVar: match[3],
     value,
+    valuePrefix,
   };
+}
+
+function onSelectNameCandidates(source, callbackName, searchStart) {
+  const names = new Set([callbackName]);
+  const tail = source.slice(searchStart);
+  let added = true;
+  while (added) {
+    added = false;
+    for (const name of [...names]) {
+      const pattern = new RegExp(
+        `(?:^|[;,])\\s*(?:var\\s+|let\\s+|const\\s+)?([A-Za-z_$][\\w$]*)=${escapeRegExp(name)}(?=[,;])`,
+        "g",
+      );
+      for (let match; (match = pattern.exec(tail)) != null;) {
+        if (!names.has(match[1])) {
+          names.add(match[1]);
+          added = true;
+        }
+      }
+    }
+  }
+  return [...names];
 }
 
 function openTargetItem({ jsxVar, menuVar, openFn, pathVar, cwdVar, openFileVar, closeVar, target }) {
@@ -190,13 +215,17 @@ function applyWorkspaceRootOpenTargetsPatch(currentSource, targets) {
     return currentSource;
   }
 
-  const onSelectIndex = currentSource.indexOf(`onSelect:${onSelectName}`, callbackEnd);
-  if (onSelectIndex === -1) {
-    warn("Could not find workspace-root File Manager menu item");
-    return currentSource;
+  let item = null;
+  for (const candidateName of onSelectNameCandidates(currentSource, onSelectName, callbackEnd)) {
+    const onSelectIndex = currentSource.indexOf(`onSelect:${candidateName}`, callbackEnd);
+    if (onSelectIndex === -1) {
+      continue;
+    }
+    item = findItemAssignment(currentSource, candidateName, onSelectIndex);
+    if (item != null) {
+      break;
+    }
   }
-
-  const item = findItemAssignment(currentSource, onSelectName, onSelectIndex);
   if (item == null) {
     warn("Could not parse workspace-root File Manager menu item");
     return currentSource;
@@ -215,7 +244,7 @@ function applyWorkspaceRootOpenTargetsPatch(currentSource, targets) {
     }),
   );
   const replacement =
-    `${item.itemVar}=(0,${item.jsxVar}.jsxs)(${item.jsxVar}.Fragment,{children:[` +
+    `${item.itemVar}=${item.valuePrefix}(0,${item.jsxVar}.jsxs)(${item.jsxVar}.Fragment,{children:[` +
     `${targetItems.join(",")},${item.value}]})`;
 
   return currentSource.slice(0, item.start) + replacement + currentSource.slice(item.end);
@@ -238,12 +267,15 @@ function patchWorkspaceRootOpenTargets(extractedDir) {
   let changed = 0;
 
   for (const name of fs.readdirSync(assetsDir)) {
-    if (!/^app-main-.*\.js$/u.test(name)) {
+    if (!/^(?:app-main-.*|app-initial~app-main~.*projects-index.*)\.js$/u.test(name)) {
+      continue;
+    }
+    const filePath = path.join(assetsDir, name);
+    const source = fs.readFileSync(filePath, "utf8");
+    if (!source.includes("target:`fileManager`")) {
       continue;
     }
     matched += 1;
-    const filePath = path.join(assetsDir, name);
-    const source = fs.readFileSync(filePath, "utf8");
     const patched = applyWorkspaceRootOpenTargetsPatch(source, targets);
     if (patched !== source) {
       fs.writeFileSync(filePath, patched, "utf8");

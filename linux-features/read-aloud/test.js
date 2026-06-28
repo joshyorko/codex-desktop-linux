@@ -865,12 +865,22 @@ test("assistant render patch preserves the current JSX runtime alias", () => {
   assert.match(patched, /globalThis\.codexLinuxReadAloudClick\?\.\(n,p,o,e\.currentTarget\)/);
 });
 
-test("assistant runtime descriptor targets split local conversation turn bundles", () => {
+test("assistant render patch covers the current shared assistant message call", () => {
+  const source = "return (0,DX.jsx)(Jft,{item:n,alwaysShowActions:V,assistantCopyText:_,turnId:v,processTargets:b,hookStats:D,threadDetailLevel:u,completedThreadGoal:O,after:C,electronAfter:w,conversationId:l,cwd:p,hostId:m,reportEntityType:h,markdownMediaCacheKey:e,projectlessOutputDirectory:q,forceCodeBlockWordWrap:ie,hasArtifacts:J,onAddSelectedTextToChat:r,onFileLinkOpen:E,onFork:F,renderCodeBlocksAsWritingBlocks:ie,showActionRow:H,showTimestampWithoutActions:U,showProcessBadges:i})";
+  const patched = twice(applyAssistantRenderPatch, source);
+
+  assert.match(patched, /DX\.Fragment/);
+  assert.match(patched, /\(0,DX\.jsx\)\("button"/);
+  assert.match(patched, /globalThis\.codexLinuxReadAloudClick\?\.\(n,_,l,e\.currentTarget\)/);
+});
+
+test("assistant runtime descriptor targets current shared assistant bundles", () => {
   const descriptor = featurePatches.find((patch) => patch.id === "assistant-runtime");
   assert.ok(descriptor);
   assert.equal(descriptor.pattern.test("index-current.js"), true);
   assert.equal(descriptor.pattern.test("local-conversation-thread-current.js"), true);
   assert.equal(descriptor.pattern.test("local-conversation-turn-current.js"), true);
+  assert.equal(descriptor.pattern.test("app-initial~app-main~onboarding-page-current.js"), true);
 });
 
 test("settings patch does not add the legacy normal settings toggle", () => {

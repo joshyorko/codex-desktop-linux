@@ -1169,6 +1169,16 @@ test("open-target discovery patches current command lookup shape", async () => {
   await assert.rejects(() => app.getOpenInTargetCommand("vscode"), /not available/);
 });
 
+test("open-target discovery command lookup tolerates param-builder target helper", async () => {
+  const source =
+    "function JN(e,t){return{target:t}}function iP(e,t){return{target:t}}var IN={};class App{constructor(){this.requestOpenInWorker=async({params:e})=>({command:e.target===`vscode`?`worker-command`:null});this.settingsStore={targets:[{id:`linux-desktop-agent`,detect:async()=>`main-command`},{id:`missing`,detect:async()=>null}]}}getSettingsStore(){return this.settingsStore}async getOpenInTargetCommand(e){if(this.requestOpenInWorker==null)return;let{command:t}=await this.requestOpenInWorker({method:`get-target-command`,params:JN(this.getSettingsStore(),e)});if(t==null)throw Error(`Open target \"${e}\" is not available`);return t}}";
+  const patched = applyPatchTwice(applyOpenInTargetCommandPatch, source);
+  const app = new Function(`${patched};return new App();`)();
+
+  assert.equal(await app.getOpenInTargetCommand("linux-desktop-agent"), "main-command");
+  assert.equal(await app.getOpenInTargetCommand("vscode"), "worker-command");
+});
+
 test("open-target discovery patches getOpenInWorker command lookup shape", async () => {
   const patched = applyPatchTwice(applyOpenInTargetCommandPatch, latestOpenInCommandBundle);
   const app = new Function(`${patched};return new App();`)();
@@ -1221,6 +1231,34 @@ test("open-target discovery patches current bridge detection shape", async () =>
   });
   assert.deepEqual(await bridge.openInTargets.detectTarget.call(bridge, { target: "missing" }), {
     available: false,
+  });
+});
+
+test("open-target discovery bridge detection tolerates param-builder target helper", async () => {
+  const source =
+    "function iP(e,t){return{target:t}}var IN={};var bridge={openInTargets:{detectTarget:async({target:e})=>{if(this.options.requestOpenInWorker==null)throw Error(`Open in worker unavailable`);let{command:t}=await this.options.requestOpenInWorker({method:`get-target-command`,params:iP(this.options.settingsStore,e)});return{available:t!=null}},loadTargetIcon:()=>{}}}";
+  const patched = applyPatchTwice(applyOpenInTargetsBridgeDetectionPatch, source);
+  const options = {
+    settingsStore: {
+      targets: [
+        { id: "linux-desktop-agent", detect: async () => "main-command" },
+        { id: "missing", detect: async () => null },
+      ],
+    },
+    requestOpenInWorker: async ({ params }) => ({
+      command: params.target === "vscode" ? "worker-command" : null,
+    }),
+  };
+  const bridge = new Function(`${patched};return bridge;`).call({ options });
+
+  assert.deepEqual(await bridge.openInTargets.detectTarget.call(bridge, { target: "linux-desktop-agent" }), {
+    available: true,
+  });
+  assert.deepEqual(await bridge.openInTargets.detectTarget.call(bridge, { target: "missing" }), {
+    available: false,
+  });
+  assert.deepEqual(await bridge.openInTargets.detectTarget.call(bridge, { target: "vscode" }), {
+    available: true,
   });
 });
 

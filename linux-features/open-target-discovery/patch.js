@@ -507,6 +507,18 @@ function applyLinuxIconSummaryResolutionPatch(currentSource) {
 }
 
 function applyOpenInTargetRegistryCommandPatch(currentSource) {
+  const helper =
+    "function codexLinuxOpenTargetRegistryTargets(e){let t=null;try{t=iP(e)}catch{}return Array.isArray(t)?t:Array.isArray(e?.targets)?e.targets:[]}" +
+    "async function codexLinuxOpenTargetRegistryCommand(e,t){if(process.platform!==`linux`)return;let n=codexLinuxOpenTargetRegistryTargets(e).find(e=>e.id===t);return typeof n?.detect===`function`?await n.detect(IN):null}";
+  const legacyHelper =
+    "async function codexLinuxOpenTargetRegistryCommand(e,t){if(process.platform!==`linux`)return;let n=iP(e).find(e=>e.id===t);return typeof n?.detect===`function`?await n.detect(IN):null}";
+
+  if (currentSource.includes(helper)) {
+    return currentSource;
+  }
+  if (currentSource.includes(legacyHelper)) {
+    return currentSource.replace(legacyHelper, helper);
+  }
   if (currentSource.includes("async function codexLinuxOpenTargetRegistryCommand(")) {
     return currentSource;
   }
@@ -524,8 +536,6 @@ function applyOpenInTargetRegistryCommandPatch(currentSource) {
     return currentSource;
   }
 
-  const helper =
-    "async function codexLinuxOpenTargetRegistryCommand(e,t){if(process.platform!==`linux`)return;let n=iP(e).find(e=>e.id===t);return typeof n?.detect===`function`?await n.detect(IN):null}";
   return currentSource.slice(0, insertionIndex) + helper + currentSource.slice(insertionIndex);
 }
 
