@@ -507,6 +507,22 @@ function applyLinuxIconSummaryResolutionPatch(currentSource) {
 }
 
 function applyOpenInTargetRegistryCommandPatch(currentSource) {
+  const helper =
+    "function codexLinuxOpenTargetRegistryTargets(e){let t=null;try{t=typeof pP===`function`?pP(e):iP(e)}catch{}return Array.isArray(t)?t:Array.isArray(e?.targets)?e.targets:[]}" +
+    "async function codexLinuxOpenTargetRegistryCommand(e,t){if(process.platform!==`linux`)return;let n=codexLinuxOpenTargetRegistryTargets(e).find(e=>e.id===t),r=typeof ZN!==`undefined`?ZN:typeof IN!==`undefined`?IN:void 0;return typeof n?.detect===`function`?await n.detect(r):null}";
+  const legacyHelpers = [
+    "async function codexLinuxOpenTargetRegistryCommand(e,t){if(process.platform!==`linux`)return;let n=(typeof pP===`function`?pP(e):iP(e)).find(e=>e.id===t),r=typeof ZN!==`undefined`?ZN:typeof IN!==`undefined`?IN:void 0;return typeof n?.detect===`function`?await n.detect(r):null}",
+    "async function codexLinuxOpenTargetRegistryCommand(e,t){if(process.platform!==`linux`)return;let n=iP(e).find(e=>e.id===t);return typeof n?.detect===`function`?await n.detect(IN):null}",
+  ];
+
+  if (currentSource.includes(helper)) {
+    return currentSource;
+  }
+  for (const legacyHelper of legacyHelpers) {
+    if (currentSource.includes(legacyHelper)) {
+      return currentSource.replace(legacyHelper, helper);
+    }
+  }
   if (currentSource.includes("async function codexLinuxOpenTargetRegistryCommand(")) {
     return currentSource;
   }
@@ -514,8 +530,6 @@ function applyOpenInTargetRegistryCommandPatch(currentSource) {
   const insertionIndex = currentSource.indexOf("async function");
   const helperInsertionIndex = insertionIndex === -1 ? 0 : insertionIndex;
 
-  const helper =
-    "async function codexLinuxOpenTargetRegistryCommand(e,t){if(process.platform!==`linux`)return;let n=(typeof pP===`function`?pP(e):iP(e)).find(e=>e.id===t),r=typeof ZN!==`undefined`?ZN:typeof IN!==`undefined`?IN:void 0;return typeof n?.detect===`function`?await n.detect(r):null}";
   return currentSource.slice(0, helperInsertionIndex) + helper + currentSource.slice(helperInsertionIndex);
 }
 

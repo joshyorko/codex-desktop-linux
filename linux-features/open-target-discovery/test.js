@@ -571,7 +571,14 @@ test("open-target discovery falls back to the Exec command", async () => {
     const editorCommand = makeExecutable(path.join(tmp, "toolbox", "bin"), "workspace-agent");
     const desktopFile = path.join(appsDir, "workspace-agent.desktop");
     const projectDir = path.join(tmp, "project");
-    const spawnRecorder = createSpawnRecorder();
+    const spawnRecorder = createSpawnRecorder({
+      failCommands: [
+        "/home/linuxbrew/.linuxbrew/bin/gio",
+        "/home/linuxbrew/.linuxbrew/bin/gtk-launch",
+        "/var/home/linuxbrew/.linuxbrew/bin/gio",
+        "/var/home/linuxbrew/.linuxbrew/bin/gtk-launch",
+      ],
+    });
     fs.mkdirSync(appsDir, { recursive: true });
     fs.mkdirSync(projectDir, { recursive: true });
     fs.writeFileSync(
@@ -600,9 +607,7 @@ test("open-target discovery falls back to the Exec command", async () => {
 
     await platform.open({ command: editorCommand, path: projectDir });
 
-    assert.deepEqual(spawnRecorder.calls, [
-      { command: editorCommand, args: ["--goto", projectDir] },
-    ]);
+    assert.deepEqual(spawnRecorder.calls.at(-1), { command: editorCommand, args: ["--goto", projectDir] });
   });
 });
 
@@ -1138,6 +1143,16 @@ test("open-target discovery patches latest command lookup shape", async () => {
   await assert.rejects(() => app.getOpenInTargetCommand("vscode"), /not available/);
 });
 
+test("open-target discovery command lookup tolerates param-builder target helper", async () => {
+  const source =
+    "function JN(e,t){return{target:t}}function iP(e,t){return{target:t}}var IN={};class App{constructor(){this.requestOpenInWorker=async({params:e})=>({command:e.target===`vscode`?`worker-command`:null});this.settingsStore={targets:[{id:`linux-desktop-agent`,detect:async()=>`main-command`},{id:`missing`,detect:async()=>null}]}}getSettingsStore(){return this.settingsStore}async getOpenInTargetCommand(e){if(this.requestOpenInWorker==null)return;let{command:t}=await this.requestOpenInWorker({method:`get-target-command`,params:JN(this.getSettingsStore(),e)});if(t==null)throw Error(`Open target \"${e}\" is not available`);return t}}";
+  const patched = applyPatchTwice(applyOpenInTargetCommandPatch, source);
+  const app = new Function(`${patched};return new App();`)();
+
+  assert.equal(await app.getOpenInTargetCommand("linux-desktop-agent"), "main-command");
+  await assert.rejects(() => app.getOpenInTargetCommand("vscode"), /not available/);
+});
+
 test("open-target discovery uses main registry for target availability", async () => {
   const patched = applyPatchTwice(applyOpenInTargetsAvailabilityPatch, openInAvailabilityBundle);
   const worker = async () => ({ command: null });
@@ -1190,6 +1205,32 @@ test("open-target discovery patches latest bridge detection shape", async () => 
     available: true,
   });
   assert.deepEqual(await bridge.openInTargets.detectTarget.call(bridge, { target: "missing" }), {
+    available: false,
+  });
+});
+
+test("open-target discovery bridge detection tolerates param-builder target helper", async () => {
+  const source =
+    "function iP(e,t){return{target:t}}var IN={};var bridge={openInTargets:{detectTarget:async({target:e})=>{if(this.options.requestOpenInWorker==null)throw Error(`Open in worker unavailable`);let{command:t}=await this.options.requestOpenInWorker({method:`get-target-command`,params:iP(this.options.settingsStore,e)});return{available:t!=null}},loadTargetIcon:()=>{}}}";
+  const patched = applyPatchTwice(applyOpenInTargetsBridgeDetectionPatch, source);
+  const options = {
+    settingsStore: {
+      targets: [
+        { id: "linux-desktop-agent", detect: async () => "main-command" },
+        { id: "missing", detect: async () => null },
+      ],
+    },
+    requestOpenInWorker: async () => ({ command: "worker-command" }),
+  };
+  const bridge = new Function(`${patched};return bridge;`).call({ options });
+
+  assert.deepEqual(await bridge.openInTargets.detectTarget.call(bridge, { target: "linux-desktop-agent" }), {
+    available: true,
+  });
+  assert.deepEqual(await bridge.openInTargets.detectTarget.call(bridge, { target: "missing" }), {
+    available: false,
+  });
+  assert.deepEqual(await bridge.openInTargets.detectTarget.call(bridge, { target: "vscode" }), {
     available: false,
   });
 });
