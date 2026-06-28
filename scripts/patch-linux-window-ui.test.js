@@ -5853,6 +5853,30 @@ test("patches current Computer Use required-feature availability gate without Wi
   assert.match(patched, /function b\(e\)\{return e===`macOS`\|\|e===`windows`\|\|e===`linux`\}/);
 });
 
+test("shows current Computer Use settings Any App row on Linux", () => {
+  const source =
+    "function Lt(){let e=(0,X.c)(21),{selectedHostId:t}=T(),n=u(He,t),r;e[0]===t?r=e[1]:(r={hostId:t},e[0]=t,e[1]=r);let i=Ce(r),{platform:a}=M();if(P(un)!=null){let t;return t}let l;e[6]!==i||e[7]!==a?(l=(0,Z.jsx)(Rt,{computerUseAvailability:i,platform:a}),e[6]=i,e[7]=a,e[8]=l):l=e[8];let p;e[16]===i.available?p=e[17]:(p=i.available?(0,Z.jsx)(Z.Fragment,{children:[`any app`]}):null,e[16]=i.available,e[17]=p);return p}";
+
+  const patched = applyPatchTwice(applyLinuxComputerUseRendererAvailabilityPatch, source);
+
+  assert.match(
+    patched,
+    /let i=Ce\(r\),\{platform:a\}=M\(\);a===`linux`&&\(i=\{\.\.\.i,available:!0,isFetching:!1,isLoading:!1\}\);if\(P\(un\)!=null\)/,
+  );
+  assert.match(patched, /e\[16\]===i\.available/);
+});
+
+test("Computer Use availability descriptor matches current settings and shared hook bundles", () => {
+  const descriptors = require("./patches/core/all-linux/webview/computer-use-ui/patch.js");
+  const descriptor = descriptors.find((entry) => entry.id === "linux-computer-use-ui-availability");
+
+  assert.match("computer-use-settings-DIl3KoEY.js", descriptor.pattern);
+  assert.match(
+    "app-initial~app-main~worktree-init-v2-page~remote-conversation-page~pull-requests-page~plug~kmtatxxf-DEE2TwPG.js",
+    descriptor.pattern,
+  );
+});
+
 test("linux Open In native target selector keeps discovered targets visible", () => {
   const { applyLinuxOpenTargetSelectionNativeModePatch } = require("./patches/core/all-linux/webview/open-target-selection/patch.js");
   const source =

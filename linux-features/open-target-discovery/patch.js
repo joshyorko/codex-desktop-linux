@@ -699,14 +699,22 @@ function applyOpenInTargetsDirectoryModePatch(currentSource) {
 }
 
 function applyNativeOpenTargetSelectionPatch(currentSource) {
-  if (currentSource.includes("function codexLinuxDirectoryOpenTarget(")) {
+  const legacyDirectoryTargetHelper =
+    "function codexLinuxDirectoryOpenTarget(e){return e?.available===!0&&(e.kind===`editor`||e.kind===`terminal`)}";
+  const directoryTargetHelper =
+    "function codexLinuxDirectoryOpenTarget(e){return(e?.appPath!=null||e?.available===!0)&&(e.kind===`editor`||e.kind===`terminal`)}";
+
+  if (currentSource.includes(directoryTargetHelper)) {
     return currentSource;
+  }
+  if (currentSource.includes(legacyDirectoryTargetHelper)) {
+    return currentSource.replace(legacyDirectoryTargetHelper, directoryTargetHelper);
   }
 
   const original =
     "function e({targets:e,availableTargets:t,includeHiddenTargets:n=!1,mode:r=`editor`}){let i=e.filter(e=>e.appPath!=null);if(i.length>0)return i;if(r===`native`)return e.filter(e=>e.target===`systemDefault`||e.target===`fileManager`);let a=new Set(t);return e.filter(e=>a.has(e.target)&&(n||!e.hidden))}";
   const patched =
-    "function codexLinuxDirectoryOpenTarget(e){return e?.available===!0&&(e.kind===`editor`||e.kind===`terminal`)}function e({targets:e,availableTargets:t,includeHiddenTargets:n=!1,mode:r=`editor`}){if(r===`native`)return e.filter(e=>e.target===`systemDefault`||e.target===`fileManager`||codexLinuxDirectoryOpenTarget(e));let i=e.filter(e=>e.appPath!=null);if(i.length>0)return i;let a=new Set(t);return e.filter(e=>a.has(e.target)&&(n||!e.hidden))}";
+    `${directoryTargetHelper}function e({targets:e,availableTargets:t,includeHiddenTargets:n=!1,mode:r=\`editor\`}){if(r===\`native\`)return e.filter(e=>e.target===\`systemDefault\`||e.target===\`fileManager\`||codexLinuxDirectoryOpenTarget(e));let i=e.filter(e=>e.appPath!=null);if(i.length>0)return i;let a=new Set(t);return e.filter(e=>a.has(e.target)&&(n||!e.hidden))}`;
 
   if (currentSource.includes(original)) {
     return currentSource.replace(original, patched);
@@ -730,7 +738,7 @@ function applyNativeOpenTargetSelectionPatch(currentSource) {
     ) => {
       patchedCore = true;
       return (
-        "function codexLinuxDirectoryOpenTarget(e){return e?.available===!0&&(e.kind===`editor`||e.kind===`terminal`)}" +
+        directoryTargetHelper +
         `function ${selectorFn}({targets:${targetsVar},availableTargets:${availableTargetsVar},includeHiddenTargets:${includeHiddenTargetsVar}=!1,mode:${modeVar}=\`editor\`}){` +
         `if(${modeVar}===\`native\`)return ${targetsVar}.filter(${targetVar}=>` +
         `${targetVar}.target===\`systemDefault\`||${targetVar}.target===\`fileManager\`||` +

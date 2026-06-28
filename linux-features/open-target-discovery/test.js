@@ -1280,6 +1280,7 @@ test("open-target discovery native selector includes available directory-capable
     { target: "terminal", available: true, kind: "terminal" },
     { target: "vscode", available: true, kind: "editor" },
     { target: "linux-desktop-kate", available: true, kind: "editor" },
+    { target: "linux-desktop-agent", appPath: "/usr/share/applications/agent.desktop", available: false, kind: "editor" },
     { target: "linux-desktop-hidden", available: false, kind: "editor" },
   ];
 
@@ -1289,7 +1290,7 @@ test("open-target discovery native selector includes available directory-capable
       availableTargets: targets.map((target) => target.target),
       mode: "native",
     }).map((target) => target.target),
-    ["fileManager", "systemDefault", "terminal", "vscode", "linux-desktop-kate"],
+    ["fileManager", "systemDefault", "terminal", "vscode", "linux-desktop-kate", "linux-desktop-agent"],
   );
 });
 

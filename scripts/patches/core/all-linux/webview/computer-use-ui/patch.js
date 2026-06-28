@@ -12,7 +12,7 @@ module.exports = [
     order: 1100,
     ciPolicy: "opt-in",
     enabled: (context) => context.enableComputerUseUi,
-    pattern: /^(use-model-settings|apps|use-in-app-browser-use-availability|use-is-plugins-enabled|use-native-apps\.electron)-.*\.js$/,
+    pattern: /^(?:(?:use-model-settings|apps|use-in-app-browser-use-availability|use-is-plugins-enabled|use-native-apps\.electron|computer-use-settings)-.*|app-initial~.*pull-requests-page~plug.*)\.js$/,
     missingDescription: "Computer Use availability bundle",
     skipDescription: "Linux Computer Use UI availability patch",
     apply: applyLinuxComputerUseRendererAvailabilityPatch,

@@ -459,6 +459,24 @@ function applyLinuxComputerUseRendererAvailabilityPatch(currentSource) {
     },
   );
 
+  const currentSettingsAvailabilityConsumerPattern =
+    /let ([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)\(([^)]*)\),\{platform:([A-Za-z_$][\w$]*)\}=([A-Za-z_$][\w$]*)\(\);/g;
+  patchedSource = patchedSource.replace(
+    currentSettingsAvailabilityConsumerPattern,
+    (match, availabilityVar, _hookVar, _hookArg, platformVar, _platformHookVar, offset) => {
+      const nextSource = patchedSource.slice(offset + match.length, offset + match.length + 3000);
+      if (
+        nextSource.startsWith(`${platformVar}===\`linux\`&&(${availabilityVar}={`) ||
+        !nextSource.includes(`computerUseAvailability:${availabilityVar}`) ||
+        !nextSource.includes(`${availabilityVar}.available`)
+      ) {
+        return match;
+      }
+      availabilityChanged = true;
+      return `${match}${platformVar}===\`linux\`&&(${availabilityVar}={...${availabilityVar},available:!0,isFetching:!1,isLoading:!1});`;
+    },
+  );
+
   if (patchedSource.includes("native-desktop-apps") && hasComputerUseLiteral(patchedSource)) {
     const nativeAppsPlatformPattern =
       /([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)&&\(([A-Za-z_$][\w$]*)===`macOS`\|\|\3===`windows`\)/g;
