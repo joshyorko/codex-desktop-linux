@@ -188,7 +188,8 @@ function applyRecordReplayHudPatch(currentSource) {
   if (currentSource.includes("codexLinuxRecordReplayHudVersion=")) {
     return currentSource;
   }
-  return currentSource + recordReplayHudRuntimeSource();
+  const separator = currentSource.endsWith("\n") ? "" : "\n";
+  return currentSource + separator + recordReplayHudRuntimeSource();
 }
 
 const descriptors = [
