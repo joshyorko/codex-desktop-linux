@@ -64,6 +64,8 @@ const openInTargetsBundle =
   '"open-in-targets":async({cwd:e,deferEnrichment:n=!1,hostId:r,nativeBrowserDiscovery:i=`scan`,path:a})=>{let o=this.getRequestAppServerClient(r??void 0),s=this.getSettingsStore();let[c,l]=await Promise.all([XN(s),YN(s)]),u=a?.replace(/^([ab])[\\\\/]/,``)??null,d=u!=null&&_F(u)&&!t.Ta(o.hostConfig),f=u==null||d||t.Ta(o.hostConfig)?null:this.resolveOpenFilePath(this.mapAgentPathToLocalPath(u,o.hostConfig)??u,this.mapAgentPathToLocalPath(e,o.hostConfig)??this.getWorkspaceRoot()),p=oj(o.hostConfig,c,l),m=new Set(p),h=tP(s,e,m),g=d||f!=null&&t.wo(f),_=f!=null&&UA(f),v=f!=null&&GA(f),y=g?await gF({nativeBrowserDiscovery:i}):_?await hF({filePath:f}):[];return{preferredTarget:h,availableTargets:Array.from(m),mode:g||v?`native`:`editor`,targets:[...l.map(({id:e,label:t,icon:n,kind:r,hidden:i})=>({id:e,target:e,label:t,icon:n,kind:r,hidden:i,available:m.has(e),default:h===e||void 0})),...y]}}';
 const currentOpenInTargetsBundle =
   '"open-in-targets":async({cwd:e,deferEnrichment:n=!1,hostId:r,nativeBrowserDiscovery:i=`scan`,path:a})=>{let o=this.getRequestAppServerClient(r??void 0),s=this.getSettingsStore();let[c,l]=await Promise.all([XN(s),YN(s)]),u=a?.replace(/^([ab])[\\\\/]/,``)??null,d=u!=null&&_F(u)&&!t.Ta(o.hostConfig),f=u==null||d||t.Ta(o.hostConfig)?null:this.resolveOpenFilePath(this.mapAgentPathToLocalPath(u,o.hostConfig)??u,this.mapAgentPathToLocalPath(e,o.hostConfig)??this.getWorkspaceRoot()),p=oj(o.hostConfig,c,l),m=new Set(p),h=tP(s,e,m),g=d||f!=null&&t.rs(f),_=f!=null&&cj(f),v=f!=null&&uj(f),y=g?await MF(i):_?await jF({filePath:f}):[];return{preferredTarget:h,availableTargets:Array.from(m),mode:g||v?`native`:`editor`,targets:[...l.map(({id:e,label:t,icon:n,kind:r,hidden:i})=>({id:e,target:e,label:t,icon:n,kind:r,hidden:i,available:m.has(e),default:h===e||void 0})),...y]}}';
+const latestOpenInTargetsBundle =
+  '"open-in-targets":async({cwd:e,deferEnrichment:n=!1,hostId:r,nativeBrowserDiscovery:i=`scan`,path:a})=>{let o=this.getRequestAppServerClient(r??void 0),s=this.getSettingsStore();if(n&&a==null){let t=cP(s,e);return{preferredTarget:t,availableTargets:[],mode:`editor`,targets:Cj(eP(s),o.hostConfig).map(({id:e,label:n,icon:r,kind:i,hidden:a})=>({id:e,target:e,label:n,icon:r,kind:i,hidden:a,default:t===e||void 0}))}}let{allAvailableTargets:c,targetMetadata:l}=await nP(s,this.getOpenInWorker()),u=a?.replace(/^([ab])[\\\\/]/,``)??null,d=u!=null&&jF(u)&&!t.Ua(o.hostConfig),f=u==null||d||t.Ua(o.hostConfig)?null:this.resolveOpenFilePath(this.mapAgentPathToLocalPath(u,o.hostConfig)??u,this.mapAgentPathToLocalPath(e,o.hostConfig)??this.getWorkspaceRoot()),p=Sj(o.hostConfig,c,l),m=new Set(p),h=sP(s,e,m),g=d||f!=null&&t.is(f),_=f!=null&&aj(f),v=f!=null&&sj(f),y=g?await kF(i):_?await OF({filePath:f}):[];return{preferredTarget:h,availableTargets:Array.from(m),mode:g||v?`native`:`editor`,targets:[...l.map(({id:e,label:t,icon:n,kind:r,hidden:i})=>({id:e,target:e,label:t,icon:n,kind:r,hidden:i,available:m.has(e),default:h===e||void 0})),...y]}}';
 const openTargetSelectionBundle =
   "function e({targets:e,availableTargets:t,includeHiddenTargets:n=!1,mode:r=`editor`}){let i=e.filter(e=>e.appPath!=null);if(i.length>0)return i;if(r===`native`)return e.filter(e=>e.target===`systemDefault`||e.target===`fileManager`);let a=new Set(t);return e.filter(e=>a.has(e.target)&&(n||!e.hidden))}function t({preferredTarget:t,targets:n,availableTargets:r,includeHiddenTargets:i=!0,mode:a=`editor`}){let o=e({targets:n,availableTargets:r,includeHiddenTargets:i,mode:a});return o.length===0?null:t?o.find(e=>e.target===t)??o[0]??null:o[0]??null}function n(e){return e.appPath==null&&e.kind===`editor`}export{e as n,t as r,n as t};";
 
@@ -1306,6 +1308,14 @@ test("open-target discovery treats directories as native open targets in current
   assert.match(patched, /codexLinuxOpenTargetIsDirectory/);
   assert.match(patched, /w=f!=null&&codexLinuxOpenTargetIsDirectory\(f\)/);
   assert.match(patched, /g=d\|\|w\|\|f!=null&&t\.rs\(f\)/);
+});
+
+test("open-target discovery treats directories as native open targets in latest route shape", () => {
+  const patched = applyPatchTwice(applyOpenInTargetsDirectoryModePatch, latestOpenInTargetsBundle);
+
+  assert.match(patched, /codexLinuxOpenTargetIsDirectory/);
+  assert.match(patched, /w=f!=null&&codexLinuxOpenTargetIsDirectory\(f\)/);
+  assert.match(patched, /g=d\|\|w\|\|f!=null&&t\.is\(f\)/);
 });
 
 test("open-target discovery native selector includes available directory-capable targets", () => {
