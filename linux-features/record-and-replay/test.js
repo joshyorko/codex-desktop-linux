@@ -181,10 +181,11 @@ test("record-and-replay bridge temp trace files are private", () => {
 });
 
 test("record-and-replay HUD patch is idempotent and appends runtime UI", () => {
-  const source = "console.log('webview');";
+  const source = "console.log('webview');\n//# sourceMappingURL=index.js.map";
   const patched = applyRecordReplayHudPatch(source);
   assert.notEqual(patched, source);
   assert.equal(applyRecordReplayHudPatch(patched), patched);
+  assert.match(patched, /sourceMappingURL=index\.js\.map\n;\(\(\)=>/);
   assert.match(patched, /codexLinuxRecordReplayHudVersion/);
   assert.match(patched, /codex-linux-record-replay-hud/);
   assert.match(patched, /linux-record-replay-status/);
