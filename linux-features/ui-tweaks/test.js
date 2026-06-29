@@ -86,6 +86,15 @@ test("patch injects sidebar project-name stylesheet runtime once", () => {
         tweaks: {
           sidebar: {
             projectName: {
+              style: DEFAULT_PROJECT_NAME_STYLE,
+            },
+          },
+        },
+      },
+      settings: {
+        tweaks: {
+          sidebar: {
+            projectName: {
               style: "font-weight: 800 !important; color: red;",
             },
           },
@@ -105,12 +114,73 @@ test("patch injects sidebar project-name stylesheet runtime once", () => {
   assert.equal((patched.match(new RegExp(STYLE_ID, "g")) ?? []).length, 1);
 });
 
-test("default project name style is bold-only", () => {
+test("default project name style is bold with top padding and no forced color", () => {
   const featureJson = JSON.parse(fs.readFileSync(path.join(__dirname, "feature.json"), "utf8"));
   assert.equal(featureJson.tweaks.sidebar.projectName.style, DEFAULT_PROJECT_NAME_STYLE);
   assert.match(DEFAULT_PROJECT_NAME_STYLE, /font-weight:\s*700\s*!important/);
+  assert.match(DEFAULT_PROJECT_NAME_STYLE, /padding-top:\s*0\.25rem/);
   assert.doesNotMatch(DEFAULT_PROJECT_NAME_STYLE, /color/i);
   assert.doesNotMatch(sidebarProjectNameCss(DEFAULT_PROJECT_NAME_STYLE), /#000|black/i);
+});
+
+test("feature settings override the tracked defaults through features.json", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "ui-tweaks-settings-"));
+  try {
+    const featuresRoot = path.join(tempDir, "linux-features");
+    fs.mkdirSync(featuresRoot, { recursive: true });
+    copyFeatureTo(featuresRoot);
+    fs.writeFileSync(
+      path.join(featuresRoot, "features.json"),
+      `${JSON.stringify(
+        {
+          enabled: ["ui-tweaks"],
+          settings: {
+            "ui-tweaks": {
+              tweaks: {
+                sidebar: {
+                  projectName: {
+                    style: "font-weight: 800 !important; color: red;",
+                  },
+                },
+              },
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+
+    const [descriptor] = loadLinuxFeaturePatchDescriptors({ featuresRoot });
+    const patched = descriptor.apply(projectBundleFixture(), {});
+
+    assert.match(patched, /font-weight: 800 !important; color: red;/);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("invalid feature settings warn and fall back to defaults", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "ui-tweaks-invalid-settings-"));
+  try {
+    const featuresRoot = path.join(tempDir, "linux-features");
+    fs.mkdirSync(featuresRoot, { recursive: true });
+    copyFeatureTo(featuresRoot);
+    fs.writeFileSync(
+      path.join(featuresRoot, "features.json"),
+      '{"enabled":["ui-tweaks"],"settings":{"ui-tweaks":false}}\n',
+    );
+
+    const { value: descriptors, warnings } = withCapturedWarns(() =>
+      loadLinuxFeaturePatchDescriptors({ featuresRoot }),
+    );
+    const patched = descriptors[0].apply(projectBundleFixture(), {});
+
+    assert.match(warnings.join("\n"), /WARN: Linux feature 'ui-tweaks' settings/);
+    assert.match(patched, /font-weight: 700 !important; padding-top: 0.25rem;/);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
 });
 
 test("patch skips unrelated assets", () => {
@@ -140,6 +210,15 @@ test("invalid and empty styles warn and fall back without throwing", () => {
             tweaks: {
               sidebar: {
                 projectName: {
+                  style: DEFAULT_PROJECT_NAME_STYLE,
+                },
+              },
+            },
+          },
+          settings: {
+            tweaks: {
+              sidebar: {
+                projectName: {
                   style: badStyle,
                 },
               },
@@ -150,7 +229,7 @@ test("invalid and empty styles warn and fall back without throwing", () => {
     );
 
     assert.match(value, new RegExp(STYLE_ID));
-    assert.match(value, /font-weight: 700 !important;/);
+    assert.match(value, /font-weight: 700 !important; padding-top: 0.25rem;/);
     assert.equal(warnings.length, 1);
     assert.match(warnings[0], /^WARN: ui-tweaks sidebar project name style/);
   }

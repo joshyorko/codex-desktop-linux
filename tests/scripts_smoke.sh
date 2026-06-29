@@ -490,6 +490,19 @@ test_update_builder_preserves_enabled_linux_features_config() {
     "example-feature",
     "local-tool"
   ],
+  "settings": {
+    "example-feature": {
+      "tweaks": {
+        "enabled": true
+      }
+    },
+    "disabled-feature": {
+      "should": "not be packaged"
+    },
+    "local-tool": {
+      "mode": "local"
+    }
+  },
   "localComment": "should not be packaged"
 }
 JSON
@@ -512,13 +525,29 @@ JSON
     assert_file_exists "$staged_local_manifest"
     assert_contains "$staged_config" "example-feature"
     assert_contains "$staged_config" "local-tool"
+    assert_contains "$staged_config" "tweaks"
+    assert_contains "$staged_config" "mode"
     assert_not_contains "$staged_config" "localComment"
+    assert_not_contains "$staged_config" "disabled-feature"
 
     node - "$staged_config" <<'NODE' || fail "Expected staged Linux features config to be sanitized"
 const fs = require("node:fs");
 const configPath = process.argv[2];
 const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
-if (JSON.stringify(config) !== JSON.stringify({ enabled: ["example-feature", "local-tool"] })) {
+const expected = {
+  enabled: ["example-feature", "local-tool"],
+  settings: {
+    "example-feature": {
+      tweaks: {
+        enabled: true,
+      },
+    },
+    "local-tool": {
+      mode: "local",
+    },
+  },
+};
+if (JSON.stringify(config) !== JSON.stringify(expected)) {
   process.exit(1);
 }
 NODE
@@ -1843,7 +1872,22 @@ test_setup_native_wizard_noninteractive_feature_writer() {
 
     make_wizard_feature_root "$features_root"
     cat > "$config" <<'JSON'
-{"enabled":["conversation-mode"]}
+{
+  "enabled": [
+    "conversation-mode"
+  ],
+  "settings": {
+    "ui-tweaks": {
+      "tweaks": {
+        "sidebar": {
+          "projectName": {
+            "style": "font-weight: 700 !important; padding-top: 0.25rem;"
+          }
+        }
+      }
+    }
+  }
+}
 JSON
 
     CODEX_BOOTSTRAP_NONINTERACTIVE=1 \
@@ -1855,6 +1899,13 @@ JSON
         bash "$REPO_DIR/scripts/bootstrap-wizard.sh" >"$output_log"
 
     assert_json_enabled_equals "$config" '["remote-mobile-control","read-aloud"]'
+    node - "$config" <<'NODE' || fail "Expected setup-native wizard to preserve Linux feature settings"
+const fs = require("node:fs");
+const config = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+if (config.settings?.["ui-tweaks"]?.tweaks?.sidebar?.projectName?.style !== "font-weight: 700 !important; padding-top: 0.25rem;") {
+  process.exit(1);
+}
+NODE
     assert_contains "$output_log" "remote-mobile-control"
     assert_contains "$output_log" "read-aloud"
     assert_contains "$output_log" "Manual-update native package mode selected"

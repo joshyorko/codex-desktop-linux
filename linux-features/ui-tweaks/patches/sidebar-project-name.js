@@ -1,6 +1,6 @@
 "use strict";
 
-const DEFAULT_PROJECT_NAME_STYLE = "font-weight: 700 !important;";
+const DEFAULT_PROJECT_NAME_STYLE = "font-weight: 700 !important; padding-top: 0.25rem;";
 const PROJECT_NAME_SELECTOR = ".group\\/folder-row .min-w-0.truncate.pr-1";
 const STYLE_ID = "codex-linux-ui-tweaks-sidebar-project-name-style";
 const RUNTIME_MARKER = "codexLinuxUiTweaksSidebarProjectNameStyleRuntime";
@@ -31,7 +31,12 @@ function sidebarProjectNameStyleRuntimeSource(style = DEFAULT_PROJECT_NAME_STYLE
 }
 
 function sidebarProjectNameConfig(context) {
-  return context?.feature?.manifest?.tweaks?.sidebar?.projectName ?? {};
+  const defaults = context?.feature?.manifest?.tweaks?.sidebar?.projectName;
+  const settings = context?.feature?.settings?.tweaks?.sidebar?.projectName;
+  return {
+    ...(defaults != null && typeof defaults === "object" && !Array.isArray(defaults) ? defaults : {}),
+    ...(settings != null && typeof settings === "object" && !Array.isArray(settings) ? settings : {}),
+  };
 }
 
 function normalizedProjectNameStyle(context) {

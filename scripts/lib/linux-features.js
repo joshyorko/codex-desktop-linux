@@ -63,6 +63,24 @@ function readJsonFile(filePath, label) {
   }
 }
 
+function readLinuxFeaturesConfig(options = {}) {
+  const featuresRoot = linuxFeaturesRoot(options);
+  const configPath = linuxFeaturesConfigPath(featuresRoot, options);
+  if (!fs.existsSync(configPath)) {
+    return { config: null, configPath };
+  }
+
+  const config = readJsonFile(configPath, "Linux features config");
+  if (config == null) {
+    return { config: null, configPath };
+  }
+  if (typeof config !== "object" || Array.isArray(config)) {
+    console.warn(`WARN: Linux features config ${configPath} must be a JSON object`);
+    return { config: null, configPath };
+  }
+  return { config, configPath };
+}
+
 function assertFeatureId(value, label) {
   if (typeof value !== "string" || !FEATURE_ID_PATTERN.test(value)) {
     throw new Error(`${label} must match ${FEATURE_ID_PATTERN}`);
@@ -112,18 +130,59 @@ function normalizeEnabledFeatureIds(value, sourcePath) {
   return ids;
 }
 
-function enabledLinuxFeatureIds(options = {}) {
-  const featuresRoot = linuxFeaturesRoot(options);
-  const configPath = linuxFeaturesConfigPath(featuresRoot, options);
-  if (!fs.existsSync(configPath)) {
-    return [];
+function normalizeLinuxFeatureSettings(value, sourcePath) {
+  if (value == null) {
+    return {};
+  }
+  if (typeof value !== "object" || Array.isArray(value)) {
+    console.warn(`WARN: Linux features config ${sourcePath} settings must be an object`);
+    return {};
   }
 
-  const config = readJsonFile(configPath, "Linux features config");
-  if (config == null) {
-    return [];
+  const settings = {};
+  for (const [rawId, rawSettings] of Object.entries(value)) {
+    if (typeof rawId !== "string" || !FEATURE_ID_PATTERN.test(rawId)) {
+      console.warn(`WARN: Invalid Linux feature settings id in ${sourcePath}: ${String(rawId)}`);
+      continue;
+    }
+    const id = LEGACY_FEATURE_ID_ALIASES.get(rawId) ?? rawId;
+    if (rawSettings == null || typeof rawSettings !== "object" || Array.isArray(rawSettings)) {
+      console.warn(`WARN: Linux feature '${rawId}' settings in ${sourcePath} must be an object`);
+      continue;
+    }
+    settings[id] = rawSettings;
   }
-  return normalizeEnabledFeatureIds(config.enabled, configPath);
+  return settings;
+}
+
+function linuxFeaturesConfig(options = {}) {
+  const { config, configPath } = readLinuxFeaturesConfig(options);
+  if (config == null) {
+    return { enabled: [], settings: {}, configPath };
+  }
+  return {
+    enabled: normalizeEnabledFeatureIds(config.enabled, configPath),
+    settings: normalizeLinuxFeatureSettings(config.settings, configPath),
+    configPath,
+  };
+}
+
+function enabledLinuxFeatureIds(options = {}) {
+  return linuxFeaturesConfig(options).enabled;
+}
+
+function enabledLinuxFeaturesConfig(options = {}) {
+  const { enabled, settings } = linuxFeaturesConfig(options);
+  const filteredSettings = {};
+  for (const id of enabled) {
+    if (Object.prototype.hasOwnProperty.call(settings, id)) {
+      filteredSettings[id] = settings[id];
+    }
+  }
+  if (Object.keys(filteredSettings).length === 0) {
+    return { enabled };
+  }
+  return { enabled, settings: filteredSettings };
 }
 
 function isDirectory(filePath) {
@@ -249,14 +308,15 @@ function validateEnabledFeatureDependencies(features) {
 function loadEnabledLinuxFeatures(options = {}) {
   const featuresRoot = linuxFeaturesRoot(options);
   const available = linuxFeatureManifestMap({ ...options, featuresRoot });
+  const config = linuxFeaturesConfig({ ...options, featuresRoot });
   const features = [];
   const missing = [];
-  for (const id of enabledLinuxFeatureIds({ ...options, featuresRoot })) {
+  for (const id of config.enabled) {
     const feature = available.get(id);
     if (feature == null) {
       missing.push(id);
     } else {
-      features.push(feature);
+      features.push({ ...feature, settings: config.settings[id] ?? {} });
     }
   }
   if (missing.length > 0) {
@@ -823,6 +883,7 @@ if (require.main === module) {
 module.exports = {
   disabledLinuxFeatureCleanupHooks,
   discoverLinuxFeatureManifests,
+  enabledLinuxFeaturesConfig,
   enabledLinuxFeatureIds,
   enabledLinuxFeatureInstallPlan,
   enabledLinuxFeaturePackageHooks,

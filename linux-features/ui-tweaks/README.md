@@ -21,12 +21,36 @@ Enable it in the local, gitignored feature config:
 
 ## Settings
 
-This feature keeps tweak settings in `feature.json` under the `tweaks` object.
+Tracked defaults live in `feature.json`, but local preferences should not be
+edited there. Put user-specific overrides in the gitignored
+`linux-features/features.json` file under `settings.ui-tweaks`.
+
+Example local config:
+
+```json
+{
+  "enabled": ["ui-tweaks"],
+  "settings": {
+    "ui-tweaks": {
+      "tweaks": {
+        "sidebar": {
+          "projectName": {
+            "style": "font-weight: 800 !important; color: red;"
+          }
+        }
+      }
+    }
+  }
+}
+```
+
 Each tweak documents its own config keys below.
 
 ### `sidebar.projectName`
 
 Styles project names in the left sidebar project list.
+
+Tracked default in `feature.json`:
 
 ```json
 {
@@ -34,7 +58,7 @@ Styles project names in the left sidebar project list.
     "sidebar": {
       "projectName": {
         "enabled": true,
-        "style": "font-weight: 700 !important;"
+        "style": "font-weight: 700 !important; padding-top: 0.25rem;"
       }
     }
   }
@@ -46,8 +70,8 @@ Config keys:
 - `enabled`: `true` applies the tweak, `false` keeps the feature enabled but
   skips this specific tweak.
 - `style`: CSS declaration string inserted into the project-name rule. The
-  default is `font-weight: 700 !important;`, so project names are bold only and
-  no color is forced.
+  default is `font-weight: 700 !important; padding-top: 0.25rem;`, so project
+  names are bold with a small top offset and no color is forced.
 
 ## Drift Behavior
 
