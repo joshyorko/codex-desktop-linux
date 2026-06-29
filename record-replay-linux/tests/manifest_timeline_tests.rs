@@ -90,6 +90,15 @@ fn speech_context_is_timeline_evidence() {
     let raw = fs::read_to_string(root.join("timeline.jsonl")).unwrap();
     assert!(raw.contains("speech_context"));
     assert!(raw.contains("microphone-transcript"));
+    assert!(raw.contains("transcripts/0000.txt"));
+    assert_eq!(
+        fs::read_to_string(root.join("transcripts/0000.txt")).unwrap(),
+        "Use my spoken description as the expected workflow intent.\n",
+    );
+    let prompt = bundle_draft_prompt(root).unwrap();
+    assert!(prompt
+        .contains("speech context: Use my spoken description as the expected workflow intent."));
+    assert!(prompt.contains("file=transcripts/0000.txt"));
 }
 
 #[test]
@@ -474,6 +483,30 @@ fn validate_bundle_rejects_duplicate_timeline_indexes() {
         !report.is_valid(),
         "duplicate timeline indexes must invalidate the bundle"
     );
+}
+
+#[test]
+fn validate_bundle_rejects_unsafe_speech_context_file_paths() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    fs::write(root.join("manifest.json"), MANIFEST_VALID_FIXTURE).unwrap();
+    fs::write(
+        root.join("timeline.jsonl"),
+        concat!(
+            "{\"index\":0,\"recorded_at\":\"2026-06-28T12:00:00Z\",\"kind\":\"session_started\",\"payload\":{}}\n",
+            "{\"index\":1,\"recorded_at\":\"2026-06-28T12:00:01Z\",\"kind\":\"speech_context\",\"payload\":{\"transcript\":\"unsafe path\",\"file\":\"/tmp/transcript.txt\"}}\n",
+        ),
+    )
+    .unwrap();
+    create_standard_bundle_dirs(root);
+    fs::write(root.join("diagnostics.json"), "{}\n").unwrap();
+
+    let report = validate_bundle_dir(root).unwrap();
+    assert!(!report.is_valid());
+    assert!(report.errors.iter().any(|error| {
+        error.to_string().contains("speech_context.file")
+            && error.to_string().contains("must be relative")
+    }));
 }
 
 #[test]

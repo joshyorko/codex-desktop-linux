@@ -16,6 +16,7 @@ const {
   stageEnabledLinuxFeatureInstall,
 } = require("../../scripts/lib/linux-features.js");
 const {
+  applyRecordReplayDictationTranscriptPatch,
   applyRecordReplayHudPatch,
   applyRecordReplayPluginGatePatch,
   applyRecordReplayMainBridgePatch,
@@ -111,13 +112,14 @@ test("record-and-replay patch descriptor loads only when feature is enabled", ()
       "feature:record-and-replay:record-and-replay-plugin-gate",
       "feature:record-and-replay:linux-record-replay-main-bridge",
       "feature:record-and-replay:record-replay-hud",
+      "feature:record-and-replay:record-replay-dictation-transcript",
     ]);
     assert.ok(loaded.every((descriptor) => descriptor.ciPolicy === "optional"));
   });
 });
 
 test("record-and-replay bridge patch is idempotent and uses execFile", () => {
-  assert.equal(descriptors.length, 3);
+  assert.equal(descriptors.length, 4);
   const source = [
     "const cp=require(\"node:child_process\"),fs=require(\"node:fs\"),path=require(\"node:path\");",
     "var bridge={\"get-global-state\":async({key:e})=>null};",
@@ -193,10 +195,36 @@ test("record-and-replay HUD patch is idempotent and appends runtime UI", () => {
   assert.match(patched, /linux-record-replay-cancel-active/);
   assert.match(patched, /I'm done recording\./);
   assert.match(patched, /submitDoneMessage/);
+  assert.match(patched, /codexLinuxRecordReplaySpeechContext/);
+  assert.match(patched, /linux-record-replay-speech-context/);
   assert.match(patched, /finishRecording/);
   assert.match(patched, /discardRecording/);
   assert.match(patched, /Discard this Record & Replay recording/);
   assert.match(patched, /let stopped=await stopActive\(\),submitted=false/);
+});
+
+test("record-and-replay mirrors built-in dictation transcripts into active recording", () => {
+  const source =
+    "function done(){i.length>0&&(j.getInstance().dispatchMessage(`global-dictation-record-history-item`,{text:i}),e===`send`?n.onTranscriptSend(i):n.onTranscriptInsert(i))}";
+  const patched = applyRecordReplayDictationTranscriptPatch(source);
+
+  assert.notEqual(patched, source);
+  assert.equal(applyRecordReplayDictationTranscriptPatch(patched), patched);
+  assert.match(patched, /codexLinuxRecordReplaySpeechContext\?\.\(i,`codex-dictation-\$\{e\}`\)/);
+  assert.match(patched, /e!==`discard`/);
+  assert.match(patched, /global-dictation-record-history-item/);
+  assert.match(patched, /onTranscriptSend\(i\)/);
+});
+
+test("record-and-replay mirrors current dictation transcript shape", () => {
+  const source =
+    "function done(){q.length>0&&(Store.getInstance().dispatchMessage(`global-dictation-record-history-item`,{text:q}),mode===`send`?handlers.onTranscriptSend(q):handlers.onTranscriptInsert(q))}";
+  const patched = applyRecordReplayDictationTranscriptPatch(source);
+
+  assert.notEqual(patched, source);
+  assert.match(patched, /codexLinuxRecordReplaySpeechContext\?\.\(q,`codex-dictation-\$\{mode\}`\)/);
+  assert.match(patched, /mode!==`discard`/);
+  assert.match(patched, /handlers\.onTranscriptSend\(q\)/);
 });
 
 test("record-and-replay plugin gate is idempotent and linux-only", () => {

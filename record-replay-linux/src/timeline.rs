@@ -27,6 +27,8 @@ pub enum TimelineEvent {
     SpeechContext {
         transcript: String,
         #[serde(skip_serializing_if = "Option::is_none")]
+        file: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
         source: Option<String>,
     },
     SessionStopped,
@@ -108,11 +110,16 @@ impl TimelineRecord {
                         .push(TimelineValidationError::MissingField("user_marker.note"));
                 }
             }
-            TimelineEvent::SpeechContext { transcript, .. } => {
+            TimelineEvent::SpeechContext {
+                transcript, file, ..
+            } => {
                 if transcript.trim().is_empty() {
                     report.errors.push(TimelineValidationError::MissingField(
                         "speech_context.transcript",
                     ));
+                }
+                if let Some(file) = file {
+                    validate_event_path(file, "speech_context.file", &mut report);
                 }
             }
             TimelineEvent::Navigation { url } => {

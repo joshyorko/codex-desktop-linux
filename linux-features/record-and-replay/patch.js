@@ -3,7 +3,7 @@
 const { requireName } = require("../../scripts/patches/shared.js");
 
 const RECORD_REPLAY_PLUGIN_NAME = "record-and-replay";
-const HUD_RUNTIME_VERSION = 1;
+const HUD_RUNTIME_VERSION = 2;
 
 function warn(message, patchName) {
   console.warn(`WARN: ${message} - skipping ${patchName}`);
@@ -170,9 +170,12 @@ function recordReplayHudRuntimeSource() {
     `function positionHud(){if(!hud||hud.dataset.active!=="true")return;resetHudPosition();let target=findComposer();if(!target)return;let rect=target.getBoundingClientRect(),width=window.innerWidth||document.documentElement?.clientWidth||0,height=window.innerHeight||document.documentElement?.clientHeight||0;if(!width||!height||rect.width<160||rect.height<24||rect.top<0||rect.top>height)return;let left=Math.max(90,Math.min(width-90,rect.left+rect.width/2)),bottom=Math.max(72,Math.min(260,height-rect.top+8));hud.style.left=left+"px";hud.style.bottom=bottom+"px"}`,
     `function statusFrom(body){let s=body?.json?.state?body.json:body?.state?body:null;return s&&typeof s==="object"?s:null}`,
     `function active(s){if(!s||s.state!=="active")return false;if(s.expires_at&&Date.now()>Date.parse(s.expires_at))return false;return true}`,
+    `function sessionDirFrom(s){return s?.session_dir||s?.sessionDirectoryPath||s?.runtimeStatus?.session_dir||null}`,
     `function elapsedText(s){let start=Date.parse(s?.started_at||"");let seconds=Number.isFinite(start)?Math.max(0,Math.floor((Date.now()-start)/1000)):0;let m=Math.floor(seconds/60),r=String(seconds%60).padStart(2,"0");return m+":"+r}`,
     `function updateHud(){let h=ensureHud(),on=active(lastStatus);h.dataset.active=on?"true":"false";if(!on)return;let time=h.querySelector(".codex-linux-record-replay-time");time&&(time.textContent=elapsedText(lastStatus));h.title=lastStatus?.goal?("Recording: "+lastStatus.goal):"Record & Replay recording active";positionHud()}`,
     `async function refresh(){try{let body=await post("linux-record-replay-status",{},2500);lastStatus=statusFrom(body);updateHud()}catch{lastStatus=null;updateHud()}}`,
+    `async function recordSpeechContext(transcript,source="codex-dictation"){let text=typeof transcript==="string"?transcript.trim():"";if(!text)return false;let s=lastStatus;if(!active(s)){try{let body=await post("linux-record-replay-status",{},2500);s=statusFrom(body);lastStatus=s;updateHud()}catch{return false}}if(!active(s))return false;let sessionDir=sessionDirFrom(s);if(!sessionDir)return false;try{let body=await post("linux-record-replay-speech-context",{sessionDir:String(sessionDir),transcript:text,source},5000);return !!(body?.ok||body?.json?.ok)}catch{return false}}`,
+    `globalThis.codexLinuxRecordReplaySpeechContext=(transcript,source)=>recordSpeechContext(transcript,source);`,
     `async function stopActive(){try{let body=await post("linux-record-replay-stop-active",{},10000);return !!(body?.ok||body?.json?.ok)}catch{return false}finally{setTimeout(refresh,250)}}`,
     `async function cancelActive(discarded){try{let body=await post("linux-record-replay-cancel-active",{discarded:!!discarded},10000);return !!(body?.ok||body?.json?.ok)}catch{return false}finally{setTimeout(refresh,250)}}`,
     `async function finishRecording(){if(stopping||canceling)return;stopping=true;let btns=hud?.querySelectorAll("button")??[];btns.forEach(b=>b.disabled=true);try{let stopped=await stopActive(),submitted=false;try{submitted=await submitDoneMessage()}catch{}if(!stopped&&!submitted)await stopActive()}finally{stopping=false;btns.forEach(b=>b.disabled=false);setTimeout(refresh,250)}}`,
@@ -190,6 +193,32 @@ function applyRecordReplayHudPatch(currentSource) {
   }
   const separator = currentSource.endsWith("\n") ? "" : "\n";
   return currentSource + separator + recordReplayHudRuntimeSource();
+}
+
+function applyRecordReplayDictationTranscriptPatch(currentSource) {
+  if (currentSource.includes("codexLinuxRecordReplaySpeechContext?.(")) {
+    return currentSource;
+  }
+
+  const transcriptSendNeedle =
+    "i.length>0&&(j.getInstance().dispatchMessage(`global-dictation-record-history-item`,{text:i}),e===`send`?n.onTranscriptSend(i):n.onTranscriptInsert(i))";
+  if (currentSource.includes(transcriptSendNeedle)) {
+    return currentSource.replace(
+      transcriptSendNeedle,
+      "i.length>0&&(e!==`discard`&&globalThis.codexLinuxRecordReplaySpeechContext?.(i,`codex-dictation-${e}`)?.catch?.(()=>{}),j.getInstance().dispatchMessage(`global-dictation-record-history-item`,{text:i}),e===`send`?n.onTranscriptSend(i):n.onTranscriptInsert(i))",
+    );
+  }
+
+  const currentTranscriptPattern =
+    /([A-Za-z_$][\w$]*)\.length>0&&\(([A-Za-z_$][\w$]*)\.getInstance\(\)\.dispatchMessage\(`global-dictation-record-history-item`,\{text:\1\}\),([A-Za-z_$][\w$]*)===`send`\?([A-Za-z_$][\w$]*)\.onTranscriptSend\(\1\):\4\.onTranscriptInsert\(\1\)\)/u;
+  if (currentTranscriptPattern.test(currentSource)) {
+    return currentSource.replace(
+      currentTranscriptPattern,
+      "$1.length>0&&($3!==`discard`&&globalThis.codexLinuxRecordReplaySpeechContext?.($1,`codex-dictation-${$3}`)?.catch?.(()=>{}),$2.getInstance().dispatchMessage(`global-dictation-record-history-item`,{text:$1}),$3===`send`?$4.onTranscriptSend($1):$4.onTranscriptInsert($1))",
+    );
+  }
+
+  return currentSource;
 }
 
 const descriptors = [
@@ -216,11 +245,20 @@ const descriptors = [
     skipDescription: "Record & Replay HUD runtime patch",
     apply: applyRecordReplayHudPatch,
   },
+  {
+    id: "record-replay-dictation-transcript",
+    phase: "webview-asset",
+    order: 153,
+    ciPolicy: "optional",
+    pattern: /\.js$/,
+    apply: applyRecordReplayDictationTranscriptPatch,
+  },
 ];
 
 module.exports = {
   RECORD_REPLAY_PLUGIN_NAME,
   HUD_RUNTIME_VERSION,
+  applyRecordReplayDictationTranscriptPatch,
   applyRecordReplayPluginGatePatch,
   applyRecordReplayHudPatch,
   applyRecordReplayMainBridgePatch,

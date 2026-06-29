@@ -158,14 +158,19 @@ fn timeline_summary(record: &crate::timeline::TimelineRecord) -> String {
             )
         }
         TimelineEvent::UserMarker { note } => format!("user marker: {note}"),
-        TimelineEvent::SpeechContext { transcript, source } => {
-            format!(
-                "speech context{}: {transcript}",
-                source
-                    .as_ref()
-                    .map(|s| format!(" via {s}"))
-                    .unwrap_or_default()
-            )
+        TimelineEvent::SpeechContext {
+            transcript,
+            file,
+            source,
+        } => {
+            let mut summary = format!("speech context: {transcript}");
+            if let Some(source) = source {
+                summary.push_str(&format!(" via {source}"));
+            }
+            if let Some(file) = file {
+                summary.push_str(&format!(" file={file}"));
+            }
+            summary
         }
         TimelineEvent::SessionStopped => "session stopped".to_string(),
         TimelineEvent::SessionCancelled { discarded } => {

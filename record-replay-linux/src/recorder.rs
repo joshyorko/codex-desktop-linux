@@ -184,10 +184,20 @@ pub fn record_speech_context(
 ) -> Result<crate::timeline::TimelineRecord> {
     let _lock = crate::secure_fs::lock_directory(bundle_dir, ".recording.lock")?;
     ensure_bundle_open(bundle_dir)?;
+    let transcripts_dir = bundle_dir.join(TRANSCRIPTS_DIR_NAME);
+    crate::secure_fs::create_private_dir_all(&transcripts_dir)
+        .with_context(|| format!("failed to create {}", transcripts_dir.display()))?;
+    let relative = format!(
+        "{TRANSCRIPTS_DIR_NAME}/{:04}.txt",
+        next_artifact_index(&transcripts_dir)?
+    );
+    crate::secure_fs::write_private_file(&bundle_dir.join(&relative), format!("{transcript}\n"))
+        .with_context(|| format!("failed to write transcript {relative}"))?;
     let record = append_timeline_record(
         bundle_dir,
         TimelineEvent::SpeechContext {
             transcript: transcript.to_string(),
+            file: Some(relative),
             source,
         },
     )?;
