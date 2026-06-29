@@ -1,0 +1,87 @@
+# Record & Replay
+
+Opt-in Linux integration for Record & Replay demo-to-skill workflows.
+
+This feature stages the official `Record & Replay` bundled plugin shell from
+the current upstream DMG when it is available, swaps the macOS helper for a
+Linux `event-stream` helper, and keeps the fallback template aligned with that
+same contract. The staged plugin launches `./bin/SkyLinuxComputerUseClient
+event-stream mcp`; that helper is backed by the Rust
+`codex-record-replay-linux` binary. The Rust helper records Linux workflow
+evidence into a bundle, generates a skill-drafting prompt, and imports
+generated skills as ordinary Codex skill folders.
+
+It is disabled by default. Enable it in `linux-features/features.json`:
+
+```json
+{
+  "enabled": [
+    "record-and-replay"
+  ]
+}
+```
+
+## Build Prerequisite
+
+When this feature is enabled, staging builds `codex-record-replay-linux` with
+Cargo and copies the release binary into `resources/native/`, the staged plugin
+`bin/codex-record-replay-linux`, and the official-shaped plugin helper alias
+`bin/SkyLinuxComputerUseClient`. Builds without a Rust toolchain can set
+`CODEX_RECORD_REPLAY_LINUX_SOURCE` to an executable prebuilt
+`codex-record-replay-linux` binary.
+
+## Behavior
+
+- Records semantic evidence, not coordinate macro playback.
+- Creates bundles with `manifest.json`, `timeline.jsonl`, screenshots,
+  accessibility snapshots, browser trace evidence, transcript context,
+  InputCapture/libei readiness, X11 session metadata, diagnostics, and
+  `draft-prompt.md`.
+- Writes a structured `backend_catalog` into the bundle manifest and a matching
+  `backend_catalog` observation into the timeline so testers can see why
+  InputCapture/libei or X11 paths are available or missing.
+- Accepts browser/CDP-style trace JSON through the CLI, MCP, and Linux bridge
+  as semantic evidence for skill drafting.
+- Exposes the plugin as `Record & Replay` with MCP server `event-stream` and
+  skill `record-and-replay`.
+- Imports skills into `$HOME/.agents/skills` by default.
+- Uses Linux Computer Use diagnostics to describe GUI readiness.
+- Keeps replay skill-driven through Codex and available providers.
+- Treats InputCapture/libei and X11 backend entries as readiness/evidence
+  providers, not live coordinate macro replay.
+
+## Tester Contract
+
+Use the matrix in [docs/record-and-replay-linux.md](../../docs/record-and-replay-linux.md#tester-acceptance-matrix) for PR verification.
+
+Minimum report data:
+
+- Desktop environment.
+- Session type.
+- Computer Use doctor output.
+- Provider readiness summary.
+- Bundle path(s).
+- Generated skill path and behavior.
+- Any degradation, cap, stop, or cancel/discard notes.
+
+## Bridge
+
+The feature adds allowlisted bridge methods:
+
+- `linux-record-replay-doctor`
+- `linux-record-replay-status`
+- `linux-record-replay-start`
+- `linux-record-replay-mark`
+- `linux-record-replay-speech-context`
+- `linux-record-replay-browser-trace`
+- `linux-record-replay-stop`
+- `linux-record-replay-stop-active`
+- `linux-record-replay-cancel`
+- `linux-record-replay-cancel-active`
+- `linux-record-replay-bundle`
+- `linux-record-replay-draft-skill`
+- `linux-record-replay-import-skill`
+- `linux-record-replay-inspect-skill`
+
+All helper invocations use `execFile` with fixed command shapes. The bridge does
+not expose a shell or arbitrary argv surface.

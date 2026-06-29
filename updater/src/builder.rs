@@ -749,6 +749,7 @@ fi
             enable_wrapper_updates: false,
             wrapper_remote: String::new(),
             wrapper_branch: "main".to_string(),
+            generated_artifact_cleanup: Default::default(),
         };
         let dmg_path = temp.path().join("Codex.dmg");
         fs::write(&dmg_path, b"dmg")?;

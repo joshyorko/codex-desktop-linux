@@ -68,16 +68,16 @@ const path = require("node:path");
 
 const helperPath = path.resolve(process.argv[2]);
 const targetPath = path.resolve(process.argv[3]);
-const { enabledLinuxFeatureIds } = require(helperPath);
+const { enabledLinuxFeaturesConfig } = require(helperPath);
 
-const enabled = enabledLinuxFeatureIds();
-if (enabled.length === 0) {
+const config = enabledLinuxFeaturesConfig();
+if (config.enabled.length === 0) {
   fs.rmSync(targetPath, { force: true });
   process.exit(0);
 }
 
 fs.mkdirSync(path.dirname(targetPath), { recursive: true });
-fs.writeFileSync(targetPath, `${JSON.stringify({ enabled }, null, 2)}\n`);
+fs.writeFileSync(targetPath, `${JSON.stringify(config, null, 2)}\n`);
 NODE
 }
 
@@ -737,6 +737,7 @@ stage_update_builder_bundle() {
     cp "$REPO_DIR/Cargo.toml" "$update_builder_root/Cargo.toml"
     cp "$REPO_DIR/Cargo.lock" "$update_builder_root/Cargo.lock"
     cp -r "$REPO_DIR/computer-use-linux" "$update_builder_root/computer-use-linux"
+    cp -r "$REPO_DIR/record-replay-linux" "$update_builder_root/record-replay-linux"
     cp -r "$REPO_DIR/read-aloud-linux" "$update_builder_root/read-aloud-linux"
     cp -r "$REPO_DIR/updater" "$update_builder_root/updater"
     mkdir -p "$update_builder_root/plugins/openai-bundled/plugins"

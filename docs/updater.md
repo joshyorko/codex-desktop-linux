@@ -35,6 +35,27 @@ Runtime files:
 ~/.local/state/codex-desktop/app.pid
 ```
 
+## Generated Artifact Cleanup
+
+The updater always prunes unreferenced updater workspaces under
+`~/.cache/codex-update-manager/workspaces`. Local checkout build output such as
+`dist/`, `target/`, and `codex-app/` is cleaned only when explicitly enabled.
+
+Example:
+
+```toml
+[generated_artifact_cleanup]
+enabled = true
+min_free_bytes = 10737418240 # 10 GiB
+roots = ["/home/mohit/Github/codex-desktop-linux"]
+entries = ["dist", "target", "codex-app"]
+```
+
+If `roots` is omitted, the updater uses `builder_bundle_root`. Cleanup only runs
+when the filesystem containing a root has less than `min_free_bytes` available.
+Every entry must be a relative top-level name, and the updater only cleans roots
+that look like this wrapper repository or packaged update-builder.
+
 ## Rollback
 
 If a rebuilt update installs but the previous retained package was better,

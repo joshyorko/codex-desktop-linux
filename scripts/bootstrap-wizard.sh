@@ -793,15 +793,17 @@ def discover_features(root):
         }
     return dict(sorted(features.items()))
 
-def read_enabled_ids(path):
+def read_feature_config(path):
     if not path.exists():
         fallback = features_root / "features.example.json"
         if fallback.exists():
-            data = read_json(fallback, "Linux features example config") or {}
+            return read_json(fallback, "Linux features example config") or {}
         else:
-            return []
+            return {}
     else:
-        data = read_json(path, "Linux features config") or {}
+        return read_json(path, "Linux features config") or {}
+
+def read_enabled_ids(data, path):
     enabled = data.get("enabled", [])
     if not isinstance(enabled, list):
         die(f"Linux features config {path} must contain an enabled array")
@@ -819,7 +821,10 @@ def csv(ids):
     return ", ".join(ids) if ids else "none"
 
 features = discover_features(features_root)
-current = read_enabled_ids(config_path)
+config_data = read_feature_config(config_path)
+if not isinstance(config_data, dict):
+    die(f"Linux features config {config_path} must be a JSON object")
+current = read_enabled_ids(config_data, config_path)
 
 if output_mode == "tsv":
     # Machine-readable discovery for the GUI feature picker: one
@@ -863,7 +868,9 @@ for feature_id in final:
 
 if apply_changes and (enable or disable):
     config_path.parent.mkdir(parents=True, exist_ok=True)
-    config_path.write_text(json.dumps({"enabled": final}, indent=2) + "\n")
+    updated_config = dict(config_data)
+    updated_config["enabled"] = final
+    config_path.write_text(json.dumps(updated_config, indent=2) + "\n")
     print(f"[setup] Updated Linux feature config: {config_path}")
 elif not config_path.exists():
     print(f"[setup] Linux feature config: {config_path} (not created yet)")

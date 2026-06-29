@@ -607,6 +607,7 @@ function applyLinuxAppServerFeatureEnablementPatch(currentSource) {
     "remote_control",
     "remote_plugin",
     "tool_call_mcp_elicitation",
+    "tool_search",
     "tool_suggest",
   ]);
   const defaultFeaturesMarker = "statsig_default_enable_features";
@@ -630,19 +631,22 @@ function applyLinuxAppServerFeatureEnablementPatch(currentSource) {
 
   function sanitizeFeatureArrayDeclaration(source, arrayVar) {
     const arrayDeclarationRegex = new RegExp(
-      `(var\\s+${escapeRegExp(arrayVar)}=\\[)([^\\]]*?)(\\])`,
+      `(^|[^\\w$])((?:var\\s+)?${escapeRegExp(arrayVar)}=\\[)([^\\]]*?)(\\])`,
       "u",
     );
     const match = source.match(arrayDeclarationRegex);
     if (match == null) {
       return source;
     }
-    const [, prefix, featureArrayItems, suffix] = match;
+    const [, boundary, prefix, featureArrayItems, suffix] = match;
     const supportedFeatureArrayItems = sanitizeFeatureArrayItems(featureArrayItems);
     if (supportedFeatureArrayItems === featureArrayItems) {
       return source;
     }
-    return source.replace(arrayDeclarationRegex, `${prefix}${supportedFeatureArrayItems}${suffix}`);
+    return source.replace(
+      arrayDeclarationRegex,
+      `${boundary}${prefix}${supportedFeatureArrayItems}${suffix}`,
+    );
   }
 
   const featureArrayRegex =
@@ -1819,6 +1823,34 @@ function applyLinuxFastModeModelGuardPatch(currentSource) {
   return currentSource;
 }
 
+function applyLinuxSkillsListDedupePatch(currentSource) {
+  if (currentSource.includes("function codexLinuxDedupeSkills(")) {
+    return currentSource;
+  }
+
+  if (
+    !currentSource.includes("list-skills-for-host") ||
+    !currentSource.includes("function IJ(e){return e.skills}")
+  ) {
+    return currentSource;
+  }
+
+  const flatMapNeedle = "b=y.flatMap(IJ)";
+  const flatMapPatch = "b=codexLinuxDedupeSkills(y.flatMap(IJ))";
+  if (!currentSource.includes(flatMapNeedle)) {
+    console.warn(
+      "WARN: Could not find skills list flatten insertion point — skipping Linux skills dedupe patch",
+    );
+    return currentSource;
+  }
+
+  const helper =
+    "function codexLinuxDedupeSkills(e){try{let t=[],n=new Set;for(let r of e??[]){if(r==null){t.push(r);continue}let e=r.path??r.id??r.privateIdentity;if(e==null){t.push(r);continue}let i=String(e);if(n.has(i))continue;n.add(i),t.push(r)}return t}catch{return e}}";
+  return currentSource
+    .replace(flatMapNeedle, flatMapPatch)
+    .replace("function IJ(e){return e.skills}", `${helper}function IJ(e){return e.skills}`);
+}
+
 function patchCommentPreloadBundle(extractedDir) {
   const commentPreloadBundle = path.join(extractedDir, ".vite", "build", "comment-preload.js");
   if (!fs.existsSync(commentPreloadBundle)) {
@@ -1856,6 +1888,7 @@ module.exports = {
   applyLinuxWindowControlsSafeAreaPatch,
   applyLinuxSafeMonospaceFontStackPatch,
   applyLinuxFastModeModelGuardPatch,
+  applyLinuxSkillsListDedupePatch,
   applyLocalEnvironmentActionModalDraftPatch,
   applySubagentNicknameMetadataPatch,
   patchCommentPreloadBundle,

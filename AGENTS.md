@@ -68,7 +68,7 @@ The current flow is:
   perform explicit feature-owned cleanup.
 - `Cargo.toml`
   Workspace root. Members currently are `computer-use-linux`,
-  `read-aloud-linux`, and `updater`.
+  `read-aloud-linux`, `record-replay-linux`, and `updater`.
 - `flake.nix` / `flake.lock`
   Nix flake that pins upstream DMG, Cargo dependency, and Node dependency
   hashes. Use `scripts/ci/update-nix-hashes.sh` to refresh pins.
@@ -201,8 +201,9 @@ Detailed contract: `linux-features/README.md` and
   patcher, and package builders.
 - Declarative `resources`, `runtimeHooks`, and `packageHooks` are preferred
   over ad hoc staging whenever possible.
-- Runtime hook types are `env`, `prelaunch`, `electronArgs`, `coldStart`, and
-  `afterExit`; they are staged under `codex-app/.codex-linux/`.
+- Runtime hook types are `env`, `prelaunch`, `electronArgs`, `launcher`,
+  `coldStart`, and `afterExit`; they are staged under
+  `codex-app/.codex-linux/`.
 - Declarative resources and runtime hooks are tracked in
   `.codex-linux/linux-features-staged.json` and removed on the next install
   when their owning feature is disabled.
@@ -278,7 +279,7 @@ update-builder bundle under `/opt/codex-desktop/update-builder`.
 The updater runs unprivileged and only escalates through `pkexec` for
 `install-deb`, `install-rpm`, or `install-pacman`.
 
-### Computer Use, Browser, And Read Aloud
+### Computer Use, Browser, Read Aloud, And Record & Replay
 
 - `computer-use-linux/`
   Rust crate for Linux Computer Use MCP, Chrome native messaging host, and the
@@ -299,13 +300,17 @@ The updater runs unprivileged and only escalates through `pkexec` for
   Bundled plugin manifests/resources staged into the Linux app.
 - `read-aloud-linux/`
   Rust MCP backend for optional Read Aloud support.
+- `record-replay-linux/`
+  Rust CLI and stdio MCP backend for the optional Record & Replay Linux
+  demo-to-skill workflow.
 - `linux-features/read-aloud/` and `linux-features/read-aloud-mcp/`
   Optional Linux features for Read Aloud patching/staging/integration. They are
-  two of ~16 opt-in features under `linux-features/` (e.g. `agent-workspace`,
-  `appshots`, `codex-wrapper-updater`, `conversation-mode`,
-  `copilot-reasoning-effort`, `frameless-titlebar`, `node-repl-reaper`,
-  `open-target-discovery`, `remote-control-ui`, `remote-mobile-control`,
-  `thorium-chrome-plugin`, `x11-ewmh-computer-use`,
+  two of 19 opt-in features under `linux-features/` (e.g. `agent-workspace`,
+  `api-key-service-tier`, `appshots`, `authenticated-proxy`,
+  `codex-wrapper-updater`, `conversation-mode`, `copilot-reasoning-effort`,
+  `frameless-titlebar`, `node-repl-reaper`, `open-target-discovery`,
+  `persistent-status-panel`, `record-and-replay`, `remote-control-ui`,
+  `remote-mobile-control`, `thorium-chrome-plugin`, `x11-ewmh-computer-use`,
   plus the `example-feature` template); all ship `feature.json` + `README.md`
   and are disabled by default.
 
@@ -368,12 +373,16 @@ package. The daily-driver flow remains `install.sh` plus a native package plus
   Linux feature framework contract.
 - `docs/linux-computer-use.md`
   Linux Computer Use backend, windowing, and desktop integration notes.
+- `docs/record-and-replay-linux.md`
+  Linux Record & Replay compatibility and tester acceptance notes.
 - `docs/nix.md`
   Nix flake, modules (`nix/`), and hash-pin workflow.
 - `docs/troubleshooting.md`
   Common install/runtime issues and diagnostics.
 - `docs/github-cli-auth.md`
   GitHub CLI authentication guidance.
+- `docs/wayland-input-focus-investigation.md`
+  Historical Wayland/X11 input-focus investigation for issue #569.
 - `docs/webview-server-evaluation.md`
   Decision record for the future local webview server model.
 
@@ -537,6 +546,8 @@ cargo check -p codex-computer-use-linux
 cargo test -p codex-computer-use-linux
 cargo check -p codex-read-aloud-linux
 cargo test -p codex-read-aloud-linux
+cargo check -p codex-record-replay-linux
+cargo test -p codex-record-replay-linux
 ```
 
 For package payload changes, build the relevant formats and inspect metadata:

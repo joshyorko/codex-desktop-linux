@@ -1,3 +1,5 @@
+**IMPORTANT: THIS PROJECT SUPPORTS ONLY THE LATEST UPSTREAM `CODEX.DMG`. WHEN FIXING UPSTREAM DRIFT, REMOVE OLD DRIFT WORKAROUNDS IN THE SAME PULL REQUEST. DO NOT KEEP LEGACY DMG SHAPES, FALLBACK PATCH PATHS, OR VERSION-SPECIFIC COMPATIBILITY ZOOS AROUND. THE CODE SHOULD TARGET THE CURRENT DMG SO REVIEW, VALIDATION, AND DIAGNOSTICS DO NOT HAVE TO GUESS WHICH UPSTREAM VERSION FAILED.**
+
 # Contributing to Codex Desktop for Linux
 
 Thanks for your interest in contributing to Codex Desktop for Linux. This project adapts the official macOS Codex Desktop DMG into a runnable Linux app, packages it for multiple Linux distributions, and maintains a local Rust update manager for future rebuilds.

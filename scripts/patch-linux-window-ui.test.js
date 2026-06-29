@@ -763,6 +763,8 @@ test("default core patch descriptors are grouped and unique", () => {
     "linux-thread-side-panel-native-tooltip",
     "linux-fast-mode-model-guard",
     "linux-safe-monospace-font-stack",
+    "linux-skills-list-dedupe",
+    "linux-terminal-user-path",
     "subagent-nickname-metadata-shape",
     "local-environment-action-modal-draft",
     "linux-computer-use-ui-availability",
@@ -4411,11 +4413,10 @@ test("removes unsupported features from default app-server feature sync", () => 
 
   assert.match(
     patched,
-    /var GF=\[`apps`,`memories`,`mentions_v2`,`plugins`,`remote_control`,`remote_plugin`,`tool_call_mcp_elicitation`,`tool_suggest`\];/,
+    /var GF=\[`apps`,`memories`,`mentions_v2`,`plugins`,`remote_control`,`remote_plugin`,`tool_call_mcp_elicitation`,`tool_search`,`tool_suggest`\];/,
   );
   assert.doesNotMatch(patched, /`auth_elicitation`/);
   assert.doesNotMatch(patched, /`enable_mcp_apps`/);
-  assert.doesNotMatch(patched, /`tool_search`/);
   assert.doesNotMatch(patched, /,te\]/);
 });
 
@@ -4423,7 +4424,7 @@ test("patches the matched app-server feature sync array when an identical array 
   const unsupportedFeatureArray =
     "var GF=[`apps`,`auth_elicitation`,`enable_mcp_apps`,`memories`,`plugins`,`tool_call_mcp_elicitation`,`tool_search`,`tool_suggest`,te];";
   const supportedFeatureArray =
-    "var GF=[`apps`,`memories`,`plugins`,`tool_call_mcp_elicitation`,`tool_suggest`];";
+    "var GF=[`apps`,`memories`,`plugins`,`tool_call_mcp_elicitation`,`tool_search`,`tool_suggest`];";
   const source = [
     unsupportedFeatureArray,
     "function OF(){return GF}",

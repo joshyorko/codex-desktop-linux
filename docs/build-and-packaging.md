@@ -4,14 +4,17 @@
 
 You need:
 
-- `python3`, `7z` or `7zz`, `curl`, `unzip`, `make`, `g++`
+- `python3`, `7z` or `7zz`, `curl`, `unzip`, `tar`, `make`, `g++`
 - Rust toolchain with `cargo` for `codex-update-manager`,
-  `codex-computer-use-linux`, and the Chrome extension host binary
+  `codex-computer-use-linux`, the Chrome extension host binary, and optional
+  Rust-backed features such as Read Aloud MCP and Record & Replay
 
 The installer downloads a managed Linux Node.js runtime into
 `codex-app/resources/node-runtime` and uses it for `node`, `npm`, and `npx`
 during the build. Existing `nvm`, asdf, Volta, NodeSource, or nodejs.org
-installs are fine, but no longer required for this project.
+installs are fine, but no longer required for the generated app build. The
+dependency helper may still install or validate a distro Node.js toolchain on
+some bootstrap paths.
 
 Bootstrap dependencies:
 
@@ -26,18 +29,18 @@ packages, and bootstraps Rust through `rustup` when needed.
 
 ```bash
 # Fedora 41+
-sudo dnf install python3 7zip curl unzip rpm-build make gcc-c++ @development-tools
+sudo dnf install python3 7zip curl unzip tar rpm-build make gcc-c++ @development-tools
 
 # Fedora < 41
-sudo dnf install python3 p7zip p7zip-plugins curl unzip rpm-build make gcc-c++
+sudo dnf install python3 p7zip p7zip-plugins curl unzip tar rpm-build make gcc-c++
 sudo dnf groupinstall 'Development Tools'
 
 # openSUSE
-sudo zypper install python3 p7zip-full curl unzip
+sudo zypper install python3 p7zip-full curl unzip tar
 sudo zypper install -t pattern devel_basis
 
 # Arch / Manjaro
-sudo pacman -S --needed python p7zip curl unzip zstd base-devel
+sudo pacman -S --needed python p7zip curl unzip tar zstd base-devel
 
 # Rust toolchain
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh

@@ -1,3 +1,5 @@
+Before opening a pull request, read [CONTRIBUTING.md](https://github.com/ilysenko/codex-desktop-linux/blob/main/CONTRIBUTING.md).
+
 # Codex Desktop for Linux
 
 Unofficial Linux build wrapper for [OpenAI Codex Desktop](https://openai.com/codex/).
@@ -9,8 +11,7 @@ The project builds native `.deb`, `.rpm`, and `.pkg.tar.zst` packages, supports
 local AppImage self-builds and Nix, and can install a local update manager that
 rebuilds future Linux packages from newer upstream DMGs.
 
-Before opening a pull request, read [CONTRIBUTING.md](CONTRIBUTING.md). For
-implementation details, see [AGENTS.md](AGENTS.md).
+For implementation details, see [AGENTS.md](AGENTS.md).
 
 ## Install By Platform
 
@@ -97,6 +98,7 @@ workarounds.
 | Linux Computer Use backend | Bundled | MCP backend registers by default | [Linux Computer Use](docs/linux-computer-use.md) |
 | Linux Computer Use UI | Opt-in | `CODEX_LINUX_ENABLE_COMPUTER_USE_UI=1` or settings flag | [Linux Computer Use](docs/linux-computer-use.md#enable-the-in-app-ui) |
 | Linux Features framework | Opt-in | Edit `linux-features/features.json` | [Linux Features](linux-features/README.md) |
+| Record and Replay (alpha) | Opt-in alpha | `record-and-replay` | [Docs](linux-features/record-and-replay/README.md) |
 | Agent Workspaces | Opt-in | `agent-workspace` | [Docs](linux-features/agent-workspace/README.md) |
 | Linux AppShots | Opt-in | `appshots` | [Docs](linux-features/appshots/README.md) |
 | Wrapper updater button | Opt-in | `codex-wrapper-updater` | [Docs](linux-features/codex-wrapper-updater/README.md) |
@@ -104,11 +106,16 @@ workarounds.
 | Copilot reasoning effort defaults | Opt-in | `copilot-reasoning-effort` | [Docs](linux-features/copilot-reasoning-effort/README.md) |
 | Example Linux Feature | Developer example | `example-feature` | [Docs](linux-features/example-feature/README.md) |
 | Open Target Discovery | Opt-in | `open-target-discovery` | [Docs](linux-features/open-target-discovery/README.md) |
+| API key service tier | Opt-in | `api-key-service-tier` | [Docs](linux-features/api-key-service-tier/README.md) |
 | Read Aloud button | Opt-in | `read-aloud` | [Docs](linux-features/read-aloud/README.md) |
 | Read Aloud MCP | Opt-in | `read-aloud-mcp` | [Docs](linux-features/read-aloud-mcp/README.md) |
 | Remote Control UI gates | Opt-in | `remote-control-ui` | [Docs](linux-features/remote-control-ui/README.md) |
 | Experimental Remote Mobile Control | Opt-in | `remote-mobile-control` | [Docs](linux-features/remote-mobile-control/README.md) |
 | Thorium Chrome Plugin Support | Opt-in | `thorium-chrome-plugin` | [Docs](linux-features/thorium-chrome-plugin/README.md) |
+
+Additional opt-in features, including proxy, titlebar, process cleanup,
+status-panel, and X11 Computer Use adapters, are documented under
+`linux-features/`.
 
 Server-gated upstream features, such as model rollouts, are controlled by
 OpenAI per account. Rebuilding this wrapper does not unlock them.
@@ -226,12 +233,14 @@ Full list: [Troubleshooting](docs/troubleshooting.md).
 - [Native setup](docs/native-setup.md)
 - [Nix](docs/nix.md)
 - [Linux Computer Use](docs/linux-computer-use.md)
+- [Record and Replay on Linux](docs/record-and-replay-linux.md)
 - [Updater](docs/updater.md)
 - [Build and packaging](docs/build-and-packaging.md)
 - [Troubleshooting](docs/troubleshooting.md)
 - [Architecture](docs/architecture.md)
 - [GitHub CLI auth in app-launched shells](docs/github-cli-auth.md)
 - [Linux Features architecture](docs/linux-features-architecture.md)
+- [Wayland input focus investigation](docs/wayland-input-focus-investigation.md)
 - [Webview server evaluation](docs/webview-server-evaluation.md)
 
 ## Disclaimer

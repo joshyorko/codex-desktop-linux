@@ -165,6 +165,59 @@ function patchLinuxWorkerFileManagerTarget(extractedDir) {
   return { matched: 1, changed: 1 };
 }
 
+function applyLinuxTerminalUserPathPatch(currentSource) {
+  const marker = "function codexLinuxRestoreUserTerminalPath(";
+  const callMarker = "&&codexLinuxRestoreUserTerminalPath(";
+  if (currentSource.includes(marker) && currentSource.includes(callMarker)) {
+    return currentSource;
+  }
+
+  const terminalEnvRegex =
+    /async buildTerminalEnv\(([^)]*)\)\{let ([A-Za-z_$][\w$]*)=\{\.\.\.process\.env\};([\s\S]*?)return process\.platform!==`win32`&&\(\2\.TERM=([A-Za-z_$][\w$]*),delete \2\.TERMINFO,delete \2\.TERMINFO_DIRS\),([A-Za-z_$][\w$]*)\.\$r\(\2\)\}/u;
+  const match = currentSource.match(terminalEnvRegex);
+  if (match == null) {
+    if (currentSource.includes("buildTerminalEnv") && currentSource.includes("node-pty")) {
+      console.warn("WARN: Could not find terminal environment builder — skipping Linux terminal PATH patch");
+    }
+    return currentSource;
+  }
+
+  const [, params, envVar] = match;
+  const sessionVar = params.split(",").map((part) => part.trim())[2];
+  if (sessionVar == null || sessionVar.length === 0) {
+    console.warn("WARN: Could not identify terminal session parameter — skipping Linux terminal PATH patch");
+    return currentSource;
+  }
+
+  const helper =
+    "function codexLinuxRestoreUserTerminalPath(e){try{let t=process.env.CODEX_LINUX_USER_PATH,n=process.env.CODEX_MANAGED_NODE_RUNTIME_DIR,r=typeof n==`string`&&n.length>0?`${n}/bin`:null,i=typeof e.PATH==`string`?e.PATH:null;if(typeof t==`string`&&t.length>0){if(r!=null&&i!=null&&i.split(`:`).includes(r)&&i!==process.env.PATH){let n=[];for(let e of i.split(`:`))e===r?n.push(...t.split(`:`)):n.push(e);e.PATH=n.join(`:`)}else(i==null||i.length===0||i===process.env.PATH)&&(e.PATH=t)}delete e.CODEX_LINUX_USER_PATH}catch{}return e}";
+  const method = match[0];
+  const returnNeedle = `return process.platform!==\`win32\`&&(${envVar}.TERM=`;
+  const insertion =
+    `process.platform===\`linux\`&&this.isLocalTerminalSession(${sessionVar})&&codexLinuxRestoreUserTerminalPath(${envVar});`;
+  if (method.includes(insertion)) {
+    return currentSource.includes(marker) ? currentSource : `${helper}${currentSource}`;
+  }
+
+  const patchedMethod = method.replace(returnNeedle, `${insertion}${returnNeedle}`);
+  if (patchedMethod === method) {
+    console.warn("WARN: Could not insert Linux terminal PATH restoration — skipping terminal PATH patch");
+    return currentSource;
+  }
+
+  let patchedSource = currentSource.replace(method, patchedMethod);
+  if (!patchedSource.includes(marker)) {
+    patchedSource = `${helper}${patchedSource}`;
+  }
+
+  if (!patchedSource.includes(insertion) || !patchedSource.includes("CODEX_LINUX_USER_PATH")) {
+    console.warn("WARN: Linux terminal PATH patch verification failed");
+    return currentSource;
+  }
+
+  return patchedSource;
+}
+
 function applyLinuxGitOriginsSourceFallbackPatch(currentSource) {
   const fallbackSource = "linux_git_origins_missing_source_fallback";
   if (currentSource.includes(`source:\`${fallbackSource}\`,requestKind:`)) {
@@ -355,8 +408,19 @@ function applyLinuxXdgDocumentsDirPatch(currentSource) {
 
 function applyLinuxLocalAppServerFeatureEnablementHandlerPatch(currentSource) {
   const method = "set-local-app-server-feature-enablement";
+  const featureKeys = [
+    "remote_control",
+    "remote_plugin",
+    "memories",
+    "mentions_v2",
+    "tool_search",
+    "tool_suggest",
+    "tool_call_mcp_elicitation",
+    "plugins",
+    "apps",
+  ];
   const handler =
-    "async e=>{let t=e?.params??e??{},n={},r=(e,t)=>{typeof t===`boolean`&&(n[e]=t)};if(t.enablement&&typeof t.enablement===`object`)for(let[e,n]of Object.entries(t.enablement))r(e,n);let i=t.featureName??t.feature_name??t.name??t.feature??null,a=t.enabled;i!=null&&r(i,a);for(let e of[`remote_control`,`remote_plugin`,`memories`,`tool_suggest`,`tool_call_mcp_elicitation`,`plugins`,`apps`])r(e,t[e]);let o=this.sharedObjectRepository?.get?.(`local_app_server_feature_enablement`)??{};return this.sharedObjectRepository?.set?.(`local_app_server_feature_enablement`,{...o,...n}),Object.prototype.hasOwnProperty.call(n,`remote_control`)&&this.sharedObjectRepository?.set?.(`local_remote_control_enabled`,n.remote_control),{enabled:n}}";
+    `async e=>{let t=e?.params??e??{},n={},r=(e,t)=>{typeof t===\`boolean\`&&(n[e]=t)};if(t.enablement&&typeof t.enablement===\`object\`)for(let[e,n]of Object.entries(t.enablement))r(e,n);let i=t.featureName??t.feature_name??t.name??t.feature??null,a=t.enabled;i!=null&&r(i,a);for(let e of[${featureKeys.map((key) => `\`${key}\``).join(",")}])r(e,t[e]);let o=this.sharedObjectRepository?.get?.(\`local_app_server_feature_enablement\`)??{};return this.sharedObjectRepository?.set?.(\`local_app_server_feature_enablement\`,{...o,...n}),Object.prototype.hasOwnProperty.call(n,\`remote_control\`)&&this.sharedObjectRepository?.set?.(\`local_remote_control_enabled\`,n.remote_control),{enabled:n}}`;
   let patchedSource = currentSource;
 
   if (!patchedSource.includes(`methods:[\`${method}\`]`)) {
@@ -408,6 +472,7 @@ function applyLinuxLocalAppServerFeatureEnablementHandlerPatch(currentSource) {
 module.exports = {
   applyLinuxFileManagerPatch,
   applyLinuxGitOriginsSourceFallbackPatch,
+  applyLinuxTerminalUserPathPatch,
   applyLinuxLocalAppServerFeatureEnablementHandlerPatch,
   applyLinuxOwlFeatureBindingFallbackPatch,
   applyLinuxWorkerFileManagerPatch,

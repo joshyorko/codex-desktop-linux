@@ -202,6 +202,31 @@ fn maybe_prune_workspace_cache(workspace_root: &Path, state: &PersistedState) {
     }
 }
 
+fn maybe_prune_generated_artifacts(config: &RuntimeConfig) {
+    match cache_cleanup::prune_generated_artifacts(
+        &config.generated_artifact_cleanup,
+        &config.builder_bundle_root,
+    ) {
+        Ok(summary) if summary.pruned_paths > 0 => {
+            info!(
+                inspected_roots = summary.inspected_roots,
+                pruned_paths = summary.pruned_paths,
+                bytes_removed = summary.bytes_removed,
+                "pruned generated wrapper artifacts"
+            );
+        }
+        Ok(_) => {}
+        Err(error) => {
+            warn!(?error, "failed to prune generated wrapper artifacts");
+        }
+    }
+}
+
+fn maybe_prune_caches(config: &RuntimeConfig, state: &PersistedState) {
+    maybe_prune_workspace_cache(&config.workspace_root, state);
+    maybe_prune_generated_artifacts(config);
+}
+
 fn clear_wrapper_update_candidate_and_persist(
     state: &mut PersistedState,
     paths: &RuntimePaths,
@@ -353,7 +378,7 @@ async fn run_daemon(
     complete_current_dmg_update_if_already_installed(config, state, paths)?;
     codex_cli::reconcile_if_present(state, paths)?;
     normalize_workspace_dir_and_persist(state, paths)?;
-    maybe_prune_workspace_cache(&config.workspace_root, state);
+    maybe_prune_caches(config, state);
     maybe_notify_cli_missing(state, paths, config.notifications)?;
     if packaged_runtime_removed(config) {
         info!("packaged app files are gone; stopping updater daemon");
@@ -413,7 +438,7 @@ async fn run_check_now(
     complete_current_dmg_update_if_already_installed(config, state, paths)?;
     codex_cli::reconcile_if_present(state, paths)?;
     normalize_workspace_dir_and_persist(state, paths)?;
-    maybe_prune_workspace_cache(&config.workspace_root, state);
+    maybe_prune_caches(config, state);
     maybe_notify_cli_missing(state, paths, config.notifications)?;
     if if_stale && upstream_check_is_fresh(config, state) {
         if let Err(error) = detect_and_record_wrapper_update(config, state, paths) {
@@ -960,7 +985,7 @@ async fn run_check_cycle(
             .clone()
             .expect("candidate version should be set before local build");
         builder::build_update(config, state, paths, &candidate_version, &downloaded.path).await?;
-        maybe_prune_workspace_cache(&config.workspace_root, state);
+        maybe_prune_caches(config, state);
         maybe_notify_update_ready(state, paths, config.notifications)?;
         Ok(())
     }
@@ -968,7 +993,7 @@ async fn run_check_cycle(
 
     if let Err(error) = result {
         mark_failed_and_persist(state, paths, error.to_string())?;
-        maybe_prune_workspace_cache(&config.workspace_root, state);
+        maybe_prune_caches(config, state);
         let _ = notify_failure(config, state, paths, &error);
         return Err(error);
     }
@@ -1861,6 +1886,7 @@ mod tests {
             enable_wrapper_updates: false,
             wrapper_remote: String::new(),
             wrapper_branch: "main".to_string(),
+            generated_artifact_cleanup: Default::default(),
         }
     }
 
@@ -1898,6 +1924,7 @@ mod tests {
             enable_wrapper_updates: false,
             wrapper_remote: String::new(),
             wrapper_branch: "main".to_string(),
+            generated_artifact_cleanup: Default::default(),
         };
 
         let mut state = PersistedState::new(true);
@@ -2043,12 +2070,28 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
-    async fn fresh_check_now_still_clears_stale_wrapper_candidate() -> Result<()> {
+    #[test]
+    fn fresh_check_now_still_clears_stale_wrapper_candidate() -> Result<()> {
+        let _env_guard = crate::test_util::env_lock();
+        let runtime = tokio::runtime::Runtime::new()?;
         let temp = tempfile::tempdir()?;
         let paths = test_paths(temp.path());
         paths.ensure_dirs()?;
         let config = test_config(temp.path());
+        let _restore_env = crate::test_util::EnvRestoreGuard::capture(&[
+            "HOME",
+            "PATH",
+            "NVM_DIR",
+            "XDG_CONFIG_HOME",
+            "CODEX_CLI_PATH",
+            "CODEX_UPDATE_MANAGER_SKIP_SYSTEM_CLI_LOOKUP",
+        ]);
+        std::env::set_var("HOME", temp.path());
+        std::env::set_var("PATH", temp.path().join("missing-bin"));
+        std::env::remove_var("NVM_DIR");
+        std::env::remove_var("XDG_CONFIG_HOME");
+        std::env::remove_var("CODEX_CLI_PATH");
+        std::env::set_var("CODEX_UPDATE_MANAGER_SKIP_SYSTEM_CLI_LOOKUP", "1");
 
         let mut state = PersistedState::new(true);
         state.last_successful_check_at = Some(Utc::now());
@@ -2057,7 +2100,7 @@ mod tests {
         state.wrapper_changelog = Some("old changelog".to_string());
         state.wrapper_dev_mode = Some(true);
 
-        run_check_now(&config, &mut state, &paths, true).await?;
+        runtime.block_on(run_check_now(&config, &mut state, &paths, true))?;
 
         assert_eq!(state.status, UpdateStatus::Idle);
         assert_eq!(state.candidate_wrapper_commit, None);
@@ -2119,6 +2162,7 @@ mod tests {
             enable_wrapper_updates: false,
             wrapper_remote: String::new(),
             wrapper_branch: "main".to_string(),
+            generated_artifact_cleanup: Default::default(),
         };
 
         let mut state = PersistedState::new(false);
@@ -2159,6 +2203,7 @@ mod tests {
             enable_wrapper_updates: false,
             wrapper_remote: String::new(),
             wrapper_branch: "main".to_string(),
+            generated_artifact_cleanup: Default::default(),
         };
 
         for status in [
@@ -2361,6 +2406,7 @@ mod tests {
             enable_wrapper_updates: false,
             wrapper_remote: String::new(),
             wrapper_branch: "main".to_string(),
+            generated_artifact_cleanup: Default::default(),
         };
 
         let mut state = PersistedState::new(true);
@@ -2420,6 +2466,7 @@ mod tests {
             enable_wrapper_updates: false,
             wrapper_remote: String::new(),
             wrapper_branch: "main".to_string(),
+            generated_artifact_cleanup: Default::default(),
         };
 
         let mut state = PersistedState::new(false);
@@ -2485,6 +2532,7 @@ mod tests {
             enable_wrapper_updates: false,
             wrapper_remote: String::new(),
             wrapper_branch: "main".to_string(),
+            generated_artifact_cleanup: Default::default(),
         };
 
         let mut state = PersistedState::new(true);
@@ -2614,6 +2662,7 @@ mod tests {
             enable_wrapper_updates: false,
             wrapper_remote: String::new(),
             wrapper_branch: "main".to_string(),
+            generated_artifact_cleanup: Default::default(),
         };
 
         let mut state = PersistedState::new(true);
@@ -2683,6 +2732,7 @@ mod tests {
             enable_wrapper_updates: false,
             wrapper_remote: String::new(),
             wrapper_branch: "main".to_string(),
+            generated_artifact_cleanup: Default::default(),
         };
 
         let mut state = PersistedState::new(false);
@@ -2743,6 +2793,7 @@ mod tests {
             enable_wrapper_updates: false,
             wrapper_remote: String::new(),
             wrapper_branch: "main".to_string(),
+            generated_artifact_cleanup: Default::default(),
         };
 
         let mut state = PersistedState::new(true);
@@ -2810,6 +2861,7 @@ mod tests {
             enable_wrapper_updates: false,
             wrapper_remote: String::new(),
             wrapper_branch: "main".to_string(),
+            generated_artifact_cleanup: Default::default(),
         };
 
         let mut state = PersistedState::new(false);
@@ -2873,6 +2925,7 @@ mod tests {
             enable_wrapper_updates: false,
             wrapper_remote: String::new(),
             wrapper_branch: "main".to_string(),
+            generated_artifact_cleanup: Default::default(),
         };
 
         let mut state = PersistedState::new(false);
@@ -2923,6 +2976,7 @@ mod tests {
             enable_wrapper_updates: false,
             wrapper_remote: String::new(),
             wrapper_branch: "main".to_string(),
+            generated_artifact_cleanup: Default::default(),
         };
 
         let mut state = PersistedState::new(false);

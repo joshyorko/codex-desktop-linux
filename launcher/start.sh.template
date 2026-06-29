@@ -657,6 +657,10 @@ export_packaged_runtime_env() {
 prepend_managed_node_runtime_to_path() {
     [ -x "$MANAGED_NODE_BIN_DIR/node" ] || return 0
 
+    if [ -z "${CODEX_LINUX_USER_PATH+x}" ]; then
+        export CODEX_LINUX_USER_PATH="${PATH:-}"
+    fi
+
     case ":$PATH:" in
         *":$MANAGED_NODE_BIN_DIR:"*) ;;
         *) export PATH="$MANAGED_NODE_BIN_DIR:$PATH" ;;
@@ -724,6 +728,7 @@ bundled_plugin_version() {
 
     python3 - "$plugin_json" <<'PY'
 import json
+import re
 import sys
 
 try:
@@ -734,7 +739,10 @@ except (OSError, json.JSONDecodeError):
 
 if not isinstance(version, str) or not version.strip():
     raise SystemExit(1)
-print(version.strip())
+version = version.strip()
+if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+-]{0,127}", version) is None:
+    raise SystemExit(1)
+print(version)
 PY
 }
 
@@ -1191,6 +1199,75 @@ sync_read_aloud_bundled_plugin_cache() {
 
     mkdir -p "$marketplace_root/plugins"
     replace_symlink "$cache_root/latest" "$marketplace_plugin_link"
+}
+
+sync_extra_bundled_plugin_cache() {
+    local plugins_root="$SCRIPT_DIR/resources/plugins/openai-bundled/plugins"
+    local source_marketplace="$SCRIPT_DIR/resources/plugins/openai-bundled/.agents/plugins/marketplace.json"
+    local codex_home="${CODEX_HOME:-$HOME/.codex}"
+    local source_plugin
+    local plugin_json
+    local plugin_name
+    local plugin_dir_name
+    local version
+    local cache_root
+    local cache_plugin
+    local cache_parent
+    local tmp_plugin
+    local marketplace_root
+    local marketplace_plugins_dir
+    local marketplace_plugin_link
+
+    [ -d "$plugins_root" ] || return 0
+
+    for source_plugin in "$plugins_root"/*; do
+        [ -d "$source_plugin" ] || continue
+        plugin_dir_name="$(basename "$source_plugin")"
+        case "$plugin_dir_name" in
+            browser|chrome|computer-use|read-aloud) continue ;;
+        esac
+
+        plugin_json="$source_plugin/.codex-plugin/plugin.json"
+        [ -f "$plugin_json" ] || continue
+
+        plugin_name="$(bundled_plugin_name "$plugin_json" 2>/dev/null || true)"
+        version="$(bundled_plugin_version "$plugin_json" 2>/dev/null || true)"
+        [ -n "$plugin_name" ] || continue
+        [ -n "$version" ] || continue
+
+        cache_root="$codex_home/plugins/cache/openai-bundled/$plugin_name"
+        cache_plugin="$cache_root/$version"
+        cache_parent="$(dirname "$cache_plugin")"
+        tmp_plugin="$cache_parent/.$plugin_name-$version.tmp.$$"
+        remove_tree_if_exists "$tmp_plugin"
+        mkdir -p "$cache_parent"
+
+        if cp -R "$source_plugin" "$tmp_plugin"; then
+            make_tree_owner_writable "$tmp_plugin"
+            find "$tmp_plugin" -type f -name '*:com.apple.*' -delete
+            remove_tree_if_exists "$cache_plugin"
+            mv "$tmp_plugin" "$cache_plugin"
+            echo "Extra bundled plugin cache synced from bundled resources: $cache_plugin"
+        else
+            remove_tree_if_exists "$tmp_plugin"
+            echo "Extra bundled plugin cache sync failed for $plugin_name; continuing with existing cache."
+            continue
+        fi
+
+        replace_symlink "$version" "$cache_root/latest"
+
+        marketplace_root="$codex_home/.tmp/bundled-marketplaces/openai-bundled"
+        marketplace_plugins_dir="$marketplace_root/.agents/plugins"
+        marketplace_plugin_link="$marketplace_root/plugins/$plugin_dir_name"
+        mkdir -p "$marketplace_plugins_dir" "$marketplace_root/plugins"
+        if [ -f "$source_marketplace" ]; then
+            rm -f "$marketplace_plugins_dir/marketplace.json"
+            cp "$source_marketplace" "$marketplace_plugins_dir/marketplace.json" && \
+                chmod u+w "$marketplace_plugins_dir/marketplace.json" || \
+                echo "Extra bundled marketplace sync failed; continuing with existing marketplace cache."
+        fi
+        replace_symlink "$cache_root/latest" "$marketplace_plugin_link"
+    done
 }
 
 resolve_browser_use_runtime_env() {
@@ -3118,6 +3195,8 @@ if needs_cold_start; then
     log_phase "computer_use_plugin_cache_synced"
     sync_read_aloud_bundled_plugin_cache
     log_phase "read_aloud_plugin_cache_synced"
+    sync_extra_bundled_plugin_cache
+    log_phase "extra_bundled_plugin_cache_synced"
     run_cold_start_hooks
     log_phase "cold_start_hooks_dispatched"
 fi

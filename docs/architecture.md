@@ -89,6 +89,10 @@ cargo check -p codex-update-manager
 cargo test -p codex-update-manager
 cargo check -p codex-computer-use-linux
 cargo test -p codex-computer-use-linux
+cargo check -p codex-read-aloud-linux
+cargo test -p codex-read-aloud-linux
+cargo check -p codex-record-replay-linux
+cargo test -p codex-record-replay-linux
 make package
 ```
 

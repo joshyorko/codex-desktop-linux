@@ -1,0 +1,520 @@
+use anyhow::{bail, Context, Result};
+use chrono::Utc;
+use codex_computer_use_linux::{atspi_tree, diagnostics::DoctorReport, screenshot};
+use serde::Serialize;
+use serde_json::{json, Value};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
+
+use crate::{
+    backends::{
+        available_recorders, recording_backend_catalog, recording_backend_observation,
+        RecordingBackend,
+    },
+    manifest::{
+        write_manifest, ACCESSIBILITY_DIR_NAME, BROWSER_DIR_NAME, DIAGNOSTICS_FILE_NAME,
+        INPUT_CAPTURE_DIR_NAME, SCREENSHOTS_DIR_NAME, TIMELINE_FILE_NAME, TRANSCRIPTS_DIR_NAME,
+        X11_DIR_NAME,
+    },
+    timeline::{append_timeline_record, TimelineEvent},
+    RecordingBundleManifest,
+};
+
+#[derive(Debug, Clone)]
+pub struct RecordStartOptions {
+    pub session_dir: PathBuf,
+    pub app_id: Option<String>,
+    pub window_id: Option<String>,
+    pub goal: Option<String>,
+    pub include_screenshot: bool,
+    pub include_accessibility: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RecordStartReport {
+    pub ok: bool,
+    pub command: &'static str,
+    pub session_dir: PathBuf,
+    pub manifest: RecordingBundleManifest,
+    pub backend_catalog: Vec<RecordingBackend>,
+    pub warnings: Vec<String>,
+}
+
+pub async fn start_session(options: RecordStartOptions) -> Result<RecordStartReport> {
+    crate::secure_fs::create_new_private_dir(&options.session_dir)?;
+    for dir in [
+        SCREENSHOTS_DIR_NAME,
+        ACCESSIBILITY_DIR_NAME,
+        BROWSER_DIR_NAME,
+        TRANSCRIPTS_DIR_NAME,
+        INPUT_CAPTURE_DIR_NAME,
+        X11_DIR_NAME,
+    ] {
+        crate::secure_fs::create_private_dir_all(&options.session_dir.join(dir))
+            .with_context(|| format!("failed to create bundle directory {dir}"))?;
+    }
+    crate::secure_fs::write_private_file(&options.session_dir.join(TIMELINE_FILE_NAME), "")
+        .with_context(|| "failed to initialize timeline")?;
+
+    codex_computer_use_linux::diagnostics::hydrate_session_bus_env();
+    let diagnostics = codex_computer_use_linux::diagnostics::doctor_report();
+    let backend_catalog = recording_backend_catalog(&diagnostics);
+    crate::secure_fs::write_private_file(
+        &options.session_dir.join(DIAGNOSTICS_FILE_NAME),
+        format!("{}\n", serde_json::to_string_pretty(&diagnostics)?),
+    )
+    .with_context(|| "failed to write diagnostics snapshot")?;
+
+    let mut manifest =
+        RecordingBundleManifest::new(session_id(&options.session_dir), now_timestamp());
+    manifest.goal = options.goal.clone();
+    manifest.target.app_id = options.app_id.clone();
+    manifest.target.window_id = options.window_id.clone();
+    manifest.backend_catalog = backend_catalog.clone();
+    manifest.recorders = available_recorders(&manifest.backend_catalog);
+
+    write_manifest(&options.session_dir, &manifest)?;
+    append_timeline_record(
+        &options.session_dir,
+        TimelineEvent::SessionStarted {
+            goal: options.goal.clone(),
+        },
+    )?;
+    append_timeline_record(
+        &options.session_dir,
+        recording_backend_observation(&diagnostics),
+    )?;
+    for event in capture_startup_provider_evidence(
+        &options.session_dir,
+        &diagnostics,
+        &manifest.backend_catalog,
+    )? {
+        append_timeline_record(&options.session_dir, event)?;
+    }
+
+    let mut warnings = Vec::new();
+    if options.include_screenshot {
+        match capture_initial_screenshot(&options.session_dir).await {
+            Ok(Some(event)) => {
+                append_timeline_record(&options.session_dir, event)?;
+            }
+            Ok(None) => {}
+            Err(error) => {
+                let message = error.to_string();
+                warnings.push(message.clone());
+                append_timeline_record(
+                    &options.session_dir,
+                    TimelineEvent::Diagnostic {
+                        level: "warn".to_string(),
+                        message,
+                    },
+                )?;
+            }
+        }
+    }
+
+    if options.include_accessibility {
+        match capture_initial_accessibility(&options.session_dir, options.app_id.as_deref()).await {
+            Ok(Some(event)) => {
+                append_timeline_record(&options.session_dir, event)?;
+            }
+            Ok(None) => {}
+            Err(error) => {
+                let message = error.to_string();
+                warnings.push(message.clone());
+                append_timeline_record(
+                    &options.session_dir,
+                    TimelineEvent::Diagnostic {
+                        level: "warn".to_string(),
+                        message,
+                    },
+                )?;
+            }
+        }
+    }
+
+    if let Err(error) =
+        crate::runtime_status::write_active_status(&options.session_dir, options.goal.clone())
+    {
+        let message = format!("failed to update recording status: {error}");
+        warnings.push(message.clone());
+        append_timeline_record(
+            &options.session_dir,
+            TimelineEvent::Diagnostic {
+                level: "warn".to_string(),
+                message,
+            },
+        )?;
+    }
+
+    if !warnings.is_empty() {
+        manifest.warnings = warnings.clone();
+        write_manifest(&options.session_dir, &manifest)?;
+    }
+
+    Ok(RecordStartReport {
+        ok: true,
+        command: "record.start",
+        session_dir: options.session_dir,
+        manifest,
+        backend_catalog,
+        warnings,
+    })
+}
+
+pub fn mark_session(bundle_dir: &Path, note: &str) -> Result<crate::timeline::TimelineRecord> {
+    let _lock = crate::secure_fs::lock_directory(bundle_dir, ".recording.lock")?;
+    ensure_bundle_open(bundle_dir)?;
+    let record = append_timeline_record(
+        bundle_dir,
+        TimelineEvent::UserMarker {
+            note: note.to_string(),
+        },
+    )?;
+    let _ = crate::runtime_status::update_active_status_for(Some(bundle_dir), "mark");
+    Ok(record)
+}
+
+pub fn record_speech_context(
+    bundle_dir: &Path,
+    transcript: &str,
+    source: Option<String>,
+) -> Result<crate::timeline::TimelineRecord> {
+    let _lock = crate::secure_fs::lock_directory(bundle_dir, ".recording.lock")?;
+    ensure_bundle_open(bundle_dir)?;
+    let record = append_timeline_record(
+        bundle_dir,
+        TimelineEvent::SpeechContext {
+            transcript: transcript.to_string(),
+            source,
+        },
+    )?;
+    let _ = crate::runtime_status::update_active_status_for(Some(bundle_dir), "speech_context");
+    Ok(record)
+}
+
+pub fn record_browser_trace(
+    bundle_dir: &Path,
+    trace: Value,
+    url: Option<String>,
+    title: Option<String>,
+    source: Option<String>,
+) -> Result<crate::timeline::TimelineRecord> {
+    let _lock = crate::secure_fs::lock_directory(bundle_dir, ".recording.lock")?;
+    ensure_bundle_open(bundle_dir)?;
+    let browser_dir = bundle_dir.join(BROWSER_DIR_NAME);
+    crate::secure_fs::create_private_dir_all(&browser_dir)
+        .with_context(|| format!("failed to create {}", browser_dir.display()))?;
+    let relative = format!(
+        "{BROWSER_DIR_NAME}/{:04}-trace.json",
+        next_artifact_index(&browser_dir)?
+    );
+    crate::secure_fs::write_private_file(
+        &bundle_dir.join(&relative),
+        format!("{}\n", serde_json::to_string_pretty(&trace)?),
+    )
+    .with_context(|| format!("failed to write browser trace {relative}"))?;
+    let record = append_timeline_record(
+        bundle_dir,
+        TimelineEvent::BrowserTrace {
+            file: relative,
+            url,
+            title,
+            source,
+        },
+    )?;
+    let _ = crate::runtime_status::update_active_status_for(Some(bundle_dir), "browser_trace");
+    Ok(record)
+}
+
+pub fn stop_session(bundle_dir: &Path) -> Result<crate::timeline::TimelineRecord> {
+    if crate::runtime_status::expired_status_for(bundle_dir) {
+        return expire_session(bundle_dir);
+    }
+    finalize_session(
+        bundle_dir,
+        "recording_controls_stopped",
+        TimelineEvent::SessionStopped,
+        crate::runtime_status::write_stopped_status,
+    )
+}
+
+pub fn cancel_session(
+    bundle_dir: &Path,
+    discarded: bool,
+) -> Result<crate::timeline::TimelineRecord> {
+    if crate::runtime_status::expired_status_for(bundle_dir) {
+        return expire_session(bundle_dir);
+    }
+    let end_reason = if discarded {
+        "recording_controls_canceled_discarded"
+    } else {
+        "recording_controls_canceled"
+    };
+    finalize_session(
+        bundle_dir,
+        end_reason,
+        TimelineEvent::SessionCancelled { discarded },
+        |session_dir| crate::runtime_status::write_canceled_status(session_dir, discarded),
+    )
+}
+
+pub fn expire_session(bundle_dir: &Path) -> Result<crate::timeline::TimelineRecord> {
+    finalize_session(
+        bundle_dir,
+        "max_duration",
+        TimelineEvent::SessionExpired,
+        crate::runtime_status::write_expired_status,
+    )
+}
+
+pub fn ranked_recorders(diagnostics: &DoctorReport) -> Vec<String> {
+    let catalog = recording_backend_catalog(diagnostics);
+    available_recorders(&catalog)
+}
+
+async fn capture_initial_screenshot(bundle_dir: &Path) -> Result<Option<TimelineEvent>> {
+    let raw = screenshot::capture_screenshot_raw().await?;
+    let extension = if raw.mime_type == "image/jpeg" {
+        "jpg"
+    } else {
+        "png"
+    };
+    let relative = format!("{SCREENSHOTS_DIR_NAME}/0000.{extension}");
+    crate::secure_fs::write_private_file(&bundle_dir.join(&relative), raw.bytes)
+        .with_context(|| format!("failed to write screenshot {relative}"))?;
+    Ok(Some(TimelineEvent::Screenshot {
+        file: relative,
+        source: Some(raw.source),
+    }))
+}
+
+async fn capture_initial_accessibility(
+    bundle_dir: &Path,
+    app_id: Option<&str>,
+) -> Result<Option<TimelineEvent>> {
+    let nodes = atspi_tree::snapshot_tree(app_id, None, 120, 12).await?;
+    let relative = format!("{ACCESSIBILITY_DIR_NAME}/0000.json");
+    crate::secure_fs::write_private_file(
+        &bundle_dir.join(&relative),
+        format!("{}\n", serde_json::to_string_pretty(&nodes)?),
+    )
+    .with_context(|| format!("failed to write accessibility snapshot {relative}"))?;
+    Ok(Some(TimelineEvent::AccessibilitySnapshot {
+        file: relative,
+        count: nodes.len(),
+    }))
+}
+
+fn capture_startup_provider_evidence(
+    bundle_dir: &Path,
+    diagnostics: &DoctorReport,
+    backend_catalog: &[RecordingBackend],
+) -> Result<Vec<TimelineEvent>> {
+    let browser = backend_by_id(backend_catalog, "browser-trace");
+    let input_capture = backend_by_id(backend_catalog, "input-capture-libei");
+    let x11 = backend_by_id(backend_catalog, "x11-recording");
+
+    Ok(vec![
+        write_provider_evidence(
+            bundle_dir,
+            BROWSER_DIR_NAME,
+            "browser-trace",
+            "0000-readiness.json",
+            browser,
+            Some("startup".to_string()),
+            json!({
+                "schema_version": 1,
+                "provider": "browser-trace",
+                "captured_at": now_timestamp(),
+                "backend": browser,
+                "cdp": {
+                    "status": "ready_for_trace_ingest",
+                    "entrypoint": "record browser-trace",
+                    "notes": [
+                        "Browser traces are semantic evidence for skill drafting.",
+                        "Replay remains skill-driven; traces are not coordinate macros."
+                    ],
+                },
+            }),
+        )?,
+        write_provider_evidence(
+            bundle_dir,
+            INPUT_CAPTURE_DIR_NAME,
+            "input-capture-libei",
+            "0000-readiness.json",
+            input_capture,
+            Some("computer-use-doctor".to_string()),
+            json!({
+                "schema_version": 1,
+                "provider": "input-capture-libei",
+                "captured_at": now_timestamp(),
+                "backend": input_capture,
+                "portal_input_capture": diagnostics.portals.input_capture,
+                "session": {
+                    "xdg_session_type": diagnostics.platform.xdg_session_type,
+                    "xdg_current_desktop": diagnostics.platform.xdg_current_desktop,
+                },
+                "input_capabilities": diagnostics.capabilities.input,
+                "preferred_input": diagnostics.capabilities.preferred.input,
+                "notes": [
+                    "InputCapture/libei readiness is captured for tester diagnostics.",
+                    "This bundle does not replay raw captured input events."
+                ],
+            }),
+        )?,
+        write_provider_evidence(
+            bundle_dir,
+            X11_DIR_NAME,
+            "x11-recording",
+            "0000-session.json",
+            x11,
+            Some("computer-use-doctor".to_string()),
+            json!({
+                "schema_version": 1,
+                "provider": "x11-recording",
+                "captured_at": now_timestamp(),
+                "backend": x11,
+                "session": {
+                    "xdg_session_type": diagnostics.platform.xdg_session_type,
+                    "xdg_current_desktop": diagnostics.platform.xdg_current_desktop,
+                    "display": diagnostics.platform.display,
+                    "xauthority_present": diagnostics.platform.xauthority.is_some(),
+                },
+                "window_capabilities": diagnostics.capabilities.window_control,
+                "windowing_readiness": {
+                    "can_query_windows": diagnostics.readiness.can_query_windows,
+                    "can_focus_apps": diagnostics.readiness.can_focus_apps,
+                    "can_focus_windows": diagnostics.readiness.can_focus_windows,
+                },
+                "notes": [
+                    "X11 evidence records session/window metadata for Linux-specific drafting.",
+                    "Replay remains semantic through skills and Computer Use."
+                ],
+            }),
+        )?,
+    ])
+}
+
+fn write_provider_evidence(
+    bundle_dir: &Path,
+    dir_name: &str,
+    provider: &str,
+    file_name: &str,
+    backend: Option<&RecordingBackend>,
+    source: Option<String>,
+    data: Value,
+) -> Result<TimelineEvent> {
+    let provider_dir = bundle_dir.join(dir_name);
+    crate::secure_fs::create_private_dir_all(&provider_dir)
+        .with_context(|| format!("failed to create {}", provider_dir.display()))?;
+    let relative = format!("{dir_name}/{file_name}");
+    crate::secure_fs::write_private_file(
+        &bundle_dir.join(&relative),
+        format!("{}\n", serde_json::to_string_pretty(&data)?),
+    )
+    .with_context(|| format!("failed to write provider evidence {relative}"))?;
+    Ok(TimelineEvent::ProviderEvidence {
+        provider: provider.to_string(),
+        file: relative,
+        status: backend_status_label(backend),
+        source,
+    })
+}
+
+fn backend_by_id<'a>(
+    backend_catalog: &'a [RecordingBackend],
+    id: &str,
+) -> Option<&'a RecordingBackend> {
+    backend_catalog.iter().find(|backend| backend.id == id)
+}
+
+fn backend_status_label(backend: Option<&RecordingBackend>) -> String {
+    match backend.map(|backend| backend.status) {
+        Some(crate::RecordingBackendStatus::Available) => "available".to_string(),
+        Some(crate::RecordingBackendStatus::Missing) => "missing".to_string(),
+        None => "unknown".to_string(),
+    }
+}
+
+pub fn now_timestamp() -> String {
+    Utc::now().to_rfc3339()
+}
+
+fn session_id(session_dir: &Path) -> String {
+    session_dir
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map(sanitize_id)
+        .filter(|id| !id.is_empty())
+        .unwrap_or_else(|| format!("recording-{}", Utc::now().timestamp()))
+}
+
+fn sanitize_id(value: &str) -> String {
+    value
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                ch
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>()
+        .trim_matches('-')
+        .to_string()
+}
+
+fn next_artifact_index(dir: &Path) -> Result<usize> {
+    let mut max_index = None;
+    for entry in fs::read_dir(dir).with_context(|| format!("failed to read {}", dir.display()))? {
+        let entry = entry?;
+        let path = entry.path();
+        let Some(stem) = path.file_stem().and_then(|stem| stem.to_str()) else {
+            continue;
+        };
+        let numeric_prefix = stem.split('-').next().unwrap_or(stem);
+        if let Ok(index) = numeric_prefix.parse::<usize>() {
+            max_index = Some(max_index.map_or(index, |current: usize| current.max(index)));
+        }
+    }
+    Ok(max_index.map_or(0, |index| index + 1))
+}
+
+fn finalize_session(
+    bundle_dir: &Path,
+    end_reason: &'static str,
+    event: TimelineEvent,
+    update_status: impl FnOnce(&Path) -> Result<crate::runtime_status::RecordingRuntimeStatus>,
+) -> Result<crate::timeline::TimelineRecord> {
+    let _lock = crate::secure_fs::lock_directory(bundle_dir, ".recording.lock")?;
+    let mut manifest = crate::manifest::read_manifest(bundle_dir)?;
+    if let Some(existing_reason) = manifest.end_reason.as_deref() {
+        bail!("recording bundle is already sealed: {existing_reason}");
+    }
+    manifest.ended_at = Some(now_timestamp());
+    manifest.end_reason = Some(end_reason.to_string());
+    write_manifest(bundle_dir, &manifest)?;
+    let record = append_timeline_record(bundle_dir, event)?;
+    let _ = update_status(bundle_dir);
+    Ok(record)
+}
+
+fn ensure_bundle_open(bundle_dir: &Path) -> Result<()> {
+    let manifest = crate::manifest::read_manifest(bundle_dir)?;
+    if let Some(reason) = manifest.end_reason.as_deref() {
+        bail!("recording bundle is sealed: {reason}");
+    }
+    let status = crate::runtime_status::read_runtime_status();
+    if status.session_dir.as_deref() == Some(bundle_dir)
+        && matches!(
+            status.state,
+            crate::runtime_status::RecordingRuntimeState::Expired
+        )
+    {
+        bail!("recording bundle is expired");
+    }
+    Ok(())
+}
