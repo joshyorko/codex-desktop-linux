@@ -3,7 +3,9 @@ use codex_record_replay_linux::{
     skysight_status, stop_skysight, update_skysight_exclusion, SkysightExclusionUpdate,
     SkysightPaths,
 };
+use serde_json::Value;
 use std::{
+    collections::BTreeSet,
     env,
     sync::{Mutex, OnceLock},
 };
@@ -67,8 +69,12 @@ fn skysight_snapshot_creates_segment_directory_and_rollup_resources() {
         .and_then(|path| path.parent())
         .unwrap();
     assert!(segment_dir.is_dir());
-    assert!(segment_dir.join("events.jsonl").is_file());
-    assert!(segment_dir.join("metadata.json").is_file());
+    let events_path = segment_dir.join("events.jsonl");
+    let metadata_path = segment_dir.join("metadata.json");
+    let diagnostics_artifact_path = segment_dir.join("artifacts").join("diagnostics.json");
+    assert!(events_path.is_file());
+    assert!(metadata_path.is_file());
+    assert!(diagnostics_artifact_path.is_file());
     assert!(status
         .current_segment_metadata_path
         .as_ref()
@@ -97,10 +103,39 @@ fn skysight_snapshot_creates_segment_directory_and_rollup_resources() {
     assert!(!status.capture_capability_notes.is_empty());
     assert!(!status.summarizer_capability_notes.is_empty());
 
+    let events = read_jsonl(&events_path);
+    let kinds = events
+        .iter()
+        .filter_map(|event| event.get("kind").and_then(Value::as_str))
+        .collect::<BTreeSet<_>>();
+    assert!(events.len() >= 4);
+    assert!(kinds.contains("diagnostics"));
+    assert!(kinds.contains("provider_readiness"));
+    assert!(kinds.contains("diagnostics_artifact"));
+    assert!(kinds.iter().any(|kind| {
+        matches!(
+            *kind,
+            "window_metadata"
+                | "screenshot"
+                | "accessibility_snapshot"
+                | "accessibility_apps"
+                | "capture_error"
+                | "suppressed_evidence"
+        )
+    }));
+
+    let metadata: Value =
+        serde_json::from_str(&std::fs::read_to_string(&metadata_path).unwrap()).unwrap();
+    assert!(metadata["event_count"].as_u64().unwrap() >= 4);
+    assert!(metadata["artifact_count"].as_u64().unwrap() >= 1);
+    assert_eq!(metadata["summary_level"], "10min");
+
     let resource = std::fs::read_to_string(status.last_10min_resource.as_ref().unwrap()).unwrap();
     assert!(resource.contains("# Skysight Activity Summary"));
     assert!(resource.contains("[skysight memory]"));
-    assert!(resource.contains("segment count"));
+    assert!(resource.contains("covers `"));
+    assert!(resource.contains("Event kinds captured"));
+    assert!(resource.contains("Evidence artifacts in window"));
     assert!(resource.contains("Diagnostics summary"));
     assert!(resource.contains("Capture capabilities"));
     assert!(status
@@ -124,6 +159,10 @@ fn skysight_snapshot_creates_segment_directory_and_rollup_resources() {
     assert_eq!(current.state, "running");
     assert_eq!(current.last_10min_resource, status.last_10min_resource);
     assert_eq!(current.last_6h_resource, status.last_6h_resource);
+
+    let second = capture_skysight_snapshot(&paths, Some("test-second")).unwrap();
+    assert_ne!(second.last_10min_resource, status.last_10min_resource);
+    assert_eq!(second.last_6h_resource, status.last_6h_resource);
 
     let stopped = stop_skysight(&paths).unwrap();
     assert_eq!(stopped.state, "stopped");
@@ -211,4 +250,13 @@ fn skysight_exclusions_roundtrip_without_starting_service() {
 
     let status = skysight_status(&paths).unwrap();
     assert_eq!(status.exclusions_count, 1);
+}
+
+fn read_jsonl(path: &std::path::Path) -> Vec<Value> {
+    std::fs::read_to_string(path)
+        .unwrap()
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect()
 }

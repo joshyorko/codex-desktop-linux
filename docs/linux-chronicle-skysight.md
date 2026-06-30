@@ -17,6 +17,21 @@ transcription system.
 - Runtime state: `$XDG_RUNTIME_DIR/skysight`
 - Chronicle-compatible resources:
   `${CODEX_HOME:-$HOME/.codex}/memories_extensions/chronicle/resources`
+- Segment evidence:
+  `$XDG_RUNTIME_DIR/skysight/segments/<timestamp>-linux-activity/`
+
+Each segment writes:
+
+- `events.jsonl` with diagnostics, provider readiness, artifact references,
+  capture errors, and suppressed-evidence records.
+- `metadata.json` with event, artifact, exclusion, and suppression counts.
+- `artifacts/` with bounded local evidence such as diagnostics, screenshot
+  files, window/app metadata, and AT-SPI/accessibility snapshots when available.
+
+Skysight writes rolling `*-10min-*.md` resources for recent segment windows and
+cadence-limited `*-6h-*.md` rollups. Exclusion rules suppress matching
+window/app/accessibility evidence and record suppression counts instead of
+copying excluded content into resources.
 
 ## Verification After Rebuild
 
@@ -27,3 +42,6 @@ transcription system.
 4. Confirm `skysight status` reports the active resource path.
 5. Exercise `skysight pause`, `skysight resume`, and `skysight stop` through
    the helper or bridge.
+6. Capture `skysight snapshot` and confirm the segment has `events.jsonl`,
+   `metadata.json`, `artifacts/diagnostics.json`, a `*-10min-*.md` resource,
+   and either a newly-created or previously-current `*-6h-*.md` rollup.

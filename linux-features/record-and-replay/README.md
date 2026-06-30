@@ -38,8 +38,13 @@ Cargo and copies the release binary into `resources/native/`, the staged plugin
   native audio metadata/recordings when available, InputCapture/libei
   readiness, X11 session metadata, diagnostics, and `draft-prompt.md`.
 - Exposes Linux Skysight pause/resume, status, snapshots, exclusions, and a
-  lightweight daemon surface through the same `event-stream` MCP server so
+  rolling evidence daemon through the same `event-stream` MCP server so
   Chronicle-compatible resources can feed skill drafting.
+- Skysight segment directories contain `events.jsonl`, `metadata.json`, and
+  bounded artifacts such as diagnostics, screenshots, window metadata, and
+  AT-SPI/accessibility evidence when available.
+- Writes rolling 10-minute markdown summaries and cadence-limited 6-hour
+  rollups instead of treating every snapshot as a fresh six-hour window.
 - Writes a structured `backend_catalog` into the bundle manifest and a matching
   `backend_catalog` observation into the timeline so testers can see why
   InputCapture/libei or X11 paths are available or missing.

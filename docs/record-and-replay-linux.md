@@ -67,6 +67,19 @@ Chronicle-compatible resources are written under
 `${CODEX_HOME:-$HOME/.codex}/memories_extensions/chronicle/resources`, while the
 runtime state directory remains `$XDG_RUNTIME_DIR/skysight`.
 
+Each Linux Skysight snapshot now writes a segment directory with `events.jsonl`,
+`metadata.json`, and bounded `artifacts/` evidence. Events include Computer Use
+diagnostics, provider readiness, artifact references, capture failures, and
+suppressed-evidence records. Artifacts include diagnostics on every snapshot
+and add screenshots, window/app metadata, and AT-SPI/accessibility evidence
+when those providers are available. Exclusion rules are enforced before
+window/app/accessibility evidence is written and cause suppression records
+instead of leaking excluded content into summaries.
+
+The memory resources follow rolling-window semantics: `*-10min-*.md` summaries
+cover recent segment windows, while `*-6h-*.md` rollups are cadence-limited and
+reuse the current rollup until the next six-hour window is due.
+
 After rebuilding the feature, Josh can verify the branch with:
 
 1. `node --test linux-features/record-and-replay/test.js`
@@ -74,7 +87,10 @@ After rebuilding the feature, Josh can verify the branch with:
 3. A live `skysight status` check that reports the resource root.
 4. `skysight pause`, `skysight resume`, and `skysight stop` through the
    bridge or helper once the Rust worker is present.
-5. A bundle/snapshot pass that still treats `speech_context` as transcript
+5. A bundle/snapshot pass that shows segment `events.jsonl`, `metadata.json`,
+   `artifacts/diagnostics.json`, a `*-10min-*.md` resource, and a current
+   `*-6h-*.md` rollup.
+6. A recording pass that still treats `speech_context` as transcript
    evidence, not audio replay.
 
 See [docs/linux-chronicle-skysight.md](./linux-chronicle-skysight.md) for the
