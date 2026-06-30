@@ -43,9 +43,10 @@ pub use skill::{
     SkillImportReport, SkillInspection, SkillStatus,
 };
 pub use skysight::{
-    capture_skysight_snapshot, list_skysight_exclusions, run_skysight_daemon, skysight_status,
-    start_skysight, stop_skysight, update_skysight_exclusion, SkysightExclusion,
-    SkysightExclusionUpdate, SkysightPaths, SkysightStartOptions, SkysightStatus,
+    capture_skysight_snapshot, list_skysight_exclusions, pause_skysight, resume_skysight,
+    run_skysight_daemon, skysight_status, start_skysight, stop_skysight, update_skysight_exclusion,
+    SkysightExclusion, SkysightExclusionUpdate, SkysightPaths, SkysightStartOptions,
+    SkysightStatus,
 };
 pub use timeline::{
     append_timeline_record, parse_timeline_line, read_timeline, TimelineEvent, TimelineParseError,
@@ -112,6 +113,10 @@ pub enum SkysightCommand {
     Status,
     /// Stop the Linux Skysight background daemon.
     Stop,
+    /// Pause the Linux Skysight background daemon without deleting memory resources.
+    Pause(SkysightPauseArgs),
+    /// Resume the Linux Skysight background daemon after a pause.
+    Resume,
     /// Capture one Skysight snapshot without starting a daemon.
     Snapshot(SkysightSnapshotArgs),
     /// Run the foreground Skysight daemon loop.
@@ -166,6 +171,12 @@ pub struct SkysightStartArgs {
 pub struct SkysightSnapshotArgs {
     #[arg(long)]
     pub source: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct SkysightPauseArgs {
+    #[arg(long)]
+    pub reason: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -334,6 +345,10 @@ pub async fn command_json(command: Commands) -> Result<Value> {
                 )?)?),
                 SkysightCommand::Status => Ok(serde_json::to_value(skysight_status(&paths)?)?),
                 SkysightCommand::Stop => Ok(serde_json::to_value(stop_skysight(&paths)?)?),
+                SkysightCommand::Pause(args) => {
+                    Ok(serde_json::to_value(pause_skysight(&paths, args.reason)?)?)
+                }
+                SkysightCommand::Resume => Ok(serde_json::to_value(resume_skysight(&paths)?)?),
                 SkysightCommand::Snapshot(args) => Ok(serde_json::to_value(
                     capture_skysight_snapshot(&paths, args.source.as_deref())?,
                 )?),

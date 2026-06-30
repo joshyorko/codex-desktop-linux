@@ -92,6 +92,8 @@ pub async fn start_session(options: RecordStartOptions) -> Result<RecordStartRep
         &options.session_dir,
         &diagnostics,
         &manifest.backend_catalog,
+        options.app_id.as_deref(),
+        options.window_id.as_deref(),
     )? {
         append_timeline_record(&options.session_dir, event)?;
     }
@@ -288,9 +290,9 @@ pub fn cancel_session(
         return expire_session(bundle_dir);
     }
     let end_reason = if discarded {
-        "recording_controls_canceled_discarded"
+        "recording_controls_cancelled_discarded"
     } else {
-        "recording_controls_canceled"
+        "recording_controls_cancelled"
     };
     finalize_session(
         bundle_dir,
@@ -351,9 +353,12 @@ fn capture_startup_provider_evidence(
     bundle_dir: &Path,
     diagnostics: &DoctorReport,
     backend_catalog: &[RecordingBackend],
+    app_id: Option<&str>,
+    window_id: Option<&str>,
 ) -> Result<Vec<TimelineEvent>> {
     let browser = backend_by_id(backend_catalog, "browser-trace");
     let input_capture = backend_by_id(backend_catalog, "input-capture-libei");
+    let window_metadata = backend_by_id(backend_catalog, "window-metadata");
     let x11 = backend_by_id(backend_catalog, "x11-recording");
 
     Ok(vec![
@@ -431,6 +436,35 @@ fn capture_startup_provider_evidence(
                 "notes": [
                     "X11 evidence records session/window metadata for Linux-specific drafting.",
                     "Replay remains semantic through skills and Computer Use."
+                ],
+            }),
+        )?,
+        write_provider_evidence(
+            bundle_dir,
+            X11_DIR_NAME,
+            "window-metadata",
+            "0001-window-metadata.json",
+            window_metadata,
+            Some("computer-use-doctor".to_string()),
+            json!({
+                "schema_version": 1,
+                "provider": "window-metadata",
+                "captured_at": now_timestamp(),
+                "backend": window_metadata,
+                "target": {
+                    "requested_app_id": app_id,
+                    "requested_window_id": window_id,
+                },
+                "windowing_readiness": {
+                    "can_list_windows": diagnostics.windowing.can_list_windows,
+                    "can_query_windows": diagnostics.readiness.can_query_windows,
+                    "can_focus_apps": diagnostics.readiness.can_focus_apps,
+                    "can_focus_windows": diagnostics.readiness.can_focus_windows,
+                },
+                "window_capabilities": diagnostics.capabilities.window_control,
+                "notes": [
+                    "Window and app metadata is captured as evidence for skill drafting.",
+                    "Replay should target semantic app/window selectors through Computer Use."
                 ],
             }),
         )?,

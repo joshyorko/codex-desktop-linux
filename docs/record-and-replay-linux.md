@@ -55,6 +55,31 @@ official macOS bundle supplies that server through
 `SkyLinuxComputerUseClient event-stream mcp`, backed by the Rust
 `codex-record-replay-linux` backend.
 
+## Chronicle / Skysight Parity
+
+Chronicle/Skysight is the screen and event-memory sidecar for Record & Replay
+on Linux. It is not microphone transcription. The Linux bridge now exposes
+pause and resume alongside the existing start, status, stop, snapshot, and
+exclusion methods so the app can keep the active capture session alive while
+the backend moves between recording states.
+
+Chronicle-compatible resources are written under
+`${CODEX_HOME:-$HOME/.codex}/memories_extensions/chronicle/resources`, while the
+runtime state directory remains `$XDG_RUNTIME_DIR/skysight`.
+
+After rebuilding the feature, Josh can verify the branch with:
+
+1. `node --test linux-features/record-and-replay/test.js`
+2. A rebuild/install of the app or feature bundle.
+3. A live `skysight status` check that reports the resource root.
+4. `skysight pause`, `skysight resume`, and `skysight stop` through the
+   bridge or helper once the Rust worker is present.
+5. A bundle/snapshot pass that still treats `speech_context` as transcript
+   evidence, not audio replay.
+
+See [docs/linux-chronicle-skysight.md](./linux-chronicle-skysight.md) for the
+short runtime contract.
+
 Relevant upstream docs:
 
 - Record & Replay: <https://developers.openai.com/codex/record-and-replay>

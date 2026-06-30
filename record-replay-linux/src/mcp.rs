@@ -16,11 +16,11 @@ use std::{
 use crate::{
     available_recorders, bundle_draft_prompt, cancel_session, capture_skysight_snapshot,
     import_skill as import_skill_dir, inspect_skill as inspect_skill_dir, list_skysight_exclusions,
-    mark_session, record_browser_trace, record_speech_context, recording_backend_catalog,
-    skysight_status, start_session, start_skysight, stop_session, stop_skysight,
-    update_skysight_exclusion, validate_bundle_dir, validate_draft_prompt, RecordStartOptions,
-    RecordingRuntimeState, SkillImportOptions, SkysightExclusionUpdate, SkysightPaths,
-    SkysightStartOptions,
+    mark_session, pause_skysight, record_browser_trace, record_speech_context,
+    recording_backend_catalog, resume_skysight, skysight_status, start_session, start_skysight,
+    stop_session, stop_skysight, update_skysight_exclusion, validate_bundle_dir,
+    validate_draft_prompt, RecordStartOptions, RecordingRuntimeState, SkillImportOptions,
+    SkysightExclusionUpdate, SkysightPaths, SkysightStartOptions,
 };
 
 const DEFAULT_MAX_DURATION_SECONDS: u64 = 30 * 60;
@@ -128,6 +128,41 @@ impl RecordReplayLinux {
                 "status": status,
             })),
             Err(error) => error_json("skysight_stop", error),
+        }
+    }
+
+    #[tool(
+        name = "skysight_pause",
+        description = "Pause Linux Skysight without deleting local Chronicle-compatible memory resources."
+    )]
+    fn skysight_pause(
+        &self,
+        Parameters(params): Parameters<SkysightPauseParams>,
+    ) -> Json<ToolResponse> {
+        let paths = SkysightPaths::from_env();
+        match pause_skysight(&paths, params.reason) {
+            Ok(status) => tool_json(json!({
+                "ok": true,
+                "command": "skysight_pause",
+                "status": status,
+            })),
+            Err(error) => error_json("skysight_pause", error),
+        }
+    }
+
+    #[tool(
+        name = "skysight_resume",
+        description = "Resume Linux Skysight after it has been paused."
+    )]
+    fn skysight_resume(&self) -> Json<ToolResponse> {
+        let paths = SkysightPaths::from_env();
+        match resume_skysight(&paths) {
+            Ok(status) => tool_json(json!({
+                "ok": true,
+                "command": "skysight_resume",
+                "status": status,
+            })),
+            Err(error) => error_json("skysight_resume", error),
         }
     }
 
@@ -427,9 +462,9 @@ impl RecordReplayLinux {
                     .and_then(|manifest| manifest.end_reason.clone())
                     .or_else(|| {
                         Some(if discarded {
-                            "recording_controls_canceled_discarded".to_string()
+                            "recording_controls_cancelled_discarded".to_string()
                         } else {
-                            "recording_controls_canceled".to_string()
+                            "recording_controls_cancelled".to_string()
                         })
                     });
                 tool_json(json!({
@@ -685,6 +720,12 @@ struct SkysightSnapshotParams {
     source: Option<String>,
 }
 
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
+struct SkysightPauseParams {
+    /// Optional user-visible reason for pausing activity memory.
+    reason: Option<String>,
+}
+
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 struct SkysightExclusionParams {
     /// Exclusion kind, such as app or domain.
@@ -892,7 +933,7 @@ fn event_stream_metadata_path(session_dir: &Path) -> PathBuf {
 fn event_stream_end_reason(state: &RecordingRuntimeState) -> Option<&'static str> {
     match state {
         RecordingRuntimeState::Stopped => Some("recording_controls_stopped"),
-        RecordingRuntimeState::Canceled => Some("recording_controls_canceled"),
+        RecordingRuntimeState::Canceled => Some("recording_controls_cancelled"),
         RecordingRuntimeState::Expired => Some("max_duration"),
         RecordingRuntimeState::Active | RecordingRuntimeState::Idle => None,
     }

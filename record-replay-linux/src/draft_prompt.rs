@@ -254,16 +254,15 @@ fn is_canceled_bundle(
     manifest: &crate::manifest::RecordingBundleManifest,
     timeline: &[crate::timeline::TimelineRecord],
 ) -> bool {
-    manifest
-        .end_reason
-        .as_deref()
-        .is_some_and(|reason| reason.starts_with("recording_controls_canceled"))
-        || timeline.iter().any(|record| {
-            matches!(
-                record.event,
-                crate::timeline::TimelineEvent::SessionCancelled { .. }
-            )
-        })
+    manifest.end_reason.as_deref().is_some_and(|reason| {
+        reason.starts_with("recording_controls_cancelled")
+            || reason.starts_with("recording_controls_canceled")
+    }) || timeline.iter().any(|record| {
+        matches!(
+            record.event,
+            crate::timeline::TimelineEvent::SessionCancelled { .. }
+        )
+    })
 }
 
 pub fn validate_draft_prompt(content: &str) -> DraftPromptValidation {

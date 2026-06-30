@@ -168,7 +168,9 @@ pub fn stop_audio_capture(
         .file
         .as_ref()
         .is_some_and(|file| bundle_dir.join(file).exists());
-    report.status = if end_reason.starts_with("recording_controls_canceled") {
+    report.status = if end_reason.starts_with("recording_controls_cancelled")
+        || end_reason.starts_with("recording_controls_canceled")
+    {
         "canceled".to_string()
     } else if end_reason == "max_duration" {
         "expired".to_string()

@@ -37,14 +37,18 @@ Cargo and copies the release binary into `resources/native/`, the staged plugin
   accessibility snapshots, browser trace evidence, transcript context,
   native audio metadata/recordings when available, InputCapture/libei
   readiness, X11 session metadata, diagnostics, and `draft-prompt.md`.
-- Exposes Linux Skysight status, snapshots, exclusions, and a lightweight
-  daemon surface through the same `event-stream` MCP server so local recent
-  activity resources can feed skill drafting.
+- Exposes Linux Skysight pause/resume, status, snapshots, exclusions, and a
+  lightweight daemon surface through the same `event-stream` MCP server so
+  Chronicle-compatible resources can feed skill drafting.
 - Writes a structured `backend_catalog` into the bundle manifest and a matching
   `backend_catalog` observation into the timeline so testers can see why
   InputCapture/libei or X11 paths are available or missing.
 - Accepts browser/CDP-style trace JSON through the CLI, MCP, and Linux bridge
   as semantic evidence for skill drafting.
+- Treats Chronicle/Skysight as screen/event memory, not microphone
+  transcription.
+- See [docs/linux-chronicle-skysight.md](../../docs/linux-chronicle-skysight.md)
+  for the runtime resource contract and verification steps.
 - Exposes the plugin as `Record & Replay` with MCP server `event-stream` and
   skill `record-and-replay`.
 - Imports skills into `$HOME/.agents/skills` by default.
@@ -75,6 +79,8 @@ The feature adds allowlisted bridge methods:
 - `linux-record-replay-status`
 - `linux-record-replay-skysight-start`
 - `linux-record-replay-skysight-status`
+- `linux-record-replay-skysight-pause`
+- `linux-record-replay-skysight-resume`
 - `linux-record-replay-skysight-stop`
 - `linux-record-replay-skysight-snapshot`
 - `linux-record-replay-skysight-list-exclusions`
@@ -93,10 +99,11 @@ The feature adds allowlisted bridge methods:
 - `linux-record-replay-inspect-skill`
 
 The Rust helper also exposes MCP tools `skysight_start`,
-`skysight_status`, `skysight_stop`, `skysight_snapshot`,
-`skysight_update_exclusion`, and `skysight_list_exclusions`. Skysight runtime
-state defaults to `$XDG_RUNTIME_DIR/skysight`; memory resources default to
-`${CODEX_HOME:-$HOME/.codex}/memories/extensions/skysight/resources`.
+`skysight_status`, `skysight_pause`, `skysight_resume`, `skysight_stop`,
+`skysight_snapshot`, `skysight_update_exclusion`, and
+`skysight_list_exclusions`. Skysight runtime state defaults to
+`$XDG_RUNTIME_DIR/skysight`; memory resources default to
+`${CODEX_HOME:-$HOME/.codex}/memories_extensions/chronicle/resources`.
 
 All helper invocations use `execFile` with fixed command shapes. The bridge does
 not expose a shell or arbitrary argv surface.

@@ -132,6 +132,8 @@ test("record-and-replay bridge patch is idempotent and uses execFile", () => {
   assert.match(patched, /"--no-audio"/);
   assert.match(patched, /"linux-record-replay-skysight-start":async/);
   assert.match(patched, /"linux-record-replay-skysight-status":async/);
+  assert.match(patched, /"linux-record-replay-skysight-pause":async/);
+  assert.match(patched, /"linux-record-replay-skysight-resume":async/);
   assert.match(patched, /"linux-record-replay-skysight-update-exclusion":async/);
   assert.match(patched, /"linux-record-replay-speech-context":async/);
   assert.match(patched, /"linux-record-replay-browser-trace":async/);
@@ -151,6 +153,19 @@ test("record-and-replay bridge patch is idempotent and uses execFile", () => {
   assert.doesNotMatch(patched, /"--target"/);
   assert.doesNotMatch(patched, /"--target-dir"/);
   assert.doesNotMatch(patched, /"--mode"/);
+});
+
+test("record-and-replay docs mention pause resume and Chronicle-compatible resources", () => {
+  const readme = fs.readFileSync(path.join(__dirname, "README.md"), "utf8");
+  assert.match(readme, /linux-record-replay-skysight-pause/);
+  assert.match(readme, /linux-record-replay-skysight-resume/);
+  assert.match(readme, /Chronicle-compatible resources/);
+  assert.match(readme, /memories_extensions\/chronicle\/resources/);
+
+  const skill = fs.readFileSync(path.join(__dirname, "plugin-template/skills/record-and-replay/SKILL.md"), "utf8");
+  assert.match(skill, /pause/);
+  assert.match(skill, /resume/);
+  assert.match(skill, /Chronicle-compatible resources/);
 });
 
 test("record-and-replay bridge temp trace files are private", () => {

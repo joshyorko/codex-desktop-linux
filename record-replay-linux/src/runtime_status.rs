@@ -179,9 +179,9 @@ pub fn write_canceled_status(
     status.session_dir = Some(session_dir.to_path_buf());
     status.updated_at = Utc::now();
     status.end_reason = Some(if discarded {
-        "recording_controls_canceled_discarded".to_string()
+        "recording_controls_cancelled_discarded".to_string()
     } else {
-        "recording_controls_canceled".to_string()
+        "recording_controls_cancelled".to_string()
     });
     status.last_event = Some(if discarded {
         "cancel_discard".to_string()

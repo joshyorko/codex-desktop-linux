@@ -65,6 +65,13 @@ fn timeline_has_expected_event_shape() {
     if let TimelineEvent::Navigation { url } = navigation.event {
         assert!(url.ends_with('/'));
     }
+    let screenshot = parse_timeline_line(lines.next().expect("screenshot line")).unwrap();
+    assert!(matches!(screenshot.event, TimelineEvent::Screenshot { .. }));
+    let accessibility = parse_timeline_line(lines.next().expect("accessibility line")).unwrap();
+    assert!(matches!(
+        accessibility.event,
+        TimelineEvent::AccessibilitySnapshot { count: 3, .. }
+    ));
 }
 
 #[test]
@@ -167,6 +174,7 @@ fn start_session_writes_browser_input_capture_and_x11_evidence() {
     assert!(root.join("browser/0000-readiness.json").is_file());
     assert!(root.join("input-capture/0000-readiness.json").is_file());
     assert!(root.join("x11/0000-session.json").is_file());
+    assert!(root.join("x11/0001-window-metadata.json").is_file());
     let timeline = read_timeline(&root).unwrap();
     assert!(timeline.iter().any(|record| {
         matches!(&record.event, TimelineEvent::ProviderEvidence { provider, file, .. } if provider == "browser-trace" && file == "browser/0000-readiness.json")
@@ -176,6 +184,9 @@ fn start_session_writes_browser_input_capture_and_x11_evidence() {
     }));
     assert!(timeline.iter().any(|record| {
         matches!(&record.event, TimelineEvent::ProviderEvidence { provider, file, .. } if provider == "x11-recording" && file == "x11/0000-session.json")
+    }));
+    assert!(timeline.iter().any(|record| {
+        matches!(&record.event, TimelineEvent::ProviderEvidence { provider, file, .. } if provider == "window-metadata" && file == "x11/0001-window-metadata.json")
     }));
     assert!(validate_bundle_dir(&root).unwrap().is_valid());
 
@@ -861,7 +872,7 @@ fn record_cancel_marks_bundle_as_canceled_and_discarded() {
     assert_eq!(response["isRecording"], false);
     assert_eq!(
         response["endReason"],
-        "recording_controls_canceled_discarded"
+        "recording_controls_cancelled_discarded"
     );
     assert_eq!(
         response["sessionDirectoryPath"].as_str(),
@@ -871,13 +882,13 @@ fn record_cancel_marks_bundle_as_canceled_and_discarded() {
     assert_eq!(status.state, RecordingRuntimeState::Canceled);
     assert_eq!(
         status.end_reason.as_deref(),
-        Some("recording_controls_canceled_discarded")
+        Some("recording_controls_cancelled_discarded")
     );
 
     let manifest = codex_record_replay_linux::manifest::read_manifest(&root).unwrap();
     assert_eq!(
         manifest.end_reason.as_deref(),
-        Some("recording_controls_canceled_discarded")
+        Some("recording_controls_cancelled_discarded")
     );
     assert!(manifest.ended_at.is_some());
 
