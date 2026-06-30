@@ -14,10 +14,13 @@ use std::{
 };
 
 use crate::{
-    available_recorders, bundle_draft_prompt, cancel_session, import_skill as import_skill_dir,
-    inspect_skill as inspect_skill_dir, mark_session, record_browser_trace, record_speech_context,
-    recording_backend_catalog, start_session, stop_session, validate_bundle_dir,
-    validate_draft_prompt, RecordStartOptions, RecordingRuntimeState, SkillImportOptions,
+    available_recorders, bundle_draft_prompt, cancel_session, capture_skysight_snapshot,
+    import_skill as import_skill_dir, inspect_skill as inspect_skill_dir, list_skysight_exclusions,
+    mark_session, record_browser_trace, record_speech_context, recording_backend_catalog,
+    skysight_status, start_session, start_skysight, stop_session, stop_skysight,
+    update_skysight_exclusion, validate_bundle_dir, validate_draft_prompt, RecordStartOptions,
+    RecordingRuntimeState, SkillImportOptions, SkysightExclusionUpdate, SkysightPaths,
+    SkysightStartOptions,
 };
 
 const DEFAULT_MAX_DURATION_SECONDS: u64 = 30 * 60;
@@ -73,6 +76,124 @@ impl RecordReplayLinux {
     }
 
     #[tool(
+        name = "skysight_start",
+        description = "Start Linux Skysight so Codex can answer questions about recent activity."
+    )]
+    fn skysight_start(
+        &self,
+        Parameters(params): Parameters<SkysightStartParams>,
+    ) -> Json<ToolResponse> {
+        let paths = SkysightPaths::from_env();
+        match start_skysight(
+            &paths,
+            SkysightStartOptions {
+                interval_seconds: params.interval_seconds.unwrap_or(60),
+            },
+        ) {
+            Ok(status) => tool_json(json!({
+                "ok": true,
+                "command": "skysight_start",
+                "status": status,
+            })),
+            Err(error) => error_json("skysight_start", error),
+        }
+    }
+
+    #[tool(
+        name = "skysight_status",
+        description = "Get Linux Skysight status and paths to recent activity files."
+    )]
+    fn skysight_status(&self) -> Json<ToolResponse> {
+        let paths = SkysightPaths::from_env();
+        match skysight_status(&paths) {
+            Ok(status) => tool_json(json!({
+                "ok": true,
+                "command": "skysight_status",
+                "status": status,
+            })),
+            Err(error) => error_json("skysight_status", error),
+        }
+    }
+
+    #[tool(
+        name = "skysight_stop",
+        description = "Stop Linux Skysight and return the current status."
+    )]
+    fn skysight_stop(&self) -> Json<ToolResponse> {
+        let paths = SkysightPaths::from_env();
+        match stop_skysight(&paths) {
+            Ok(status) => tool_json(json!({
+                "ok": true,
+                "command": "skysight_stop",
+                "status": status,
+            })),
+            Err(error) => error_json("skysight_stop", error),
+        }
+    }
+
+    #[tool(
+        name = "skysight_snapshot",
+        description = "Capture one Linux Skysight activity snapshot into local segment and memory resources."
+    )]
+    fn skysight_snapshot(
+        &self,
+        Parameters(params): Parameters<SkysightSnapshotParams>,
+    ) -> Json<ToolResponse> {
+        let paths = SkysightPaths::from_env();
+        match capture_skysight_snapshot(&paths, params.source.as_deref()) {
+            Ok(status) => tool_json(json!({
+                "ok": true,
+                "command": "skysight_snapshot",
+                "status": status,
+            })),
+            Err(error) => error_json("skysight_snapshot", error),
+        }
+    }
+
+    #[tool(
+        name = "skysight_update_exclusion",
+        description = "Add, update, or remove a Linux Skysight app/domain exclusion."
+    )]
+    fn skysight_update_exclusion(
+        &self,
+        Parameters(params): Parameters<SkysightExclusionParams>,
+    ) -> Json<ToolResponse> {
+        let paths = SkysightPaths::from_env();
+        match update_skysight_exclusion(
+            &paths,
+            SkysightExclusionUpdate {
+                kind: params.kind,
+                value: params.value,
+                reason: params.reason,
+                remove: params.remove.unwrap_or(false),
+            },
+        ) {
+            Ok(exclusions) => tool_json(json!({
+                "ok": true,
+                "command": "skysight_update_exclusion",
+                "exclusions": exclusions,
+            })),
+            Err(error) => error_json("skysight_update_exclusion", error),
+        }
+    }
+
+    #[tool(
+        name = "skysight_list_exclusions",
+        description = "List Linux Skysight app/domain exclusions."
+    )]
+    fn skysight_list_exclusions(&self) -> Json<ToolResponse> {
+        let paths = SkysightPaths::from_env();
+        match list_skysight_exclusions(&paths) {
+            Ok(exclusions) => tool_json(json!({
+                "ok": true,
+                "command": "skysight_list_exclusions",
+                "exclusions": exclusions,
+            })),
+            Err(error) => error_json("skysight_list_exclusions", error),
+        }
+    }
+
+    #[tool(
         name = "event_stream_start",
         description = "Start recording the user's actions for up to 30 minutes. If a recording is already active, return that active session instead of starting another one."
     )]
@@ -118,6 +239,7 @@ impl RecordReplayLinux {
             goal: params.goal,
             include_screenshot: params.include_screenshot.unwrap_or(true),
             include_accessibility: params.include_accessibility.unwrap_or(true),
+            include_audio: params.include_audio.unwrap_or(true),
         })
         .await;
         match result {
@@ -415,7 +537,7 @@ impl RecordReplayLinux {
 #[tool_handler(
     name = "event-stream",
     version = "0.1.0-linux-alpha1",
-    instructions = "Use Event-stream to record Linux desktop/browser workflows and compile them into reusable Codex skills. Call doctor before first recording when readiness is uncertain. Use start, let the user perform the workflow, call speech_context when microphone or dictation transcript is available, call browser_trace when browser/CDP trace evidence is available, optionally call mark for important intent boundaries, call stop when the user says they are done, inspect the bundle, draft a skill prompt, create or refine SKILL.md, then import the skill when the user approves. Replay through Codex skills and Computer Use; do not replay raw pointer coordinates as the main architecture."
+    instructions = "Use Event-stream to record Linux desktop/browser workflows and compile them into reusable Codex skills. Call doctor before first recording when readiness is uncertain. Use skysight_start or skysight_snapshot when recent activity context will help the skill draft. Use start/event_stream_start, let the user perform the workflow, call speech_context only for additional transcript text that is explicitly available, call browser_trace when browser/CDP trace evidence is available, optionally call mark for important intent boundaries, call stop/event_stream_stop when the user says they are done, inspect the bundle, draft a skill prompt, create or refine SKILL.md, then import the skill when the user approves. Replay through Codex skills and Computer Use; do not replay raw pointer coordinates as the main architecture."
 )]
 impl ServerHandler for RecordReplayLinux {}
 
@@ -547,6 +669,32 @@ struct StartParams {
     include_screenshot: Option<bool>,
     /// Capture an initial AT-SPI accessibility snapshot. Defaults to true.
     include_accessibility: Option<bool>,
+    /// Capture native Linux audio evidence when an audio recorder is available. Defaults to true.
+    include_audio: Option<bool>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
+struct SkysightStartParams {
+    /// Seconds between daemon snapshots. Defaults to 60.
+    interval_seconds: Option<u64>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
+struct SkysightSnapshotParams {
+    /// Optional snapshot source label.
+    source: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct SkysightExclusionParams {
+    /// Exclusion kind, such as app or domain.
+    kind: String,
+    /// App name, bundle id, window title fragment, or domain to exclude.
+    value: String,
+    /// Optional reason shown in local diagnostics.
+    reason: Option<String>,
+    /// Remove the matching exclusion instead of adding/updating it.
+    remove: Option<bool>,
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]

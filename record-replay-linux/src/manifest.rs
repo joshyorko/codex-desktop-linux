@@ -11,6 +11,7 @@ pub const SCREENSHOTS_DIR_NAME: &str = "screenshots";
 pub const ACCESSIBILITY_DIR_NAME: &str = "accessibility";
 pub const BROWSER_DIR_NAME: &str = "browser";
 pub const TRANSCRIPTS_DIR_NAME: &str = "transcripts";
+pub const AUDIO_DIR_NAME: &str = "audio";
 pub const INPUT_CAPTURE_DIR_NAME: &str = "input-capture";
 pub const X11_DIR_NAME: &str = "x11";
 pub const DIAGNOSTICS_FILE_NAME: &str = "diagnostics.json";
@@ -28,6 +29,8 @@ pub struct FileShape {
     pub browser: String,
     #[serde(default = "default_transcripts")]
     pub transcripts: String,
+    #[serde(default = "default_audio")]
+    pub audio: String,
     #[serde(default = "default_input_capture")]
     pub input_capture: String,
     #[serde(default = "default_x11")]
@@ -46,6 +49,7 @@ impl Default for FileShape {
             accessibility: default_accessibility(),
             browser: default_browser(),
             transcripts: default_transcripts(),
+            audio: default_audio(),
             input_capture: default_input_capture(),
             x11: default_x11(),
             diagnostics: default_diagnostics(),
@@ -55,13 +59,14 @@ impl Default for FileShape {
 }
 
 impl FileShape {
-    pub fn entries(&self) -> [(&'static str, &str); 9] {
+    pub fn entries(&self) -> [(&'static str, &str); 10] {
         [
             ("timeline", self.timeline.as_str()),
             ("screenshots", self.screenshots.as_str()),
             ("accessibility", self.accessibility.as_str()),
             ("browser", self.browser.as_str()),
             ("transcripts", self.transcripts.as_str()),
+            ("audio", self.audio.as_str()),
             ("input_capture", self.input_capture.as_str()),
             ("x11", self.x11.as_str()),
             ("diagnostics", self.diagnostics.as_str()),
@@ -207,7 +212,13 @@ pub fn validate_bundle_dir(bundle_dir: &Path) -> Result<BundleValidationReport> 
         };
         let expected_dir = matches!(
             field,
-            "screenshots" | "accessibility" | "browser" | "transcripts" | "input_capture" | "x11"
+            "screenshots"
+                | "accessibility"
+                | "browser"
+                | "transcripts"
+                | "audio"
+                | "input_capture"
+                | "x11"
         );
         if !path.exists() {
             if field != "draft_prompt" {
@@ -435,6 +446,10 @@ fn default_browser() -> String {
 
 fn default_transcripts() -> String {
     TRANSCRIPTS_DIR_NAME.to_string()
+}
+
+fn default_audio() -> String {
+    AUDIO_DIR_NAME.to_string()
 }
 
 fn default_input_capture() -> String {

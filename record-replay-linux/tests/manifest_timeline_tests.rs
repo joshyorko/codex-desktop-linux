@@ -159,6 +159,7 @@ fn start_session_writes_browser_input_capture_and_x11_evidence() {
             goal: Some("record backend evidence".to_string()),
             include_screenshot: false,
             include_accessibility: false,
+            include_audio: false,
         }))
         .unwrap();
 
@@ -208,6 +209,7 @@ fn start_session_creates_private_bundle_and_status_files() {
             goal: Some("private bundle".to_string()),
             include_screenshot: false,
             include_accessibility: false,
+            include_audio: false,
         }))
         .unwrap();
 
@@ -237,6 +239,58 @@ fn start_session_creates_private_bundle_and_status_files() {
     match previous {
         Some(path) => std::env::set_var("CODEX_RECORD_REPLAY_STATUS_PATH", path),
         None => std::env::remove_var("CODEX_RECORD_REPLAY_STATUS_PATH"),
+    }
+}
+
+#[test]
+fn start_and_stop_session_records_audio_metadata_without_composer_dictation() {
+    let _guard = status_env_guard();
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("bundle");
+    let status_path = temp.path().join("status.json");
+    let previous_status = std::env::var_os("CODEX_RECORD_REPLAY_STATUS_PATH");
+    let previous_audio = std::env::var_os("CODEX_RECORD_REPLAY_AUDIO");
+    std::env::set_var("CODEX_RECORD_REPLAY_STATUS_PATH", &status_path);
+    std::env::set_var("CODEX_RECORD_REPLAY_AUDIO", "0");
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime
+        .block_on(start_session(RecordStartOptions {
+            session_dir: root.clone(),
+            app_id: None,
+            window_id: None,
+            goal: Some("audio metadata".to_string()),
+            include_screenshot: false,
+            include_accessibility: false,
+            include_audio: true,
+        }))
+        .unwrap();
+
+    assert!(root.join("audio/recording.json").is_file());
+    let timeline = read_timeline(&root).unwrap();
+    assert!(timeline.iter().any(|record| {
+        matches!(&record.event, TimelineEvent::AudioRecording { status, metadata_file, .. }
+            if status == "disabled" && metadata_file == "audio/recording.json")
+    }));
+
+    stop_session(&root).unwrap();
+    let timeline = read_timeline(&root).unwrap();
+    assert!(timeline.iter().any(|record| {
+        matches!(&record.event, TimelineEvent::AudioRecording { status, metadata_file, .. }
+            if status == "stopped" && metadata_file == "audio/recording.json")
+    }));
+    assert!(validate_bundle_dir(&root).unwrap().is_valid());
+
+    match previous_status {
+        Some(path) => std::env::set_var("CODEX_RECORD_REPLAY_STATUS_PATH", path),
+        None => std::env::remove_var("CODEX_RECORD_REPLAY_STATUS_PATH"),
+    }
+    match previous_audio {
+        Some(value) => std::env::set_var("CODEX_RECORD_REPLAY_AUDIO", value),
+        None => std::env::remove_var("CODEX_RECORD_REPLAY_AUDIO"),
     }
 }
 
@@ -298,6 +352,7 @@ fn start_session_rejects_existing_or_symlink_session_dir() {
         goal: None,
         include_screenshot: false,
         include_accessibility: false,
+        include_audio: false,
     }));
     assert!(
         result.is_err(),
@@ -319,6 +374,7 @@ fn start_session_rejects_existing_or_symlink_session_dir() {
         goal: None,
         include_screenshot: false,
         include_accessibility: false,
+        include_audio: false,
     }));
     assert!(result.is_err(), "session_dir symlinks must be rejected");
 
@@ -349,6 +405,7 @@ fn sealed_sessions_reject_mutations_and_terminal_rewrites() {
             goal: None,
             include_screenshot: false,
             include_accessibility: false,
+            include_audio: false,
         }))
         .unwrap();
 
@@ -894,6 +951,7 @@ fn create_standard_bundle_dirs(root: &Path) {
         "accessibility",
         "browser",
         "transcripts",
+        "audio",
         "input-capture",
         "x11",
     ] {

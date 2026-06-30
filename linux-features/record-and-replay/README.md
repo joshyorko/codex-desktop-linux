@@ -35,8 +35,11 @@ Cargo and copies the release binary into `resources/native/`, the staged plugin
 - Records semantic evidence, not coordinate macro playback.
 - Creates bundles with `manifest.json`, `timeline.jsonl`, screenshots,
   accessibility snapshots, browser trace evidence, transcript context,
-  InputCapture/libei readiness, X11 session metadata, diagnostics, and
-  `draft-prompt.md`.
+  native audio metadata/recordings when available, InputCapture/libei
+  readiness, X11 session metadata, diagnostics, and `draft-prompt.md`.
+- Exposes Linux Skysight status, snapshots, exclusions, and a lightweight
+  daemon surface through the same `event-stream` MCP server so local recent
+  activity resources can feed skill drafting.
 - Writes a structured `backend_catalog` into the bundle manifest and a matching
   `backend_catalog` observation into the timeline so testers can see why
   InputCapture/libei or X11 paths are available or missing.
@@ -70,6 +73,12 @@ The feature adds allowlisted bridge methods:
 
 - `linux-record-replay-doctor`
 - `linux-record-replay-status`
+- `linux-record-replay-skysight-start`
+- `linux-record-replay-skysight-status`
+- `linux-record-replay-skysight-stop`
+- `linux-record-replay-skysight-snapshot`
+- `linux-record-replay-skysight-list-exclusions`
+- `linux-record-replay-skysight-update-exclusion`
 - `linux-record-replay-start`
 - `linux-record-replay-mark`
 - `linux-record-replay-speech-context`
@@ -82,6 +91,12 @@ The feature adds allowlisted bridge methods:
 - `linux-record-replay-draft-skill`
 - `linux-record-replay-import-skill`
 - `linux-record-replay-inspect-skill`
+
+The Rust helper also exposes MCP tools `skysight_start`,
+`skysight_status`, `skysight_stop`, `skysight_snapshot`,
+`skysight_update_exclusion`, and `skysight_list_exclusions`. Skysight runtime
+state defaults to `$XDG_RUNTIME_DIR/skysight`; memory resources default to
+`${CODEX_HOME:-$HOME/.codex}/memories/extensions/skysight/resources`.
 
 All helper invocations use `execFile` with fixed command shapes. The bridge does
 not expose a shell or arbitrary argv surface.

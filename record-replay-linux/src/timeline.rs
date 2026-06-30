@@ -31,6 +31,14 @@ pub enum TimelineEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         source: Option<String>,
     },
+    AudioRecording {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        file: Option<String>,
+        metadata_file: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provider: Option<String>,
+        status: String,
+    },
     SessionStopped,
     SessionCancelled {
         discarded: bool,
@@ -120,6 +128,22 @@ impl TimelineRecord {
                 }
                 if let Some(file) = file {
                     validate_event_path(file, "speech_context.file", &mut report);
+                }
+            }
+            TimelineEvent::AudioRecording {
+                file,
+                metadata_file,
+                status,
+                ..
+            } => {
+                if let Some(file) = file {
+                    validate_event_path(file, "audio_recording.file", &mut report);
+                }
+                validate_event_path(metadata_file, "audio_recording.metadata_file", &mut report);
+                if status.trim().is_empty() {
+                    report.errors.push(TimelineValidationError::MissingField(
+                        "audio_recording.status",
+                    ));
                 }
             }
             TimelineEvent::Navigation { url } => {

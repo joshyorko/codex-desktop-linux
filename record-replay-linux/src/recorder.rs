@@ -14,9 +14,9 @@ use crate::{
         RecordingBackend,
     },
     manifest::{
-        write_manifest, ACCESSIBILITY_DIR_NAME, BROWSER_DIR_NAME, DIAGNOSTICS_FILE_NAME,
-        INPUT_CAPTURE_DIR_NAME, SCREENSHOTS_DIR_NAME, TIMELINE_FILE_NAME, TRANSCRIPTS_DIR_NAME,
-        X11_DIR_NAME,
+        write_manifest, ACCESSIBILITY_DIR_NAME, AUDIO_DIR_NAME, BROWSER_DIR_NAME,
+        DIAGNOSTICS_FILE_NAME, INPUT_CAPTURE_DIR_NAME, SCREENSHOTS_DIR_NAME, TIMELINE_FILE_NAME,
+        TRANSCRIPTS_DIR_NAME, X11_DIR_NAME,
     },
     timeline::{append_timeline_record, TimelineEvent},
     RecordingBundleManifest,
@@ -30,6 +30,7 @@ pub struct RecordStartOptions {
     pub goal: Option<String>,
     pub include_screenshot: bool,
     pub include_accessibility: bool,
+    pub include_audio: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -49,6 +50,7 @@ pub async fn start_session(options: RecordStartOptions) -> Result<RecordStartRep
         ACCESSIBILITY_DIR_NAME,
         BROWSER_DIR_NAME,
         TRANSCRIPTS_DIR_NAME,
+        AUDIO_DIR_NAME,
         INPUT_CAPTURE_DIR_NAME,
         X11_DIR_NAME,
     ] {
@@ -121,6 +123,33 @@ pub async fn start_session(options: RecordStartOptions) -> Result<RecordStartRep
                 append_timeline_record(&options.session_dir, event)?;
             }
             Ok(None) => {}
+            Err(error) => {
+                let message = error.to_string();
+                warnings.push(message.clone());
+                append_timeline_record(
+                    &options.session_dir,
+                    TimelineEvent::Diagnostic {
+                        level: "warn".to_string(),
+                        message,
+                    },
+                )?;
+            }
+        }
+    }
+
+    if options.include_audio {
+        match crate::audio::start_audio_capture(&options.session_dir) {
+            Ok(report) => {
+                if !report.ok && report.status != "disabled" {
+                    if let Some(message) = report.message.clone() {
+                        warnings.push(message);
+                    }
+                }
+                append_timeline_record(
+                    &options.session_dir,
+                    crate::audio::audio_timeline_event(&report),
+                )?;
+            }
             Err(error) => {
                 let message = error.to_string();
                 warnings.push(message.clone());
@@ -507,6 +536,21 @@ fn finalize_session(
     manifest.ended_at = Some(now_timestamp());
     manifest.end_reason = Some(end_reason.to_string());
     write_manifest(bundle_dir, &manifest)?;
+    match crate::audio::stop_audio_capture(bundle_dir, end_reason) {
+        Ok(Some(report)) => {
+            append_timeline_record(bundle_dir, crate::audio::audio_timeline_event(&report))?;
+        }
+        Ok(None) => {}
+        Err(error) => {
+            append_timeline_record(
+                bundle_dir,
+                TimelineEvent::Diagnostic {
+                    level: "warn".to_string(),
+                    message: format!("failed to stop audio capture: {error}"),
+                },
+            )?;
+        }
+    }
     let record = append_timeline_record(bundle_dir, event)?;
     let _ = update_status(bundle_dir);
     Ok(record)

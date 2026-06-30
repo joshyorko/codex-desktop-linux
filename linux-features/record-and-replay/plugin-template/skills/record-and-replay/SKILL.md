@@ -19,30 +19,38 @@ client, implemented by the Rust `codex-record-replay-linux` backend.
 1. Call `doctor` when readiness is uncertain. If Computer Use cannot observe the
    desktop, explain the blocker and offer the diagnostics/setup path before
    recording.
-2. Call `event_stream_start` with a short `goal` when matching the upstream
+2. Call `skysight_start` when recent activity context should keep accumulating
+   before or during the demo, or `skysight_snapshot` when you only need a
+   point-in-time local activity summary. Use `skysight_status` to find the
+   resource paths. Respect `skysight_list_exclusions` and update exclusions
+   before recording sensitive apps or domains.
+3. Call `event_stream_start` with a short `goal` when matching the upstream
    Record & Replay flow, or `start` when you need Linux-specific options. The
    Linux app should show the active Record & Replay recording HUD while the
-   shared runtime status is active.
+   shared runtime status is active. Native Linux audio evidence is owned by the
+   recorder when available; pass `include_audio: false` only for sensitive or
+   test runs where audio capture must be disabled.
    Tell the user that recording is active, that they should perform the workflow
    normally, and that they can say `done` when finished.
-3. During the demonstration, call `mark` only for meaningful intent boundaries
+4. During the demonstration, call `mark` only for meaningful intent boundaries
    that will help the future skill, such as "source page opened" or "finished
    selecting rows".
-4. When the user speaks into the microphone or dictates guidance during the
-   recording, call `speech_context` with the transcript. Treat the speech as
-   user intent/context, not as audio to replay.
-5. For browser workflows, call `browser_trace` when browser/CDP trace evidence
+5. When transcript text is explicitly available during the recording, call
+   `speech_context` with the transcript. Treat the speech as user
+   intent/context, not as audio to replay. Do not hijack the composer dictation
+   UI as the recording architecture.
+6. For browser workflows, call `browser_trace` when browser/CDP trace evidence
    is available. Treat the trace as semantic evidence for drafting the skill,
    not as a click/coordinate replay script.
-6. Use `event_stream_status` or `status` if you need to confirm which bundle is
+7. Use `event_stream_status` or `status` if you need to confirm which bundle is
    active. When the user says they are done, asks to stop, or the HUD sends
    "I'm done recording.", call `event_stream_stop` or `stop` if the bundle is
    still active.
-7. Call `validate_bundle`, then `draft_skill_prompt`.
-8. Use the draft prompt and the bundle evidence to create or update a normal
+8. Call `validate_bundle`, then `draft_skill_prompt`.
+9. Use the draft prompt and the bundle evidence to create or update a normal
    `SKILL.md`. Prefer stable app names, URLs, semantic UI labels, and data
    shape descriptions over literal coordinates.
-9. Call `inspect_skill` before import. Call `import_skill` only after the user
+10. Call `inspect_skill` before import. Call `import_skill` only after the user
    approves the generated skill.
 
 ## Guardrails

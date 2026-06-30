@@ -172,6 +172,21 @@ fn timeline_summary(record: &crate::timeline::TimelineRecord) -> String {
             }
             summary
         }
+        TimelineEvent::AudioRecording {
+            file,
+            metadata_file,
+            provider,
+            status,
+        } => {
+            let mut summary = format!("audio recording status={status} metadata={metadata_file}");
+            if let Some(file) = file {
+                summary.push_str(&format!(" file={file}"));
+            }
+            if let Some(provider) = provider {
+                summary.push_str(&format!(" provider={provider}"));
+            }
+            summary
+        }
         TimelineEvent::SessionStopped => "session stopped".to_string(),
         TimelineEvent::SessionCancelled { discarded } => {
             if *discarded {
