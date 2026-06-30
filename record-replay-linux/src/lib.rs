@@ -3,6 +3,7 @@ pub mod backends;
 pub mod draft_prompt;
 pub mod manifest;
 pub mod mcp;
+mod process_reaper;
 pub mod recorder;
 pub mod runtime_status;
 mod secure_fs;

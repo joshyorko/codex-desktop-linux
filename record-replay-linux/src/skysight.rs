@@ -251,7 +251,8 @@ pub fn start_skysight(
     let _ = fs::remove_file(&paths.pause_request_path);
     let exe =
         env::current_exe().context("failed to find current executable for Skysight daemon")?;
-    let child = Command::new(exe)
+    let mut command = Command::new(exe);
+    command
         .arg("skysight")
         .arg("daemon")
         .arg("--interval-seconds")
@@ -266,11 +267,8 @@ pub fn start_skysight(
         .env("CODEX_SKYSIGHT_EXCLUSIONS_PATH", &paths.exclusions_path)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .context("failed to spawn Skysight daemon")?;
-    let pid = child.id();
-    drop(child);
+        .stderr(Stdio::null());
+    let pid = crate::process_reaper::spawn_reaped(&mut command, "failed to spawn Skysight daemon")?;
 
     let status = status_value(StatusValueInput {
         paths,

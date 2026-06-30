@@ -321,4 +321,12 @@ mod tests {
             path = identity::DBUS_OBJECT_PATH
         )));
     }
+
+    #[test]
+    fn rendered_extension_exposes_screenshot_capture() {
+        let rendered = render_extension_asset(EXTENSION_JS);
+
+        assert!(rendered.contains("<method name=\"CaptureScreenshot\">"));
+        assert!(rendered.contains("CaptureScreenshotAsync"));
+    }
 }

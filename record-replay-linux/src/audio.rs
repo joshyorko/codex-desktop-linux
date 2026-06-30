@@ -99,18 +99,16 @@ pub fn start_audio_capture(bundle_dir: &Path) -> Result<AudioCaptureReport> {
         .with_context(|| format!("failed to open {}", stderr_path.display()))?;
     set_private_file_mode_best_effort(&stderr_path);
 
-    let child = Command::new(&spec.binary)
+    let mut command = Command::new(&spec.binary);
+    command
         .args(&spec.args)
         .current_dir(bundle_dir)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::from(stderr))
-        .spawn();
+        .stderr(Stdio::from(stderr));
 
-    match child {
-        Ok(child) => {
-            let pid = child.id();
-            drop(child);
+    match crate::process_reaper::spawn_reaped(&mut command, "failed to spawn audio recorder") {
+        Ok(pid) => {
             crate::secure_fs::write_private_file(
                 &bundle_dir.join(format!("{AUDIO_DIR_NAME}/{AUDIO_PID_FILE_NAME}")),
                 format!("{pid}\n"),
@@ -397,5 +395,34 @@ fn set_private_file_mode_best_effort(path: &Path) {
     {
         use std::os::unix::fs::PermissionsExt;
         let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o600));
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn spawned_audio_children_are_reaped_after_exit() {
+        let mut command = Command::new("sh");
+        command
+            .arg("-c")
+            .arg("exit 0")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+
+        let pid = crate::process_reaper::spawn_reaped(&mut command, "test audio recorder")
+            .expect("test process should spawn");
+
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while Instant::now() < deadline {
+            if !process_is_alive(pid) {
+                return;
+            }
+            thread::sleep(Duration::from_millis(25));
+        }
+
+        panic!("child process {pid} was not reaped");
     }
 }
