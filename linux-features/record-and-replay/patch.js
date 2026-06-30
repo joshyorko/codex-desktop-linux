@@ -3,7 +3,8 @@
 const { requireName } = require("../../scripts/patches/shared.js");
 
 const RECORD_REPLAY_PLUGIN_NAME = "record-and-replay";
-const HUD_RUNTIME_VERSION = 2;
+const HUD_RUNTIME_VERSION = 3;
+const JS_IDENT = "[A-Za-z_$][\\w$]*";
 
 function warn(message, patchName) {
   console.warn(`WARN: ${message} - skipping ${patchName}`);
@@ -75,6 +76,104 @@ function findAlwaysOnBundledDescriptor(pluginGateArray) {
   let lastMatch = null;
   for (const match of pluginGateArray.text.matchAll(regex)) lastMatch = match;
   return lastMatch;
+}
+
+function objectPropVar(objectSource, name, fallback) {
+  return objectSource.match(new RegExp(`(?:^|,)\\s*${escapeRegExp(name)}:(${JS_IDENT})(?:,|$)`))?.[1] ?? fallback;
+}
+
+function currentComposerBinding(source) {
+  const propsPatterns = [
+    new RegExp(`\\{([^{}]*voiceControls:${JS_IDENT}[^{}]*)\\}\\s*=\\s*${JS_IDENT}`, "g"),
+    new RegExp(`function\\s+${JS_IDENT}\\s*\\(\\{([^{}]*voiceControls:${JS_IDENT}[^{}]*)\\}\\)\\{`, "g"),
+  ];
+  for (const propsPattern of propsPatterns) {
+    for (const propsMatch of source.matchAll(propsPattern)) {
+      const propsObject = propsMatch[1];
+      const voiceControlsVar = objectPropVar(propsObject, "voiceControls", null);
+      if (voiceControlsVar == null) {
+        continue;
+      }
+      const voiceControlsPattern = new RegExp(
+        `\\{([^{}]*startDictation:[^{}]*stopDictation:[^{}]*)\\}\\s*=\\s*${escapeRegExp(voiceControlsVar)}`,
+        "g",
+      );
+      voiceControlsPattern.lastIndex = propsMatch.index + propsMatch[0].length;
+      const voiceControlsMatch = voiceControlsPattern.exec(source);
+      if (voiceControlsMatch != null) {
+        return {
+          propsObject,
+          voiceControlsObject: voiceControlsMatch[1],
+          voiceControlsVar,
+          voiceControlsStart: voiceControlsMatch.index,
+          voiceControlsEnd: voiceControlsMatch.index + voiceControlsMatch[0].length,
+        };
+      }
+    }
+  }
+  return null;
+}
+
+function voiceControlVar(source, name, fallback) {
+  const currentBinding = currentComposerBinding(source);
+  if (currentBinding == null) {
+    return fallback;
+  }
+  return objectPropVar(currentBinding.voiceControlsObject, name, fallback);
+}
+
+function composerPropVar(source, name, fallback) {
+  const currentBinding = currentComposerBinding(source);
+  if (currentBinding == null) {
+    return fallback;
+  }
+  return objectPropVar(currentBinding.propsObject, name, fallback);
+}
+
+function recordReplayComposerPayload(vars, props) {
+  return [
+    `conversationId:${props.conversationId}`,
+    `isDictating:${vars.isDictating}`,
+    `isTranscribing:${vars.isTranscribing}`,
+    `isDictationSupported:${vars.isDictationSupported}`,
+    `startDictation:${vars.startDictation}`,
+    `stopDictation:${vars.stopDictation}`,
+  ].join(",");
+}
+
+function applyRecordReplayComposerVoicePatch(source) {
+  if (!source.includes("voiceControls") || !source.includes("startDictation") || !source.includes("stopDictation")) {
+    return source;
+  }
+  if (source.includes("codexLinuxRecordReplayVoiceControls?.(")) {
+    return source;
+  }
+
+  const currentBinding = currentComposerBinding(source);
+  if (currentBinding == null) {
+    warn("Could not resolve composer voice controls", "Record & Replay composer voice patch");
+    return source;
+  }
+
+  const props = {
+    conversationId: composerPropVar(source, "conversationId", "null"),
+    isResponseInProgress: composerPropVar(source, "isResponseInProgress", "false"),
+    submitBlockReason: composerPropVar(source, "submitBlockReason", "null"),
+  };
+  const vars = {
+    isDictating: voiceControlVar(source, "isDictating", "false"),
+    isDictationSupported: voiceControlVar(source, "isDictationSupported", "false"),
+    isTranscribing: voiceControlVar(source, "isTranscribing", "false"),
+    startDictation: voiceControlVar(source, "startDictation", "null"),
+    stopDictation: voiceControlVar(source, "stopDictation", "null"),
+  };
+
+  const payload = `globalThis.codexLinuxRecordReplayVoiceControls?.({${recordReplayComposerPayload(vars, props)}});`;
+  const end = currentBinding.voiceControlsEnd;
+  if (source[end] === ",") {
+    return `${source.slice(0, end)};${payload}let ${source.slice(end + 1)}`;
+  }
+  return `${source.slice(0, end)};${payload}${source.slice(end)}`;
 }
 
 function applyRecordReplayPluginGatePatch(currentSource) {
@@ -153,7 +252,7 @@ function recordReplayHudRuntimeSource() {
     `const VERSION=${HUD_RUNTIME_VERSION};`,
     `if(globalThis.codexLinuxRecordReplayHudVersion===VERSION)return;`,
     `globalThis.codexLinuxRecordReplayHudVersion=VERSION;`,
-    `let seq=0,pending=new Map,hud=null,timer=null,lastStatus=null,stopping=false,canceling=false;`,
+    `let seq=0,pending=new Map,hud=null,timer=null,lastStatus=null,stopping=false,canceling=false,voiceControls=null,voiceSession=null,voiceStartedAt=0,voiceStarting=false,voiceStopping=false,voiceFinalizing=false,nextVoiceStartAt=0,pendingTranscriptWaiter=null;`,
     `function onMessage(e){let t=e?.data;if(!t||typeof t!=="object"||t.type!=="fetch-response")return;let n=pending.get(t.requestId);if(!n)return;pending.delete(t.requestId);clearTimeout(n.timer);if(t.responseType==="success"){let e=null;try{e=t.bodyJsonString?JSON.parse(t.bodyJsonString):null}catch{}n.resolve(e)}else n.reject(Error(t.error||"fetch failed"))}`,
     `window.addEventListener("message",onMessage);`,
     `function dispatch(payload){let bridge=window.electronBridge,event=new CustomEvent("codex-message-from-view",{detail:payload});if(bridge?.sendMessageFromView){event.__codexForwardedViaBridge=!0;bridge.sendMessageFromView(payload).catch(()=>{})}window.dispatchEvent(event)}`,
@@ -172,14 +271,25 @@ function recordReplayHudRuntimeSource() {
     `function active(s){if(!s||s.state!=="active")return false;if(s.expires_at&&Date.now()>Date.parse(s.expires_at))return false;return true}`,
     `function sessionDirFrom(s){return s?.session_dir||s?.sessionDirectoryPath||s?.runtimeStatus?.session_dir||null}`,
     `function elapsedText(s){let start=Date.parse(s?.started_at||"");let seconds=Number.isFinite(start)?Math.max(0,Math.floor((Date.now()-start)/1000)):0;let m=Math.floor(seconds/60),r=String(seconds%60).padStart(2,"0");return m+":"+r}`,
-    `function updateHud(){let h=ensureHud(),on=active(lastStatus);h.dataset.active=on?"true":"false";if(!on)return;let time=h.querySelector(".codex-linux-record-replay-time");time&&(time.textContent=elapsedText(lastStatus));h.title=lastStatus?.goal?("Recording: "+lastStatus.goal):"Record & Replay recording active";positionHud()}`,
+    `function updateHud(){let h=ensureHud(),on=active(lastStatus);h.dataset.active=on?"true":"false";if(!on){if(lastStatus?.state&&lastStatus.state!=="active"&&(voiceControls?.isDictating||voiceControls?.isTranscribing||voiceSession)&&!voiceStopping&&!voiceFinalizing)stopVoiceCapture("discard",1000).catch(()=>{});return}let time=h.querySelector(".codex-linux-record-replay-time");time&&(time.textContent=elapsedText(lastStatus));h.title=lastStatus?.goal?("Recording: "+lastStatus.goal):"Record & Replay recording active";positionHud();manageVoiceCapture()}`,
     `async function refresh(){try{let body=await post("linux-record-replay-status",{},2500);lastStatus=statusFrom(body);updateHud()}catch{lastStatus=null;updateHud()}}`,
     `async function recordSpeechContext(transcript,source="codex-dictation"){let text=typeof transcript==="string"?transcript.trim():"";if(!text)return false;let s=lastStatus;if(!active(s)){try{let body=await post("linux-record-replay-status",{},2500);s=statusFrom(body);lastStatus=s;updateHud()}catch{return false}}if(!active(s))return false;let sessionDir=sessionDirFrom(s);if(!sessionDir)return false;try{let body=await post("linux-record-replay-speech-context",{sessionDir:String(sessionDir),transcript:text,source},5000);return !!(body?.ok||body?.json?.ok)}catch{return false}}`,
+    `function voiceReady(){return voiceControls&&voiceControls.isDictationSupported!==!1&&typeof voiceControls.startDictation==="function"&&typeof voiceControls.stopDictation==="function"}`,
+    `function clearTranscriptWaiter(result){let waiter=pendingTranscriptWaiter;pendingTranscriptWaiter=null;waiter?.(!!result)}`,
+    `function waitForTranscript(timeoutMs=30000){return new Promise(resolve=>{let done=false;pendingTranscriptWaiter=result=>{if(done)return;done=true;resolve(!!result)};setTimeout(()=>{if(done)return;done=true;pendingTranscriptWaiter=null;resolve(false)},timeoutMs)})}`,
+    `function handleDictationTranscript(transcript,mode){let s=lastStatus;if(!active(s))return false;let source=mode?("codex-record-replay-auto-"+mode):"codex-record-replay-auto";recordSpeechContext(transcript,source).finally(()=>clearTranscriptWaiter(true));voiceSession=null;voiceStartedAt=0;nextVoiceStartAt=Date.now()+900;if(!stopping&&!canceling&&!voiceFinalizing)setTimeout(manageVoiceCapture,1200);return true}`,
+    `globalThis.codexLinuxRecordReplayHandleTranscript=(transcript,mode)=>handleDictationTranscript(transcript,mode);`,
     `globalThis.codexLinuxRecordReplaySpeechContext=(transcript,source)=>recordSpeechContext(transcript,source);`,
+    `function startVoiceCapture(sessionDir){if(!voiceReady()||voiceStarting||voiceStopping||voiceFinalizing)return false;if(Date.now()<nextVoiceStartAt)return false;voiceStarting=true;voiceSession=sessionDir;voiceStartedAt=Date.now();nextVoiceStartAt=Date.now()+5000;try{let result=voiceControls.startDictation();Promise.resolve(result).catch(()=>{voiceSession=null;voiceStartedAt=0;nextVoiceStartAt=Date.now()+5000}).finally(()=>{voiceStarting=false});return true}catch{voiceStarting=false;voiceSession=null;voiceStartedAt=0;nextVoiceStartAt=Date.now()+5000;return false}}`,
+    `async function stopVoiceCapture(action="send",timeoutMs=30000){if(!voiceReady()||voiceStopping)return false;if(!voiceControls.isDictating&&!voiceControls.isTranscribing&&!voiceSession)return false;voiceStopping=true;let wait=action==="discard"?Promise.resolve(false):waitForTranscript(timeoutMs);try{voiceControls.stopDictation(action)}catch{voiceStopping=false;clearTranscriptWaiter(false);return false}let captured=await wait.catch(()=>false);voiceStopping=false;voiceSession=null;voiceStartedAt=0;nextVoiceStartAt=Date.now()+900;return captured}`,
+    `async function flushVoiceChunk(sessionDir){if(voiceStopping||voiceFinalizing||!voiceReady())return;let captured=await stopVoiceCapture("send",30000);if(captured&&active(lastStatus)&&sessionDirFrom(lastStatus)===sessionDir&&!stopping&&!canceling&&!voiceFinalizing)setTimeout(manageVoiceCapture,1200)}`,
+    `function manageVoiceCapture(){let s=lastStatus;if(!active(s)||stopping||canceling||voiceFinalizing)return;if(!voiceReady())return;let sessionDir=sessionDirFrom(s);if(!sessionDir)return;if(voiceControls.isTranscribing||voiceStarting||voiceStopping)return;if(voiceControls.isDictating){if(voiceStartedAt&&Date.now()-voiceStartedAt>60000)flushVoiceChunk(sessionDir);return}if(voiceSession===sessionDir)return;startVoiceCapture(sessionDir)}`,
+    `globalThis.codexLinuxRecordReplayVoiceControls=controls=>{voiceControls=controls&&typeof controls==="object"?controls:null;manageVoiceCapture();return false};`,
+    `async function finalizeVoiceCapture(action="send"){voiceFinalizing=true;try{return await stopVoiceCapture(action,30000)}finally{voiceFinalizing=false}}`,
     `async function stopActive(){try{let body=await post("linux-record-replay-stop-active",{},10000);return !!(body?.ok||body?.json?.ok)}catch{return false}finally{setTimeout(refresh,250)}}`,
     `async function cancelActive(discarded){try{let body=await post("linux-record-replay-cancel-active",{discarded:!!discarded},10000);return !!(body?.ok||body?.json?.ok)}catch{return false}finally{setTimeout(refresh,250)}}`,
-    `async function finishRecording(){if(stopping||canceling)return;stopping=true;let btns=hud?.querySelectorAll("button")??[];btns.forEach(b=>b.disabled=true);try{let stopped=await stopActive(),submitted=false;try{submitted=await submitDoneMessage()}catch{}if(!stopped&&!submitted)await stopActive()}finally{stopping=false;btns.forEach(b=>b.disabled=false);setTimeout(refresh,250)}}`,
-    `async function discardRecording(){if(stopping||canceling)return;if(!confirm("Discard this Record & Replay recording? The bundle will be kept only as canceled evidence."))return;canceling=true;let btns=hud?.querySelectorAll("button")??[];btns.forEach(b=>b.disabled=true);try{await cancelActive(true)}finally{canceling=false;btns.forEach(b=>b.disabled=false);setTimeout(refresh,250)}}`,
+    `async function finishRecording(){if(stopping||canceling)return;stopping=true;let btns=hud?.querySelectorAll("button")??[];btns.forEach(b=>b.disabled=true);try{await finalizeVoiceCapture("send");let stopped=await stopActive(),submitted=false;try{submitted=await submitDoneMessage()}catch{}if(!stopped&&!submitted)await stopActive()}finally{stopping=false;btns.forEach(b=>b.disabled=false);setTimeout(refresh,250)}}`,
+    `async function discardRecording(){if(stopping||canceling)return;if(!confirm("Discard this Record & Replay recording? The bundle will be kept only as canceled evidence."))return;canceling=true;let btns=hud?.querySelectorAll("button")??[];btns.forEach(b=>b.disabled=true);try{await finalizeVoiceCapture("discard");await cancelActive(true)}finally{canceling=false;btns.forEach(b=>b.disabled=false);setTimeout(refresh,250)}}`,
     `function tick(){updateHud();refresh().catch(()=>{})}`,
     `function start(){if(document.readyState==="loading"){document.addEventListener("DOMContentLoaded",start,{once:!0});return}ensureHud();tick();timer=setInterval(tick,1000);window.addEventListener("resize",positionHud);window.addEventListener("scroll",positionHud,true);new MutationObserver(positionHud).observe(document.body||document.documentElement,{childList:true,subtree:true})}`,
     `start();`,
@@ -196,8 +306,26 @@ function applyRecordReplayHudPatch(currentSource) {
 }
 
 function applyRecordReplayDictationTranscriptPatch(currentSource) {
-  if (currentSource.includes("codexLinuxRecordReplaySpeechContext?.(")) {
+  if (currentSource.includes("codexLinuxRecordReplayHandleTranscript?.(")) {
     return currentSource;
+  }
+
+  const oldSpecificTranscriptNeedle =
+    "i.length>0&&(e!==`discard`&&globalThis.codexLinuxRecordReplaySpeechContext?.(i,`codex-dictation-${e}`)?.catch?.(()=>{}),j.getInstance().dispatchMessage(`global-dictation-record-history-item`,{text:i}),e===`send`?n.onTranscriptSend(i):n.onTranscriptInsert(i))";
+  if (currentSource.includes(oldSpecificTranscriptNeedle)) {
+    return currentSource.replace(
+      oldSpecificTranscriptNeedle,
+      "i.length>0&&e!==`discard`&&(globalThis.codexLinuxRecordReplayHandleTranscript?.(i,e)===!0||(j.getInstance().dispatchMessage(`global-dictation-record-history-item`,{text:i}),e===`send`?n.onTranscriptSend(i):n.onTranscriptInsert(i)))",
+    );
+  }
+
+  const oldTranscriptPattern =
+    /([A-Za-z_$][\w$]*)\.length>0&&\(([A-Za-z_$][\w$]*)!==`discard`&&globalThis\.codexLinuxRecordReplaySpeechContext\?\.\(\1,`codex-dictation-\$\{\2\}`\)\?\.catch\?\.\(\(\)=>\{\}\),([A-Za-z_$][\w$]*)\.getInstance\(\)\.dispatchMessage\(`global-dictation-record-history-item`,\{text:\1\}\),\2===`send`\?([A-Za-z_$][\w$]*)\.onTranscriptSend\(\1\):\4\.onTranscriptInsert\(\1\)\)/u;
+  if (oldTranscriptPattern.test(currentSource)) {
+    return currentSource.replace(
+      oldTranscriptPattern,
+      "$1.length>0&&$2!==`discard`&&(globalThis.codexLinuxRecordReplayHandleTranscript?.($1,$2)===!0||($3.getInstance().dispatchMessage(`global-dictation-record-history-item`,{text:$1}),$2===`send`?$4.onTranscriptSend($1):$4.onTranscriptInsert($1)))",
+    );
   }
 
   const transcriptSendNeedle =
@@ -205,7 +333,7 @@ function applyRecordReplayDictationTranscriptPatch(currentSource) {
   if (currentSource.includes(transcriptSendNeedle)) {
     return currentSource.replace(
       transcriptSendNeedle,
-      "i.length>0&&(e!==`discard`&&globalThis.codexLinuxRecordReplaySpeechContext?.(i,`codex-dictation-${e}`)?.catch?.(()=>{}),j.getInstance().dispatchMessage(`global-dictation-record-history-item`,{text:i}),e===`send`?n.onTranscriptSend(i):n.onTranscriptInsert(i))",
+      "i.length>0&&e!==`discard`&&(globalThis.codexLinuxRecordReplayHandleTranscript?.(i,e)===!0||(j.getInstance().dispatchMessage(`global-dictation-record-history-item`,{text:i}),e===`send`?n.onTranscriptSend(i):n.onTranscriptInsert(i)))",
     );
   }
 
@@ -214,7 +342,7 @@ function applyRecordReplayDictationTranscriptPatch(currentSource) {
   if (currentTranscriptPattern.test(currentSource)) {
     return currentSource.replace(
       currentTranscriptPattern,
-      "$1.length>0&&($3!==`discard`&&globalThis.codexLinuxRecordReplaySpeechContext?.($1,`codex-dictation-${$3}`)?.catch?.(()=>{}),$2.getInstance().dispatchMessage(`global-dictation-record-history-item`,{text:$1}),$3===`send`?$4.onTranscriptSend($1):$4.onTranscriptInsert($1))",
+      "$1.length>0&&$3!==`discard`&&(globalThis.codexLinuxRecordReplayHandleTranscript?.($1,$3)===!0||($2.getInstance().dispatchMessage(`global-dictation-record-history-item`,{text:$1}),$3===`send`?$4.onTranscriptSend($1):$4.onTranscriptInsert($1)))",
     );
   }
 
@@ -246,9 +374,17 @@ const descriptors = [
     apply: applyRecordReplayHudPatch,
   },
   {
-    id: "record-replay-dictation-transcript",
+    id: "record-replay-composer-voice-controls",
     phase: "webview-asset",
     order: 153,
+    ciPolicy: "optional",
+    pattern: /\.js$/,
+    apply: applyRecordReplayComposerVoicePatch,
+  },
+  {
+    id: "record-replay-dictation-transcript",
+    phase: "webview-asset",
+    order: 154,
     ciPolicy: "optional",
     pattern: /\.js$/,
     apply: applyRecordReplayDictationTranscriptPatch,
@@ -259,6 +395,7 @@ module.exports = {
   RECORD_REPLAY_PLUGIN_NAME,
   HUD_RUNTIME_VERSION,
   applyRecordReplayDictationTranscriptPatch,
+  applyRecordReplayComposerVoicePatch,
   applyRecordReplayPluginGatePatch,
   applyRecordReplayHudPatch,
   applyRecordReplayMainBridgePatch,

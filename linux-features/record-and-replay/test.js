@@ -16,6 +16,7 @@ const {
   stageEnabledLinuxFeatureInstall,
 } = require("../../scripts/lib/linux-features.js");
 const {
+  applyRecordReplayComposerVoicePatch,
   applyRecordReplayDictationTranscriptPatch,
   applyRecordReplayHudPatch,
   applyRecordReplayPluginGatePatch,
@@ -25,6 +26,9 @@ const {
 } = require("./patch.js");
 
 const featureDir = __dirname;
+
+const currentComposerControlSource =
+  "function hz(e){let{conversationId:v,isResponseInProgress:A,onStop:P,submitBlockReason:F,voiceControls:z}=e,I=h===void 0?!1:h,L=mu(),R=fu(L,tg),x=fu(L,eg),{enterBehavior:B}=Ul(),V=Wt(),{canRetryDictation:K,dictationShortcutLabel:q,isDictating:J,isDictationSupported:ee,isNewRealtimeConversationAvailable:te,isRealtimeSubmitStarting:ne,isTranscribing:re,startDictation:se,startNewRealtimeConversation:ce,stopDictation:le,threadRealtime:ue}=z;let Be=ze,Ve=F===`empty-message`&&!A&&(ue.isAvailable&&ue.phase!==`active`||te),He=oi(fc,`composer.startVoiceMode`),Ue;Ue=()=>{if(ue.phase===`starting`||ue.phase===`active`){ue.stopRealtime();return}if(ue.isAvailable){ue.phase===`inactive`&&ue.startRealtime(`composer_button_existing_thread`);return}ce()};}";
 
 function repoRoot() {
   return path.resolve(featureDir, "../..");
@@ -112,6 +116,7 @@ test("record-and-replay patch descriptor loads only when feature is enabled", ()
       "feature:record-and-replay:record-and-replay-plugin-gate",
       "feature:record-and-replay:linux-record-replay-main-bridge",
       "feature:record-and-replay:record-replay-hud",
+      "feature:record-and-replay:record-replay-composer-voice-controls",
       "feature:record-and-replay:record-replay-dictation-transcript",
     ]);
     assert.ok(loaded.every((descriptor) => descriptor.ciPolicy === "optional"));
@@ -119,7 +124,7 @@ test("record-and-replay patch descriptor loads only when feature is enabled", ()
 });
 
 test("record-and-replay bridge patch is idempotent and uses execFile", () => {
-  assert.equal(descriptors.length, 4);
+  assert.equal(descriptors.length, 5);
   const source = [
     "const cp=require(\"node:child_process\"),fs=require(\"node:fs\"),path=require(\"node:path\");",
     "var bridge={\"get-global-state\":async({key:e})=>null};",
@@ -196,11 +201,31 @@ test("record-and-replay HUD patch is idempotent and appends runtime UI", () => {
   assert.match(patched, /I'm done recording\./);
   assert.match(patched, /submitDoneMessage/);
   assert.match(patched, /codexLinuxRecordReplaySpeechContext/);
+  assert.match(patched, /codexLinuxRecordReplayHandleTranscript/);
+  assert.match(patched, /codexLinuxRecordReplayVoiceControls/);
+  assert.match(patched, /manageVoiceCapture/);
+  assert.match(patched, /startDictation\(\)/);
+  assert.match(patched, /stopDictation\(action\)/);
+  assert.match(patched, /flushVoiceChunk/);
+  assert.match(patched, /stopVoiceCapture\("discard",1000\)/);
   assert.match(patched, /linux-record-replay-speech-context/);
   assert.match(patched, /finishRecording/);
   assert.match(patched, /discardRecording/);
   assert.match(patched, /Discard this Record & Replay recording/);
-  assert.match(patched, /let stopped=await stopActive\(\),submitted=false/);
+  assert.match(patched, /await finalizeVoiceCapture\("send"\)/);
+  assert.match(patched, /await finalizeVoiceCapture\("discard"\)/);
+});
+
+test("record-and-replay composer patch registers built-in dictation controls", () => {
+  const patched = applyRecordReplayComposerVoicePatch(currentComposerControlSource);
+
+  assert.notEqual(patched, currentComposerControlSource);
+  assert.equal(applyRecordReplayComposerVoicePatch(patched), patched);
+  assert.match(
+    patched,
+    /codexLinuxRecordReplayVoiceControls\?\.\(\{conversationId:v,isDictating:J,isTranscribing:re,isDictationSupported:ee,startDictation:se,stopDictation:le\}\)/,
+  );
+  assert.match(patched, /composer\.startVoiceMode/);
 });
 
 test("record-and-replay mirrors built-in dictation transcripts into active recording", () => {
@@ -210,7 +235,7 @@ test("record-and-replay mirrors built-in dictation transcripts into active recor
 
   assert.notEqual(patched, source);
   assert.equal(applyRecordReplayDictationTranscriptPatch(patched), patched);
-  assert.match(patched, /codexLinuxRecordReplaySpeechContext\?\.\(i,`codex-dictation-\$\{e\}`\)/);
+  assert.match(patched, /codexLinuxRecordReplayHandleTranscript\?\.\(i,e\)===!0/);
   assert.match(patched, /e!==`discard`/);
   assert.match(patched, /global-dictation-record-history-item/);
   assert.match(patched, /onTranscriptSend\(i\)/);
@@ -222,9 +247,22 @@ test("record-and-replay mirrors current dictation transcript shape", () => {
   const patched = applyRecordReplayDictationTranscriptPatch(source);
 
   assert.notEqual(patched, source);
-  assert.match(patched, /codexLinuxRecordReplaySpeechContext\?\.\(q,`codex-dictation-\$\{mode\}`\)/);
+  assert.match(patched, /codexLinuxRecordReplayHandleTranscript\?\.\(q,mode\)===!0/);
   assert.match(patched, /mode!==`discard`/);
   assert.match(patched, /handlers\.onTranscriptSend\(q\)/);
+});
+
+test("record-and-replay upgrades older dictation transcript mirror patches", () => {
+  const source =
+    "function done(){a.length>0&&(t!==`discard`&&globalThis.codexLinuxRecordReplaySpeechContext?.(a,`codex-dictation-${t}`)?.catch?.(()=>{}),qe.getInstance().dispatchMessage(`global-dictation-record-history-item`,{text:a}),t===`send`?r.onTranscriptSend(a):r.onTranscriptInsert(a))}";
+  const patched = applyRecordReplayDictationTranscriptPatch(source);
+
+  assert.notEqual(patched, source);
+  assert.equal(applyRecordReplayDictationTranscriptPatch(patched), patched);
+  assert.match(patched, /codexLinuxRecordReplayHandleTranscript\?\.\(a,t\)===!0/);
+  assert.doesNotMatch(patched, /codexLinuxRecordReplaySpeechContext\?\.\(a/);
+  assert.match(patched, /t!==`discard`/);
+  assert.match(patched, /r\.onTranscriptSend\(a\)/);
 });
 
 test("record-and-replay plugin gate is idempotent and linux-only", () => {
