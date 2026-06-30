@@ -329,4 +329,13 @@ mod tests {
         assert!(rendered.contains("<method name=\"CaptureScreenshot\">"));
         assert!(rendered.contains("CaptureScreenshotAsync"));
     }
+
+    #[test]
+    fn rendered_extension_canonicalizes_screenshot_paths() {
+        let rendered = render_extension_asset(EXTENSION_JS);
+
+        assert!(rendered.contains("GLib.canonicalize_filename(path, null)"));
+        assert!(rendered.contains("GLib.path_get_dirname(canonicalPath) !== tmpDir"));
+        assert!(rendered.contains("basename.startsWith('computer-use-linux-gnome-extension-')"));
+    }
 }

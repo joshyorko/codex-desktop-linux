@@ -197,12 +197,13 @@ class WindowControlDBus extends GObject.Object {
         if (!path.endsWith('.png'))
             return false;
 
-        const tmpPrefix = `${GLib.get_tmp_dir()}/computer-use-linux-gnome-extension-`;
-        if (!path.startsWith(tmpPrefix))
+        const canonicalPath = GLib.canonicalize_filename(path, null);
+        const tmpDir = GLib.canonicalize_filename(GLib.get_tmp_dir(), null);
+        if (GLib.path_get_dirname(canonicalPath) !== tmpDir)
             return false;
 
-        const basename = GLib.path_get_basename(path);
-        return !basename.includes('/');
+        const basename = GLib.path_get_basename(canonicalPath);
+        return basename.startsWith('computer-use-linux-gnome-extension-');
     }
 });
 
