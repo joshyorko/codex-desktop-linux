@@ -27,6 +27,19 @@ function applyPatchTwice(patchFn, source) {
   return once;
 }
 
+function applyPatchTwiceWithoutWarnings(patchFn, source) {
+  const warnings = [];
+  const originalWarn = console.warn;
+  console.warn = (...args) => warnings.push(args.join(" "));
+  try {
+    const patched = applyPatchTwice(patchFn, source);
+    assert.deepEqual(warnings, []);
+    return patched;
+  } finally {
+    console.warn = originalWarn;
+  }
+}
+
 function withFeatureConfig(enabled, callback) {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "authenticated-proxy-feature-"));
   const configPath = path.join(tempDir, "features.json");
@@ -189,7 +202,7 @@ test("registers Linux proxy authentication before Electron app ready", async () 
     "await n.app.whenReady();",
     "return A}",
   ].join("");
-  const patched = applyPatchTwice(applyAuthenticatedProxyPatch, source);
+  const patched = applyPatchTwiceWithoutWarnings(applyAuthenticatedProxyPatch, source);
 
   assert.match(patched, /function codexLinuxInstallProxyAuthHandler\(e\)/);
   assert.match(patched, /codexLinuxInstallProxyAuthHandler\(n\);await n\.app\.whenReady\(\)/);
@@ -266,19 +279,19 @@ test("routes authenticated proxy desktop fetches through ClientRequest login", a
     "let a=require(`electron`);",
     "async function boot(){await a.app.whenReady()}",
     "class Fetcher{",
-    "async performDesktopFetch({body:e,headers:n,method:r,onUploadProgress:i,resolvedUrl:o,signal:s}){let p=()=>e,m=async e=>{let t=this.cloneHeaders(n);let d=i==null?await a.net.fetch(o,{method:r,headers:t,body:p(),signal:s}):await this.performProgressRequest({body:p(),headers:t,method:r,onUploadProgress:i,resolvedUrl:o,signal:s});return d};return m({})}",
-    "performProgressRequest({body:e,headers:t,method:n,onUploadProgress:r,resolvedUrl:i,signal:o}){return new Promise((s,c)=>{let l=a.net.request({method:n,url:i,headers:t}),u=-1,d=()=>{let e=l.getUploadProgress();!e.started||e.current===u||(u=e.current,r({loaded:e.current,total:e.total}))};if(o.addEventListener(`abort`,()=>{},{}),o.aborted)return;l.on(`error`,e=>c(e)),l.on(`response`,e=>{d();let t=[];e.on(`data`,e=>{t.push(e)}),e.on(`end`,()=>{let n=Buffer.concat(t),r=new Headers;for(let[t,n]of Object.entries(e.headers))for(let e of Array.isArray(n)?n:[n])r.append(t,e);s(new Response(n.length===0?null:n,{status:e.statusCode,statusText:e.statusMessage,headers:r}))})});let g=e instanceof ArrayBuffer?Buffer.from(e):e;l.end(g)})}",
+    "async performDesktopFetch({body:e,headers:n,method:r,onUploadProgress:i,resolvedUrl:o,signal:s,useSessionCookies:c}){let p=()=>e,m=async e=>{let t=this.cloneHeaders(n);let d=i==null?await a.net.fetch(o,{method:r,headers:t,body:p(),signal:s,credentials:c?`include`:`same-origin`}):await this.performProgressRequest({body:p(),headers:t,method:r,onUploadProgress:i,resolvedUrl:o,signal:s,useSessionCookies:c});return d};return m({})}",
+    "performProgressRequest({body:e,headers:t,method:n,onUploadProgress:r,resolvedUrl:i,signal:o,useSessionCookies:s}){return new Promise((c,l)=>{let u=a.net.request({method:n,url:i,headers:t,useSessionCookies:s}),d=-1,f=()=>{let e=u.getUploadProgress();!e.started||e.current===d||(d=e.current,r({loaded:e.current,total:e.total}))};if(o.addEventListener(`abort`,()=>{},{}),o.aborted)return;u.on(`error`,e=>l(e)),u.on(`response`,e=>{f();let t=[];e.on(`data`,e=>{t.push(e)}),e.on(`end`,()=>{let n=Buffer.concat(t),r=new Headers;for(let[t,n]of Object.entries(e.headers))for(let e of Array.isArray(n)?n:[n])r.append(t,e);c(new Response(n.length===0?null:n,{status:e.statusCode,statusText:e.statusMessage,headers:r}))})});let g=e instanceof ArrayBuffer?Buffer.from(e):e;u.end(g)})}",
     "cloneHeaders(e){return e}",
     "}",
     "globalThis.Fetcher=Fetcher;",
   ].join("");
-  const patched = applyPatchTwice(applyAuthenticatedProxyPatch, source);
+  const patched = applyPatchTwiceWithoutWarnings(applyAuthenticatedProxyPatch, source);
 
   assert.match(patched, /function codexLinuxAttachProxyAuthToRequest\(e\)/);
   assert.match(patched, /i==null&&!codexLinuxProxyAuthEntry\(\)\?await a\.net\.fetch/);
   assert.match(
     patched,
-    /codexLinuxAttachProxyAuthToRequest\(l\);let u=-1,d=\(\)=>\{if\(r==null\)return;/,
+    /codexLinuxAttachProxyAuthToRequest\(u\);let d=-1,f=\(\)=>\{if\(r==null\)return;/,
   );
 
   let fetchCalls = 0;
@@ -362,4 +375,20 @@ test("routes authenticated proxy desktop fetches through ClientRequest login", a
   assert.equal(response.status, 200);
   assert.equal(await response.text(), "request");
   assert.deepEqual(credentials, { username: "user", password: "p@ss" });
+});
+
+test("authenticated-proxy tests fail when current desktop fetch shape drifts", () => {
+  const source = [
+    "let a=require(`electron`);",
+    "async function boot(){await a.app.whenReady()}",
+    "class Fetcher{",
+    "async performDesktopFetch(){let d=await a.net.fetch(`https://example.test`,{})}",
+    "performProgressRequest(){let u=a.net.request({url:`https://example.test`})}",
+    "}",
+  ].join("");
+
+  assert.throws(
+    () => applyPatchTwiceWithoutWarnings(applyAuthenticatedProxyPatch, source),
+    /Could not route Linux proxy-auth desktop fetches through ClientRequest|Expected values to be strictly deep-equal/,
+  );
 });

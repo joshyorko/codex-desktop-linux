@@ -7,16 +7,18 @@ const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
 
+const workspaceRootOpenTargetsPatch = require("./patches/core/all-linux/extracted-app/workspace-root-open-targets/patch.js");
 const {
   apply: patchWorkspaceRootOpenTargets,
   applyWorkspaceRootOpenTargetsPatch,
   enabledWorkspaceRootTargets,
-} = require("./patches/core/all-linux/extracted-app/workspace-root-open-targets/patch.js");
+} = workspaceRootOpenTargetsPatch;
 
 test("workspace root dropdown adds Linux open targets alongside File Manager", () => {
   const mainSource = [
     "function codexLinuxIdeCommand(){}",
     "var lM={id:`vscode`};",
+    "var iN={id:`vscodeInsiders`};",
     "var wN={id:`zed`,platforms:{linux:{label:`Zed`}}};",
     "var Hj={id:`terminal`,platforms:{linux:{label:`Terminal`}}};",
   ].join("");
@@ -35,17 +37,51 @@ test("workspace root dropdown adds Linux open targets alongside File Manager", (
 
   assert.deepEqual(targets, [
     { id: "vscode", label: "VS Code" },
+    { id: "vscodeInsiders", label: "VS Code Insiders" },
     { id: "zed", label: "Zed" },
     { id: "terminal", label: "Terminal" },
   ]);
   assert.notEqual(patched, source);
   assert.match(patched, /codexLinuxWorkspaceRootOpenTarget:vscode/);
+  assert.match(patched, /codexLinuxWorkspaceRootOpenTarget:vscodeInsiders/);
   assert.match(patched, /codexLinuxWorkspaceRootOpenTarget:zed/);
   assert.match(patched, /codexLinuxWorkspaceRootOpenTarget:terminal/);
   assert.match(patched, /target:`vscode`/);
+  assert.match(patched, /target:`vscodeInsiders`/);
   assert.match(patched, /target:`zed`/);
   assert.match(patched, /target:`terminal`/);
   assert.match(patched, /target:`fileManager`/);
+  assert.equal(applyWorkspaceRootOpenTargetsPatch(patched, targets), patched);
+});
+
+test("workspace root dropdown patches every File Manager item in a shared chunk", () => {
+  const targets = [
+    { id: "vscode", label: "VS Code" },
+    { id: "zed", label: "Zed" },
+  ];
+  const source = [
+    "function FirstWorkspaceRootMenu(){",
+    "let a=()=>{},v=`/tmp/one`,S=Zt(`open-file`),C,T;",
+    "C=()=>{if(v==null)return;let e=lr(v);El({path:v,cwd:e,target:`fileManager`,openFile:S.mutate}),a(!1)};",
+    "T=(0,Z.jsx)(uv.Item,{LeftIcon:iy,onSelect:C,children:`File Manager`});",
+    "return T",
+    "}",
+    "function SecondWorkspaceRootMenu(){",
+    "let b=()=>{},p=`/tmp/two`,M=Qt(`open-file`),D,U;",
+    "D=()=>{if(p==null)return;let c=lr(p);Op({path:p,cwd:c,target:`fileManager`,openFile:M.mutate}),b(!1)};",
+    "U=(0,Z.jsx)(uv.Item,{LeftIcon:iy,onSelect:D,children:`File Manager`});",
+    "return U",
+    "}",
+  ].join("");
+
+  const patched = applyWorkspaceRootOpenTargetsPatch(source, targets);
+
+  assert.notEqual(patched, source);
+  assert.equal((patched.match(/codexLinuxWorkspaceRootOpenTarget:vscode/g) ?? []).length, 2);
+  assert.equal((patched.match(/codexLinuxWorkspaceRootOpenTarget:zed/g) ?? []).length, 2);
+  assert.equal((patched.match(/target:`vscode`/g) ?? []).length, 2);
+  assert.equal((patched.match(/target:`zed`/g) ?? []).length, 2);
+  assert.equal((patched.match(/target:`fileManager`/g) ?? []).length, 2);
   assert.equal(applyWorkspaceRootOpenTargetsPatch(patched, targets), patched);
 });
 
@@ -89,6 +125,7 @@ test("workspace root open targets patch scans current shared app main project ch
       [
         "function codexLinuxIdeCommand(){}",
         "var lM={id:`vscode`};",
+        "var iN={id:`vscodeInsiders`};",
         "var wN={id:`zed`,platforms:{linux:{label:`Zed`}}};",
         "var Hj={id:`terminal`,platforms:{linux:{label:`Terminal`}}};",
       ].join(""),
@@ -113,8 +150,85 @@ test("workspace root open targets patch scans current shared app main project ch
 
     assert.equal(result.changed, 1);
     assert.match(patched, /codexLinuxWorkspaceRootOpenTarget:vscode/);
+    assert.match(patched, /codexLinuxWorkspaceRootOpenTarget:vscodeInsiders/);
     assert.match(patched, /codexLinuxWorkspaceRootOpenTarget:zed/);
     assert.match(patched, /codexLinuxWorkspaceRootOpenTarget:terminal/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("workspace root open targets patch is not applicable without Linux targets", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-workspace-root-open-targets-"));
+  try {
+    const buildDir = path.join(root, ".vite", "build");
+    const assetsDir = path.join(root, "webview", "assets");
+    fs.mkdirSync(buildDir, { recursive: true });
+    fs.mkdirSync(assetsDir, { recursive: true });
+    fs.writeFileSync(path.join(buildDir, "main.js"), "var lM={id:`vscode`};");
+    fs.writeFileSync(
+      path.join(assetsDir, "app-main-current.js"),
+      [
+        "function CurrentWorkspaceMenu(){",
+        "let _=`/tmp/project`,a=()=>{},x=A(`open-file`),C,E;",
+        "C=()=>{if(_==null)return;let e=S(_);Ta({path:_,cwd:e,target:`fileManager`,openFile:x.mutate}),a(!1)};",
+        "E=(0,$.jsx)(di.Item,{LeftIcon:em,onSelect:C,children:`File Manager`});",
+        "return E",
+        "}",
+      ].join(""),
+    );
+
+    const result = patchWorkspaceRootOpenTargets(root);
+
+    assert.deepEqual(result, {
+      matched: 0,
+      changed: 0,
+      status: "skipped-target",
+      reason: "No Linux editor or terminal open targets are enabled",
+    });
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("workspace root open targets patch reports optional drift when Linux targets are enabled but the File Manager chunk is absent", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-workspace-root-open-targets-"));
+  try {
+    const buildDir = path.join(root, ".vite", "build");
+    const assetsDir = path.join(root, "webview", "assets");
+    fs.mkdirSync(buildDir, { recursive: true });
+    fs.mkdirSync(assetsDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(buildDir, "main.js"),
+      [
+        "function codexLinuxIdeCommand(){}",
+        "var lM={id:`vscode`};",
+        "var wN={id:`zed`,platforms:{linux:{label:`Zed`}}};",
+      ].join(""),
+    );
+    fs.writeFileSync(
+      path.join(assetsDir, "app-main-current.js"),
+      [
+        "function CurrentWorkspaceMenu(){",
+        "let _=`/tmp/project`,a=()=>{},x=A(`open-file`);",
+        "return (0,$.jsx)(di.Item,{onSelect:a,children:`Project`})",
+        "}",
+      ].join(""),
+    );
+
+    const result = patchWorkspaceRootOpenTargets(root);
+    const expectedReason = "Workspace-root File Manager open action is not present in this upstream build";
+
+    assert.deepEqual(result, {
+      matched: 0,
+      changed: 0,
+      status: "skipped-optional",
+      reason: expectedReason,
+    });
+    assert.deepEqual(workspaceRootOpenTargetsPatch.status(result, []), {
+      status: "skipped-optional",
+      reason: expectedReason,
+    });
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

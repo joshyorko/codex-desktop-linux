@@ -8,6 +8,8 @@ const {
 } = require("../../../../shared.js");
 
 const PATCH_MARKER = "codexLinuxWorkspaceRootOpenTarget";
+const MISSING_FILE_MANAGER_ACTION_REASON =
+  "Workspace-root File Manager open action is not present in this upstream build";
 
 function warn(message) {
   console.warn(`WARN: ${message} - skipping Linux workspace-root open targets patch`);
@@ -96,6 +98,16 @@ function enabledWorkspaceRootTargets(mainSource) {
   ) {
     targets.push({ id: "vscode", label: "VS Code" });
   }
+  if (
+    mainSource.includes("id:`vscodeInsiders`") &&
+    (
+      mainSource.includes("linuxDetect:()=>codexLinuxOpenTargetExecutable(`code-insiders`)") ||
+      mainSource.includes("codexLinuxIdePlatform(`vscodeInsiders`") ||
+      mainSource.includes("function codexLinuxIdeCommand(")
+    )
+  ) {
+    targets.push({ id: "vscodeInsiders", label: "VS Code Insiders" });
+  }
   if (mainSource.includes("id:`zed`") && mainSource.includes("linux:{label:`Zed`")) {
     targets.push({ id: "zed", label: "Zed" });
   }
@@ -173,81 +185,94 @@ function openTargetItem({ jsxVar, menuVar, openFn, pathVar, cwdVar, openFileVar,
 }
 
 function applyWorkspaceRootOpenTargetsPatch(currentSource, targets) {
-  if (currentSource.includes(PATCH_MARKER)) {
-    return currentSource;
-  }
   if (targets.length === 0) {
-    warn("Could not find Linux editor or terminal open targets in the main bundle");
     return currentSource;
   }
 
-  const openCallPattern = /([A-Za-z_$][\w$]*)\(\{path:([A-Za-z_$][\w$]*),cwd:([A-Za-z_$][\w$]*),target:`fileManager`,openFile:([A-Za-z_$][\w$]*)\.mutate\}\)/u;
-  const openCallMatch = currentSource.match(openCallPattern);
-  if (openCallMatch == null) {
+  const openCallPattern = /([A-Za-z_$][\w$]*)\(\{path:([A-Za-z_$][\w$]*),cwd:([A-Za-z_$][\w$]*),target:`fileManager`,openFile:([A-Za-z_$][\w$]*)\.mutate\}\)/gu;
+  const edits = [];
+  let matchedOpenCall = false;
+  for (const openCallMatch of currentSource.matchAll(openCallPattern)) {
+    matchedOpenCall = true;
+    const [openCall, openFn, pathVar, cwdVar, openFileVar] = openCallMatch;
+    const callbackPattern = /([A-Za-z_$][\w$]*)=\(\)=>\{/g;
+    let callbackMatch = null;
+    const callbackSearchSource = currentSource.slice(0, openCallMatch.index);
+    for (let next; (next = callbackPattern.exec(callbackSearchSource)) != null;) {
+      callbackMatch = next;
+    }
+    if (callbackMatch == null) {
+      warn("Could not identify workspace-root File Manager callback");
+      continue;
+    }
+
+    const [, onSelectName] = callbackMatch;
+    const callbackBraceIndex = currentSource.indexOf("{", callbackMatch.index);
+    const callbackEnd = findMatching(currentSource, callbackBraceIndex, "{", "}");
+    if (callbackEnd === -1 || callbackEnd < openCallMatch.index) {
+      warn("Could not parse workspace-root File Manager callback body");
+      continue;
+    }
+
+    const callbackBodyAfterOpen = currentSource.slice(openCallMatch.index + openCall.length, callbackEnd);
+    const closeVar = callbackBodyAfterOpen.match(/,([A-Za-z_$][\w$]*)\(!1\)/u)?.[1] ?? null;
+    if (closeVar == null) {
+      warn("Could not identify workspace-root dropdown close callback");
+      continue;
+    }
+
+    let item = null;
+    for (const candidateName of onSelectNameCandidates(currentSource, onSelectName, callbackEnd)) {
+      const onSelectIndex = currentSource.indexOf(`onSelect:${candidateName}`, callbackEnd);
+      if (onSelectIndex === -1) {
+        continue;
+      }
+      item = findItemAssignment(currentSource, candidateName, onSelectIndex);
+      if (item != null) {
+        break;
+      }
+    }
+    if (item == null) {
+      warn("Could not parse workspace-root File Manager menu item");
+      continue;
+    }
+    if (item.value.includes(PATCH_MARKER) || edits.some((edit) => edit.start === item.start && edit.end === item.end)) {
+      continue;
+    }
+
+    const targetItems = targets.map((target) =>
+      openTargetItem({
+        jsxVar: item.jsxVar,
+        menuVar: item.menuVar,
+        openFn,
+        pathVar,
+        cwdVar,
+        openFileVar,
+        closeVar,
+        target,
+      }),
+    );
+    const replacement =
+      `${item.itemVar}=${item.valuePrefix}(0,${item.jsxVar}.jsxs)(${item.jsxVar}.Fragment,{children:[` +
+      `${targetItems.join(",")},${item.value}]})`;
+
+    edits.push({ start: item.start, end: item.end, replacement });
+  }
+
+  if (!matchedOpenCall) {
     warn("Could not find workspace-root File Manager open action");
     return currentSource;
   }
-
-  const [openCall, openFn, pathVar, cwdVar, openFileVar] = openCallMatch;
-  const callbackPattern = /([A-Za-z_$][\w$]*)=\(\)=>\{/g;
-  let callbackMatch = null;
-  const callbackSearchSource = currentSource.slice(0, openCallMatch.index);
-  for (let next; (next = callbackPattern.exec(callbackSearchSource)) != null;) {
-    callbackMatch = next;
-  }
-  if (callbackMatch == null) {
-    warn("Could not identify workspace-root File Manager callback");
+  if (edits.length === 0) {
     return currentSource;
   }
 
-  const [, onSelectName] = callbackMatch;
-  const callbackBraceIndex = currentSource.indexOf("{", callbackMatch.index);
-  const callbackEnd = findMatching(currentSource, callbackBraceIndex, "{", "}");
-  if (callbackEnd === -1 || callbackEnd < openCallMatch.index) {
-    warn("Could not parse workspace-root File Manager callback body");
-    return currentSource;
-  }
-
-  const callbackBodyAfterOpen = currentSource.slice(openCallMatch.index + openCall.length, callbackEnd);
-  const closeVar = callbackBodyAfterOpen.match(/,([A-Za-z_$][\w$]*)\(!1\)/u)?.[1] ?? null;
-  if (closeVar == null) {
-    warn("Could not identify workspace-root dropdown close callback");
-    return currentSource;
-  }
-
-  let item = null;
-  for (const candidateName of onSelectNameCandidates(currentSource, onSelectName, callbackEnd)) {
-    const onSelectIndex = currentSource.indexOf(`onSelect:${candidateName}`, callbackEnd);
-    if (onSelectIndex === -1) {
-      continue;
-    }
-    item = findItemAssignment(currentSource, candidateName, onSelectIndex);
-    if (item != null) {
-      break;
-    }
-  }
-  if (item == null) {
-    warn("Could not parse workspace-root File Manager menu item");
-    return currentSource;
-  }
-
-  const targetItems = targets.map((target) =>
-    openTargetItem({
-      jsxVar: item.jsxVar,
-      menuVar: item.menuVar,
-      openFn,
-      pathVar,
-      cwdVar,
-      openFileVar,
-      closeVar,
-      target,
-    }),
-  );
-  const replacement =
-    `${item.itemVar}=${item.valuePrefix}(0,${item.jsxVar}.jsxs)(${item.jsxVar}.Fragment,{children:[` +
-    `${targetItems.join(",")},${item.value}]})`;
-
-  return currentSource.slice(0, item.start) + replacement + currentSource.slice(item.end);
+  return edits
+    .sort((left, right) => right.start - left.start)
+    .reduce(
+      (patched, edit) => patched.slice(0, edit.start) + edit.replacement + patched.slice(edit.end),
+      currentSource,
+    );
 }
 
 function patchWorkspaceRootOpenTargets(extractedDir) {
@@ -263,6 +288,14 @@ function patchWorkspaceRootOpenTargets(extractedDir) {
 
   const mainSource = fs.readFileSync(path.join(main.buildDir, main.mainBundle), "utf8");
   const targets = enabledWorkspaceRootTargets(mainSource);
+  if (targets.length === 0) {
+    return {
+      matched: 0,
+      changed: 0,
+      status: "skipped-target",
+      reason: "No Linux editor or terminal open targets are enabled",
+    };
+  }
   let matched = 0;
   let changed = 0;
 
@@ -284,7 +317,12 @@ function patchWorkspaceRootOpenTargets(extractedDir) {
   }
 
   if (matched === 0) {
-    return { matched, changed };
+    return {
+      matched,
+      changed,
+      status: "skipped-optional",
+      reason: MISSING_FILE_MANAGER_ACTION_REASON,
+    };
   }
   return { matched, changed };
 }
@@ -295,6 +333,20 @@ module.exports = {
   order: 2060,
   ciPolicy: "optional",
   apply: patchWorkspaceRootOpenTargets,
+  status(result, warnings) {
+    if (result?.status != null) {
+      return { status: result.status, reason: result.reason ?? null };
+    }
+    if (result?.changed) {
+      return warnings.length > 0
+        ? { status: "applied-with-warnings", reason: warnings[0] }
+        : "applied";
+    }
+    if (warnings.length > 0) {
+      return { status: "skipped-optional", reason: warnings[0] };
+    }
+    return "already-applied";
+  },
   applyWorkspaceRootOpenTargetsPatch,
   enabledWorkspaceRootTargets,
 };

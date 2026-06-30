@@ -813,6 +813,11 @@ test("default core patch descriptors are grouped and unique", () => {
       `${id} should block upstream builds when it drifts`,
     );
   }
+  assert.equal(
+    descriptors.find((descriptor) => descriptor.id === "linux-workspace-root-open-targets")?.ciPolicy,
+    "optional",
+    "workspace-root open targets should not block app builds when upstream removes the File Manager insertion point",
+  );
 
   const descriptorOrder = new Map(descriptors.map((descriptor) => [descriptor.id, descriptor.order]));
   assert.ok(
@@ -4013,7 +4018,18 @@ test("keeps Linux desktop toggles visible with native Keyboard Shortcuts", () =>
     assert.match(linuxDesktopSource, /Build information/);
     assert.match(linuxDesktopSource, /Linux source commit/);
     assert.match(linuxDesktopSource, /Copy commit/);
-    assert.match(linuxDesktopSource, /Open commit/);
+    assert.match(linuxDesktopSource, /Open on GitHub/);
+    assert.match(linuxDesktopSource, /"Linux source commit":\[\{key:"copyCommit"/);
+    assert.match(linuxDesktopSource, /"Generated":\[\{key:"refresh"/);
+    assert.match(linuxDesktopSource, /"Metadata file":\[\{key:"details"/);
+    assert.match(linuxDesktopSource, /control:null/);
+    assert.match(linuxDesktopSource, /cursor-pointer/);
+    assert.match(linuxDesktopSource, /disabled:cursor-not-allowed/);
+    assert.doesNotMatch(
+      linuxDesktopSource,
+      /control:\$\.jsxs\("div",\{className:"flex flex-wrap items-center justify-end gap-2"/,
+    );
+    assert.doesNotMatch(linuxDesktopSource, /Source commit URL/);
     assert.match(linuxDesktopSource, /href:url/);
     assert.match(linuxDesktopSource, /codex-linux-get-build-info/);
     assert.match(linuxDesktopSource, /codex-linux-system-tray-enabled/);
