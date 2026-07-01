@@ -8,6 +8,8 @@ ARG NODE_VERSION=22.22.2
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PATH="/usr/local/cargo/bin:${PATH}"
 
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
 RUN apt-get update -qq \
     && apt-get install -y --no-install-recommends \
         bash \

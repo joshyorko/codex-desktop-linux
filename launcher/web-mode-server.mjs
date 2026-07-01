@@ -3945,27 +3945,80 @@ async function syncBundledMarketplace(args, pluginNames) {
       : [];
   }
 
+  const manifestMetadataForPlugin = async (pluginName, fallbackCategory = "Productivity") => {
+    const pluginJsonPath = path.join(sourceRoot, "plugins", pluginName, ".codex-plugin", "plugin.json");
+    if (!(await exists(pluginJsonPath))) {
+      return null;
+    }
+    let category = fallbackCategory;
+    let manifestInterface = null;
+    const manifestFields = {};
+    try {
+      const manifest = await readJsonFile(pluginJsonPath);
+      manifestInterface =
+        manifest?.interface != null && typeof manifest.interface === "object" && !Array.isArray(manifest.interface)
+          ? manifest.interface
+          : null;
+      category = manifestInterface?.category || category;
+      for (const key of ["version", "description", "homepage", "license"]) {
+        if (typeof manifest?.[key] === "string" && manifest[key].length > 0) {
+          manifestFields[key] = manifest[key];
+        }
+      }
+      if (manifest?.author != null && typeof manifest.author === "object" && !Array.isArray(manifest.author)) {
+        manifestFields.author = manifest.author;
+      }
+      if (Array.isArray(manifest?.keywords)) {
+        manifestFields.keywords = manifest.keywords;
+      }
+    } catch {
+      // Keep the generated marketplace usable even if a local manifest drifts.
+    }
+    return {
+      category,
+      ...manifestFields,
+      ...(manifestInterface != null ? { interface: manifestInterface } : {}),
+    };
+  };
+
+  marketplace.plugins = await Promise.all(
+    marketplace.plugins.map(async (plugin) => {
+      const pluginName = plugin?.name;
+      if (typeof pluginName !== "string" || !allowedPlugins.has(pluginName)) {
+        return plugin;
+      }
+      const manifestMetadata = await manifestMetadataForPlugin(pluginName, plugin?.category || "Productivity");
+      if (manifestMetadata == null) {
+        return plugin;
+      }
+      const pluginInterface =
+        plugin?.interface != null && typeof plugin.interface === "object" && !Array.isArray(plugin.interface)
+          ? plugin.interface
+          : null;
+      return {
+        ...manifestMetadata,
+        ...plugin,
+        ...(manifestMetadata.interface != null || pluginInterface != null
+          ? { interface: { ...(manifestMetadata.interface || {}), ...(pluginInterface || {}) } }
+          : {}),
+      };
+    }),
+  );
+
   const marketplacePluginNames = new Set(marketplace.plugins.map((plugin) => plugin?.name).filter(Boolean));
   for (const pluginName of pluginNames) {
     if (marketplacePluginNames.has(pluginName)) {
       continue;
     }
-    const pluginJsonPath = path.join(sourceRoot, "plugins", pluginName, ".codex-plugin", "plugin.json");
-    if (!(await exists(pluginJsonPath))) {
+    const manifestMetadata = await manifestMetadataForPlugin(pluginName);
+    if (manifestMetadata == null) {
       continue;
-    }
-    let category = "Productivity";
-    try {
-      const manifest = await readJsonFile(pluginJsonPath);
-      category = manifest?.interface?.category || category;
-    } catch {
-      // Keep the generated marketplace usable even if a local manifest drifts.
     }
     marketplace.plugins.push({
       name: pluginName,
       source: { source: "local", path: `./plugins/${pluginName}` },
       policy: { installation: "AVAILABLE", authentication: "ON_INSTALL" },
-      category,
+      ...manifestMetadata,
     });
   }
   marketplace.plugins = marketplace.plugins.filter((plugin) => allowedPlugins.has(plugin?.name));

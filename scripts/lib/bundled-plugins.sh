@@ -1109,9 +1109,66 @@ const includeComputerUse = process.argv[6] === "1";
 const marketplace = JSON.parse(fs.readFileSync(sourcePath, "utf8"));
 const sourcePlugins = marketplace.plugins || [];
 const plugins = [];
+const marketplaceRoot = path.resolve(path.dirname(destinationPath), "..", "..");
+
+function readStagedPluginManifest(pluginName) {
+  const manifestPath = path.join(
+    marketplaceRoot,
+    "plugins",
+    pluginName,
+    ".codex-plugin",
+    "plugin.json",
+  );
+  try {
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    return manifest != null && typeof manifest === "object" && !Array.isArray(manifest) ? manifest : null;
+  } catch (_err) {
+    return null;
+  }
+}
+
+function synthesizeLocalMarketplacePlugin(pluginName, fallbackCategory) {
+  const manifest = readStagedPluginManifest(pluginName);
+  const manifestInterface =
+    manifest?.interface != null && typeof manifest.interface === "object" && !Array.isArray(manifest.interface)
+      ? manifest.interface
+      : null;
+  const name =
+    typeof manifest?.name === "string" && manifest.name.length > 0 ? manifest.name : pluginName;
+  const category =
+    typeof manifestInterface?.category === "string" && manifestInterface.category.length > 0
+      ? manifestInterface.category
+      : fallbackCategory;
+  const entry = {
+    name,
+    source: {
+      source: "local",
+      path: `./plugins/${pluginName}`,
+    },
+    policy: {
+      installation: "AVAILABLE",
+      authentication: "ON_INSTALL",
+    },
+    category,
+  };
+  for (const key of ["version", "description", "homepage", "license"]) {
+    if (typeof manifest?.[key] === "string" && manifest[key].length > 0) {
+      entry[key] = manifest[key];
+    }
+  }
+  if (manifest?.author != null && typeof manifest.author === "object" && !Array.isArray(manifest.author)) {
+    entry.author = manifest.author;
+  }
+  if (Array.isArray(manifest?.keywords)) {
+    entry.keywords = manifest.keywords;
+  }
+  if (manifestInterface != null) {
+    entry.interface = manifestInterface;
+  }
+  return entry;
+}
 
 if (includeBrowser) {
-  const marketplaceRoot = path.resolve(path.dirname(destinationPath), "..", "..");
   const browser = sourcePlugins.find((plugin) => {
     if (plugin == null || typeof plugin !== "object") {
       return false;
@@ -1221,18 +1278,7 @@ if (includeChrome) {
 }
 
 if (includeComputerUse) {
-  plugins.push({
-    name: "computer-use",
-    source: {
-      source: "local",
-      path: "./plugins/computer-use",
-    },
-    policy: {
-      installation: "AVAILABLE",
-      authentication: "ON_INSTALL",
-    },
-    category: "Productivity",
-  });
+  plugins.push(synthesizeLocalMarketplacePlugin("computer-use", "Productivity"));
 }
 
 marketplace.plugins = plugins;

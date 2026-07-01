@@ -5523,6 +5523,21 @@ for (const name of ["browser", "chrome", "computer-use", "read-aloud"]) {
 if (names.includes("browser-use")) {
   throw new Error("stale browser-use bundled plugin id would prune Browser from runtime sync");
 }
+const enrichIndex = source.indexOf("marketplace.plugins = await Promise.all(");
+const existingNamesIndex = source.indexOf("const marketplacePluginNames = new Set");
+if (enrichIndex === -1 || existingNamesIndex === -1 || enrichIndex > existingNamesIndex) {
+  throw new Error("web-mode bundled marketplace must enrich existing entries before checking missing plugins");
+}
+for (const required of [
+  "manifestMetadataForPlugin",
+  "...manifestMetadata",
+  "...plugin",
+  "interface: { ...(manifestMetadata.interface || {}), ...(pluginInterface || {}) }",
+]) {
+  if (!source.includes(required)) {
+    throw new Error(`web-mode bundled marketplace missing manifest metadata merge marker: ${required}`);
+  }
+}
 NODE
 }
 
@@ -6255,6 +6270,85 @@ JSON
     assert_contains "$marketplace" '"installation": "AVAILABLE"'
     assert_contains "$marketplace" '"authentication": "ON_INSTALL"'
     assert_not_contains "$marketplace" "Bundled marketplace does not contain chrome plugin"
+}
+
+test_computer_use_marketplace_fallback_synthesis() {
+    info "Checking Computer Use marketplace fallback synthesis from staged manifest"
+    local workspace="$TMP_DIR/computer-use-marketplace-fallback"
+    local app_dir="$workspace/Codex.app"
+    local install_dir="$workspace/install"
+    local output_log="$workspace/output.log"
+    local marketplace="$install_dir/resources/plugins/openai-bundled/.agents/plugins/marketplace.json"
+
+    mkdir -p "$app_dir/Contents/Resources/plugins/openai-bundled/.agents/plugins" "$install_dir/resources"
+    cat > "$app_dir/Contents/Resources/plugins/openai-bundled/.agents/plugins/marketplace.json" <<'JSON'
+{"plugins":[]}
+JSON
+
+    (
+        SCRIPT_DIR="$REPO_DIR"
+        INSTALL_DIR="$install_dir"
+        WORK_DIR="$workspace/work"
+        ARCH="x86_64"
+        ICON_SOURCE="$workspace/missing-icon.png"
+        CODEX_APP_ID="codex-desktop"
+        mkdir -p "$WORK_DIR"
+        warn() { echo "[WARN] $*" >&2; }
+        info() { echo "[INFO] $*" >&2; }
+        # shellcheck disable=SC1091
+        source "$REPO_DIR/scripts/lib/bundled-plugins.sh"
+        stage_linux_computer_use_plugin() {
+            local target_plugins="$1"
+            local target_plugin="$target_plugins/computer-use"
+            mkdir -p "$target_plugin/.codex-plugin" "$target_plugin/bin"
+            cat > "$target_plugin/.codex-plugin/plugin.json" <<'JSON'
+{"name":"computer-use","version":"9.9.9","description":"Manifest description","homepage":"https://example.invalid","license":"MIT","author":{"name":"Linux"},"keywords":["desktop"],"interface":{"displayName":"Computer Use Manifest","category":"ManifestCategory","shortDescription":"Manifest short"}}
+JSON
+            printf '#!/bin/sh\n' > "$target_plugin/bin/codex-computer-use-linux"
+            printf '#!/bin/sh\n' > "$target_plugin/bin/codex-computer-use-cosmic"
+            chmod +x "$target_plugin/bin/codex-computer-use-linux" "$target_plugin/bin/codex-computer-use-cosmic"
+            return 0
+        }
+        install_bundled_plugin_resources "$app_dir"
+    ) >"$output_log" 2>&1
+
+    assert_file_exists "$marketplace"
+    node - "$marketplace" <<'NODE' || fail "Expected Computer Use fallback marketplace entry to use staged manifest metadata"
+const fs = require("node:fs");
+const marketplace = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+const plugin = marketplace.plugins.find((entry) => entry.name === "computer-use");
+if (plugin == null) {
+  throw new Error("missing computer-use marketplace entry");
+}
+const expected = {
+  source: "local",
+  path: "./plugins/computer-use",
+  installation: "AVAILABLE",
+  authentication: "ON_INSTALL",
+  category: "ManifestCategory",
+  version: "9.9.9",
+  displayName: "Computer Use Manifest",
+  description: "Manifest description",
+};
+if (plugin.source?.source !== expected.source || plugin.source?.path !== expected.path) {
+  throw new Error(`bad source: ${JSON.stringify(plugin.source)}`);
+}
+if (
+  plugin.policy?.installation !== expected.installation ||
+  plugin.policy?.authentication !== expected.authentication
+) {
+  throw new Error(`bad policy: ${JSON.stringify(plugin.policy)}`);
+}
+if (plugin.category !== expected.category || plugin.interface?.category !== expected.category) {
+  throw new Error(`bad category: ${JSON.stringify(plugin)}`);
+}
+if (plugin.version !== expected.version || plugin.interface?.displayName !== expected.displayName) {
+  throw new Error(`missing manifest display metadata: ${JSON.stringify(plugin)}`);
+}
+if (plugin.description !== expected.description) {
+  throw new Error(`missing manifest description: ${JSON.stringify(plugin)}`);
+}
+NODE
 }
 
 test_chrome_native_host_manifest_writer() {
@@ -8328,6 +8422,7 @@ main() {
     test_chrome_plugin_staging
     test_chrome_browser_client_profile_root_variants
     test_chrome_marketplace_fallback_synthesis
+    test_computer_use_marketplace_fallback_synthesis
     test_chrome_native_host_manifest_writer
     test_launcher_template_sanity
     test_process_detection_helper_cmdline_shapes
