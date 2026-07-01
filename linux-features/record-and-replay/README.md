@@ -36,7 +36,8 @@ Cargo and copies the release binary into `resources/native/`, the staged plugin
 - Creates bundles with `manifest.json`, `timeline.jsonl`, screenshots,
   accessibility snapshots, browser trace evidence, transcript context,
   native audio metadata/recordings when available, InputCapture/libei
-  readiness, X11 session metadata, diagnostics, and `draft-prompt.md`.
+  readiness, X11 session metadata, active desktop/window snapshots,
+  diagnostics, and `draft-prompt.md`.
 - Exposes Linux Skysight pause/resume, status, snapshots, exclusions, and a
   rolling evidence daemon through the same `event-stream` MCP server so
   Chronicle-compatible resources can feed skill drafting.
@@ -50,6 +51,8 @@ Cargo and copies the release binary into `resources/native/`, the staged plugin
   InputCapture/libei or X11 paths are available or missing.
 - Accepts browser/CDP-style trace JSON through the CLI, MCP, and Linux bridge
   as semantic evidence for skill drafting.
+- Captures active desktop/window snapshots through the CLI, MCP, Linux bridge,
+  and recording HUD so bundles can show focused apps/windows during a demo.
 - Treats Chronicle/Skysight as screen/event memory, not microphone
   transcription.
 - See [docs/linux-chronicle-skysight.md](../../docs/linux-chronicle-skysight.md)
@@ -94,6 +97,7 @@ The feature adds allowlisted bridge methods:
 - `linux-record-replay-mark`
 - `linux-record-replay-speech-context`
 - `linux-record-replay-browser-trace`
+- `linux-record-replay-desktop-snapshot`
 - `linux-record-replay-stop`
 - `linux-record-replay-stop-active`
 - `linux-record-replay-cancel`
@@ -105,7 +109,7 @@ The feature adds allowlisted bridge methods:
 
 The Rust helper also exposes MCP tools `skysight_start`,
 `skysight_status`, `skysight_pause`, `skysight_resume`, `skysight_stop`,
-`skysight_snapshot`, `skysight_update_exclusion`, and
+`skysight_snapshot`, `desktop_snapshot`, `skysight_update_exclusion`, and
 `skysight_list_exclusions`. Skysight runtime state defaults to
 `$XDG_RUNTIME_DIR/skysight`; memory resources default to
 `${CODEX_HOME:-$HOME/.codex}/memories_extensions/chronicle/resources`.

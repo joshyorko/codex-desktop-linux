@@ -3,7 +3,7 @@
 const { requireName } = require("../../scripts/patches/shared.js");
 
 const RECORD_REPLAY_PLUGIN_NAME = "record-and-replay";
-const HUD_RUNTIME_VERSION = 4;
+const HUD_RUNTIME_VERSION = 5;
 
 function warn(message, patchName) {
   console.warn(`WARN: ${message} - skipping ${patchName}`);
@@ -110,6 +110,7 @@ function recordReplayBridgeSource({ childProcessVar, fsVar, pathVar }) {
     `"linux-record-replay-mark":async({sessionDir:e,note:t}={})=>{let n=codexLinuxRecordReplayString(e),r=codexLinuxRecordReplayString(t);if(!n||!r)return{ok:!1,action:"record.mark",message:"sessionDir and note are required"};return codexLinuxRecordReplayRun(["record","mark","--session-dir",n,"--note",r],15000)}`,
     `"linux-record-replay-speech-context":async({sessionDir:e,transcript:t,source:n}={})=>{let r=codexLinuxRecordReplayString(e),a=codexLinuxRecordReplayString(t);if(!r||!a)return{ok:!1,action:"record.speech",message:"sessionDir and transcript are required"};let o=["record","speech","--session-dir",r,"--text",a];n&&o.push("--source",String(n));return codexLinuxRecordReplayRun(o,15000)}`,
     `"linux-record-replay-browser-trace":async({sessionDir:e,trace:t,traceJson:n,url:r,title:a,source:o}={})=>{let s=codexLinuxRecordReplayString(e),i=codexLinuxRecordReplayString(n);if(!s)return{ok:!1,action:"record.browser-trace",message:"sessionDir is required"};if(!i&&t!==void 0)i=JSON.stringify(t);if(!i)return{ok:!1,action:"record.browser-trace",message:"trace or traceJson is required"};let c=codexLinuxRecordReplayWriteTempJson(i),l=["record","browser-trace","--session-dir",s,"--trace-file",c];r&&l.push("--url",String(r));a&&l.push("--title",String(a));o&&l.push("--source",String(o));return codexLinuxRecordReplayRun(l,30000)}`,
+    `"linux-record-replay-desktop-snapshot":async({sessionDir:e,source:t}={})=>{let n=codexLinuxRecordReplayString(e);if(!n)return{ok:!1,action:"record.desktop-snapshot",message:"sessionDir is required"};let r=["record","desktop-snapshot","--session-dir",n];t&&r.push("--source",String(t));return codexLinuxRecordReplayRun(r,15000)}`,
     `"linux-record-replay-stop":async({sessionDir:e}={})=>{let t=codexLinuxRecordReplayString(e);if(!t)return{ok:!1,action:"record.stop",message:"sessionDir is required"};return codexLinuxRecordReplayRun(["record","stop","--session-dir",t],15000)}`,
     `"linux-record-replay-stop-active":async()=>{let e=await codexLinuxRecordReplayRun(["status"],5000),t=e?.json?.session_dir;if(!e?.ok||e?.json?.state!==\`active\`||!t)return{ok:!1,action:"record.stop-active",message:"No active Record & Replay session"};return codexLinuxRecordReplayRun(["record","stop","--session-dir",String(t)],15000)}`,
     `"linux-record-replay-cancel":async({sessionDir:e,discarded:t}={})=>{let n=codexLinuxRecordReplayString(e);if(!n)return{ok:!1,action:"record.cancel",message:"sessionDir is required"};let r=["record","cancel","--session-dir",n];t&&r.push("--discarded");return codexLinuxRecordReplayRun(r,15000)}`,
@@ -161,7 +162,7 @@ function recordReplayHudRuntimeSource() {
     `const VERSION=${HUD_RUNTIME_VERSION};`,
     `if(globalThis.codexLinuxRecordReplayHudVersion===VERSION)return;`,
     `globalThis.codexLinuxRecordReplayHudVersion=VERSION;`,
-    `let seq=0,pending=new Map,hud=null,timer=null,lastStatus=null,stopping=false,canceling=false;`,
+    `let seq=0,pending=new Map,hud=null,timer=null,lastStatus=null,stopping=false,canceling=false,capturedTranscripts=new Set,desktopSnapshotInFlight=false,lastDesktopSnapshotAt=0;`,
     `function onMessage(e){let t=e?.data;if(!t||typeof t!=="object"||t.type!=="fetch-response")return;let n=pending.get(t.requestId);if(!n)return;pending.delete(t.requestId);clearTimeout(n.timer);if(t.responseType==="success"){let e=null;try{e=t.bodyJsonString?JSON.parse(t.bodyJsonString):null}catch{}n.resolve(e)}else n.reject(Error(t.error||"fetch failed"))}`,
     `window.addEventListener("message",onMessage);`,
     `function dispatch(payload){let bridge=window.electronBridge,event=new CustomEvent("codex-message-from-view",{detail:payload});if(bridge?.sendMessageFromView){event.__codexForwardedViaBridge=!0;bridge.sendMessageFromView(payload).catch(()=>{})}window.dispatchEvent(event)}`,
@@ -179,6 +180,10 @@ function recordReplayHudRuntimeSource() {
     `function statusFrom(body){let s=body?.json?.state?body.json:body?.state?body:null;return s&&typeof s==="object"?s:null}`,
     `function active(s){if(!s||s.state!=="active")return false;if(s.expires_at&&Date.now()>Date.parse(s.expires_at))return false;return true}`,
     `function sessionDirFrom(s){return s?.session_dir||s?.sessionDirectoryPath||s?.runtimeStatus?.session_dir||null}`,
+    `function compactTranscript(e){return String(e||"").replace(/\\s+/g," ").trim()}`,
+    `function rememberTranscriptKey(e){capturedTranscripts.add(e);if(capturedTranscripts.size>120)capturedTranscripts.delete(capturedTranscripts.values().next().value)}`,
+    `async function captureTranscript(text,action){let transcript=String(text||"").trim();if(!transcript||action==="discard")return false;let status=active(lastStatus)?lastStatus:null;if(!status){try{let body=await post("linux-record-replay-status",{},2500);status=statusFrom(body);lastStatus=status;updateHud()}catch{return false}}if(!active(status))return false;let sessionDir=sessionDirFrom(status);if(!sessionDir)return false;let compact=compactTranscript(transcript),key=sessionDir+"|"+String(action||"")+"|"+compact;if(!compact||capturedTranscripts.has(key))return true;rememberTranscriptKey(key);try{await post("linux-record-replay-speech-context",{sessionDir,transcript,source:"codex-dictation-"+String(action||"unknown")},15000);return true}catch{capturedTranscripts.delete(key);return false}}`,
+    `async function captureDesktopSnapshot(){if(desktopSnapshotInFlight||Date.now()-lastDesktopSnapshotAt<5000)return false;let status=active(lastStatus)?lastStatus:null;if(!status){try{let body=await post("linux-record-replay-status",{},2500);status=statusFrom(body);lastStatus=status;updateHud()}catch{return false}}if(!active(status))return false;let sessionDir=sessionDirFrom(status);if(!sessionDir)return false;desktopSnapshotInFlight=true;lastDesktopSnapshotAt=Date.now();try{await post("linux-record-replay-desktop-snapshot",{sessionDir,source:"record-replay-hud"},15000);return true}catch{lastDesktopSnapshotAt=0;return false}finally{desktopSnapshotInFlight=false}}`,
     `function elapsedText(s){let start=Date.parse(s?.started_at||"");let seconds=Number.isFinite(start)?Math.max(0,Math.floor((Date.now()-start)/1000)):0;let m=Math.floor(seconds/60),r=String(seconds%60).padStart(2,"0");return m+":"+r}`,
     `function updateHud(){let h=ensureHud(),on=active(lastStatus);h.dataset.active=on?"true":"false";if(!on)return;let time=h.querySelector(".codex-linux-record-replay-time");time&&(time.textContent=elapsedText(lastStatus));h.title=lastStatus?.goal?("Recording: "+lastStatus.goal):"Record & Replay recording active";positionHud()}`,
     `async function refresh(){try{let body=await post("linux-record-replay-status",{},2500);lastStatus=statusFrom(body);updateHud()}catch{lastStatus=null;updateHud()}}`,
@@ -186,8 +191,9 @@ function recordReplayHudRuntimeSource() {
     `async function cancelActive(discarded){try{let body=await post("linux-record-replay-cancel-active",{discarded:!!discarded},10000);return !!(body?.ok||body?.json?.ok)}catch{return false}finally{setTimeout(refresh,250)}}`,
     `async function finishRecording(){if(stopping||canceling)return;stopping=true;let btns=hud?.querySelectorAll("button")??[];btns.forEach(b=>b.disabled=true);try{let stopped=await stopActive(),submitted=false;try{submitted=await submitDoneMessage()}catch{}if(!stopped&&!submitted)await stopActive()}finally{stopping=false;btns.forEach(b=>b.disabled=false);setTimeout(refresh,250)}}`,
     `async function discardRecording(){if(stopping||canceling)return;if(!confirm("Discard this Record & Replay recording? The bundle will be kept only as canceled evidence."))return;canceling=true;let btns=hud?.querySelectorAll("button")??[];btns.forEach(b=>b.disabled=true);try{await cancelActive(true)}finally{canceling=false;btns.forEach(b=>b.disabled=false);setTimeout(refresh,250)}}`,
-    `function tick(){updateHud();refresh().catch(()=>{})}`,
+    `async function tick(){updateHud();try{await refresh();await captureDesktopSnapshot()}catch{}}`,
     `function start(){if(document.readyState==="loading"){document.addEventListener("DOMContentLoaded",start,{once:!0});return}ensureHud();tick();timer=setInterval(tick,1000);window.addEventListener("resize",positionHud);window.addEventListener("scroll",positionHud,true);new MutationObserver(positionHud).observe(document.body||document.documentElement,{childList:true,subtree:true})}`,
+    `globalThis.codexLinuxRecordReplayCaptureTranscript=captureTranscript;`,
     `start();`,
     `})();`,
   ].join("");
@@ -199,6 +205,55 @@ function applyRecordReplayHudPatch(currentSource) {
   }
   const separator = currentSource.endsWith("\n") ? "" : "\n";
   return currentSource + separator + recordReplayHudRuntimeSource();
+}
+
+function applyRecordReplayDictationTranscriptPatch(currentSource) {
+  const patchName = "Record & Replay dictation transcript patch";
+  if (currentSource.includes("codexLinuxRecordReplayCaptureTranscript")) {
+    return currentSource;
+  }
+  if (!currentSource.includes("global-dictation-record-history-item")) {
+    return currentSource;
+  }
+
+  const upstreamNeedle =
+    "i.length>0&&(j.getInstance().dispatchMessage(`global-dictation-record-history-item`,{text:i}),e===`send`?n.onTranscriptSend(i):n.onTranscriptInsert(i))";
+  if (currentSource.includes(upstreamNeedle)) {
+    return currentSource.replace(
+      upstreamNeedle,
+      "i.length>0&&(globalThis.codexLinuxRecordReplayCaptureTranscript?.(i,e),j.getInstance().dispatchMessage(`global-dictation-record-history-item`,{text:i}),e===`send`?n.onTranscriptSend(i):n.onTranscriptInsert(i))",
+    );
+  }
+
+  const conversationNeedle =
+    "i.length>0&&e!==`discard`&&globalThis.codexLinuxConversationShouldSendTranscript?.(i,e)!==!1&&(j.getInstance().dispatchMessage(`global-dictation-record-history-item`,{text:i}),e===`send`?n.onTranscriptSend(i):n.onTranscriptInsert(i))";
+  if (currentSource.includes(conversationNeedle)) {
+    return currentSource.replace(
+      conversationNeedle,
+      "i.length>0&&e!==`discard`&&globalThis.codexLinuxConversationShouldSendTranscript?.(i,e)!==!1&&(globalThis.codexLinuxRecordReplayCaptureTranscript?.(i,e),j.getInstance().dispatchMessage(`global-dictation-record-history-item`,{text:i}),e===`send`?n.onTranscriptSend(i):n.onTranscriptInsert(i))",
+    );
+  }
+
+  const conversationPattern =
+    /([A-Za-z_$][\w$]*)\.length>0&&([A-Za-z_$][\w$]*)!==`discard`&&globalThis\.codexLinuxConversationShouldSendTranscript\?\.\(\1,\2\)!==!1&&\((([A-Za-z_$][\w$]*)\.getInstance\(\)\.dispatchMessage\(`global-dictation-record-history-item`,\{text:\1\}\),\2===`send`\?([A-Za-z_$][\w$]*)\.onTranscriptSend\(\1\):\5\.onTranscriptInsert\(\1\))\)/u;
+  if (conversationPattern.test(currentSource)) {
+    return currentSource.replace(
+      conversationPattern,
+      "$1.length>0&&$2!==`discard`&&globalThis.codexLinuxConversationShouldSendTranscript?.($1,$2)!==!1&&(globalThis.codexLinuxRecordReplayCaptureTranscript?.($1,$2),$3)",
+    );
+  }
+
+  const upstreamPattern =
+    /([A-Za-z_$][\w$]*)\.length>0&&\((([A-Za-z_$][\w$]*)\.getInstance\(\)\.dispatchMessage\(`global-dictation-record-history-item`,\{text:\1\}\),([A-Za-z_$][\w$]*)===`send`\?([A-Za-z_$][\w$]*)\.onTranscriptSend\(\1\):\5\.onTranscriptInsert\(\1\))\)/u;
+  if (upstreamPattern.test(currentSource)) {
+    return currentSource.replace(
+      upstreamPattern,
+      "$1.length>0&&(globalThis.codexLinuxRecordReplayCaptureTranscript?.($1,$4),$2)",
+    );
+  }
+
+  warn("Could not find dictation transcript send point", patchName);
+  return currentSource;
 }
 
 const descriptors = [
@@ -225,11 +280,22 @@ const descriptors = [
     skipDescription: "Record & Replay HUD runtime patch",
     apply: applyRecordReplayHudPatch,
   },
+  {
+    id: "record-replay-dictation-transcript",
+    phase: "webview-asset",
+    order: 20695,
+    ciPolicy: "optional",
+    pattern: /^(?:browser-sidebar-comment-light-dismiss|use-dictation(?!-hotkey))-.*\.js$/,
+    missingDescription: "composer dictation bundle",
+    skipDescription: "Record & Replay dictation transcript patch",
+    apply: applyRecordReplayDictationTranscriptPatch,
+  },
 ];
 
 module.exports = {
   RECORD_REPLAY_PLUGIN_NAME,
   HUD_RUNTIME_VERSION,
+  applyRecordReplayDictationTranscriptPatch,
   applyRecordReplayPluginGatePatch,
   applyRecordReplayHudPatch,
   applyRecordReplayMainBridgePatch,

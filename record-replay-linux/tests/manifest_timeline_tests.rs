@@ -3,8 +3,8 @@ use std::path::Path;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use codex_record_replay_linux::{
-    bundle_draft_prompt, cancel_session, command_json, expire_session, mark_session,
-    parse_timeline_line, read_runtime_status, read_timeline, record_browser_trace,
+    append_timeline_record, bundle_draft_prompt, cancel_session, command_json, expire_session,
+    mark_session, parse_timeline_line, read_runtime_status, read_timeline, record_browser_trace,
     record_speech_context, start_session, stop_session, update_active_status, validate_bundle_dir,
     validate_draft_prompt, write_active_status, write_stopped_status, Commands, RecordCommand,
     RecordStartOptions, RecordingBundleManifest, RecordingRuntimeState, SessionCancelArgs,
@@ -145,6 +145,286 @@ fn browser_trace_is_bundle_artifact_evidence() {
 }
 
 #[test]
+fn desktop_snapshot_is_prompt_visible_bundle_evidence() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    fs::write(root.join("manifest.json"), MANIFEST_VALID_FIXTURE).unwrap();
+    fs::write(root.join("timeline.jsonl"), "").unwrap();
+    create_standard_bundle_dirs(root);
+    fs::write(root.join("diagnostics.json"), "{\"ok\":true}\n").unwrap();
+    fs::write(
+        root.join("x11/0000-desktop-snapshot.json"),
+        "{\"ok\":true}\n",
+    )
+    .unwrap();
+
+    let record = append_timeline_record(
+        root,
+        TimelineEvent::DesktopSnapshot {
+            file: "x11/0000-desktop-snapshot.json".to_string(),
+            window_count: 2,
+            focused_window_title: Some("Gemini - Google Chrome".to_string()),
+            focused_window_app_id: Some("google-chrome".to_string()),
+            focused_window_wm_class: Some("Google-chrome".to_string()),
+            source: Some("record-replay-hud".to_string()),
+        },
+    )
+    .unwrap();
+
+    assert!(record.validate().is_valid());
+    assert!(validate_bundle_dir(root).unwrap().is_valid());
+    let prompt = bundle_draft_prompt(root).unwrap();
+    assert!(prompt.contains("desktop snapshot x11/0000-desktop-snapshot.json"));
+    assert!(prompt.contains("Gemini - Google Chrome"));
+    assert!(prompt.contains("google-chrome"));
+    assert!(prompt.contains("record-replay-hud"));
+}
+
+#[test]
+fn event_stream_uses_sky_compatible_event_kinds() {
+    let _guard = status_env_guard();
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("bundle");
+    let status_path = temp.path().join("status.json");
+    let previous = std::env::var_os("CODEX_RECORD_REPLAY_STATUS_PATH");
+    std::env::set_var("CODEX_RECORD_REPLAY_STATUS_PATH", &status_path);
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime
+        .block_on(start_session(RecordStartOptions {
+            session_dir: root.clone(),
+            app_id: None,
+            window_id: None,
+            goal: Some("record Gemini image generation workflow".to_string()),
+            include_screenshot: false,
+            include_accessibility: false,
+            include_audio: false,
+        }))
+        .unwrap();
+
+    record_speech_context(
+        &root,
+        "Open Chrome, go to Gemini, enter the image prompt, generate it, and download the image.",
+        Some("codex-dictation-send".to_string()),
+    )
+    .unwrap();
+    record_browser_trace(
+        &root,
+        serde_json::json!({
+            "events": [
+                { "method": "Page.navigate", "params": { "url": "https://gemini.google.com/app" } }
+            ]
+        }),
+        Some("https://gemini.google.com/app".to_string()),
+        Some("Gemini - Google Chrome".to_string()),
+        Some("chrome-cdp".to_string()),
+    )
+    .unwrap();
+    fs::write(
+        root.join("x11/0002-desktop-snapshot.json"),
+        serde_json::json!({
+            "schema_version": 1,
+            "provider": "window-metadata",
+            "captured_at": "2026-06-30T20:20:41Z",
+            "source": "record-replay-hud",
+            "windows": [
+                {
+                    "window_id": 42,
+                    "title": "Gemini - Google Chrome",
+                    "app_id": "google-chrome",
+                    "wm_class": "Google-chrome",
+                    "focused": true,
+                    "hidden": false,
+                    "backend": "test"
+                }
+            ],
+            "focused_window": {
+                "window_id": 42,
+                "title": "Gemini - Google Chrome",
+                "app_id": "google-chrome",
+                "wm_class": "Google-chrome",
+                "pid": 1234
+            },
+            "window_count": 1
+        })
+        .to_string(),
+    )
+    .unwrap();
+    append_timeline_record(
+        &root,
+        TimelineEvent::DesktopSnapshot {
+            file: "x11/0002-desktop-snapshot.json".to_string(),
+            window_count: 1,
+            focused_window_title: Some("Gemini - Google Chrome".to_string()),
+            focused_window_app_id: Some("google-chrome".to_string()),
+            focused_window_wm_class: Some("Google-chrome".to_string()),
+            source: Some("record-replay-hud".to_string()),
+        },
+    )
+    .unwrap();
+    stop_session(&root).unwrap();
+
+    let event_stream = read_jsonl_values(&root.join("events.jsonl"));
+    let kinds = event_stream
+        .iter()
+        .filter_map(|event| event["kind"].as_str())
+        .collect::<Vec<_>>();
+    assert!(kinds.contains(&"session.started"));
+    assert!(kinds.contains(&"keyboard.text_input"));
+    assert!(kinds.contains(&"window.changed"));
+    assert!(kinds.contains(&"session.ended"));
+    assert!(!kinds.contains(&"session_started"));
+    assert!(!kinds.contains(&"speech_context"));
+    assert!(!kinds.contains(&"desktop_snapshot"));
+    assert!(event_stream.iter().any(|event| {
+        event["kind"] == "keyboard.text_input"
+            && event["text"]
+                .as_str()
+                .is_some_and(|text| text.contains("Open Chrome, go to Gemini"))
+            && event["target"]["file"] == "transcripts/0000.txt"
+    }));
+    assert!(event_stream.iter().any(|event| {
+        event["kind"] == "window.changed"
+            && event["title"] == "Gemini - Google Chrome"
+            && event["bundleIdentifier"] == "google-chrome"
+            && event["target"]["file"] == "x11/0002-desktop-snapshot.json"
+    }));
+    let session: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(root.join("session.json")).unwrap()).unwrap();
+    assert_eq!(
+        session["eventCount"].as_u64(),
+        Some(event_stream.len() as u64)
+    );
+    assert!(session["suppressedEventCount"].as_u64().is_some());
+
+    match previous {
+        Some(path) => std::env::set_var("CODEX_RECORD_REPLAY_STATUS_PATH", path),
+        None => std::env::remove_var("CODEX_RECORD_REPLAY_STATUS_PATH"),
+    }
+}
+
+#[test]
+fn gemini_image_workflow_bundle_prompt_has_transcript_browser_and_window_context() {
+    let _guard = status_env_guard();
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("bundle");
+    let status_path = temp.path().join("status.json");
+    let previous = std::env::var_os("CODEX_RECORD_REPLAY_STATUS_PATH");
+    std::env::set_var("CODEX_RECORD_REPLAY_STATUS_PATH", &status_path);
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime
+        .block_on(start_session(RecordStartOptions {
+            session_dir: root.clone(),
+            app_id: None,
+            window_id: None,
+            goal: Some("record Gemini image generation workflow".to_string()),
+            include_screenshot: false,
+            include_accessibility: false,
+            include_audio: false,
+        }))
+        .unwrap();
+
+    record_speech_context(
+        &root,
+        "Open Chrome, go to Gemini, enter a prompt to create an image of a neon cabin, generate it, then download the image.",
+        Some("codex-dictation-send".to_string()),
+    )
+    .unwrap();
+    let browser_record = record_browser_trace(
+        &root,
+        serde_json::json!({
+            "events": [
+                {
+                    "method": "Page.navigate",
+                    "params": { "url": "https://gemini.google.com/app" }
+                },
+                {
+                    "method": "Runtime.consoleAPICalled",
+                    "params": { "text": "Gemini image prompt submitted" }
+                }
+            ]
+        }),
+        Some("https://gemini.google.com/app".to_string()),
+        Some("Gemini - Google Chrome".to_string()),
+        Some("chrome-cdp".to_string()),
+    )
+    .unwrap();
+    let browser_trace_file = match &browser_record.event {
+        TimelineEvent::BrowserTrace { file, .. } => file.as_str(),
+        _ => panic!("expected browser trace record"),
+    };
+    fs::write(
+        root.join("x11/0002-desktop-snapshot.json"),
+        serde_json::json!({
+            "schema_version": 1,
+            "provider": "window-metadata",
+            "captured_at": "2026-06-30T20:20:41Z",
+            "source": "record-replay-hud",
+            "windows": [
+                {
+                    "window_id": 42,
+                    "title": "Gemini - Google Chrome",
+                    "app_id": "google-chrome",
+                    "wm_class": "Google-chrome",
+                    "focused": true,
+                    "hidden": false,
+                    "backend": "test"
+                }
+            ],
+            "focused_window": {
+                "title": "Gemini - Google Chrome",
+                "app_id": "google-chrome",
+                "wm_class": "Google-chrome"
+            },
+            "window_count": 1
+        })
+        .to_string(),
+    )
+    .unwrap();
+    append_timeline_record(
+        &root,
+        TimelineEvent::DesktopSnapshot {
+            file: "x11/0002-desktop-snapshot.json".to_string(),
+            window_count: 1,
+            focused_window_title: Some("Gemini - Google Chrome".to_string()),
+            focused_window_app_id: Some("google-chrome".to_string()),
+            focused_window_wm_class: Some("Google-chrome".to_string()),
+            source: Some("record-replay-hud".to_string()),
+        },
+    )
+    .unwrap();
+
+    let prompt = bundle_draft_prompt(&root).unwrap();
+    assert!(root.join("session.json").is_file());
+    assert!(root.join("events.jsonl").is_file());
+    assert!(root.join("transcripts/0000.txt").is_file());
+    assert!(root.join(browser_trace_file).is_file());
+    assert!(root.join("x11/0002-desktop-snapshot.json").is_file());
+    let event_stream = fs::read_to_string(root.join("events.jsonl")).unwrap();
+    assert!(event_stream.contains("speech_context"));
+    assert!(event_stream.contains("browser_trace"));
+    assert!(event_stream.contains("desktop_snapshot"));
+    assert!(prompt.contains("Open Chrome, go to Gemini"));
+    assert!(prompt.contains("create an image of a neon cabin"));
+    assert!(prompt.contains("https://gemini.google.com/app"));
+    assert!(prompt.contains("Gemini - Google Chrome"));
+    assert!(prompt.contains("google-chrome"));
+    assert!(prompt.contains("download the image"));
+
+    match previous {
+        Some(path) => std::env::set_var("CODEX_RECORD_REPLAY_STATUS_PATH", path),
+        None => std::env::remove_var("CODEX_RECORD_REPLAY_STATUS_PATH"),
+    }
+}
+
+#[test]
 fn start_session_writes_browser_input_capture_and_x11_evidence() {
     let _guard = status_env_guard();
     let temp = tempfile::tempdir().unwrap();
@@ -171,6 +451,8 @@ fn start_session_writes_browser_input_capture_and_x11_evidence() {
         .unwrap();
 
     assert!(report.ok);
+    assert!(root.join("session.json").is_file());
+    assert!(root.join("events.jsonl").is_file());
     assert!(root.join("browser/0000-readiness.json").is_file());
     assert!(root.join("input-capture/0000-readiness.json").is_file());
     assert!(root.join("x11/0000-session.json").is_file());
@@ -236,7 +518,9 @@ fn start_session_creates_private_bundle_and_status_files() {
     }
     for file in [
         root.join("manifest.json"),
+        root.join("session.json"),
         root.join("timeline.jsonl"),
+        root.join("events.jsonl"),
         root.join("diagnostics.json"),
         root.join("browser/0000-readiness.json"),
         root.join("input-capture/0000-readiness.json"),
@@ -878,6 +1162,14 @@ fn record_cancel_marks_bundle_as_canceled_and_discarded() {
         response["sessionDirectoryPath"].as_str(),
         Some(root.to_string_lossy().as_ref())
     );
+    assert_eq!(
+        response["eventsPath"].as_str(),
+        Some(root.join("events.jsonl").to_string_lossy().as_ref())
+    );
+    assert_eq!(
+        response["metadataPath"].as_str(),
+        Some(root.join("session.json").to_string_lossy().as_ref())
+    );
     let status = read_runtime_status();
     assert_eq!(status.state, RecordingRuntimeState::Canceled);
     assert_eq!(
@@ -968,4 +1260,13 @@ fn create_standard_bundle_dirs(root: &Path) {
     ] {
         fs::create_dir(root.join(dir)).unwrap();
     }
+}
+
+fn read_jsonl_values(path: &Path) -> Vec<serde_json::Value> {
+    fs::read_to_string(path)
+        .unwrap()
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect()
 }

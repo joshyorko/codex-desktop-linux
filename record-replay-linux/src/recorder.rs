@@ -1,6 +1,6 @@
 use anyhow::{bail, Context, Result};
 use chrono::Utc;
-use codex_computer_use_linux::{atspi_tree, diagnostics::DoctorReport, screenshot};
+use codex_computer_use_linux::{atspi_tree, diagnostics::DoctorReport, screenshot, windowing};
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::{
@@ -59,6 +59,13 @@ pub async fn start_session(options: RecordStartOptions) -> Result<RecordStartRep
     }
     crate::secure_fs::write_private_file(&options.session_dir.join(TIMELINE_FILE_NAME), "")
         .with_context(|| "failed to initialize timeline")?;
+    crate::secure_fs::write_private_file(
+        &options
+            .session_dir
+            .join(crate::manifest::EVENT_STREAM_EVENTS_FILE_NAME),
+        "",
+    )
+    .with_context(|| "failed to initialize event-stream events")?;
 
     codex_computer_use_linux::diagnostics::hydrate_session_bus_env();
     let diagnostics = codex_computer_use_linux::diagnostics::doctor_report();
@@ -267,6 +274,75 @@ pub fn record_browser_trace(
         },
     )?;
     let _ = crate::runtime_status::update_active_status_for(Some(bundle_dir), "browser_trace");
+    Ok(record)
+}
+
+pub async fn record_desktop_snapshot(
+    bundle_dir: &Path,
+    source: Option<String>,
+) -> Result<crate::timeline::TimelineRecord> {
+    let recorded_at = now_timestamp();
+    let windows = windowing::list_windows()
+        .await
+        .with_context(|| "failed to list desktop windows")?;
+    record_desktop_snapshot_from_windows(bundle_dir, recorded_at, source, windows)
+}
+
+fn record_desktop_snapshot_from_windows(
+    bundle_dir: &Path,
+    recorded_at: String,
+    source: Option<String>,
+    windows: Vec<windowing::WindowInfo>,
+) -> Result<crate::timeline::TimelineRecord> {
+    let _lock = crate::secure_fs::lock_directory(bundle_dir, ".recording.lock")?;
+    ensure_bundle_open(bundle_dir)?;
+    let x11_dir = bundle_dir.join(X11_DIR_NAME);
+    crate::secure_fs::create_private_dir_all(&x11_dir)
+        .with_context(|| format!("failed to create {}", x11_dir.display()))?;
+    let focused_window = windows.iter().find(|window| window.focused).cloned();
+    let visible_windows = windows
+        .into_iter()
+        .filter(|window| !window.hidden)
+        .collect::<Vec<_>>();
+    let window_count = visible_windows.len();
+    let relative = format!(
+        "{X11_DIR_NAME}/{:04}-desktop-snapshot.json",
+        next_artifact_index(&x11_dir)?
+    );
+    crate::secure_fs::write_private_file(
+        &bundle_dir.join(&relative),
+        format!(
+            "{}\n",
+            serde_json::to_string_pretty(&json!({
+                "schema_version": 1,
+                "provider": "window-metadata",
+                "captured_at": recorded_at,
+                "source": source.as_deref(),
+                "windows": &visible_windows,
+                "focused_window": focused_window.as_ref(),
+                "window_count": window_count,
+            }))?
+        ),
+    )
+    .with_context(|| format!("failed to write desktop snapshot {relative}"))?;
+    let record = append_timeline_record(
+        bundle_dir,
+        TimelineEvent::DesktopSnapshot {
+            file: relative,
+            window_count,
+            focused_window_title: focused_window
+                .as_ref()
+                .and_then(|window| window.title.clone()),
+            focused_window_app_id: focused_window
+                .as_ref()
+                .and_then(|window| window.app_id.clone()),
+            focused_window_wm_class: focused_window
+                .as_ref()
+                .and_then(|window| window.wm_class.clone()),
+            source,
+        },
+    )?;
+    let _ = crate::runtime_status::update_active_status_for(Some(bundle_dir), "desktop_snapshot");
     Ok(record)
 }
 
@@ -605,4 +681,92 @@ fn ensure_bundle_open(bundle_dir: &Path) -> Result<()> {
         bail!("recording bundle is expired");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{Mutex, MutexGuard, OnceLock};
+
+    fn status_env_guard() -> MutexGuard<'static, ()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
+    }
+
+    fn window(title: &str, app_id: &str, wm_class: &str) -> windowing::WindowInfo {
+        windowing::WindowInfo {
+            window_id: 42,
+            title: Some(title.to_string()),
+            app_id: Some(app_id.to_string()),
+            wm_class: Some(wm_class.to_string()),
+            pid: Some(1234),
+            bounds: None,
+            workspace: Some(0),
+            focused: true,
+            hidden: false,
+            client_type: Some("wayland".to_string()),
+            backend: "test".to_string(),
+            terminal: None,
+        }
+    }
+
+    #[test]
+    fn desktop_snapshot_writes_focused_window_bundle_evidence() {
+        let _guard = status_env_guard();
+        let temp = tempfile::tempdir().unwrap();
+        let previous = std::env::var_os("CODEX_RECORD_REPLAY_STATUS_PATH");
+        std::env::set_var(
+            "CODEX_RECORD_REPLAY_STATUS_PATH",
+            temp.path().join("status.json"),
+        );
+        let root = temp.path().join("bundle");
+        crate::secure_fs::create_private_dir_all(&root).unwrap();
+        crate::secure_fs::create_private_dir_all(&root.join(X11_DIR_NAME)).unwrap();
+        crate::secure_fs::write_private_file(&root.join(TIMELINE_FILE_NAME), "").unwrap();
+        write_manifest(
+            &root,
+            &RecordingBundleManifest::new(
+                "desktop-snapshot".to_string(),
+                "2026-06-30T12:00:00Z".to_string(),
+            ),
+        )
+        .unwrap();
+
+        let record = record_desktop_snapshot_from_windows(
+            &root,
+            "2026-06-30T12:01:00Z".to_string(),
+            Some("record-replay-hud".to_string()),
+            vec![window(
+                "Gemini - Google Chrome",
+                "google-chrome",
+                "Google-chrome",
+            )],
+        )
+        .unwrap();
+
+        assert!(record.validate().is_valid());
+        assert!(matches!(
+            &record.event,
+            TimelineEvent::DesktopSnapshot {
+                file,
+                window_count: 1,
+                focused_window_title,
+                focused_window_app_id,
+                focused_window_wm_class,
+                source,
+            } if file == "x11/0000-desktop-snapshot.json"
+                && focused_window_title.as_deref() == Some("Gemini - Google Chrome")
+                && focused_window_app_id.as_deref() == Some("google-chrome")
+                && focused_window_wm_class.as_deref() == Some("Google-chrome")
+                && source.as_deref() == Some("record-replay-hud")
+        ));
+        let artifact = fs::read_to_string(root.join("x11/0000-desktop-snapshot.json")).unwrap();
+        assert!(artifact.contains("Gemini - Google Chrome"));
+        assert!(artifact.contains("google-chrome"));
+
+        match previous {
+            Some(path) => std::env::set_var("CODEX_RECORD_REPLAY_STATUS_PATH", path),
+            None => std::env::remove_var("CODEX_RECORD_REPLAY_STATUS_PATH"),
+        }
+    }
 }

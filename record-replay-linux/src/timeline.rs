@@ -70,6 +70,18 @@ pub enum TimelineEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         source: Option<String>,
     },
+    DesktopSnapshot {
+        file: String,
+        window_count: usize,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        focused_window_title: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        focused_window_app_id: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        focused_window_wm_class: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        source: Option<String>,
+    },
     ProviderEvidence {
         provider: String,
         file: String,
@@ -169,6 +181,9 @@ impl TimelineRecord {
             TimelineEvent::BrowserTrace { file, .. } => {
                 validate_event_path(file, "browser_trace.file", &mut report);
             }
+            TimelineEvent::DesktopSnapshot { file, .. } => {
+                validate_event_path(file, "desktop_snapshot.file", &mut report);
+            }
             TimelineEvent::ProviderEvidence {
                 provider,
                 file,
@@ -253,7 +268,9 @@ pub fn append_timeline_record(bundle_dir: &Path, event: TimelineEvent) -> Result
         0
     };
     let record = TimelineRecord::new(next_index, crate::recorder::now_timestamp(), event);
-    crate::secure_fs::append_private_line(&path, &record.to_json_line()?)?;
+    let line = record.to_json_line()?;
+    crate::secure_fs::append_private_line(&path, &line)?;
+    crate::event_stream::append_event_stream_record(bundle_dir, &record)?;
     Ok(record)
 }
 

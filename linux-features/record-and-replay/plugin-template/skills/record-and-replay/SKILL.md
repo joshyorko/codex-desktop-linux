@@ -34,9 +34,10 @@ client, implemented by the Rust `codex-record-replay-linux` backend.
    test runs where audio capture must be disabled.
    Tell the user that recording is active, that they should perform the workflow
    normally, and that they can say `done` when finished.
-4. During the demonstration, call `mark` only for meaningful intent boundaries
-   that will help the future skill, such as "source page opened" or "finished
-   selecting rows".
+4. During the demonstration, call `desktop_snapshot` at meaningful app/window
+   changes, such as after the user opens Chrome or arrives on a target site.
+   Call `mark` only for meaningful intent boundaries that will help the future
+   skill, such as "source page opened" or "finished selecting rows".
 5. When transcript text is explicitly available during the recording, call
    `speech_context` with the transcript. Treat the speech as user
    intent/context, not as audio to replay or Chronicle-compatible resources.

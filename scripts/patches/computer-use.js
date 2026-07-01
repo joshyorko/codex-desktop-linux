@@ -95,6 +95,20 @@ function buildComputerUseGate({ nameExpr, availabilityProp, featuresVar, platfor
   return `{installWhenMissing:!0,name:${nameExpr},${availabilityProp}:({features:${featuresVar},platform:${platformVar}})=>(${platformVar}===\`darwin\`||${platformVar}===\`linux\`)&&${featuresVar}.computerUse,migrate:${migrateVar}}`;
 }
 
+function rewriteComputerUseMarketplaceSelector(currentSource) {
+  const marketplaceGateRegex =
+    /if\(!\(\s*([A-Za-z_$][\w$]*)\.platform!==`darwin`\|\|!\s*\1\.marketplacePluginNames\.includes\(`computer-use`\)\s*\)\)return\s*\1\.desktopFeatureAvailability\.computerUseNodeRepl\?`node-repl`:`legacy-mcp`/g;
+  return currentSource.replace(
+    marketplaceGateRegex,
+    (_match, ref) =>
+      `if(!((${ref}.platform!==\`darwin\`&&${ref}.platform!==\`linux\`)||!${ref}.marketplacePluginNames.includes(\`computer-use\`)))return ${ref}.platform===\`darwin\`&&${ref}.desktopFeatureAvailability.computerUseNodeRepl?\`node-repl\`:\`legacy-mcp\``,
+  );
+}
+
+function hasPatchedComputerUseMarketplaceSelector(currentSource) {
+  return /if\(!\(\(\s*([A-Za-z_$][\w$]*)\.platform!==`darwin`&&\1\.platform!==`linux`\)\|\|!\1\.marketplacePluginNames\.includes\(`computer-use`\)\)\)return\s+\1\.platform===`darwin`&&\1\.desktopFeatureAvailability\.computerUseNodeRepl\?`node-repl`:`legacy-mcp`/.test(currentSource);
+}
+
 function stripInstallWhenMissingRequiresOptIn(value) {
   return value.replace(/installWhenMissingRequiresOptIn:!0,/g, "");
 }
@@ -141,7 +155,12 @@ function applyLinuxComputerUsePluginGatePatch(currentSource) {
     return currentSource;
   }
 
-  const computerUseNameVar = currentSource.match(/([A-Za-z_$][\w$]*)=(?:`computer-use`|"computer-use"|'computer-use')/)?.[1] ?? null;
+  const sourceWithMarketplaceSelector = rewriteComputerUseMarketplaceSelector(currentSource);
+  const hasMarketplaceSelectorPatch =
+    sourceWithMarketplaceSelector !== currentSource ||
+    hasPatchedComputerUseMarketplaceSelector(sourceWithMarketplaceSelector);
+
+  const computerUseNameVar = sourceWithMarketplaceSelector.match(/([A-Za-z_$][\w$]*)=(?:`computer-use`|"computer-use"|'computer-use')/)?.[1] ?? null;
   const nameExpressionPattern = String.raw`(?:[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)?|` +
     String.raw`\`computer-use\`|"computer-use"|'computer-use')`;
   const gateRegex =
@@ -149,7 +168,7 @@ function applyLinuxComputerUsePluginGatePatch(currentSource) {
   let sawEnabledGate = false;
   let sawUnpatchableGate = false;
   let patchedGateCount = 0;
-  const patchedSource = currentSource.replace(
+  const patchedSource = sourceWithMarketplaceSelector.replace(
     gateRegex,
     (gateSource, installWhenMissing, nameExpr, availabilityProp, paramsText, expression, migrateVar) => {
       if (!isComputerUseNameExpr(nameExpr, computerUseNameVar)) {
@@ -186,7 +205,7 @@ function applyLinuxComputerUsePluginGatePatch(currentSource) {
   const flexibleGateRegex =
     new RegExp(String.raw`\{([^{}]*?)name:(${nameExpressionPattern}),([^{}]*?)(isEnabled|isAvailable):\(\{([^}]*)\}\)=>([^{}]*?\.computerUse)([^{}]*?)\}`, "g");
   let flexiblePatchedCount = 0;
-  const flexiblyPatchedSource = currentSource.replace(
+  const flexiblyPatchedSource = sourceWithMarketplaceSelector.replace(
     flexibleGateRegex,
     (gateSource, prefix, nameExpr, middleFields, availabilityProp, paramsText, expression, expressionSuffix) => {
       if (!isComputerUseNameExpr(nameExpr, computerUseNameVar)) {
@@ -236,14 +255,18 @@ function applyLinuxComputerUsePluginGatePatch(currentSource) {
   }
 
   if (sawEnabledGate && !sawUnpatchableGate) {
-    return currentSource;
+    return sourceWithMarketplaceSelector;
   }
 
-  if (hasComputerUseLiteral(currentSource) && currentSource.includes("computerUse")) {
+  if (hasMarketplaceSelectorPatch && !sawUnpatchableGate) {
+    return sourceWithMarketplaceSelector;
+  }
+
+  if (hasComputerUseLiteral(sourceWithMarketplaceSelector) && sourceWithMarketplaceSelector.includes("computerUse")) {
     throw new Error("Required Linux Computer Use plugin gate patch failed: could not enable bundled Computer Use on Linux");
   }
 
-  return currentSource;
+  return sourceWithMarketplaceSelector;
 }
 
 function applyLinuxComputerUseFeaturePatch(currentSource) {

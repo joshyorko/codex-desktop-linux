@@ -1,6 +1,7 @@
 pub mod audio;
 pub mod backends;
 pub mod draft_prompt;
+pub mod event_stream;
 pub mod manifest;
 pub mod mcp;
 mod process_reaper;
@@ -31,8 +32,8 @@ pub use manifest::{
     RecordingBundleManifest,
 };
 pub use recorder::{
-    cancel_session, expire_session, mark_session, record_browser_trace, record_speech_context,
-    start_session, stop_session, RecordStartOptions,
+    cancel_session, expire_session, mark_session, record_browser_trace, record_desktop_snapshot,
+    record_speech_context, start_session, stop_session, RecordStartOptions,
 };
 pub use runtime_status::{
     read_runtime_status, refresh_runtime_status, status_path, update_active_status,
@@ -138,6 +139,8 @@ pub enum RecordCommand {
     Speech(RecordSpeechArgs),
     /// Add a browser/CDP-style trace artifact to the recording timeline.
     BrowserTrace(RecordBrowserTraceArgs),
+    /// Capture focused desktop window metadata as semantic workflow evidence.
+    DesktopSnapshot(RecordDesktopSnapshotArgs),
     /// Stop a recording session and append the stop marker.
     Stop(SessionDirArgs),
     /// Cancel a recording session and mark whether the bundle was discarded.
@@ -222,6 +225,14 @@ pub struct RecordBrowserTraceArgs {
     pub url: Option<String>,
     #[arg(long)]
     pub title: Option<String>,
+    #[arg(long)]
+    pub source: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct RecordDesktopSnapshotArgs {
+    #[arg(long)]
+    pub session_dir: PathBuf,
     #[arg(long)]
     pub source: Option<String>,
 }
@@ -439,6 +450,14 @@ pub async fn command_json(command: Commands) -> Result<Value> {
                     "record": record,
                 }))
             }
+            RecordCommand::DesktopSnapshot(args) => {
+                let record = record_desktop_snapshot(&args.session_dir, args.source).await?;
+                Ok(serde_json::json!({
+                    "ok": true,
+                    "command": "record.desktop-snapshot",
+                    "record": record,
+                }))
+            }
             RecordCommand::Stop(args) => {
                 let record = stop_session(&args.session_dir)?;
                 Ok(serde_json::json!({
@@ -457,8 +476,9 @@ pub async fn command_json(command: Commands) -> Result<Value> {
                     .map(str::to_string)
                     .unwrap_or_else(|| "recording".to_string());
                 let session_directory_path = session_dir.clone();
-                let events_path = session_dir.join(crate::manifest::TIMELINE_FILE_NAME);
-                let metadata_path = session_dir.join(crate::manifest::MANIFEST_FILE_NAME);
+                let events_path = session_dir.join(crate::manifest::EVENT_STREAM_EVENTS_FILE_NAME);
+                let metadata_path =
+                    session_dir.join(crate::manifest::EVENT_STREAM_SESSION_FILE_NAME);
                 Ok(serde_json::json!({
                     "ok": true,
                     "command": "record.cancel",

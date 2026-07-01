@@ -16,10 +16,10 @@ disabled-by-default `record-and-replay` Linux feature.
 Supported in Phase 1 means Linux can surface the opt-in `Record & Replay`
 plugin shell, start a local recording session through its `event-stream` MCP
 server, collect a bundle of screenshots, accessibility snapshots, spoken
-transcript context, window/session diagnostics, and user markers, generate a
-draft-skill prompt, import ordinary Codex skill folders where the required tools
-exist, and classify replay readiness. It does not mean Linux replays raw mouse
-coordinates as a macro.
+transcript context, active desktop/window snapshots, window/session diagnostics,
+and user markers, generate a draft-skill prompt, import ordinary Codex skill
+folders where the required tools exist, and classify replay readiness. It does
+not mean Linux replays raw mouse coordinates as a macro.
 
 Use these terms consistently:
 
@@ -213,6 +213,7 @@ Capability classes:
 | `platform-windows` | Registry, PowerShell UI setup, Win32 paths/apps, or Windows-specific Computer Use assumptions. | Unsupported on Linux. |
 | `recording` | Requires capturing a new demonstration. | Supported only through the opt-in Linux recording bundle path. |
 | `speech-context` | Spoken microphone/dictation transcript captured while demonstrating. | Treat as semantic user intent and evidence, not audio or timing to replay. |
+| `desktop-snapshot` | Active app/window metadata captured while demonstrating. | Use as semantic workflow evidence; exact browser URLs still require browser trace/CDP or visible accessibility evidence. |
 
 Use evidence in this order:
 
@@ -346,6 +347,9 @@ Current Linux slice status:
 - `record start` creates `browser/`, `input-capture/`, and `x11/` provider
   evidence files so bundle reviewers can inspect browser trace readiness,
   InputCapture/libei portal readiness, and X11/window metadata.
+- `record desktop-snapshot`, MCP `desktop_snapshot`, and the Linux HUD append
+  active focused-window metadata into `x11/*-desktop-snapshot.json` and surface
+  that context in the draft prompt timeline.
 - `record browser-trace` and MCP `browser_trace` append caller-provided
   browser/CDP-style trace JSON into the bundle as semantic evidence.
 - InputCapture/libei and X11 are real readiness/evidence providers in this PR.
@@ -427,6 +431,7 @@ that may still be pending but should be reported explicitly.
 | 30-minute session | target | The session remains usable up to the cap or fails with a clear cap message. | Start/stop timestamps or cap message. |
 | Mic / speech context | current | Spoken context is captured as transcript evidence, not replay audio. | Transcript excerpt or bundle file path. |
 | Browser trace evidence | current | Browser/CDP-style trace JSON can be added to the active bundle and appears in the draft prompt timeline. | `browser/*-trace.json` path and timeline row. |
+| Active desktop/window evidence | current | Focused app/window metadata is captured during the recording and appears in the draft prompt timeline. | `x11/*-desktop-snapshot.json` path and timeline row. |
 | InputCapture/libei evidence | current | The bundle records portal readiness and input capability evidence even when live input capture is unavailable. | `input-capture/0000-readiness.json`. |
 | X11 evidence | current | The bundle records session/window metadata and marks X11-specific support when running on X11. | `x11/0000-session.json`. |
 | Bundle validation | current | Bundle validation reports pass, warnings, or blockers before drafting. | Validation output and bundle path. |

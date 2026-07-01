@@ -230,6 +230,29 @@ fn timeline_summary(record: &crate::timeline::TimelineRecord) -> String {
             }
             summary
         }
+        TimelineEvent::DesktopSnapshot {
+            file,
+            window_count,
+            focused_window_title,
+            focused_window_app_id,
+            focused_window_wm_class,
+            source,
+        } => {
+            let mut summary = format!("desktop snapshot {file} ({window_count} visible windows)");
+            if let Some(title) = focused_window_title {
+                summary.push_str(&format!(" focused_title={title:?}"));
+            }
+            if let Some(app_id) = focused_window_app_id {
+                summary.push_str(&format!(" app_id={app_id:?}"));
+            }
+            if let Some(wm_class) = focused_window_wm_class {
+                summary.push_str(&format!(" wm_class={wm_class:?}"));
+            }
+            if let Some(source) = source {
+                summary.push_str(&format!(" via {source}"));
+            }
+            summary
+        }
         TimelineEvent::ProviderEvidence {
             provider,
             file,

@@ -16,6 +16,7 @@ const {
   stageEnabledLinuxFeatureInstall,
 } = require("../../scripts/lib/linux-features.js");
 const {
+  applyRecordReplayDictationTranscriptPatch,
   applyRecordReplayHudPatch,
   applyRecordReplayPluginGatePatch,
   applyRecordReplayMainBridgePatch,
@@ -111,13 +112,14 @@ test("record-and-replay patch descriptor loads only when feature is enabled", ()
       "feature:record-and-replay:record-and-replay-plugin-gate",
       "feature:record-and-replay:linux-record-replay-main-bridge",
       "feature:record-and-replay:record-replay-hud",
+      "feature:record-and-replay:record-replay-dictation-transcript",
     ]);
     assert.ok(loaded.every((descriptor) => descriptor.ciPolicy === "optional"));
   });
 });
 
 test("record-and-replay bridge patch is idempotent and uses execFile", () => {
-  assert.equal(descriptors.length, 3);
+  assert.equal(descriptors.length, 4);
   const source = [
     "const cp=require(\"node:child_process\"),fs=require(\"node:fs\"),path=require(\"node:path\");",
     "var bridge={\"get-global-state\":async({key:e})=>null};",
@@ -137,6 +139,8 @@ test("record-and-replay bridge patch is idempotent and uses execFile", () => {
   assert.match(patched, /"linux-record-replay-skysight-update-exclusion":async/);
   assert.match(patched, /"linux-record-replay-speech-context":async/);
   assert.match(patched, /"linux-record-replay-browser-trace":async/);
+  assert.match(patched, /"linux-record-replay-desktop-snapshot":async/);
+  assert.match(patched, /"desktop-snapshot"/);
   assert.match(patched, /"linux-record-replay-stop-active":async/);
   assert.match(patched, /"linux-record-replay-cancel":async/);
   assert.match(patched, /"linux-record-replay-cancel-active":async/);
@@ -210,6 +214,12 @@ test("record-and-replay HUD patch is idempotent and appends runtime UI", () => {
   assert.match(patched, /linux-record-replay-status/);
   assert.match(patched, /linux-record-replay-stop-active/);
   assert.match(patched, /linux-record-replay-cancel-active/);
+  assert.match(patched, /codexLinuxRecordReplayCaptureTranscript/);
+  assert.match(patched, /linux-record-replay-speech-context/);
+  assert.match(patched, /codex-dictation-/);
+  assert.match(patched, /linux-record-replay-desktop-snapshot/);
+  assert.match(patched, /record-replay-hud/);
+  assert.match(patched, /captureDesktopSnapshot/);
   assert.match(patched, /I'm done recording\./);
   assert.match(patched, /submitDoneMessage/);
   assert.match(patched, /finishRecording/);
@@ -219,6 +229,32 @@ test("record-and-replay HUD patch is idempotent and appends runtime UI", () => {
   assert.doesNotMatch(patched, /startDictation/);
   assert.doesNotMatch(patched, /stopDictation/);
   assert.doesNotMatch(patched, /finalizeVoiceCapture/);
+});
+
+test("record-and-replay mirrors finalized dictation transcripts into active bundle", () => {
+  const source =
+    "function send(e,n){let i=`Create an image of a neon cabin`;i.length>0&&(j.getInstance().dispatchMessage(`global-dictation-record-history-item`,{text:i}),e===`send`?n.onTranscriptSend(i):n.onTranscriptInsert(i))}";
+  const patched = applyRecordReplayDictationTranscriptPatch(source);
+
+  assert.notEqual(patched, source);
+  assert.equal(applyRecordReplayDictationTranscriptPatch(patched), patched);
+  assert.match(patched, /codexLinuxRecordReplayCaptureTranscript\?\.\(i,e\)/);
+  assert.match(patched, /global-dictation-record-history-item/);
+  assert.match(patched, /e===`send`\?n\.onTranscriptSend\(i\):n\.onTranscriptInsert\(i\)/);
+});
+
+test("record-and-replay transcript hook composes after conversation mode transcript gate", () => {
+  const source =
+    "function send(e,n){let i=`Create an image of a neon cabin`;i.length>0&&e!==`discard`&&globalThis.codexLinuxConversationShouldSendTranscript?.(i,e)!==!1&&(j.getInstance().dispatchMessage(`global-dictation-record-history-item`,{text:i}),e===`send`?n.onTranscriptSend(i):n.onTranscriptInsert(i))}";
+  const patched = applyRecordReplayDictationTranscriptPatch(source);
+
+  assert.notEqual(patched, source);
+  assert.equal(applyRecordReplayDictationTranscriptPatch(patched), patched);
+  assert.match(
+    patched,
+    /codexLinuxConversationShouldSendTranscript\?\.\(i,e\)!==!1&&\(globalThis\.codexLinuxRecordReplayCaptureTranscript\?\.\(i,e\),/,
+  );
+  assert.match(patched, /global-dictation-record-history-item/);
 });
 
 test("record-and-replay plugin gate is idempotent and linux-only", () => {
