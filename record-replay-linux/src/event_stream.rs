@@ -83,17 +83,19 @@ fn sky_event_for(bundle_dir: &Path, record: &TimelineRecord) -> Result<Option<Va
         } => desktop_snapshot_event(
             bundle_dir,
             record,
-            file,
-            *browser_observation_count,
-            focused_window_title.as_deref(),
-            focused_window_app_id.as_deref(),
-            focused_window_wm_class.as_deref(),
-            focused_browser_name.as_deref(),
-            focused_browser_title.as_deref(),
-            focused_browser_url.as_deref(),
-            focused_browser_domain.as_deref(),
-            focused_browser_url_source.as_deref(),
-            source.as_deref(),
+            DesktopSnapshotEventContext {
+                file,
+                browser_observation_count: *browser_observation_count,
+                focused_window_title: focused_window_title.as_deref(),
+                focused_window_app_id: focused_window_app_id.as_deref(),
+                focused_window_wm_class: focused_window_wm_class.as_deref(),
+                focused_browser_name: focused_browser_name.as_deref(),
+                focused_browser_title: focused_browser_title.as_deref(),
+                focused_browser_url: focused_browser_url.as_deref(),
+                focused_browser_domain: focused_browser_domain.as_deref(),
+                focused_browser_url_source: focused_browser_url_source.as_deref(),
+                source: source.as_deref(),
+            },
         )?,
         TimelineEvent::SessionStopped => session_ended_event(bundle_dir, record, "stopped"),
         TimelineEvent::SessionCancelled { discarded } => {
@@ -170,37 +172,41 @@ fn session_ended_event(bundle_dir: &Path, record: &TimelineRecord, status: &str)
     })
 }
 
+struct DesktopSnapshotEventContext<'a> {
+    file: &'a str,
+    browser_observation_count: usize,
+    focused_window_title: Option<&'a str>,
+    focused_window_app_id: Option<&'a str>,
+    focused_window_wm_class: Option<&'a str>,
+    focused_browser_name: Option<&'a str>,
+    focused_browser_title: Option<&'a str>,
+    focused_browser_url: Option<&'a str>,
+    focused_browser_domain: Option<&'a str>,
+    focused_browser_url_source: Option<&'a str>,
+    source: Option<&'a str>,
+}
+
 fn desktop_snapshot_event(
     bundle_dir: &Path,
     record: &TimelineRecord,
-    file: &str,
-    browser_observation_count: usize,
-    focused_window_title: Option<&str>,
-    focused_window_app_id: Option<&str>,
-    focused_window_wm_class: Option<&str>,
-    focused_browser_name: Option<&str>,
-    focused_browser_title: Option<&str>,
-    focused_browser_url: Option<&str>,
-    focused_browser_domain: Option<&str>,
-    focused_browser_url_source: Option<&str>,
-    source: Option<&str>,
+    context: DesktopSnapshotEventContext<'_>,
 ) -> Result<Value> {
-    let artifact = read_json_artifact(bundle_dir, file)?;
+    let artifact = read_json_artifact(bundle_dir, context.file)?;
     let focused = artifact
         .as_ref()
         .and_then(|artifact| artifact.get("focused_window"));
     let title = focused
         .and_then(|window| window.get("title"))
         .and_then(Value::as_str)
-        .or(focused_window_title);
+        .or(context.focused_window_title);
     let app_id = focused
         .and_then(|window| window.get("app_id"))
         .and_then(Value::as_str)
-        .or(focused_window_app_id);
+        .or(context.focused_window_app_id);
     let wm_class = focused
         .and_then(|window| window.get("wm_class"))
         .and_then(Value::as_str)
-        .or(focused_window_wm_class);
+        .or(context.focused_window_wm_class);
     let window_id = focused
         .and_then(|window| window.get("window_id"))
         .and_then(Value::as_u64);
@@ -213,28 +219,28 @@ fn desktop_snapshot_event(
     let browser_name = focused_browser
         .and_then(|browser| browser.get("browser"))
         .and_then(Value::as_str)
-        .or(focused_browser_name);
+        .or(context.focused_browser_name);
     let browser_title = focused_browser
         .and_then(|browser| browser.get("title"))
         .and_then(Value::as_str)
-        .or(focused_browser_title);
+        .or(context.focused_browser_title);
     let browser_url = focused_browser
         .and_then(|browser| browser.get("url"))
         .and_then(Value::as_str)
-        .or(focused_browser_url);
+        .or(context.focused_browser_url);
     let browser_domain = focused_browser
         .and_then(|browser| browser.get("domain"))
         .and_then(Value::as_str)
-        .or(focused_browser_domain);
+        .or(context.focused_browser_domain);
     let browser_url_source = focused_browser
         .and_then(|browser| browser.get("url_source"))
         .and_then(Value::as_str)
-        .or(focused_browser_url_source);
+        .or(context.focused_browser_url_source);
     let browser_count = artifact
         .as_ref()
         .and_then(|artifact| artifact.get("browser_observation_count"))
         .and_then(Value::as_u64)
-        .unwrap_or(browser_observation_count as u64);
+        .unwrap_or(context.browser_observation_count as u64);
     let mut event = json!({
         "kind": "window.changed",
         "index": record.index,
@@ -244,11 +250,11 @@ fn desktop_snapshot_event(
         "bundleIdentifier": app_id,
         "wmClass": wm_class,
         "title": title.or(browser_title),
-        "url": browser_url,
-        "windowID": window_id,
-        "target": {
-            "file": file,
-            "source": source,
+            "url": browser_url,
+            "windowID": window_id,
+            "target": {
+            "file": context.file,
+            "source": context.source,
             "semanticKind": "desktop_snapshot",
             "browserObservationCount": browser_count,
             "browser": browser_name,

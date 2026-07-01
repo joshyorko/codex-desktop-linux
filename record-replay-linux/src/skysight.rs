@@ -771,7 +771,7 @@ async fn collect_desktop_evidence_async(
         .iter()
         .find(|window| window.focused)
         .cloned()
-        .or_else(|| focused_window_best_effort());
+        .or_else(focused_window_best_effort);
     let visible_excluded_windows = windows
         .iter()
         .filter(|window| !window.hidden)
