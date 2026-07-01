@@ -22,6 +22,7 @@ const {
   applyRecordReplayMainBridgePatch,
   descriptors,
   recordReplayHelperSource,
+  recordReplayHudRuntimeSource,
 } = require("./patch.js");
 
 const featureDir = __dirname;
@@ -223,6 +224,9 @@ test("record-and-replay HUD patch is idempotent and appends runtime UI", () => {
   assert.match(patched, /linux-record-replay-stop-active/);
   assert.match(patched, /linux-record-replay-cancel-active/);
   assert.match(patched, /codexLinuxRecordReplayCaptureTranscript/);
+  assert.match(patched, /codexLinuxRecordReplayPendingTranscripts/);
+  assert.match(patched, /drainBootstrapTranscriptQueue/);
+  assert.match(patched, /flushPendingTranscripts/);
   assert.match(patched, /linux-record-replay-speech-context/);
   assert.match(patched, /codex-dictation-/);
   assert.match(patched, /linux-record-replay-desktop-snapshot/);
@@ -247,8 +251,136 @@ test("record-and-replay mirrors finalized dictation transcripts into active bund
   assert.notEqual(patched, source);
   assert.equal(applyRecordReplayDictationTranscriptPatch(patched), patched);
   assert.match(patched, /codexLinuxRecordReplayCaptureTranscript\?\.\(i,e\)/);
+  assert.match(patched, /codexLinuxRecordReplayPendingTranscripts\?\?=\[\]/);
   assert.match(patched, /global-dictation-record-history-item/);
   assert.match(patched, /e===`send`\?n\.onTranscriptSend\(i\):n\.onTranscriptInsert\(i\)/);
+});
+
+test("record-and-replay generated transcript runtimes are syntactically valid", () => {
+  const source =
+    "function send(e,n){let i=`Create an image of a neon cabin`;i.length>0&&(j.getInstance().dispatchMessage(`global-dictation-record-history-item`,{text:i}),e===`send`?n.onTranscriptSend(i):n.onTranscriptInsert(i))}";
+
+  assert.doesNotThrow(() => new vm.Script(recordReplayHudRuntimeSource()));
+  assert.doesNotThrow(() => new vm.Script(applyRecordReplayDictationTranscriptPatch(source)));
+});
+
+test("record-and-replay HUD drains queued dictation transcripts into active bundle", async () => {
+  const posted = [];
+  const listeners = {};
+  const makeElement = () => ({
+    className: "",
+    dataset: {},
+    disabled: false,
+    innerHTML: "",
+    style: {},
+    textContent: "",
+    title: "",
+    addEventListener() {},
+    appendChild() {},
+    closest() {
+      return null;
+    },
+    contains() {
+      return true;
+    },
+    focus() {},
+    getBoundingClientRect() {
+      return { height: 0, top: 0, width: 0 };
+    },
+    querySelector() {
+      return makeElement();
+    },
+    querySelectorAll() {
+      return [];
+    },
+    setAttribute() {},
+  });
+  const documentElement = makeElement();
+  const context = {
+    codexLinuxRecordReplayPendingTranscripts: [
+      { action: "send", queuedAt: Date.now(), transcript: "Create an image of a neon cabin" },
+    ],
+    clearTimeout,
+    CustomEvent: class {
+      constructor(type, init = {}) {
+        this.type = type;
+        this.detail = init.detail;
+      }
+    },
+    Date,
+    document: {
+      body: documentElement,
+      createElement: makeElement,
+      documentElement,
+      getElementById() {
+        return null;
+      },
+      head: documentElement,
+      querySelectorAll() {
+        return [];
+      },
+      readyState: "complete",
+    },
+    Error,
+    Event: class {},
+    HTMLInputElement: class {},
+    HTMLTextAreaElement: class {},
+    InputEvent: class {},
+    KeyboardEvent: class {},
+    Math,
+    MutationObserver: class {
+      observe() {}
+    },
+    Promise,
+    setInterval() {
+      return 1;
+    },
+    setTimeout,
+    String,
+  };
+  context.document.contains = () => true;
+  context.window = {
+    addEventListener(type, handler) {
+      listeners[type] = handler;
+    },
+    dispatchEvent() {},
+    electronBridge: {
+      sendMessageFromView(payload) {
+        const method = payload.url.split("/").pop();
+        const body = JSON.parse(payload.body ?? "{}");
+        posted.push({ body, method });
+        const response =
+          method === "linux-record-replay-status"
+            ? { json: { session_dir: "/tmp/recording", started_at: new Date().toISOString(), state: "active" } }
+            : { json: { ok: true }, ok: true };
+        setTimeout(() => {
+          listeners.message?.({
+            data: {
+              bodyJsonString: JSON.stringify(response),
+              requestId: payload.requestId,
+              responseType: "success",
+              type: "fetch-response",
+            },
+          });
+        }, 0);
+        return Promise.resolve();
+      },
+    },
+    innerHeight: 800,
+    innerWidth: 1200,
+  };
+
+  vm.runInNewContext(recordReplayHudRuntimeSource(), context);
+  await new Promise((resolve) => setTimeout(resolve, 25));
+
+  assert.ok(
+    posted.some(
+      (request) =>
+        request.method === "linux-record-replay-speech-context" &&
+        request.body.transcript === "Create an image of a neon cabin" &&
+        request.body.source === "codex-dictation-send",
+    ),
+  );
 });
 
 test("record-and-replay transcript hook composes after conversation mode transcript gate", () => {
@@ -260,8 +392,9 @@ test("record-and-replay transcript hook composes after conversation mode transcr
   assert.equal(applyRecordReplayDictationTranscriptPatch(patched), patched);
   assert.match(
     patched,
-    /codexLinuxConversationShouldSendTranscript\?\.\(i,e\)!==!1&&\(globalThis\.codexLinuxRecordReplayCaptureTranscript\?\.\(i,e\),/,
+    /codexLinuxConversationShouldSendTranscript\?\.\(i,e\)!==!1&&\(\(globalThis\.codexLinuxRecordReplayCaptureTranscript\?\.\(i,e\)\?\?/,
   );
+  assert.match(patched, /codexLinuxRecordReplayPendingTranscripts\?\?=\[\]/);
   assert.match(patched, /global-dictation-record-history-item/);
 });
 
