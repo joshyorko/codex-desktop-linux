@@ -118,6 +118,14 @@ test("record-and-replay patch descriptor loads only when feature is enabled", ()
   });
 });
 
+test("record-and-replay dictation descriptor tracks moved upstream composer bundle", () => {
+  const descriptor = descriptors.find((patch) => patch.id === "record-replay-dictation-transcript");
+  assert.ok(descriptor);
+  assert.equal(descriptor.pattern.test("app-initial~app-main~onboarding-page-BUwCKIcU.js"), true);
+  assert.equal(descriptor.pattern.test("use-dictation-BUwCKIcU.js"), true);
+  assert.equal(descriptor.pattern.test("use-dictation-hotkey-BUwCKIcU.js"), false);
+});
+
 test("record-and-replay bridge patch is idempotent and uses execFile", () => {
   assert.equal(descriptors.length, 4);
   const source = [

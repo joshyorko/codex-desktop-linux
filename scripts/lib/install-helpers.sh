@@ -65,6 +65,9 @@ Environment variables:
   CODEX_APP_DISPLAY_NAME
                       Override display name (default: Codex Desktop)
   CODEX_WEBVIEW_PORT  Override webview HTTP port (default: 5175, or 5176 for non-default app ids)
+  CODEX_DMG_REFRESH_MODE=pinned
+                      Reuse an existing cached Codex.dmg verbatim and refuse
+                      network refresh/download when no explicit DMG path is passed
   ELECTRON_HEADERS_URL
                       Override the Electron headers URL used by @electron/rebuild
                       (default: https://artifacts.electronjs.org/headers/dist)
@@ -141,6 +144,20 @@ shell_quote() {
     printf '%q' "$1"
 }
 
+dmg_refresh_mode_is_pinned() {
+    case "${CODEX_DMG_REFRESH_MODE:-auto}" in
+        ""|auto)
+            return 1
+            ;;
+        pinned|pin|1|true|yes)
+            return 0
+            ;;
+        *)
+            error "CODEX_DMG_REFRESH_MODE must be 'auto' or 'pinned'"
+            ;;
+    esac
+}
+
 prepare_install() {
     if [ "$FRESH_INSTALL" -eq 1 ] && [ -d "$INSTALL_DIR" ]; then
         info "Removing existing install directory: $INSTALL_DIR"
@@ -148,6 +165,7 @@ prepare_install() {
     fi
 
     if [ "$FRESH_INSTALL" -eq 1 ] && [ "$REUSE_CACHED_DMG" -ne 1 ] \
+            && ! dmg_refresh_mode_is_pinned \
             && { [ -e "$CACHED_DMG_PATH" ] || [ -e "$CACHED_DMG_METADATA_PATH" ]; }; then
         info "Removing cached DMG and metadata: $CACHED_DMG_PATH"
         rm -f "$CACHED_DMG_PATH"

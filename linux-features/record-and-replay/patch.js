@@ -285,7 +285,8 @@ const descriptors = [
     phase: "webview-asset",
     order: 20695,
     ciPolicy: "optional",
-    pattern: /^(?:browser-sidebar-comment-light-dismiss|use-dictation(?!-hotkey))-.*\.js$/,
+    pattern:
+      /^(?:(?:browser-sidebar-comment-light-dismiss|use-dictation(?!-hotkey))-|app-initial~app-main~.*onboarding-page).*\.js$/,
     missingDescription: "composer dictation bundle",
     skipDescription: "Record & Replay dictation transcript patch",
     apply: applyRecordReplayDictationTranscriptPatch,

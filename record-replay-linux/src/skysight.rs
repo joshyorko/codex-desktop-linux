@@ -11,6 +11,8 @@ use std::{
     time::Duration,
 };
 
+use crate::browser_observation::{self, BrowserObservation};
+
 const STATUS_FILE_NAME: &str = "status.json";
 const SEGMENTS_DIR_NAME: &str = "segments";
 const RESOURCES_DIR_NAME: &str = "resources";
@@ -623,6 +625,11 @@ fn provider_readiness_event(
                 "cdp_traces_supported": false,
                 "note": "No reusable in-crate CDP recorder is currently exposed; Record & Replay can ingest browser trace artifacts when provided.",
             },
+            "browser_observation": {
+                "status": "available_from_window_metadata",
+                "url_hints_supported": true,
+                "note": "Linux Skysight records browser window/title evidence and known-site URL hints after applying exclusions.",
+            },
             "input_capture_libei": {
                 "portal": &diagnostics.portals.input_capture,
                 "capabilities": &diagnostics.capabilities.input,
@@ -738,6 +745,14 @@ async fn collect_desktop_evidence_async(
                 focused.as_ref(),
                 &mut capture,
             )?;
+            capture_browser_observations(
+                &segment_dir,
+                &recorded_at,
+                &source,
+                &exclusions,
+                &windows,
+                &mut capture,
+            )?;
             windows
         }
         Err(error) => {
@@ -851,6 +866,60 @@ fn capture_window_metadata(
         "window_count": filtered_windows.len(),
         "suppressed_count": suppressed.len(),
     }));
+    capture.events.extend(suppressed);
+    Ok(())
+}
+
+fn capture_browser_observations(
+    segment_dir: &Path,
+    recorded_at: &str,
+    source: &str,
+    exclusions: &[SkysightExclusion],
+    windows: &[windowing::WindowInfo],
+    capture: &mut DesktopEvidenceCapture,
+) -> Result<()> {
+    let mut observations = Vec::new();
+    let mut suppressed = Vec::new();
+
+    for observation in browser_observation::observations_from_windows(windows) {
+        if let Some(rule) = browser_observation_matching_exclusion(&observation, exclusions) {
+            suppressed.push(suppressed_event(
+                "browser_observation",
+                recorded_at,
+                source,
+                rule,
+                "browser observation matched an exclusion rule",
+            ));
+        } else {
+            observations.push(observation);
+        }
+    }
+
+    if !observations.is_empty() {
+        let relative = PathBuf::from(ARTIFACTS_DIR_NAME).join("browser-observations.json");
+        let absolute = segment_dir.join(&relative);
+        let data = json!({
+            "schema_version": 1,
+            "recorded_at": recorded_at,
+            "source": source,
+            "observations": observations,
+            "suppressed_observation_count": suppressed.len(),
+        });
+        write_json_artifact(&absolute, &data)?;
+        capture.artifact_count += 1;
+        capture.events.push(json!({
+            "schema_version": 1,
+            "recorded_at": recorded_at,
+            "source": source,
+            "kind": "browser_observation",
+            "file": relative.to_string_lossy(),
+            "path": absolute,
+            "observation_count": observations.len(),
+            "focused_count": observations.iter().filter(|observation| observation.focused).count(),
+            "suppressed_count": suppressed.len(),
+        }));
+    }
+
     capture.events.extend(suppressed);
     Ok(())
 }
@@ -1127,6 +1196,24 @@ fn accessibility_node_matches_exclusion<'a>(
     })
 }
 
+fn browser_observation_matching_exclusion<'a>(
+    observation: &BrowserObservation,
+    exclusions: &'a [SkysightExclusion],
+) -> Option<&'a SkysightExclusion> {
+    exclusions.iter().find(|rule| {
+        evidence_text_matches_rule(
+            rule,
+            [
+                observation.title.as_deref(),
+                observation.app_id.as_deref(),
+                observation.wm_class.as_deref(),
+                observation.url.as_deref(),
+                observation.domain.as_deref(),
+            ],
+        )
+    })
+}
+
 fn evidence_text_matches_rule<const N: usize>(
     rule: &SkysightExclusion,
     fields: [Option<&str>; N],
@@ -1166,6 +1253,44 @@ fn contains_case_insensitive(field: &str, value: &str) -> bool {
     field
         .to_ascii_lowercase()
         .contains(&value.to_ascii_lowercase())
+}
+
+fn browser_observation_summary(events: &[Value]) -> Option<Value> {
+    let mut observation_count = 0_u64;
+    let mut focused_count = 0_u64;
+    let mut suppressed_count = 0_u64;
+    let mut files = Vec::<Value>::new();
+
+    for event in events {
+        if event.get("kind").and_then(Value::as_str) == Some("browser_observation") {
+            observation_count += event
+                .get("observation_count")
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            focused_count += event
+                .get("focused_count")
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            suppressed_count += event
+                .get("suppressed_count")
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            if let Some(file) = event.get("file").and_then(Value::as_str) {
+                files.push(Value::String(file.to_string()));
+            }
+        }
+    }
+
+    if observation_count == 0 && suppressed_count == 0 {
+        return None;
+    }
+
+    Some(json!({
+        "observation_count": observation_count,
+        "focused_count": focused_count,
+        "suppressed_count": suppressed_count,
+        "files": files,
+    }))
 }
 
 fn domain_or_contains_match(field: &str, value: &str) -> bool {
@@ -1444,6 +1569,7 @@ fn format_10min_resource(
         .and_then(|diagnostics| diagnostics.get("capabilities"))
         .cloned()
         .unwrap_or(Value::Null);
+    let browser_summary = browser_observation_summary(events).unwrap_or(Value::Null);
     let event_kinds = event_kind_counts(events);
     let segment_count = recent_segments.len().max(1);
     let event_total: usize = recent_segments
@@ -1462,7 +1588,7 @@ fn format_10min_resource(
         .sum::<usize>()
         .max(metadata.suppressed_event_count);
     format!(
-        "# Skysight Activity Summary\n\n## Memory summary\n\nLinux Skysight captured local activity at `{recorded_at}` from `{source}` and folded it into the current 10-minute window. The segment contains Computer Use diagnostics, provider readiness, and bounded desktop evidence artifacts for future Codex context. [skysight memory]\n\n### Relevant prior context\n\nThis summary covers `{segment_count}` segment(s) in the recent 10-minute window.\n\n### Important non-obvious context about the user\n\n- Linux Record & Replay Skysight wrote this segment under `{segment_dir}`.\n- Exclusion rules active during capture: `{exclusion_count}`.\n- Suppressed evidence records in the window: `{suppressed_total}`.\n\n## Recording summary\n\n- Segment events: `{events_path}`.\n- Segment metadata: `{metadata_path}`.\n- Event records in window: `{event_total}`.\n- Evidence artifacts in window: `{artifact_total}`.\n- Event kinds captured in this segment:\n\n```json\n{event_kinds}\n```\n\n- Windowing readiness is captured in the diagnostics payload and window metadata artifact when available.\n- Accessibility readiness is captured in the diagnostics payload and AT-SPI artifact when available.\n- Diagnostics summary:\n\n```json\n{diagnostics_summary}\n```\n\n- Capture capabilities:\n\n```json\n{capabilities}\n```\n\n## Citations\n\n- {events_path}\n- {metadata_path}\n",
+        "# Skysight Activity Summary\n\n## Memory summary\n\nLinux Skysight captured local activity at `{recorded_at}` from `{source}` and folded it into the current 10-minute window. The segment contains Computer Use diagnostics, provider readiness, and bounded desktop evidence artifacts for future Codex context. [skysight memory]\n\n### Relevant prior context\n\nThis summary covers `{segment_count}` segment(s) in the recent 10-minute window.\n\n### Important non-obvious context about the user\n\n- Linux Record & Replay Skysight wrote this segment under `{segment_dir}`.\n- Exclusion rules active during capture: `{exclusion_count}`.\n- Suppressed evidence records in the window: `{suppressed_total}`.\n\n## Recording summary\n\n- Segment events: `{events_path}`.\n- Segment metadata: `{metadata_path}`.\n- Event records in window: `{event_total}`.\n- Evidence artifacts in window: `{artifact_total}`.\n- Event kinds captured in this segment:\n\n```json\n{event_kinds}\n```\n\n- Windowing readiness is captured in the diagnostics payload and window metadata artifact when available.\n- Browser observation evidence is captured from filtered browser windows when available.\n- Accessibility readiness is captured in the diagnostics payload and AT-SPI artifact when available.\n- Browser observations:\n\n```json\n{browser_summary}\n```\n\n- Diagnostics summary:\n\n```json\n{diagnostics_summary}\n```\n\n- Capture capabilities:\n\n```json\n{capabilities}\n```\n\n## Citations\n\n- {events_path}\n- {metadata_path}\n",
         segment_dir = metadata
             .metadata_path
             .parent()
@@ -1476,8 +1602,10 @@ fn format_10min_resource(
         artifact_total = artifact_total,
         suppressed_total = suppressed_total,
         event_kinds = event_kinds,
-        diagnostics_summary =
-            serde_json::to_string_pretty(&diagnostics_summary).unwrap_or_else(|_| "null".to_string()),
+        diagnostics_summary = serde_json::to_string_pretty(&diagnostics_summary)
+            .unwrap_or_else(|_| "null".to_string()),
+        browser_summary =
+            serde_json::to_string_pretty(&browser_summary).unwrap_or_else(|_| "null".to_string()),
         capabilities =
             serde_json::to_string_pretty(&capabilities).unwrap_or_else(|_| "null".to_string()),
     )
@@ -1549,6 +1677,7 @@ fn capture_capability_notes() -> Vec<String> {
         "screenshot-readiness".to_string(),
         "accessibility-at-spi-readiness".to_string(),
         "windowing-readiness".to_string(),
+        "browser-window-observation".to_string(),
         "browser-trace-evidence-when-provided".to_string(),
     ]
 }
@@ -1719,6 +1848,98 @@ mod tests {
             &domain,
             [Some("https://example.org")]
         ));
+    }
+
+    #[test]
+    fn browser_observation_infers_gemini_url_from_chrome_window_title() {
+        let observation = browser_observation::observation_from_window(&window(
+            "Trump Rides Giant Banana - Google Gemini - Google Chrome",
+            "google-chrome.desktop",
+            "google-chrome",
+        ))
+        .unwrap();
+
+        assert_eq!(observation.browser, "Google Chrome");
+        assert_eq!(
+            observation.url.as_deref(),
+            Some("https://gemini.google.com/")
+        );
+        assert_eq!(observation.domain.as_deref(), Some("gemini.google.com"));
+        assert_eq!(
+            observation.url_source.as_deref(),
+            Some("known_site_window_title_hint")
+        );
+    }
+
+    #[test]
+    fn browser_observation_does_not_infer_url_from_ambiguous_gemini_title() {
+        let observation = browser_observation::observation_from_window(&window(
+            "Gemini Man - Google Chrome",
+            "google-chrome.desktop",
+            "google-chrome",
+        ))
+        .unwrap();
+
+        assert_eq!(observation.browser, "Google Chrome");
+        assert_eq!(observation.url, None);
+        assert_eq!(observation.domain, None);
+        assert_eq!(observation.url_source, None);
+    }
+
+    #[test]
+    fn browser_observation_exclusions_match_inferred_domain() {
+        let observation = browser_observation::observation_from_window(&window(
+            "Google Gemini - Google Chrome",
+            "google-chrome.desktop",
+            "google-chrome",
+        ))
+        .unwrap();
+        let rules = vec![exclusion("urlDomain", "gemini.google.com")];
+
+        assert_eq!(
+            browser_observation_matching_exclusion(&observation, &rules)
+                .unwrap()
+                .value,
+            "gemini.google.com"
+        );
+    }
+
+    #[test]
+    fn browser_observation_artifact_suppresses_excluded_windows() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut capture = DesktopEvidenceCapture::default();
+        let windows = vec![
+            window(
+                "Google Gemini - Google Chrome",
+                "google-chrome.desktop",
+                "google-chrome",
+            ),
+            window("Docs - Chromium", "chromium.desktop", "chromium"),
+        ];
+
+        capture_browser_observations(
+            temp.path(),
+            "2026-06-30T00:00:00Z",
+            "test",
+            &[exclusion("urlDomain", "gemini.google.com")],
+            &windows,
+            &mut capture,
+        )
+        .unwrap();
+
+        assert_eq!(capture.artifact_count, 1);
+        assert!(capture
+            .events
+            .iter()
+            .any(|event| event["kind"] == "browser_observation"));
+        assert!(capture.events.iter().any(|event| {
+            event["kind"] == "suppressed_evidence" && event["provider"] == "browser_observation"
+        }));
+
+        let artifact = temp.path().join("artifacts/browser-observations.json");
+        let raw = std::fs::read_to_string(artifact).unwrap();
+        assert!(raw.contains("Chromium"));
+        assert!(!raw.contains("gemini.google.com"));
     }
 
     #[test]

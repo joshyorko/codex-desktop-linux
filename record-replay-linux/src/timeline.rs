@@ -73,12 +73,24 @@ pub enum TimelineEvent {
     DesktopSnapshot {
         file: String,
         window_count: usize,
+        #[serde(default)]
+        browser_observation_count: usize,
         #[serde(skip_serializing_if = "Option::is_none")]
         focused_window_title: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         focused_window_app_id: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         focused_window_wm_class: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        focused_browser_name: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        focused_browser_title: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        focused_browser_url: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        focused_browser_domain: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        focused_browser_url_source: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         source: Option<String>,
     },

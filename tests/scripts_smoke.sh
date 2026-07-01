@@ -1437,6 +1437,50 @@ EOF
     [ "$(cat "$differing/Codex.dmg")" = "new" ] || fail "Expected differing metadata to refresh cache"
     assert_contains "$differing/curl.log" "GET"
 
+    local differing_pinned="$workspace/differing-pinned"
+    mkdir -p "$differing_pinned"
+    printf '%s' "old" >"$differing_pinned/Codex.dmg"
+    cat >"$differing_pinned/Codex.dmg.metadata" <<EOF
+url_sha256=$url_sha256
+etag=old-etag
+last_modified=Thu, 04 Jun 2026 00:00:00 GMT
+content_length=3
+EOF
+    run_dmg_cache_case "$differing_pinned" "$differing_pinned/output.log" \
+        CODEX_DMG_REFRESH_MODE=pinned \
+        TEST_ETAG=fresh-etag \
+        TEST_LAST_MODIFIED="Thu, 04 Jun 2026 00:00:00 GMT" \
+        TEST_CONTENT_LENGTH=3 \
+        TEST_DOWNLOAD_CONTENT=new
+    [ "$(cat "$differing_pinned/Codex.dmg")" = "old" ] || fail "Expected pinned stale cache to keep old DMG"
+    assert_not_contains "$differing_pinned/curl.log" "HEAD"
+    assert_not_contains "$differing_pinned/curl.log" "GET"
+    assert_contains "$differing_pinned/output.log" "CODEX_DMG_REFRESH_MODE=pinned"
+
+    local no_metadata_pinned="$workspace/no-metadata-pinned"
+    mkdir -p "$no_metadata_pinned"
+    printf '%s' "old" >"$no_metadata_pinned/Codex.dmg"
+    run_dmg_cache_case "$no_metadata_pinned" "$no_metadata_pinned/output.log" \
+        CODEX_DMG_REFRESH_MODE=pinned \
+        TEST_ETAG=fresh-etag \
+        TEST_LAST_MODIFIED="Thu, 04 Jun 2026 00:00:00 GMT" \
+        TEST_CONTENT_LENGTH=3 \
+        TEST_DOWNLOAD_CONTENT=new
+    [ "$(cat "$no_metadata_pinned/Codex.dmg")" = "old" ] || fail "Expected pinned missing metadata cache to keep old DMG"
+    assert_not_contains "$no_metadata_pinned/curl.log" "HEAD"
+    assert_not_contains "$no_metadata_pinned/curl.log" "GET"
+
+    local missing_pinned="$workspace/missing-pinned"
+    mkdir -p "$missing_pinned"
+    if run_dmg_cache_case "$missing_pinned" "$missing_pinned/output.log" \
+        CODEX_DMG_REFRESH_MODE=pinned
+    then
+        fail "Expected pinned mode without cached DMG to fail"
+    fi
+    assert_not_contains "$missing_pinned/curl.log" "HEAD"
+    assert_not_contains "$missing_pinned/curl.log" "GET"
+    assert_contains "$missing_pinned/output.log" "requires an existing cached DMG"
+
     local failed_get="$workspace/failed-get"
     mkdir -p "$failed_get"
     printf '%s' "old" >"$failed_get/Codex.dmg"
@@ -1676,6 +1720,34 @@ SCRIPT
 
     assert_file_not_exists "$source_dir/Codex.dmg"
     assert_file_not_exists "$source_dir/Codex.dmg.metadata"
+}
+
+test_fresh_pinned_dmg_preserves_cached_dmg_metadata() {
+    info "Checking --fresh preserves cached DMG metadata in pinned refresh mode"
+    local workspace="$TMP_DIR/fresh-pinned-dmg-metadata"
+    local source_dir="$workspace/source"
+
+    mkdir -p "$source_dir"
+    printf '%s' "cached" >"$source_dir/Codex.dmg"
+    printf '%s' "metadata" >"$source_dir/Codex.dmg.metadata"
+
+    TEST_SOURCE_DIR="$source_dir" REPO_DIR="$REPO_DIR" bash <<'SCRIPT'
+set -Eeuo pipefail
+
+SCRIPT_DIR="$TEST_SOURCE_DIR"
+WORK_DIR="$(mktemp -d)"
+INSTALL_DIR="$TEST_SOURCE_DIR/codex-app"
+CODEX_DMG_REFRESH_MODE=pinned
+# shellcheck disable=SC1091
+source "$REPO_DIR/scripts/lib/install-helpers.sh"
+
+FRESH_INSTALL=1
+REUSE_CACHED_DMG=0
+prepare_install
+SCRIPT
+
+    assert_file_exists "$source_dir/Codex.dmg"
+    assert_file_exists "$source_dir/Codex.dmg.metadata"
 }
 
 test_fresh_reuse_dmg_uses_cache_when_metadata_matches() {
@@ -8365,6 +8437,7 @@ main() {
     test_installer_refreshes_stale_cached_dmg_metadata
     test_extract_dmg_repairs_safe_7z_link_warnings
     test_fresh_install_removes_cached_dmg_metadata
+    test_fresh_pinned_dmg_preserves_cached_dmg_metadata
     test_fresh_reuse_dmg_uses_cache_when_metadata_matches
     test_rebuild_candidate_uses_validated_default_dmg
     test_native_shortcut_targets_compose_existing_flows

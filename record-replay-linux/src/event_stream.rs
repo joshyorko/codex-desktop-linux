@@ -16,7 +16,10 @@ pub fn append_event_stream_record(bundle_dir: &Path, record: &TimelineRecord) ->
             &record.to_json_line()?,
         )?;
     }
-    if bundle_dir.join(crate::manifest::MANIFEST_FILE_NAME).is_file() {
+    if bundle_dir
+        .join(crate::manifest::MANIFEST_FILE_NAME)
+        .is_file()
+    {
         crate::manifest::refresh_event_stream_session(bundle_dir)?;
     }
     Ok(())
@@ -66,18 +69,30 @@ fn sky_event_for(bundle_dir: &Path, record: &TimelineRecord) -> Result<Option<Va
         }),
         TimelineEvent::DesktopSnapshot {
             file,
+            browser_observation_count,
             focused_window_title,
             focused_window_app_id,
             focused_window_wm_class,
+            focused_browser_name,
+            focused_browser_title,
+            focused_browser_url,
+            focused_browser_domain,
+            focused_browser_url_source,
             source,
             ..
         } => desktop_snapshot_event(
             bundle_dir,
             record,
             file,
+            *browser_observation_count,
             focused_window_title.as_deref(),
             focused_window_app_id.as_deref(),
             focused_window_wm_class.as_deref(),
+            focused_browser_name.as_deref(),
+            focused_browser_title.as_deref(),
+            focused_browser_url.as_deref(),
+            focused_browser_domain.as_deref(),
+            focused_browser_url_source.as_deref(),
             source.as_deref(),
         )?,
         TimelineEvent::SessionStopped => session_ended_event(bundle_dir, record, "stopped"),
@@ -159,9 +174,15 @@ fn desktop_snapshot_event(
     bundle_dir: &Path,
     record: &TimelineRecord,
     file: &str,
+    browser_observation_count: usize,
     focused_window_title: Option<&str>,
     focused_window_app_id: Option<&str>,
     focused_window_wm_class: Option<&str>,
+    focused_browser_name: Option<&str>,
+    focused_browser_title: Option<&str>,
+    focused_browser_url: Option<&str>,
+    focused_browser_domain: Option<&str>,
+    focused_browser_url_source: Option<&str>,
     source: Option<&str>,
 ) -> Result<Value> {
     let artifact = read_json_artifact(bundle_dir, file)?;
@@ -186,7 +207,35 @@ fn desktop_snapshot_event(
     let pid = focused
         .and_then(|window| window.get("pid"))
         .and_then(Value::as_u64);
-    Ok(json!({
+    let focused_browser = artifact
+        .as_ref()
+        .and_then(|artifact| artifact.get("focused_browser_observation"));
+    let browser_name = focused_browser
+        .and_then(|browser| browser.get("browser"))
+        .and_then(Value::as_str)
+        .or(focused_browser_name);
+    let browser_title = focused_browser
+        .and_then(|browser| browser.get("title"))
+        .and_then(Value::as_str)
+        .or(focused_browser_title);
+    let browser_url = focused_browser
+        .and_then(|browser| browser.get("url"))
+        .and_then(Value::as_str)
+        .or(focused_browser_url);
+    let browser_domain = focused_browser
+        .and_then(|browser| browser.get("domain"))
+        .and_then(Value::as_str)
+        .or(focused_browser_domain);
+    let browser_url_source = focused_browser
+        .and_then(|browser| browser.get("url_source"))
+        .and_then(Value::as_str)
+        .or(focused_browser_url_source);
+    let browser_count = artifact
+        .as_ref()
+        .and_then(|artifact| artifact.get("browser_observation_count"))
+        .and_then(Value::as_u64)
+        .unwrap_or(browser_observation_count as u64);
+    let mut event = json!({
         "kind": "window.changed",
         "index": record.index,
         "recordedAt": record.recorded_at,
@@ -194,14 +243,23 @@ fn desktop_snapshot_event(
         "processIdentifier": pid,
         "bundleIdentifier": app_id,
         "wmClass": wm_class,
-        "title": title,
+        "title": title.or(browser_title),
+        "url": browser_url,
         "windowID": window_id,
         "target": {
             "file": file,
             "source": source,
-            "semanticKind": "desktop_snapshot"
+            "semanticKind": "desktop_snapshot",
+            "browserObservationCount": browser_count,
+            "browser": browser_name,
+            "browserTitle": browser_title,
+            "browserUrl": browser_url,
+            "browserDomain": browser_domain,
+            "browserUrlSource": browser_url_source
         }
-    }))
+    });
+    set_optional(&mut event, "browser", browser_name);
+    Ok(event)
 }
 
 fn read_json_artifact(bundle_dir: &Path, file: &str) -> Result<Option<Value>> {
@@ -209,8 +267,8 @@ fn read_json_artifact(bundle_dir: &Path, file: &str) -> Result<Option<Value>> {
     if !path.is_file() {
         return Ok(None);
     }
-    let raw =
-        std::fs::read_to_string(&path).with_context(|| format!("failed to read {}", path.display()))?;
+    let raw = std::fs::read_to_string(&path)
+        .with_context(|| format!("failed to read {}", path.display()))?;
     serde_json::from_str(&raw)
         .map(Some)
         .with_context(|| format!("failed to parse {}", path.display()))

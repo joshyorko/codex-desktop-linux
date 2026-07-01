@@ -116,6 +116,7 @@ fn skysight_snapshot_creates_segment_directory_and_rollup_resources() {
         matches!(
             *kind,
             "window_metadata"
+                | "browser_observation"
                 | "screenshot"
                 | "accessibility_snapshot"
                 | "accessibility_apps"
@@ -136,12 +137,17 @@ fn skysight_snapshot_creates_segment_directory_and_rollup_resources() {
     assert!(resource.contains("covers `"));
     assert!(resource.contains("Event kinds captured"));
     assert!(resource.contains("Evidence artifacts in window"));
+    assert!(resource.contains("Browser observations"));
     assert!(resource.contains("Diagnostics summary"));
     assert!(resource.contains("Capture capabilities"));
     assert!(status
         .capture_capability_notes
         .iter()
         .any(|note| note.contains("windowing")));
+    assert!(status
+        .capture_capability_notes
+        .iter()
+        .any(|note| note.contains("browser-window")));
     assert!(status
         .capture_capability_notes
         .iter()

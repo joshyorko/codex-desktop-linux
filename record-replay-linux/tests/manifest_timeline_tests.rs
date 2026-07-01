@@ -163,9 +163,15 @@ fn desktop_snapshot_is_prompt_visible_bundle_evidence() {
         TimelineEvent::DesktopSnapshot {
             file: "x11/0000-desktop-snapshot.json".to_string(),
             window_count: 2,
+            browser_observation_count: 1,
             focused_window_title: Some("Gemini - Google Chrome".to_string()),
             focused_window_app_id: Some("google-chrome".to_string()),
             focused_window_wm_class: Some("Google-chrome".to_string()),
+            focused_browser_name: Some("Google Chrome".to_string()),
+            focused_browser_title: Some("Gemini - Google Chrome".to_string()),
+            focused_browser_url: Some("https://gemini.google.com/".to_string()),
+            focused_browser_domain: Some("gemini.google.com".to_string()),
+            focused_browser_url_source: Some("known_site_window_title_hint".to_string()),
             source: Some("record-replay-hud".to_string()),
         },
     )
@@ -177,6 +183,8 @@ fn desktop_snapshot_is_prompt_visible_bundle_evidence() {
     assert!(prompt.contains("desktop snapshot x11/0000-desktop-snapshot.json"));
     assert!(prompt.contains("Gemini - Google Chrome"));
     assert!(prompt.contains("google-chrome"));
+    assert!(prompt.contains("browser_url=https://gemini.google.com/"));
+    assert!(prompt.contains("browser_domain=gemini.google.com"));
     assert!(prompt.contains("record-replay-hud"));
 }
 
@@ -248,7 +256,20 @@ fn event_stream_uses_sky_compatible_event_kinds() {
                 "wm_class": "Google-chrome",
                 "pid": 1234
             },
-            "window_count": 1
+            "window_count": 1,
+            "browser_observation_count": 1,
+            "focused_browser_observation": {
+                "browser": "Google Chrome",
+                "window_id": 42,
+                "title": "Gemini - Google Chrome",
+                "app_id": "google-chrome",
+                "wm_class": "Google-chrome",
+                "pid": 1234,
+                "focused": true,
+                "url": "https://gemini.google.com/",
+                "domain": "gemini.google.com",
+                "url_source": "known_site_window_title_hint"
+            }
         })
         .to_string(),
     )
@@ -258,9 +279,15 @@ fn event_stream_uses_sky_compatible_event_kinds() {
         TimelineEvent::DesktopSnapshot {
             file: "x11/0002-desktop-snapshot.json".to_string(),
             window_count: 1,
+            browser_observation_count: 1,
             focused_window_title: Some("Gemini - Google Chrome".to_string()),
             focused_window_app_id: Some("google-chrome".to_string()),
             focused_window_wm_class: Some("Google-chrome".to_string()),
+            focused_browser_name: Some("Google Chrome".to_string()),
+            focused_browser_title: Some("Gemini - Google Chrome".to_string()),
+            focused_browser_url: Some("https://gemini.google.com/".to_string()),
+            focused_browser_domain: Some("gemini.google.com".to_string()),
+            focused_browser_url_source: Some("known_site_window_title_hint".to_string()),
             source: Some("record-replay-hud".to_string()),
         },
     )
@@ -289,7 +316,10 @@ fn event_stream_uses_sky_compatible_event_kinds() {
     assert!(event_stream.iter().any(|event| {
         event["kind"] == "window.changed"
             && event["title"] == "Gemini - Google Chrome"
+            && event["browser"] == "Google Chrome"
+            && event["url"] == "https://gemini.google.com/"
             && event["bundleIdentifier"] == "google-chrome"
+            && event["target"]["browserDomain"] == "gemini.google.com"
             && event["target"]["file"] == "x11/0002-desktop-snapshot.json"
     }));
     let session: serde_json::Value =
@@ -383,7 +413,16 @@ fn gemini_image_workflow_bundle_prompt_has_transcript_browser_and_window_context
                 "app_id": "google-chrome",
                 "wm_class": "Google-chrome"
             },
-            "window_count": 1
+            "window_count": 1,
+            "browser_observation_count": 1,
+            "focused_browser_observation": {
+                "browser": "Google Chrome",
+                "title": "Gemini - Google Chrome",
+                "focused": true,
+                "url": "https://gemini.google.com/",
+                "domain": "gemini.google.com",
+                "url_source": "known_site_window_title_hint"
+            }
         })
         .to_string(),
     )
@@ -393,9 +432,15 @@ fn gemini_image_workflow_bundle_prompt_has_transcript_browser_and_window_context
         TimelineEvent::DesktopSnapshot {
             file: "x11/0002-desktop-snapshot.json".to_string(),
             window_count: 1,
+            browser_observation_count: 1,
             focused_window_title: Some("Gemini - Google Chrome".to_string()),
             focused_window_app_id: Some("google-chrome".to_string()),
             focused_window_wm_class: Some("Google-chrome".to_string()),
+            focused_browser_name: Some("Google Chrome".to_string()),
+            focused_browser_title: Some("Gemini - Google Chrome".to_string()),
+            focused_browser_url: Some("https://gemini.google.com/".to_string()),
+            focused_browser_domain: Some("gemini.google.com".to_string()),
+            focused_browser_url_source: Some("known_site_window_title_hint".to_string()),
             source: Some("record-replay-hud".to_string()),
         },
     )
