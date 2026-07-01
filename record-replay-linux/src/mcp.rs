@@ -1003,7 +1003,12 @@ mod tests {
 
         assert_eq!(
             value["suppressedEventsPath"].as_str(),
-            Some(session_dir.join("suppressed.jsonl").to_string_lossy().as_ref())
+            Some(
+                session_dir
+                    .join("suppressed.jsonl")
+                    .to_string_lossy()
+                    .as_ref()
+            )
         );
     }
 
@@ -1017,7 +1022,12 @@ mod tests {
 
         assert_eq!(
             value["suppressedEventsPath"].as_str(),
-            Some(session_dir.join("suppressed.jsonl").to_string_lossy().as_ref())
+            Some(
+                session_dir
+                    .join("suppressed.jsonl")
+                    .to_string_lossy()
+                    .as_ref()
+            )
         );
     }
 
@@ -1031,11 +1041,7 @@ mod tests {
             "2026-06-30T12:00:00Z".to_string(),
         );
         crate::manifest::write_manifest(&session_dir, &manifest).unwrap();
-        std::fs::write(
-            session_dir.join(crate::manifest::TIMELINE_FILE_NAME),
-            "",
-        )
-        .unwrap();
+        std::fs::write(session_dir.join(crate::manifest::TIMELINE_FILE_NAME), "").unwrap();
         let previous = std::env::var_os("CODEX_RECORD_REPLAY_STATUS_PATH");
         let status_path = temp.path().join("status.json");
         std::env::set_var("CODEX_RECORD_REPLAY_STATUS_PATH", &status_path);
@@ -1051,7 +1057,12 @@ mod tests {
 
         assert_eq!(
             value["suppressedEventsPath"].as_str(),
-            Some(session_dir.join("suppressed.jsonl").to_string_lossy().as_ref())
+            Some(
+                session_dir
+                    .join("suppressed.jsonl")
+                    .to_string_lossy()
+                    .as_ref()
+            )
         );
 
         match previous {

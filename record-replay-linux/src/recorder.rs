@@ -8,6 +8,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use crate::browser_observation;
+
 use crate::{
     backends::{
         available_recorders, recording_backend_catalog, recording_backend_observation,
@@ -305,6 +307,12 @@ fn record_desktop_snapshot_from_windows(
         .filter(|window| !window.hidden)
         .collect::<Vec<_>>();
     let window_count = visible_windows.len();
+    let browser_observations = browser_observation::observations_from_windows(&visible_windows);
+    let focused_browser_observation = browser_observations
+        .iter()
+        .find(|observation| observation.focused)
+        .or_else(|| browser_observations.first());
+    let browser_observation_count = browser_observations.len();
     let relative = format!(
         "{X11_DIR_NAME}/{:04}-desktop-snapshot.json",
         next_artifact_index(&x11_dir)?
@@ -321,6 +329,9 @@ fn record_desktop_snapshot_from_windows(
                 "windows": &visible_windows,
                 "focused_window": focused_window.as_ref(),
                 "window_count": window_count,
+                "browser_observations": &browser_observations,
+                "browser_observation_count": browser_observation_count,
+                "focused_browser_observation": focused_browser_observation,
             }))?
         ),
     )
@@ -330,6 +341,7 @@ fn record_desktop_snapshot_from_windows(
         TimelineEvent::DesktopSnapshot {
             file: relative,
             window_count,
+            browser_observation_count,
             focused_window_title: focused_window
                 .as_ref()
                 .and_then(|window| window.title.clone()),
@@ -339,6 +351,16 @@ fn record_desktop_snapshot_from_windows(
             focused_window_wm_class: focused_window
                 .as_ref()
                 .and_then(|window| window.wm_class.clone()),
+            focused_browser_name: focused_browser_observation
+                .map(|observation| observation.browser.clone()),
+            focused_browser_title: focused_browser_observation
+                .and_then(|observation| observation.title.clone()),
+            focused_browser_url: focused_browser_observation
+                .and_then(|observation| observation.url.clone()),
+            focused_browser_domain: focused_browser_observation
+                .and_then(|observation| observation.domain.clone()),
+            focused_browser_url_source: focused_browser_observation
+                .and_then(|observation| observation.url_source.clone()),
             source,
         },
     )?;
@@ -737,7 +759,7 @@ mod tests {
             "2026-06-30T12:01:00Z".to_string(),
             Some("record-replay-hud".to_string()),
             vec![window(
-                "Gemini - Google Chrome",
+                "Google Gemini - Google Chrome",
                 "google-chrome",
                 "Google-chrome",
             )],
@@ -750,19 +772,31 @@ mod tests {
             TimelineEvent::DesktopSnapshot {
                 file,
                 window_count: 1,
+                browser_observation_count: 1,
                 focused_window_title,
                 focused_window_app_id,
                 focused_window_wm_class,
+                focused_browser_name,
+                focused_browser_title,
+                focused_browser_url,
+                focused_browser_domain,
+                focused_browser_url_source,
                 source,
             } if file == "x11/0000-desktop-snapshot.json"
-                && focused_window_title.as_deref() == Some("Gemini - Google Chrome")
+                  && focused_window_title.as_deref() == Some("Google Gemini - Google Chrome")
                 && focused_window_app_id.as_deref() == Some("google-chrome")
                 && focused_window_wm_class.as_deref() == Some("Google-chrome")
+                && focused_browser_name.as_deref() == Some("Google Chrome")
+                && focused_browser_title.as_deref() == Some("Google Gemini - Google Chrome")
+                && focused_browser_url.as_deref() == Some("https://gemini.google.com/")
+                && focused_browser_domain.as_deref() == Some("gemini.google.com")
+                && focused_browser_url_source.as_deref() == Some("known_site_window_title_hint")
                 && source.as_deref() == Some("record-replay-hud")
         ));
         let artifact = fs::read_to_string(root.join("x11/0000-desktop-snapshot.json")).unwrap();
-        assert!(artifact.contains("Gemini - Google Chrome"));
+        assert!(artifact.contains("Google Gemini - Google Chrome"));
         assert!(artifact.contains("google-chrome"));
+        assert!(artifact.contains("https://gemini.google.com/"));
 
         match previous {
             Some(path) => std::env::set_var("CODEX_RECORD_REPLAY_STATUS_PATH", path),

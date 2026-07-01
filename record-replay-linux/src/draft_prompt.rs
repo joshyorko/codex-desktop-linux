@@ -233,9 +233,15 @@ fn timeline_summary(record: &crate::timeline::TimelineRecord) -> String {
         TimelineEvent::DesktopSnapshot {
             file,
             window_count,
+            browser_observation_count,
             focused_window_title,
             focused_window_app_id,
             focused_window_wm_class,
+            focused_browser_name,
+            focused_browser_title,
+            focused_browser_url,
+            focused_browser_domain,
+            focused_browser_url_source,
             source,
         } => {
             let mut summary = format!("desktop snapshot {file} ({window_count} visible windows)");
@@ -247,6 +253,26 @@ fn timeline_summary(record: &crate::timeline::TimelineRecord) -> String {
             }
             if let Some(wm_class) = focused_window_wm_class {
                 summary.push_str(&format!(" wm_class={wm_class:?}"));
+            }
+            if *browser_observation_count > 0 {
+                summary.push_str(&format!(
+                    " browser_observations={browser_observation_count}"
+                ));
+            }
+            if let Some(browser) = focused_browser_name {
+                summary.push_str(&format!(" browser={browser:?}"));
+            }
+            if let Some(title) = focused_browser_title {
+                summary.push_str(&format!(" browser_title={title:?}"));
+            }
+            if let Some(url) = focused_browser_url {
+                summary.push_str(&format!(" browser_url={url}"));
+            }
+            if let Some(domain) = focused_browser_domain {
+                summary.push_str(&format!(" browser_domain={domain}"));
+            }
+            if let Some(url_source) = focused_browser_url_source {
+                summary.push_str(&format!(" browser_url_source={url_source}"));
             }
             if let Some(source) = source {
                 summary.push_str(&format!(" via {source}"));

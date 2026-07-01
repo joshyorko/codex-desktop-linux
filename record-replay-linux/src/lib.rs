@@ -1,5 +1,6 @@
 pub mod audio;
 pub mod backends;
+mod browser_observation;
 pub mod draft_prompt;
 pub mod event_stream;
 pub mod manifest;
