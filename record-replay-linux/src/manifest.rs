@@ -194,10 +194,7 @@ pub(crate) fn refresh_event_stream_session(bundle_dir: &Path) -> Result<()> {
     write_event_stream_session(bundle_dir, &manifest)
 }
 
-fn write_event_stream_session(
-    bundle_dir: &Path,
-    manifest: &RecordingBundleManifest,
-) -> Result<()> {
+fn write_event_stream_session(bundle_dir: &Path, manifest: &RecordingBundleManifest) -> Result<()> {
     let event_stream_path = bundle_dir.join(EVENT_STREAM_SESSION_FILE_NAME);
     let mut session = serde_json::to_value(manifest)?;
     session["eventCount"] = serde_json::json!(count_jsonl_lines(
