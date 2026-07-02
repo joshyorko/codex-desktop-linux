@@ -95,6 +95,44 @@ fn skysight_paths_default_to_chronicle_resources_dir() {
 }
 
 #[test]
+fn skysight_migrates_legacy_exclusions_with_daemon_path_overrides() {
+    let temp = tempfile::tempdir().unwrap();
+    let code_home = temp.path().join("real-code-home");
+    let runtime_dir = temp.path().join("runtime");
+    let memory_extension_dir = code_home
+        .join("memories")
+        .join("extensions")
+        .join("chronicle");
+    let custom_exclusions_path = temp.path().join("daemon").join("exclusions.json");
+    let legacy_exclusions_path = code_home
+        .join("memories_extensions")
+        .join("chronicle")
+        .join("exclusions.json");
+    fs::create_dir_all(legacy_exclusions_path.parent().unwrap()).unwrap();
+    fs::write(
+        &legacy_exclusions_path,
+        r#"{"schema_version":1,"rules":[{"kind":"app","value":"Secrets","reason":"private","updated_at":"2026-07-02T00:00:00Z"}]}"#,
+    )
+    .unwrap();
+
+    let mut paths = SkysightPaths::new(runtime_dir, memory_extension_dir.join("resources"));
+    paths.memory_extension_dir = memory_extension_dir.clone();
+    paths.resources_dir = memory_extension_dir.join("resources");
+    paths.exclusions_path = custom_exclusions_path.clone();
+    paths.memory_instructions_path = memory_extension_dir.join("SkysightMemoryInstructions.md");
+    paths.summarizer_path = memory_extension_dir.join("SkysightSummarizer.md");
+    assert_eq!(paths.memory_extension_dir, memory_extension_dir);
+    assert_eq!(paths.exclusions_path, custom_exclusions_path);
+
+    let exclusions = list_skysight_exclusions(&paths).unwrap();
+    assert_eq!(exclusions.len(), 1);
+    assert_eq!(exclusions[0].kind, "app");
+    assert_eq!(exclusions[0].value, "Secrets");
+    assert!(paths.exclusions_path.is_file());
+    assert!(legacy_exclusions_path.is_file());
+}
+
+#[test]
 fn skysight_snapshot_creates_segment_directory_and_rollup_resources() {
     let temp = tempfile::tempdir().unwrap();
     let paths = SkysightPaths::new(temp.path().join("runtime"), temp.path().join("resources"));

@@ -1833,20 +1833,44 @@ fn migrate_legacy_exclusions_if_needed(paths: &SkysightPaths) -> Result<()> {
     if paths.exclusions_path.exists() {
         return Ok(());
     }
-    let Some(legacy_path) = legacy_default_exclusions_path(&paths.exclusions_path) else {
-        return Ok(());
-    };
-    if legacy_path == paths.exclusions_path || !legacy_path.exists() {
-        return Ok(());
+    for legacy_path in legacy_exclusions_candidates(paths) {
+        if legacy_path == paths.exclusions_path || !legacy_path.exists() {
+            continue;
+        }
+        let raw = fs::read_to_string(&legacy_path).with_context(|| {
+            format!("failed to read legacy exclusions {}", legacy_path.display())
+        })?;
+        return crate::secure_fs::write_private_file(&paths.exclusions_path, raw).with_context(
+            || {
+                format!(
+                    "failed to migrate exclusions to {}",
+                    paths.exclusions_path.display()
+                )
+            },
+        );
     }
-    let raw = fs::read_to_string(&legacy_path)
-        .with_context(|| format!("failed to read legacy exclusions {}", legacy_path.display()))?;
-    crate::secure_fs::write_private_file(&paths.exclusions_path, raw).with_context(|| {
-        format!(
-            "failed to migrate exclusions to {}",
-            paths.exclusions_path.display()
-        )
-    })
+    Ok(())
+}
+
+fn legacy_exclusions_candidates(paths: &SkysightPaths) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    push_legacy_exclusions_candidate(
+        &mut candidates,
+        legacy_default_exclusions_path(&paths.exclusions_path),
+    );
+    push_legacy_exclusions_candidate(
+        &mut candidates,
+        legacy_default_exclusions_path(&paths.memory_extension_dir.join(EXCLUSIONS_FILE_NAME)),
+    );
+    candidates
+}
+
+fn push_legacy_exclusions_candidate(candidates: &mut Vec<PathBuf>, candidate: Option<PathBuf>) {
+    if let Some(candidate) = candidate {
+        if !candidates.iter().any(|existing| existing == &candidate) {
+            candidates.push(candidate);
+        }
+    }
 }
 
 fn legacy_default_exclusions_path(exclusions_path: &Path) -> Option<PathBuf> {

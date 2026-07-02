@@ -96,7 +96,7 @@ function applyRecordReplayPluginGatePatch(currentSource) {
 
 function recordReplayBridgeSource({ childProcessVar, fsVar, pathVar }) {
   return [
-    `"chronicle-permissions":async()=>{let e=await codexLinuxChronicleEnsureSidecarRunning(!0),t=e.enabled===!0?"granted":"unknown";return{accessibility:t,screenRecording:t,chronicleSidecarPresent:e.enabled===!0,chronicleSidecarProcessState:e.state??"disabled"}}`,
+    `"chronicle-permissions":async()=>{let e=await codexLinuxChronicleSidecarControlStateAsync(),t=e.enabled===!0?"granted":"unknown";return{accessibility:t,screenRecording:t,chronicleSidecarPresent:e.enabled===!0,chronicleSidecarProcessState:e.state??"disabled"}}`,
     `"getChronicleSidecarControlState":async()=>codexLinuxChronicleSidecarControlStateAsync()`,
     `"toggleChronicleSidecar":async()=>codexLinuxChronicleToggleSidecar()`,
     `"linux-record-replay-doctor":async()=>codexLinuxRecordReplayRun([${JSON.stringify("doctor")}],15000)`,
