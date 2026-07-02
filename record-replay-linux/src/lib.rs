@@ -5,6 +5,7 @@ pub mod draft_prompt;
 pub mod event_stream;
 pub mod manifest;
 pub mod mcp;
+mod process_identity;
 mod process_reaper;
 pub mod recorder;
 pub mod runtime_status;
@@ -162,7 +163,12 @@ pub struct RecordStartArgs {
     pub no_screenshot: bool,
     #[arg(long)]
     pub no_accessibility: bool,
-    #[arg(long)]
+    #[arg(
+        long,
+        help = "Capture native Linux audio evidence when CODEX_RECORD_REPLAY_AUDIO is enabled"
+    )]
+    pub audio: bool,
+    #[arg(long, help = "Do not capture native Linux audio evidence")]
     pub no_audio: bool,
 }
 
@@ -415,7 +421,7 @@ pub async fn command_json(command: Commands) -> Result<Value> {
                     goal: args.goal,
                     include_screenshot: !args.no_screenshot,
                     include_accessibility: !args.no_accessibility,
-                    include_audio: !args.no_audio,
+                    include_audio: args.audio && !args.no_audio,
                 })
                 .await?;
                 Ok(serde_json::to_value(report)?)

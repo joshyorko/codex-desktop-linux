@@ -91,7 +91,7 @@ After rebuilding the feature, Josh can verify the branch with:
    `artifacts/diagnostics.json`, a `*-10min-*.md` resource, and a current
    `*-6h-*.md` rollup.
 6. A recording pass that still treats `speech_context` as transcript
-   evidence, not audio replay.
+   evidence, not audio replay; native audio artifacts are opt-in only.
 
 See [docs/linux-chronicle-skysight.md](./linux-chronicle-skysight.md) for the
 short runtime contract.
@@ -430,6 +430,7 @@ that may still be pending but should be reported explicitly.
 | Cancel/discard | target | HUD discard cancels the active session, marks the bundle as discarded evidence, and does not draft a skill from it. | Note whether the control exists, final status, and bundle path. |
 | 30-minute session | target | The session remains usable up to the cap or fails with a clear cap message. | Start/stop timestamps or cap message. |
 | Mic / speech context | current | Spoken context is captured as transcript evidence, not replay audio. | Transcript excerpt or bundle file path. |
+| Native audio artifacts | current | Native audio capture stays off unless the caller opts in and `CODEX_RECORD_REPLAY_AUDIO` is affirmative. | Start command/options and `audio/recording.json` status when tested. |
 | Browser trace evidence | current | Browser/CDP-style trace JSON can be added to the active bundle and appears in the draft prompt timeline. | `browser/*-trace.json` path and timeline row. |
 | Active desktop/window evidence | current | Focused app/window metadata is captured during the recording and appears in the draft prompt timeline. | `x11/*-desktop-snapshot.json` path and timeline row. |
 | InputCapture/libei evidence | current | The bundle records portal readiness and input capability evidence even when live input capture is unavailable. | `input-capture/0000-readiness.json`. |

@@ -26,6 +26,8 @@ pub struct AudioCaptureReport {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pid: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub process_start_time_ticks: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub command: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub args: Vec<String>,
@@ -109,6 +111,7 @@ pub fn start_audio_capture(bundle_dir: &Path) -> Result<AudioCaptureReport> {
 
     match crate::process_reaper::spawn_reaped(&mut command, "failed to spawn audio recorder") {
         Ok(pid) => {
+            let process_start_time_ticks = crate::process_identity::process_start_time_ticks(pid);
             crate::secure_fs::write_private_file(
                 &bundle_dir.join(format!("{AUDIO_DIR_NAME}/{AUDIO_PID_FILE_NAME}")),
                 format!("{pid}\n"),
@@ -120,6 +123,7 @@ pub fn start_audio_capture(bundle_dir: &Path) -> Result<AudioCaptureReport> {
                 metadata_file: audio_metadata_relative_path(),
                 file: Some(relative_audio),
                 pid: Some(pid),
+                process_start_time_ticks,
                 command: Some(spec.binary.to_string_lossy().to_string()),
                 args: spec.args,
                 message: None,
@@ -157,7 +161,7 @@ pub fn stop_audio_capture(
 
     let mut report = read_audio_metadata(bundle_dir)?;
     if let Some(pid) = report.pid {
-        terminate_process(pid);
+        terminate_process(pid, report.process_start_time_ticks);
     }
     if let Some(file) = &report.file {
         set_private_file_mode_best_effort(&bundle_dir.join(file));
@@ -266,11 +270,11 @@ fn known_recorders() -> Vec<KnownRecorder> {
 
 fn audio_capture_enabled() -> bool {
     match env::var("CODEX_RECORD_REPLAY_AUDIO") {
-        Ok(value) => !matches!(
+        Ok(value) => matches!(
             value.trim().to_ascii_lowercase().as_str(),
-            "0" | "false" | "off" | "no" | "disabled"
+            "1" | "true" | "on" | "yes" | "enabled"
         ),
-        Err(_) => true,
+        Err(_) => false,
     }
 }
 
@@ -337,6 +341,7 @@ impl AudioCaptureReport {
             metadata_file: audio_metadata_relative_path(),
             file,
             pid: None,
+            process_start_time_ticks: None,
             command,
             args: Vec::new(),
             message,
@@ -347,8 +352,8 @@ impl AudioCaptureReport {
     }
 }
 
-fn terminate_process(pid: u32) {
-    if !process_is_alive(pid) {
+fn terminate_process(pid: u32, expected_start_time_ticks: Option<u64>) {
+    if !process_is_alive(pid, expected_start_time_ticks) {
         return;
     }
     let _ = Command::new("kill")
@@ -361,7 +366,7 @@ fn terminate_process(pid: u32) {
 
     let deadline = Instant::now() + Duration::from_secs(2);
     while Instant::now() < deadline {
-        if !process_is_alive(pid) {
+        if !process_is_alive(pid, expected_start_time_ticks) {
             return;
         }
         thread::sleep(Duration::from_millis(50));
@@ -376,18 +381,8 @@ fn terminate_process(pid: u32) {
         .status();
 }
 
-fn process_is_alive(pid: u32) -> bool {
-    if pid == 0 {
-        return false;
-    }
-    #[cfg(target_os = "linux")]
-    {
-        Path::new("/proc").join(pid.to_string()).exists()
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        true
-    }
+fn process_is_alive(pid: u32, expected_start_time_ticks: Option<u64>) -> bool {
+    crate::process_identity::process_matches_start_time(pid, expected_start_time_ticks)
 }
 
 fn set_private_file_mode_best_effort(path: &Path) {
@@ -417,7 +412,7 @@ mod tests {
 
         let deadline = Instant::now() + Duration::from_secs(3);
         while Instant::now() < deadline {
-            if !process_is_alive(pid) {
+            if crate::process_identity::process_start_time_ticks(pid).is_none() {
                 return;
             }
             thread::sleep(Duration::from_millis(25));

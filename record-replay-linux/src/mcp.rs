@@ -274,7 +274,7 @@ impl RecordReplayLinux {
             goal: params.goal,
             include_screenshot: params.include_screenshot.unwrap_or(true),
             include_accessibility: params.include_accessibility.unwrap_or(true),
-            include_audio: params.include_audio.unwrap_or(true),
+            include_audio: params.include_audio.unwrap_or(false),
         })
         .await;
         match result {
@@ -736,7 +736,7 @@ struct StartParams {
     include_screenshot: Option<bool>,
     /// Capture an initial AT-SPI accessibility snapshot. Defaults to true.
     include_accessibility: Option<bool>,
-    /// Capture native Linux audio evidence when an audio recorder is available. Defaults to true.
+    /// Capture native Linux audio evidence when explicitly requested and CODEX_RECORD_REPLAY_AUDIO is enabled.
     include_audio: Option<bool>,
 }
 

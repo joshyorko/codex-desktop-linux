@@ -759,7 +759,7 @@ mod tests {
             "2026-06-30T12:01:00Z".to_string(),
             Some("record-replay-hud".to_string()),
             vec![window(
-                "Google Gemini - Google Chrome",
+                "Image Studio - Google Chrome",
                 "google-chrome",
                 "Google-chrome",
             )],
@@ -783,20 +783,20 @@ mod tests {
                 focused_browser_url_source,
                 source,
             } if file == "x11/0000-desktop-snapshot.json"
-                  && focused_window_title.as_deref() == Some("Google Gemini - Google Chrome")
+                  && focused_window_title.as_deref() == Some("Image Studio - Google Chrome")
                 && focused_window_app_id.as_deref() == Some("google-chrome")
                 && focused_window_wm_class.as_deref() == Some("Google-chrome")
                 && focused_browser_name.as_deref() == Some("Google Chrome")
-                && focused_browser_title.as_deref() == Some("Google Gemini - Google Chrome")
-                && focused_browser_url.as_deref() == Some("https://gemini.google.com/")
-                && focused_browser_domain.as_deref() == Some("gemini.google.com")
-                && focused_browser_url_source.as_deref() == Some("known_site_window_title_hint")
+                && focused_browser_title.as_deref() == Some("Image Studio - Google Chrome")
+                && focused_browser_url.is_none()
+                && focused_browser_domain.is_none()
+                && focused_browser_url_source.is_none()
                 && source.as_deref() == Some("record-replay-hud")
         ));
         let artifact = fs::read_to_string(root.join("x11/0000-desktop-snapshot.json")).unwrap();
-        assert!(artifact.contains("Google Gemini - Google Chrome"));
+        assert!(artifact.contains("Image Studio - Google Chrome"));
         assert!(artifact.contains("google-chrome"));
-        assert!(artifact.contains("https://gemini.google.com/"));
+        assert!(!artifact.contains("image-studio.example"));
 
         match previous {
             Some(path) => std::env::set_var("CODEX_RECORD_REPLAY_STATUS_PATH", path),

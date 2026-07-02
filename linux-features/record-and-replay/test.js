@@ -157,6 +157,7 @@ test("record-and-replay bridge patch is idempotent and uses execFile", () => {
   assert.match(patched, /"skysight","status"/);
   assert.match(patched, /"linux-record-replay-status":async/);
   assert.match(patched, /"linux-record-replay-start":async/);
+  assert.match(patched, /"--audio"/);
   assert.match(patched, /"--no-audio"/);
   assert.match(patched, /"linux-record-replay-skysight-start":async/);
   assert.match(patched, /"linux-record-replay-skysight-status":async/);
@@ -176,6 +177,7 @@ test("record-and-replay bridge patch is idempotent and uses execFile", () => {
   assert.match(patched, /"linux-record-replay-import-skill":async/);
   assert.match(patched, /\.execFile\(n,e,\{encoding:"utf8",timeout:t,maxBuffer:16777216\}/);
   assert.match(patched, /codexLinuxRecordReplayWriteTempJson/);
+  assert.match(patched, /finally\{try\{fs\.unlinkSync\(c\)\}catch\{\}\}/);
   assert.match(patched, /"browser-trace"/);
   assert.match(patched, /"--trace-file"/);
   assert.doesNotMatch(patched, /exec\(/);

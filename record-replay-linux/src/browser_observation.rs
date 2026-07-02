@@ -36,7 +36,6 @@ pub(crate) fn observation_from_window(
     window: &windowing::WindowInfo,
 ) -> Option<BrowserObservation> {
     let browser = browser_name_for_window(window)?;
-    let (url, domain, url_source) = infer_browser_url_hint(window);
     Some(BrowserObservation {
         browser,
         window_id: window.window_id,
@@ -45,9 +44,9 @@ pub(crate) fn observation_from_window(
         wm_class: window.wm_class.clone(),
         pid: window.pid,
         focused: window.focused,
-        url,
-        domain,
-        url_source,
+        url: None,
+        domain: None,
+        url_source: None,
     })
 }
 
@@ -73,27 +72,4 @@ fn browser_name_for_window(window: &windowing::WindowInfo) -> Option<String> {
     } else {
         None
     }
-}
-
-fn infer_browser_url_hint(
-    window: &windowing::WindowInfo,
-) -> (Option<String>, Option<String>, Option<String>) {
-    let title = window.title.as_deref().unwrap_or_default();
-    if contains_case_insensitive(title, "Google Gemini")
-        || contains_case_insensitive(title, "gemini.google.com")
-    {
-        return (
-            Some("https://gemini.google.com/".to_string()),
-            Some("gemini.google.com".to_string()),
-            Some("known_site_window_title_hint".to_string()),
-        );
-    }
-
-    (None, None, None)
-}
-
-fn contains_case_insensitive(field: &str, value: &str) -> bool {
-    field
-        .to_ascii_lowercase()
-        .contains(&value.to_ascii_lowercase())
 }

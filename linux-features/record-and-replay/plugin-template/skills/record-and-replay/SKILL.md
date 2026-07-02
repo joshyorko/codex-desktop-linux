@@ -29,9 +29,10 @@ client, implemented by the Rust `codex-record-replay-linux` backend.
 3. Call `event_stream_start` with a short `goal` when matching the upstream
    Record & Replay flow, or `start` when you need Linux-specific options. The
    Linux app should show the active Record & Replay recording HUD while the
-   shared runtime status is active. Native Linux audio evidence is owned by the
-   recorder when available; pass `include_audio: false` only for sensitive or
-   test runs where audio capture must be disabled.
+   shared runtime status is active. Native Linux audio evidence is opt-in and
+   requires both `include_audio: true` and an affirmative
+   `CODEX_RECORD_REPLAY_AUDIO` setting; normal workflow recording should rely
+   on transcript `speech_context` instead.
    Tell the user that recording is active, that they should perform the workflow
    normally, and that they can say `done` when finished.
 4. During the demonstration, call `desktop_snapshot` at meaningful app/window

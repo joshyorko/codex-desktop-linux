@@ -35,7 +35,7 @@ Cargo and copies the release binary into `resources/native/`, the staged plugin
 - Records semantic evidence, not coordinate macro playback.
 - Creates bundles with `manifest.json`, `timeline.jsonl`, screenshots,
   accessibility snapshots, browser trace evidence, transcript context,
-  native audio metadata/recordings when available, InputCapture/libei
+  opt-in native audio metadata/recordings when explicitly enabled, InputCapture/libei
   readiness, X11 session metadata, active desktop/window snapshots,
   diagnostics, and `draft-prompt.md`.
 - Exposes Linux Skysight pause/resume, status, snapshots, exclusions, and a

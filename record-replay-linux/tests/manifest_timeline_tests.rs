@@ -164,14 +164,14 @@ fn desktop_snapshot_is_prompt_visible_bundle_evidence() {
             file: "x11/0000-desktop-snapshot.json".to_string(),
             window_count: 2,
             browser_observation_count: 1,
-            focused_window_title: Some("Gemini - Google Chrome".to_string()),
+            focused_window_title: Some("Image Studio - Google Chrome".to_string()),
             focused_window_app_id: Some("google-chrome".to_string()),
             focused_window_wm_class: Some("Google-chrome".to_string()),
             focused_browser_name: Some("Google Chrome".to_string()),
-            focused_browser_title: Some("Gemini - Google Chrome".to_string()),
-            focused_browser_url: Some("https://gemini.google.com/".to_string()),
-            focused_browser_domain: Some("gemini.google.com".to_string()),
-            focused_browser_url_source: Some("known_site_window_title_hint".to_string()),
+            focused_browser_title: Some("Image Studio - Google Chrome".to_string()),
+            focused_browser_url: Some("https://image-studio.example/".to_string()),
+            focused_browser_domain: Some("image-studio.example".to_string()),
+            focused_browser_url_source: Some("browser_trace".to_string()),
             source: Some("record-replay-hud".to_string()),
         },
     )
@@ -181,10 +181,10 @@ fn desktop_snapshot_is_prompt_visible_bundle_evidence() {
     assert!(validate_bundle_dir(root).unwrap().is_valid());
     let prompt = bundle_draft_prompt(root).unwrap();
     assert!(prompt.contains("desktop snapshot x11/0000-desktop-snapshot.json"));
-    assert!(prompt.contains("Gemini - Google Chrome"));
+    assert!(prompt.contains("Image Studio - Google Chrome"));
     assert!(prompt.contains("google-chrome"));
-    assert!(prompt.contains("browser_url=https://gemini.google.com/"));
-    assert!(prompt.contains("browser_domain=gemini.google.com"));
+    assert!(prompt.contains("browser_url=https://image-studio.example/"));
+    assert!(prompt.contains("browser_domain=image-studio.example"));
     assert!(prompt.contains("record-replay-hud"));
 }
 
@@ -206,7 +206,7 @@ fn event_stream_uses_sky_compatible_event_kinds() {
             session_dir: root.clone(),
             app_id: None,
             window_id: None,
-            goal: Some("record Gemini image generation workflow".to_string()),
+            goal: Some("record image generation workflow".to_string()),
             include_screenshot: false,
             include_accessibility: false,
             include_audio: false,
@@ -215,7 +215,7 @@ fn event_stream_uses_sky_compatible_event_kinds() {
 
     record_speech_context(
         &root,
-        "Open Chrome, go to Gemini, enter the image prompt, generate it, and download the image.",
+        "Open Chrome, open the image workspace, enter the image prompt, generate it, and download the image.",
         Some("codex-dictation-send".to_string()),
     )
     .unwrap();
@@ -223,11 +223,11 @@ fn event_stream_uses_sky_compatible_event_kinds() {
         &root,
         serde_json::json!({
             "events": [
-                { "method": "Page.navigate", "params": { "url": "https://gemini.google.com/app" } }
+                { "method": "Page.navigate", "params": { "url": "https://image-studio.example/app" } }
             ]
         }),
-        Some("https://gemini.google.com/app".to_string()),
-        Some("Gemini - Google Chrome".to_string()),
+        Some("https://image-studio.example/app".to_string()),
+        Some("Image Studio - Google Chrome".to_string()),
         Some("chrome-cdp".to_string()),
     )
     .unwrap();
@@ -241,7 +241,7 @@ fn event_stream_uses_sky_compatible_event_kinds() {
             "windows": [
                 {
                     "window_id": 42,
-                    "title": "Gemini - Google Chrome",
+                    "title": "Image Studio - Google Chrome",
                     "app_id": "google-chrome",
                     "wm_class": "Google-chrome",
                     "focused": true,
@@ -251,7 +251,7 @@ fn event_stream_uses_sky_compatible_event_kinds() {
             ],
             "focused_window": {
                 "window_id": 42,
-                "title": "Gemini - Google Chrome",
+                "title": "Image Studio - Google Chrome",
                 "app_id": "google-chrome",
                 "wm_class": "Google-chrome",
                 "pid": 1234
@@ -261,14 +261,14 @@ fn event_stream_uses_sky_compatible_event_kinds() {
             "focused_browser_observation": {
                 "browser": "Google Chrome",
                 "window_id": 42,
-                "title": "Gemini - Google Chrome",
+                "title": "Image Studio - Google Chrome",
                 "app_id": "google-chrome",
                 "wm_class": "Google-chrome",
                 "pid": 1234,
                 "focused": true,
-                "url": "https://gemini.google.com/",
-                "domain": "gemini.google.com",
-                "url_source": "known_site_window_title_hint"
+                "url": "https://image-studio.example/",
+                "domain": "image-studio.example",
+                "url_source": "browser_trace"
             }
         })
         .to_string(),
@@ -280,14 +280,14 @@ fn event_stream_uses_sky_compatible_event_kinds() {
             file: "x11/0002-desktop-snapshot.json".to_string(),
             window_count: 1,
             browser_observation_count: 1,
-            focused_window_title: Some("Gemini - Google Chrome".to_string()),
+            focused_window_title: Some("Image Studio - Google Chrome".to_string()),
             focused_window_app_id: Some("google-chrome".to_string()),
             focused_window_wm_class: Some("Google-chrome".to_string()),
             focused_browser_name: Some("Google Chrome".to_string()),
-            focused_browser_title: Some("Gemini - Google Chrome".to_string()),
-            focused_browser_url: Some("https://gemini.google.com/".to_string()),
-            focused_browser_domain: Some("gemini.google.com".to_string()),
-            focused_browser_url_source: Some("known_site_window_title_hint".to_string()),
+            focused_browser_title: Some("Image Studio - Google Chrome".to_string()),
+            focused_browser_url: Some("https://image-studio.example/".to_string()),
+            focused_browser_domain: Some("image-studio.example".to_string()),
+            focused_browser_url_source: Some("browser_trace".to_string()),
             source: Some("record-replay-hud".to_string()),
         },
     )
@@ -310,16 +310,16 @@ fn event_stream_uses_sky_compatible_event_kinds() {
         event["kind"] == "keyboard.text_input"
             && event["text"]
                 .as_str()
-                .is_some_and(|text| text.contains("Open Chrome, go to Gemini"))
+                .is_some_and(|text| text.contains("Open Chrome, open the image workspace"))
             && event["target"]["file"] == "transcripts/0000.txt"
     }));
     assert!(event_stream.iter().any(|event| {
         event["kind"] == "window.changed"
-            && event["title"] == "Gemini - Google Chrome"
+            && event["title"] == "Image Studio - Google Chrome"
             && event["browser"] == "Google Chrome"
-            && event["url"] == "https://gemini.google.com/"
+            && event["url"] == "https://image-studio.example/"
             && event["bundleIdentifier"] == "google-chrome"
-            && event["target"]["browserDomain"] == "gemini.google.com"
+            && event["target"]["browserDomain"] == "image-studio.example"
             && event["target"]["file"] == "x11/0002-desktop-snapshot.json"
     }));
     let session: serde_json::Value =
@@ -337,7 +337,7 @@ fn event_stream_uses_sky_compatible_event_kinds() {
 }
 
 #[test]
-fn gemini_image_workflow_bundle_prompt_has_transcript_browser_and_window_context() {
+fn image_generation_workflow_bundle_prompt_has_transcript_browser_and_window_context() {
     let _guard = status_env_guard();
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("bundle");
@@ -354,7 +354,7 @@ fn gemini_image_workflow_bundle_prompt_has_transcript_browser_and_window_context
             session_dir: root.clone(),
             app_id: None,
             window_id: None,
-            goal: Some("record Gemini image generation workflow".to_string()),
+            goal: Some("record image generation workflow".to_string()),
             include_screenshot: false,
             include_accessibility: false,
             include_audio: false,
@@ -363,7 +363,7 @@ fn gemini_image_workflow_bundle_prompt_has_transcript_browser_and_window_context
 
     record_speech_context(
         &root,
-        "Open Chrome, go to Gemini, enter a prompt to create an image of a neon cabin, generate it, then download the image.",
+        "Open Chrome, open the image workspace, enter a prompt to create an image of a neon cabin, generate it, then download the image.",
         Some("codex-dictation-send".to_string()),
     )
     .unwrap();
@@ -373,16 +373,16 @@ fn gemini_image_workflow_bundle_prompt_has_transcript_browser_and_window_context
             "events": [
                 {
                     "method": "Page.navigate",
-                    "params": { "url": "https://gemini.google.com/app" }
+                    "params": { "url": "https://image-studio.example/app" }
                 },
                 {
                     "method": "Runtime.consoleAPICalled",
-                    "params": { "text": "Gemini image prompt submitted" }
+                    "params": { "text": "image prompt submitted" }
                 }
             ]
         }),
-        Some("https://gemini.google.com/app".to_string()),
-        Some("Gemini - Google Chrome".to_string()),
+        Some("https://image-studio.example/app".to_string()),
+        Some("Image Studio - Google Chrome".to_string()),
         Some("chrome-cdp".to_string()),
     )
     .unwrap();
@@ -400,7 +400,7 @@ fn gemini_image_workflow_bundle_prompt_has_transcript_browser_and_window_context
             "windows": [
                 {
                     "window_id": 42,
-                    "title": "Gemini - Google Chrome",
+                    "title": "Image Studio - Google Chrome",
                     "app_id": "google-chrome",
                     "wm_class": "Google-chrome",
                     "focused": true,
@@ -409,7 +409,7 @@ fn gemini_image_workflow_bundle_prompt_has_transcript_browser_and_window_context
                 }
             ],
             "focused_window": {
-                "title": "Gemini - Google Chrome",
+                "title": "Image Studio - Google Chrome",
                 "app_id": "google-chrome",
                 "wm_class": "Google-chrome"
             },
@@ -417,11 +417,11 @@ fn gemini_image_workflow_bundle_prompt_has_transcript_browser_and_window_context
             "browser_observation_count": 1,
             "focused_browser_observation": {
                 "browser": "Google Chrome",
-                "title": "Gemini - Google Chrome",
+                "title": "Image Studio - Google Chrome",
                 "focused": true,
-                "url": "https://gemini.google.com/",
-                "domain": "gemini.google.com",
-                "url_source": "known_site_window_title_hint"
+                "url": "https://image-studio.example/",
+                "domain": "image-studio.example",
+                "url_source": "browser_trace"
             }
         })
         .to_string(),
@@ -433,14 +433,14 @@ fn gemini_image_workflow_bundle_prompt_has_transcript_browser_and_window_context
             file: "x11/0002-desktop-snapshot.json".to_string(),
             window_count: 1,
             browser_observation_count: 1,
-            focused_window_title: Some("Gemini - Google Chrome".to_string()),
+            focused_window_title: Some("Image Studio - Google Chrome".to_string()),
             focused_window_app_id: Some("google-chrome".to_string()),
             focused_window_wm_class: Some("Google-chrome".to_string()),
             focused_browser_name: Some("Google Chrome".to_string()),
-            focused_browser_title: Some("Gemini - Google Chrome".to_string()),
-            focused_browser_url: Some("https://gemini.google.com/".to_string()),
-            focused_browser_domain: Some("gemini.google.com".to_string()),
-            focused_browser_url_source: Some("known_site_window_title_hint".to_string()),
+            focused_browser_title: Some("Image Studio - Google Chrome".to_string()),
+            focused_browser_url: Some("https://image-studio.example/".to_string()),
+            focused_browser_domain: Some("image-studio.example".to_string()),
+            focused_browser_url_source: Some("browser_trace".to_string()),
             source: Some("record-replay-hud".to_string()),
         },
     )
@@ -456,10 +456,10 @@ fn gemini_image_workflow_bundle_prompt_has_transcript_browser_and_window_context
     assert!(event_stream.contains("speech_context"));
     assert!(event_stream.contains("browser_trace"));
     assert!(event_stream.contains("desktop_snapshot"));
-    assert!(prompt.contains("Open Chrome, go to Gemini"));
+    assert!(prompt.contains("Open Chrome, open the image workspace"));
     assert!(prompt.contains("create an image of a neon cabin"));
-    assert!(prompt.contains("https://gemini.google.com/app"));
-    assert!(prompt.contains("Gemini - Google Chrome"));
+    assert!(prompt.contains("https://image-studio.example/app"));
+    assert!(prompt.contains("Image Studio - Google Chrome"));
     assert!(prompt.contains("google-chrome"));
     assert!(prompt.contains("download the image"));
 

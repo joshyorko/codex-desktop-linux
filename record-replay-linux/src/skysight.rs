@@ -59,6 +59,8 @@ pub struct SkysightStatus {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pid: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub process_start_time_ticks: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub started_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub updated_at: Option<String>,
@@ -245,7 +247,11 @@ pub fn start_skysight(
 ) -> Result<SkysightStatus> {
     ensure_layout(paths)?;
     if let Ok(status) = read_status(paths) {
-        if status.is_running && status.pid.is_some_and(process_is_alive) {
+        if status.is_running
+            && status
+                .pid
+                .is_some_and(|pid| process_is_alive(pid, status.process_start_time_ticks))
+        {
             return Ok(status);
         }
     }
@@ -507,7 +513,11 @@ pub fn skysight_status(paths: &SkysightPaths) -> Result<SkysightStatus> {
             status.capture_capabilities = capture_capabilities;
             status.summarizer_capability_notes = summarizer_capabilities.clone();
             status.summarizer_capabilities = summarizer_capabilities;
-            if status.is_running && !status.pid.is_some_and(process_is_alive) {
+            if status.is_running
+                && !status
+                    .pid
+                    .is_some_and(|pid| process_is_alive(pid, status.process_start_time_ticks))
+            {
                 status.state = "stopped".to_string();
                 status.is_running = false;
                 status.paused = false;
@@ -536,7 +546,7 @@ pub fn stop_skysight(paths: &SkysightPaths) -> Result<SkysightStatus> {
     ensure_layout(paths)?;
     if let Ok(status) = read_status(paths) {
         if let Some(pid) = status.pid {
-            if process_is_alive(pid) {
+            if process_is_alive(pid, status.process_start_time_ticks) {
                 request_process_stop(pid);
             }
         }
@@ -643,8 +653,8 @@ fn provider_readiness_event(
             },
             "browser_observation": {
                 "status": "available_from_window_metadata",
-                "url_hints_supported": true,
-                "note": "Linux Skysight records browser window/title evidence and known-site URL hints after applying exclusions.",
+                "url_hints_supported": false,
+                "note": "Linux Skysight records browser window/title evidence after applying exclusions. URL evidence is ingested from explicit browser traces or observations.",
             },
             "input_capture_libei": {
                 "portal": &diagnostics.portals.input_capture,
@@ -788,20 +798,47 @@ async fn collect_desktop_evidence_async(
         .find(|window| window.focused)
         .cloned()
         .or_else(focused_window_best_effort);
+    let browser_observations = browser_observation::observations_from_windows(&windows);
     let visible_excluded_windows = windows
         .iter()
         .filter(|window| !window.hidden)
         .filter(|window| window_matching_exclusion(window, &exclusions).is_some())
         .count();
+    let visible_domain_excluded_browser_windows = browser_observations
+        .iter()
+        .filter(|observation| {
+            browser_observation_matching_url_domain_exclusion(observation, &exclusions).is_some()
+        })
+        .count();
+    let visible_unverified_browser_domain_windows =
+        unverified_browser_domain_observation_count(&browser_observations, &exclusions);
+    let focused_browser_observation = focused_window
+        .as_ref()
+        .and_then(browser_observation::observation_from_window);
+    let focused_browser_domain_exclusion =
+        focused_browser_observation
+            .as_ref()
+            .and_then(|observation| {
+                browser_observation_matching_url_domain_exclusion(observation, &exclusions)
+            });
+    let focused_browser_domain_unverified =
+        focused_browser_observation
+            .as_ref()
+            .is_some_and(|observation| {
+                browser_observation_needs_url_domain_verification(observation, &exclusions)
+            });
     let focused_exclusion = focused_window
         .as_ref()
-        .and_then(|window| window_matching_exclusion(window, &exclusions));
+        .and_then(|window| window_matching_exclusion(window, &exclusions))
+        .or(focused_browser_domain_exclusion);
 
     capture_screenshot_evidence(
         &segment_dir,
         &recorded_at,
         &source,
         visible_excluded_windows,
+        visible_domain_excluded_browser_windows,
+        visible_unverified_browser_domain_windows,
         window_listing_unavailable && !exclusions.is_empty(),
         &mut capture,
     )
@@ -813,6 +850,7 @@ async fn collect_desktop_evidence_async(
         &exclusions,
         focused_window.as_ref(),
         focused_exclusion,
+        focused_browser_domain_unverified,
         &mut capture,
     )
     .await?;
@@ -898,7 +936,18 @@ fn capture_browser_observations(
     let mut suppressed = Vec::new();
 
     for observation in browser_observation::observations_from_windows(windows) {
-        if let Some(rule) = browser_observation_matching_exclusion(&observation, exclusions) {
+        if browser_observation_needs_url_domain_verification(&observation, exclusions) {
+            suppressed.push(json!({
+                "schema_version": 1,
+                "recorded_at": recorded_at,
+                "source": source,
+                "kind": "suppressed_evidence",
+                "provider": "browser_observation",
+                "count": 1,
+                "reason": "browser URL/domain could not be verified while domain exclusions were active; browser observation was skipped",
+            }));
+        } else if let Some(rule) = browser_observation_matching_exclusion(&observation, exclusions)
+        {
             suppressed.push(suppressed_event(
                 "browser_observation",
                 recorded_at,
@@ -945,6 +994,8 @@ async fn capture_screenshot_evidence(
     recorded_at: &str,
     source: &str,
     visible_excluded_windows: usize,
+    visible_domain_excluded_browser_windows: usize,
+    visible_unverified_browser_domain_windows: usize,
     unverified_exclusions: bool,
     capture: &mut DesktopEvidenceCapture,
 ) -> Result<()> {
@@ -957,6 +1008,32 @@ async fn capture_screenshot_evidence(
             "provider": "screenshot",
             "count": 1,
             "reason": "window listing was unavailable while Skysight exclusions were active; full-screen screenshot was skipped",
+        }));
+        return Ok(());
+    }
+
+    if visible_unverified_browser_domain_windows > 0 {
+        capture.events.push(json!({
+            "schema_version": 1,
+            "recorded_at": recorded_at,
+            "source": source,
+            "kind": "suppressed_evidence",
+            "provider": "screenshot",
+            "count": visible_unverified_browser_domain_windows,
+            "reason": "browser URL/domain could not be verified while domain exclusions were active; full-screen screenshot was skipped",
+        }));
+        return Ok(());
+    }
+
+    if visible_domain_excluded_browser_windows > 0 {
+        capture.events.push(json!({
+            "schema_version": 1,
+            "recorded_at": recorded_at,
+            "source": source,
+            "kind": "suppressed_evidence",
+            "provider": "screenshot",
+            "count": visible_domain_excluded_browser_windows,
+            "reason": "browser URL/domain matched a Skysight domain exclusion; full-screen screenshot was skipped",
         }));
         return Ok(());
     }
@@ -1018,8 +1095,22 @@ async fn capture_accessibility_evidence(
     exclusions: &[SkysightExclusion],
     focused_window: Option<&windowing::WindowInfo>,
     focused_exclusion: Option<&SkysightExclusion>,
+    focused_browser_domain_unverified: bool,
     capture: &mut DesktopEvidenceCapture,
 ) -> Result<()> {
+    if focused_browser_domain_unverified {
+        capture.events.push(json!({
+            "schema_version": 1,
+            "recorded_at": recorded_at,
+            "source": source,
+            "kind": "suppressed_evidence",
+            "provider": "accessibility",
+            "count": 1,
+            "reason": "focused browser URL/domain could not be verified while domain exclusions were active; AT-SPI tree capture was skipped",
+        }));
+        return Ok(());
+    }
+
     if let Some(rule) = focused_exclusion {
         capture.events.push(suppressed_event(
             "accessibility",
@@ -1217,6 +1308,13 @@ fn browser_observation_matching_exclusion<'a>(
     exclusions: &'a [SkysightExclusion],
 ) -> Option<&'a SkysightExclusion> {
     exclusions.iter().find(|rule| {
+        if is_url_domain_exclusion(rule) {
+            return evidence_text_matches_rule(
+                rule,
+                [observation.url.as_deref(), observation.domain.as_deref()],
+            );
+        }
+
         evidence_text_matches_rule(
             rule,
             [
@@ -1228,6 +1326,59 @@ fn browser_observation_matching_exclusion<'a>(
             ],
         )
     })
+}
+
+fn browser_observation_matching_url_domain_exclusion<'a>(
+    observation: &BrowserObservation,
+    exclusions: &'a [SkysightExclusion],
+) -> Option<&'a SkysightExclusion> {
+    exclusions
+        .iter()
+        .filter(|rule| is_url_domain_exclusion(rule))
+        .find(|rule| {
+            evidence_text_matches_rule(
+                rule,
+                [observation.url.as_deref(), observation.domain.as_deref()],
+            )
+        })
+}
+
+fn browser_observation_needs_url_domain_verification(
+    observation: &BrowserObservation,
+    exclusions: &[SkysightExclusion],
+) -> bool {
+    exclusions.iter().any(is_url_domain_exclusion)
+        && observation
+            .url
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .is_none()
+        && observation
+            .domain
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .is_none()
+}
+
+fn unverified_browser_domain_observation_count(
+    observations: &[BrowserObservation],
+    exclusions: &[SkysightExclusion],
+) -> usize {
+    observations
+        .iter()
+        .filter(|observation| {
+            browser_observation_needs_url_domain_verification(observation, exclusions)
+        })
+        .count()
+}
+
+fn is_url_domain_exclusion(rule: &SkysightExclusion) -> bool {
+    matches!(
+        normalize_exclusion_kind(&rule.kind).as_str(),
+        "domain" | "urldomain" | "url_domain"
+    )
 }
 
 fn evidence_text_matches_rule<const N: usize>(
@@ -1391,6 +1542,9 @@ fn status_value(input: StatusValueInput<'_>) -> Result<SkysightStatus> {
     let exclusions_count = list_skysight_exclusions(input.paths)?.len();
     let capture_capabilities = capture_capability_notes();
     let summarizer_capabilities = summarizer_capability_notes();
+    let process_start_time_ticks = input
+        .pid
+        .and_then(crate::process_identity::process_start_time_ticks);
     Ok(SkysightStatus {
         ok: true,
         schema_version: 2,
@@ -1400,6 +1554,7 @@ fn status_value(input: StatusValueInput<'_>) -> Result<SkysightStatus> {
         is_paused: input.paused,
         pause_reason: input.pause_reason,
         pid: input.pid,
+        process_start_time_ticks,
         started_at: input.started_at.or_else(|| {
             existing
                 .as_ref()
@@ -1758,24 +1913,14 @@ fn resource_timestamp(path: &Path) -> Option<DateTime<Utc>> {
 }
 
 fn active_status_pid(paths: &SkysightPaths) -> Option<u32> {
-    read_status(paths)
-        .ok()
-        .and_then(|status| status.pid)
-        .filter(|pid| process_is_alive(*pid))
+    read_status(paths).ok().and_then(|status| {
+        let pid = status.pid?;
+        process_is_alive(pid, status.process_start_time_ticks).then_some(pid)
+    })
 }
 
-fn process_is_alive(pid: u32) -> bool {
-    if pid == 0 {
-        return false;
-    }
-    #[cfg(target_os = "linux")]
-    {
-        Path::new("/proc").join(pid.to_string()).exists()
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        true
-    }
+fn process_is_alive(pid: u32, expected_start_time_ticks: Option<u64>) -> bool {
+    crate::process_identity::process_matches_start_time(pid, expected_start_time_ticks)
 }
 
 fn request_process_stop(pid: u32) {
@@ -1867,30 +2012,9 @@ mod tests {
     }
 
     #[test]
-    fn browser_observation_infers_gemini_url_from_chrome_window_title() {
+    fn browser_observation_from_window_keeps_url_fields_empty() {
         let observation = browser_observation::observation_from_window(&window(
-            "Trump Rides Giant Banana - Google Gemini - Google Chrome",
-            "google-chrome.desktop",
-            "google-chrome",
-        ))
-        .unwrap();
-
-        assert_eq!(observation.browser, "Google Chrome");
-        assert_eq!(
-            observation.url.as_deref(),
-            Some("https://gemini.google.com/")
-        );
-        assert_eq!(observation.domain.as_deref(), Some("gemini.google.com"));
-        assert_eq!(
-            observation.url_source.as_deref(),
-            Some("known_site_window_title_hint")
-        );
-    }
-
-    #[test]
-    fn browser_observation_does_not_infer_url_from_ambiguous_gemini_title() {
-        let observation = browser_observation::observation_from_window(&window(
-            "Gemini Man - Google Chrome",
+            "Image Studio - Google Chrome",
             "google-chrome.desktop",
             "google-chrome",
         ))
@@ -1903,20 +2027,76 @@ mod tests {
     }
 
     #[test]
-    fn browser_observation_exclusions_match_inferred_domain() {
+    fn browser_observation_does_not_infer_url_from_window_title_text() {
         let observation = browser_observation::observation_from_window(&window(
-            "Google Gemini - Google Chrome",
+            "Project Workspace - Google Chrome",
             "google-chrome.desktop",
             "google-chrome",
         ))
         .unwrap();
-        let rules = vec![exclusion("urlDomain", "gemini.google.com")];
+
+        assert_eq!(observation.browser, "Google Chrome");
+        assert_eq!(observation.url, None);
+        assert_eq!(observation.domain, None);
+        assert_eq!(observation.url_source, None);
+    }
+
+    #[test]
+    fn browser_observation_exclusions_match_title() {
+        let observation = browser_observation::observation_from_window(&window(
+            "Private Workspace - Google Chrome",
+            "google-chrome.desktop",
+            "google-chrome",
+        ))
+        .unwrap();
+        let rules = vec![exclusion("title", "private workspace")];
 
         assert_eq!(
             browser_observation_matching_exclusion(&observation, &rules)
                 .unwrap()
                 .value,
-            "gemini.google.com"
+            "private workspace"
+        );
+    }
+
+    #[test]
+    fn url_domain_exclusions_require_verified_browser_url_for_rich_evidence() {
+        let rules = vec![exclusion("urlDomain", "bank.example")];
+        let observation = browser_observation::observation_from_window(&window(
+            "Account Dashboard - Google Chrome",
+            "google-chrome.desktop",
+            "google-chrome",
+        ))
+        .unwrap();
+
+        assert!(browser_observation_needs_url_domain_verification(
+            &observation,
+            &rules
+        ));
+        assert_eq!(
+            unverified_browser_domain_observation_count(std::slice::from_ref(&observation), &rules),
+            1
+        );
+        assert!(browser_observation_matching_url_domain_exclusion(&observation, &rules).is_none());
+
+        let mut verified_other_domain = observation.clone();
+        verified_other_domain.domain = Some("docs.example".to_string());
+        assert!(!browser_observation_needs_url_domain_verification(
+            &verified_other_domain,
+            &rules
+        ));
+        assert!(
+            browser_observation_matching_url_domain_exclusion(&verified_other_domain, &rules)
+                .is_none()
+        );
+
+        let mut verified_excluded_domain = observation.clone();
+        verified_excluded_domain.domain = Some("login.bank.example".to_string());
+        assert_eq!(
+            browser_observation_matching_url_domain_exclusion(&verified_excluded_domain, &rules)
+                .unwrap()
+                .value,
+            "bank.example"
         );
     }
 
@@ -1926,7 +2106,7 @@ mod tests {
         let mut capture = DesktopEvidenceCapture::default();
         let windows = vec![
             window(
-                "Google Gemini - Google Chrome",
+                "Private Workspace - Google Chrome",
                 "google-chrome.desktop",
                 "google-chrome",
             ),
@@ -1937,7 +2117,7 @@ mod tests {
             temp.path(),
             "2026-06-30T00:00:00Z",
             "test",
-            &[exclusion("urlDomain", "gemini.google.com")],
+            &[exclusion("title", "private workspace")],
             &windows,
             &mut capture,
         )
@@ -1955,7 +2135,37 @@ mod tests {
         let artifact = temp.path().join("artifacts/browser-observations.json");
         let raw = std::fs::read_to_string(artifact).unwrap();
         assert!(raw.contains("Chromium"));
-        assert!(!raw.contains("gemini.google.com"));
+        assert!(!raw.contains("Private Workspace"));
+    }
+
+    #[test]
+    fn browser_observation_is_suppressed_when_domain_cannot_be_verified() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut capture = DesktopEvidenceCapture::default();
+        let windows = vec![window(
+            "Account Dashboard - Google Chrome",
+            "google-chrome.desktop",
+            "google-chrome",
+        )];
+
+        capture_browser_observations(
+            temp.path(),
+            "2026-06-30T00:00:00Z",
+            "test",
+            &[exclusion("domain", "bank.example")],
+            &windows,
+            &mut capture,
+        )
+        .unwrap();
+
+        assert_eq!(capture.artifact_count, 0);
+        assert!(capture.events.iter().any(|event| {
+            event["kind"] == "suppressed_evidence" && event["provider"] == "browser_observation"
+        }));
+        assert!(!temp
+            .path()
+            .join("artifacts/browser-observations.json")
+            .exists());
     }
 
     #[test]
@@ -1981,6 +2191,8 @@ mod tests {
                 "2026-06-30T00:00:00Z",
                 "test",
                 0,
+                0,
+                0,
                 true,
                 &mut capture,
             ))
@@ -1990,5 +2202,33 @@ mod tests {
         assert_eq!(capture.events.len(), 1);
         assert_eq!(capture.events[0]["kind"], "suppressed_evidence");
         assert_eq!(capture.events[0]["provider"], "screenshot");
+    }
+
+    #[test]
+    fn accessibility_is_suppressed_when_focused_browser_domain_cannot_be_verified() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut capture = DesktopEvidenceCapture::default();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+
+        runtime
+            .block_on(capture_accessibility_evidence(
+                temp.path(),
+                "2026-06-30T00:00:00Z",
+                "test",
+                &[exclusion("domain", "bank.example")],
+                None,
+                None,
+                true,
+                &mut capture,
+            ))
+            .unwrap();
+
+        assert_eq!(capture.artifact_count, 0);
+        assert_eq!(capture.events.len(), 1);
+        assert_eq!(capture.events[0]["kind"], "suppressed_evidence");
+        assert_eq!(capture.events[0]["provider"], "accessibility");
     }
 }
