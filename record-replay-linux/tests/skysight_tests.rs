@@ -6,7 +6,7 @@ use codex_record_replay_linux::{
 use serde_json::Value;
 use std::{
     collections::BTreeSet,
-    env,
+    env, fs,
     sync::{Mutex, OnceLock},
 };
 
@@ -60,7 +60,10 @@ fn skysight_snapshot_creates_segment_directory_and_rollup_resources() {
     let status = capture_skysight_snapshot(&paths, Some("test")).unwrap();
 
     assert!(status.ok);
-    assert_eq!(status.state, "running");
+    assert_eq!(status.state, "stopped");
+    assert!(!status.is_running);
+    assert!(status.pid.is_none());
+    assert_eq!(status.end_reason.as_deref(), Some("snapshot-only"));
     assert!(status.status_path.is_file());
     assert!(status.memory_extension_dir.ends_with("resources"));
     let segment_dir = status
@@ -162,7 +165,8 @@ fn skysight_snapshot_creates_segment_directory_and_rollup_resources() {
     assert!(rollup.contains("[skysight memory]"));
 
     let current = skysight_status(&paths).unwrap();
-    assert_eq!(current.state, "running");
+    assert_eq!(current.state, "stopped");
+    assert!(!current.is_running);
     assert_eq!(current.last_10min_resource, status.last_10min_resource);
     assert_eq!(current.last_6h_resource, status.last_6h_resource);
 
@@ -182,26 +186,53 @@ fn skysight_pause_and_resume_gate_snapshot_capture() {
 
     let paused = pause_skysight(&paths, Some("focus on review".to_string())).unwrap();
     assert_eq!(paused.state, "paused");
+    assert!(!paused.is_running);
     assert!(paused.paused);
     assert_eq!(paused.pause_reason.as_deref(), Some("focus on review"));
 
     let snapshot_while_paused = capture_skysight_snapshot(&paths, Some("paused")).unwrap();
     assert_eq!(snapshot_while_paused.state, "paused");
+    assert!(!snapshot_while_paused.is_running);
     assert!(snapshot_while_paused.current_segment_events_path.is_none());
     assert!(snapshot_while_paused.last_10min_resource.is_none());
     assert!(snapshot_while_paused.last_6h_resource.is_none());
 
     let resumed = resume_skysight(&paths).unwrap();
-    assert_eq!(resumed.state, "running");
+    assert_eq!(resumed.state, "stopped");
+    assert!(!resumed.is_running);
     assert!(!resumed.paused);
     assert!(resumed.pause_reason.is_none());
 
     let snapshot = capture_skysight_snapshot(&paths, Some("resume")).unwrap();
-    assert_eq!(snapshot.state, "running");
+    assert_eq!(snapshot.state, "stopped");
+    assert!(!snapshot.is_running);
     assert!(snapshot
         .current_segment_events_path
         .as_ref()
         .is_some_and(|path| path.is_file()));
+}
+
+#[test]
+fn skysight_status_does_not_treat_running_without_pid_as_alive() {
+    let temp = tempfile::tempdir().unwrap();
+    let paths = SkysightPaths::new(temp.path().join("runtime"), temp.path().join("resources"));
+
+    capture_skysight_snapshot(&paths, Some("legacy-status")).unwrap();
+    let mut status: Value = serde_json::from_str(&fs::read_to_string(&paths.status_path).unwrap())
+        .expect("status json should parse");
+    status["state"] = Value::String("running".to_string());
+    status["is_running"] = Value::Bool(true);
+    status.as_object_mut().unwrap().remove("pid");
+    fs::write(
+        &paths.status_path,
+        format!("{}\n", serde_json::to_string_pretty(&status).unwrap()),
+    )
+    .unwrap();
+
+    let current = skysight_status(&paths).unwrap();
+    assert_eq!(current.state, "stopped");
+    assert!(!current.is_running);
+    assert_eq!(current.end_reason.as_deref(), Some("process-exited"));
 }
 
 #[test]

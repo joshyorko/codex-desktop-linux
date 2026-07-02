@@ -340,13 +340,15 @@ pub fn pause_skysight<S: Into<String>>(
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| "user-paused".to_string());
     crate::secure_fs::write_private_file(&paths.pause_request_path, format!("{reason}\n"))?;
+    let pid = active_status_pid(paths);
+    let is_running = pid.is_some();
     let status = status_value(StatusValueInput {
         paths,
         state: "paused",
-        is_running: true,
+        is_running,
         paused: true,
         pause_reason: Some(reason),
-        pid: active_status_pid(paths),
+        pid,
         started_at: None,
         end_reason: None,
         message: Some("Skysight paused".to_string()),
@@ -358,16 +360,22 @@ pub fn pause_skysight<S: Into<String>>(
 pub fn resume_skysight(paths: &SkysightPaths) -> Result<SkysightStatus> {
     ensure_layout(paths)?;
     let _ = fs::remove_file(&paths.pause_request_path);
+    let pid = active_status_pid(paths);
+    let is_running = pid.is_some();
     let status = status_value(StatusValueInput {
         paths,
-        state: "running",
-        is_running: true,
+        state: if is_running { "running" } else { "stopped" },
+        is_running,
         paused: false,
         pause_reason: None,
-        pid: active_status_pid(paths),
+        pid,
         started_at: None,
-        end_reason: None,
-        message: Some("Skysight resumed".to_string()),
+        end_reason: (!is_running).then(|| "not-started".to_string()),
+        message: Some(if is_running {
+            "Skysight resumed".to_string()
+        } else {
+            "Skysight pause cleared; daemon is not running".to_string()
+        }),
     })?;
     write_status(paths, &status)?;
     Ok(status)
@@ -379,13 +387,15 @@ pub fn capture_skysight_snapshot(
 ) -> Result<SkysightStatus> {
     ensure_layout(paths)?;
     if let Some(reason) = read_pause_reason(paths)? {
+        let pid = active_status_pid(paths);
+        let is_running = pid.is_some();
         let status = status_value(StatusValueInput {
             paths,
             state: "paused",
-            is_running: true,
+            is_running,
             paused: true,
             pause_reason: Some(reason),
-            pid: active_status_pid(paths),
+            pid,
             started_at: None,
             end_reason: None,
             message: Some("Skysight is paused; resume before capturing a snapshot".to_string()),
@@ -457,16 +467,22 @@ pub fn capture_skysight_snapshot(
         None => latest_resource_with_kind(paths, "-6h-")?,
     };
 
+    let pid = active_status_pid(paths);
+    let is_running = pid.is_some();
     let status = status_value(StatusValueInput {
         paths,
-        state: "running",
-        is_running: true,
+        state: if is_running { "running" } else { "stopped" },
+        is_running,
         paused: false,
         pause_reason: None,
-        pid: active_status_pid(paths),
+        pid,
         started_at: None,
-        end_reason: None,
-        message: Some("Skysight snapshot captured".to_string()),
+        end_reason: (!is_running).then(|| "snapshot-only".to_string()),
+        message: Some(if is_running {
+            "Skysight snapshot captured".to_string()
+        } else {
+            "Skysight snapshot captured; daemon is not running".to_string()
+        }),
     })?;
     let mut status = status;
     status.last_10min_resource = Some(ten_minute_path);
@@ -491,7 +507,7 @@ pub fn skysight_status(paths: &SkysightPaths) -> Result<SkysightStatus> {
             status.capture_capabilities = capture_capabilities;
             status.summarizer_capability_notes = summarizer_capabilities.clone();
             status.summarizer_capabilities = summarizer_capabilities;
-            if status.is_running && status.pid.is_some_and(|pid| !process_is_alive(pid)) {
+            if status.is_running && !status.pid.is_some_and(process_is_alive) {
                 status.state = "stopped".to_string();
                 status.is_running = false;
                 status.paused = false;
