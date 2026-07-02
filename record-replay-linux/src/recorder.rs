@@ -1,6 +1,6 @@
 use anyhow::{bail, Context, Result};
 use chrono::Utc;
-use codex_computer_use_linux::{atspi_tree, diagnostics::DoctorReport, screenshot};
+use codex_computer_use_linux::{atspi_tree, diagnostics::DoctorReport, screenshot, windowing};
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::{
@@ -8,15 +8,17 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use crate::browser_observation;
+
 use crate::{
     backends::{
         available_recorders, recording_backend_catalog, recording_backend_observation,
         RecordingBackend,
     },
     manifest::{
-        write_manifest, ACCESSIBILITY_DIR_NAME, BROWSER_DIR_NAME, DIAGNOSTICS_FILE_NAME,
-        INPUT_CAPTURE_DIR_NAME, SCREENSHOTS_DIR_NAME, TIMELINE_FILE_NAME, TRANSCRIPTS_DIR_NAME,
-        X11_DIR_NAME,
+        write_manifest, ACCESSIBILITY_DIR_NAME, AUDIO_DIR_NAME, BROWSER_DIR_NAME,
+        DIAGNOSTICS_FILE_NAME, INPUT_CAPTURE_DIR_NAME, SCREENSHOTS_DIR_NAME, TIMELINE_FILE_NAME,
+        TRANSCRIPTS_DIR_NAME, X11_DIR_NAME,
     },
     timeline::{append_timeline_record, TimelineEvent},
     RecordingBundleManifest,
@@ -30,6 +32,7 @@ pub struct RecordStartOptions {
     pub goal: Option<String>,
     pub include_screenshot: bool,
     pub include_accessibility: bool,
+    pub include_audio: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -49,6 +52,7 @@ pub async fn start_session(options: RecordStartOptions) -> Result<RecordStartRep
         ACCESSIBILITY_DIR_NAME,
         BROWSER_DIR_NAME,
         TRANSCRIPTS_DIR_NAME,
+        AUDIO_DIR_NAME,
         INPUT_CAPTURE_DIR_NAME,
         X11_DIR_NAME,
     ] {
@@ -57,6 +61,13 @@ pub async fn start_session(options: RecordStartOptions) -> Result<RecordStartRep
     }
     crate::secure_fs::write_private_file(&options.session_dir.join(TIMELINE_FILE_NAME), "")
         .with_context(|| "failed to initialize timeline")?;
+    crate::secure_fs::write_private_file(
+        &options
+            .session_dir
+            .join(crate::manifest::EVENT_STREAM_EVENTS_FILE_NAME),
+        "",
+    )
+    .with_context(|| "failed to initialize event-stream events")?;
 
     codex_computer_use_linux::diagnostics::hydrate_session_bus_env();
     let diagnostics = codex_computer_use_linux::diagnostics::doctor_report();
@@ -90,6 +101,8 @@ pub async fn start_session(options: RecordStartOptions) -> Result<RecordStartRep
         &options.session_dir,
         &diagnostics,
         &manifest.backend_catalog,
+        options.app_id.as_deref(),
+        options.window_id.as_deref(),
     )? {
         append_timeline_record(&options.session_dir, event)?;
     }
@@ -121,6 +134,33 @@ pub async fn start_session(options: RecordStartOptions) -> Result<RecordStartRep
                 append_timeline_record(&options.session_dir, event)?;
             }
             Ok(None) => {}
+            Err(error) => {
+                let message = error.to_string();
+                warnings.push(message.clone());
+                append_timeline_record(
+                    &options.session_dir,
+                    TimelineEvent::Diagnostic {
+                        level: "warn".to_string(),
+                        message,
+                    },
+                )?;
+            }
+        }
+    }
+
+    if options.include_audio {
+        match crate::audio::start_audio_capture(&options.session_dir) {
+            Ok(report) => {
+                if !report.ok && report.status != "disabled" {
+                    if let Some(message) = report.message.clone() {
+                        warnings.push(message);
+                    }
+                }
+                append_timeline_record(
+                    &options.session_dir,
+                    crate::audio::audio_timeline_event(&report),
+                )?;
+            }
             Err(error) => {
                 let message = error.to_string();
                 warnings.push(message.clone());
@@ -184,10 +224,20 @@ pub fn record_speech_context(
 ) -> Result<crate::timeline::TimelineRecord> {
     let _lock = crate::secure_fs::lock_directory(bundle_dir, ".recording.lock")?;
     ensure_bundle_open(bundle_dir)?;
+    let transcripts_dir = bundle_dir.join(TRANSCRIPTS_DIR_NAME);
+    crate::secure_fs::create_private_dir_all(&transcripts_dir)
+        .with_context(|| format!("failed to create {}", transcripts_dir.display()))?;
+    let relative = format!(
+        "{TRANSCRIPTS_DIR_NAME}/{:04}.txt",
+        next_artifact_index(&transcripts_dir)?
+    );
+    crate::secure_fs::write_private_file(&bundle_dir.join(&relative), format!("{transcript}\n"))
+        .with_context(|| format!("failed to write transcript {relative}"))?;
     let record = append_timeline_record(
         bundle_dir,
         TimelineEvent::SpeechContext {
             transcript: transcript.to_string(),
+            file: Some(relative),
             source,
         },
     )?;
@@ -229,6 +279,95 @@ pub fn record_browser_trace(
     Ok(record)
 }
 
+pub async fn record_desktop_snapshot(
+    bundle_dir: &Path,
+    source: Option<String>,
+) -> Result<crate::timeline::TimelineRecord> {
+    let recorded_at = now_timestamp();
+    let windows = windowing::list_windows()
+        .await
+        .with_context(|| "failed to list desktop windows")?;
+    record_desktop_snapshot_from_windows(bundle_dir, recorded_at, source, windows)
+}
+
+fn record_desktop_snapshot_from_windows(
+    bundle_dir: &Path,
+    recorded_at: String,
+    source: Option<String>,
+    windows: Vec<windowing::WindowInfo>,
+) -> Result<crate::timeline::TimelineRecord> {
+    let _lock = crate::secure_fs::lock_directory(bundle_dir, ".recording.lock")?;
+    ensure_bundle_open(bundle_dir)?;
+    let x11_dir = bundle_dir.join(X11_DIR_NAME);
+    crate::secure_fs::create_private_dir_all(&x11_dir)
+        .with_context(|| format!("failed to create {}", x11_dir.display()))?;
+    let focused_window = windows.iter().find(|window| window.focused).cloned();
+    let visible_windows = windows
+        .into_iter()
+        .filter(|window| !window.hidden)
+        .collect::<Vec<_>>();
+    let window_count = visible_windows.len();
+    let browser_observations = browser_observation::observations_from_windows(&visible_windows);
+    let focused_browser_observation = browser_observations
+        .iter()
+        .find(|observation| observation.focused)
+        .or_else(|| browser_observations.first());
+    let browser_observation_count = browser_observations.len();
+    let relative = format!(
+        "{X11_DIR_NAME}/{:04}-desktop-snapshot.json",
+        next_artifact_index(&x11_dir)?
+    );
+    crate::secure_fs::write_private_file(
+        &bundle_dir.join(&relative),
+        format!(
+            "{}\n",
+            serde_json::to_string_pretty(&json!({
+                "schema_version": 1,
+                "provider": "window-metadata",
+                "captured_at": recorded_at,
+                "source": source.as_deref(),
+                "windows": &visible_windows,
+                "focused_window": focused_window.as_ref(),
+                "window_count": window_count,
+                "browser_observations": &browser_observations,
+                "browser_observation_count": browser_observation_count,
+                "focused_browser_observation": focused_browser_observation,
+            }))?
+        ),
+    )
+    .with_context(|| format!("failed to write desktop snapshot {relative}"))?;
+    let record = append_timeline_record(
+        bundle_dir,
+        TimelineEvent::DesktopSnapshot {
+            file: relative,
+            window_count,
+            browser_observation_count,
+            focused_window_title: focused_window
+                .as_ref()
+                .and_then(|window| window.title.clone()),
+            focused_window_app_id: focused_window
+                .as_ref()
+                .and_then(|window| window.app_id.clone()),
+            focused_window_wm_class: focused_window
+                .as_ref()
+                .and_then(|window| window.wm_class.clone()),
+            focused_browser_name: focused_browser_observation
+                .map(|observation| observation.browser.clone()),
+            focused_browser_title: focused_browser_observation
+                .and_then(|observation| observation.title.clone()),
+            focused_browser_url: focused_browser_observation
+                .and_then(|observation| observation.url.clone()),
+            focused_browser_domain: focused_browser_observation
+                .and_then(|observation| observation.domain.clone()),
+            focused_browser_url_source: focused_browser_observation
+                .and_then(|observation| observation.url_source.clone()),
+            source,
+        },
+    )?;
+    let _ = crate::runtime_status::update_active_status_for(Some(bundle_dir), "desktop_snapshot");
+    Ok(record)
+}
+
 pub fn stop_session(bundle_dir: &Path) -> Result<crate::timeline::TimelineRecord> {
     if crate::runtime_status::expired_status_for(bundle_dir) {
         return expire_session(bundle_dir);
@@ -249,9 +388,9 @@ pub fn cancel_session(
         return expire_session(bundle_dir);
     }
     let end_reason = if discarded {
-        "recording_controls_canceled_discarded"
+        "recording_controls_cancelled_discarded"
     } else {
-        "recording_controls_canceled"
+        "recording_controls_cancelled"
     };
     finalize_session(
         bundle_dir,
@@ -312,9 +451,12 @@ fn capture_startup_provider_evidence(
     bundle_dir: &Path,
     diagnostics: &DoctorReport,
     backend_catalog: &[RecordingBackend],
+    app_id: Option<&str>,
+    window_id: Option<&str>,
 ) -> Result<Vec<TimelineEvent>> {
     let browser = backend_by_id(backend_catalog, "browser-trace");
     let input_capture = backend_by_id(backend_catalog, "input-capture-libei");
+    let window_metadata = backend_by_id(backend_catalog, "window-metadata");
     let x11 = backend_by_id(backend_catalog, "x11-recording");
 
     Ok(vec![
@@ -392,6 +534,35 @@ fn capture_startup_provider_evidence(
                 "notes": [
                     "X11 evidence records session/window metadata for Linux-specific drafting.",
                     "Replay remains semantic through skills and Computer Use."
+                ],
+            }),
+        )?,
+        write_provider_evidence(
+            bundle_dir,
+            X11_DIR_NAME,
+            "window-metadata",
+            "0001-window-metadata.json",
+            window_metadata,
+            Some("computer-use-doctor".to_string()),
+            json!({
+                "schema_version": 1,
+                "provider": "window-metadata",
+                "captured_at": now_timestamp(),
+                "backend": window_metadata,
+                "target": {
+                    "requested_app_id": app_id,
+                    "requested_window_id": window_id,
+                },
+                "windowing_readiness": {
+                    "can_list_windows": diagnostics.windowing.can_list_windows,
+                    "can_query_windows": diagnostics.readiness.can_query_windows,
+                    "can_focus_apps": diagnostics.readiness.can_focus_apps,
+                    "can_focus_windows": diagnostics.readiness.can_focus_windows,
+                },
+                "window_capabilities": diagnostics.capabilities.window_control,
+                "notes": [
+                    "Window and app metadata is captured as evidence for skill drafting.",
+                    "Replay should target semantic app/window selectors through Computer Use."
                 ],
             }),
         )?,
@@ -497,6 +668,21 @@ fn finalize_session(
     manifest.ended_at = Some(now_timestamp());
     manifest.end_reason = Some(end_reason.to_string());
     write_manifest(bundle_dir, &manifest)?;
+    match crate::audio::stop_audio_capture(bundle_dir, end_reason) {
+        Ok(Some(report)) => {
+            append_timeline_record(bundle_dir, crate::audio::audio_timeline_event(&report))?;
+        }
+        Ok(None) => {}
+        Err(error) => {
+            append_timeline_record(
+                bundle_dir,
+                TimelineEvent::Diagnostic {
+                    level: "warn".to_string(),
+                    message: format!("failed to stop audio capture: {error}"),
+                },
+            )?;
+        }
+    }
     let record = append_timeline_record(bundle_dir, event)?;
     let _ = update_status(bundle_dir);
     Ok(record)
@@ -517,4 +703,104 @@ fn ensure_bundle_open(bundle_dir: &Path) -> Result<()> {
         bail!("recording bundle is expired");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{Mutex, MutexGuard, OnceLock};
+
+    fn status_env_guard() -> MutexGuard<'static, ()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
+    }
+
+    fn window(title: &str, app_id: &str, wm_class: &str) -> windowing::WindowInfo {
+        windowing::WindowInfo {
+            window_id: 42,
+            title: Some(title.to_string()),
+            app_id: Some(app_id.to_string()),
+            wm_class: Some(wm_class.to_string()),
+            pid: Some(1234),
+            bounds: None,
+            workspace: Some(0),
+            focused: true,
+            hidden: false,
+            client_type: Some("wayland".to_string()),
+            backend: "test".to_string(),
+            terminal: None,
+        }
+    }
+
+    #[test]
+    fn desktop_snapshot_writes_focused_window_bundle_evidence() {
+        let _guard = status_env_guard();
+        let temp = tempfile::tempdir().unwrap();
+        let previous = std::env::var_os("CODEX_RECORD_REPLAY_STATUS_PATH");
+        std::env::set_var(
+            "CODEX_RECORD_REPLAY_STATUS_PATH",
+            temp.path().join("status.json"),
+        );
+        let root = temp.path().join("bundle");
+        crate::secure_fs::create_private_dir_all(&root).unwrap();
+        crate::secure_fs::create_private_dir_all(&root.join(X11_DIR_NAME)).unwrap();
+        crate::secure_fs::write_private_file(&root.join(TIMELINE_FILE_NAME), "").unwrap();
+        write_manifest(
+            &root,
+            &RecordingBundleManifest::new(
+                "desktop-snapshot".to_string(),
+                "2026-06-30T12:00:00Z".to_string(),
+            ),
+        )
+        .unwrap();
+
+        let record = record_desktop_snapshot_from_windows(
+            &root,
+            "2026-06-30T12:01:00Z".to_string(),
+            Some("record-replay-hud".to_string()),
+            vec![window(
+                "Image Studio - Google Chrome",
+                "google-chrome",
+                "Google-chrome",
+            )],
+        )
+        .unwrap();
+
+        assert!(record.validate().is_valid());
+        assert!(matches!(
+            &record.event,
+            TimelineEvent::DesktopSnapshot {
+                file,
+                window_count: 1,
+                browser_observation_count: 1,
+                focused_window_title,
+                focused_window_app_id,
+                focused_window_wm_class,
+                focused_browser_name,
+                focused_browser_title,
+                focused_browser_url,
+                focused_browser_domain,
+                focused_browser_url_source,
+                source,
+            } if file == "x11/0000-desktop-snapshot.json"
+                  && focused_window_title.as_deref() == Some("Image Studio - Google Chrome")
+                && focused_window_app_id.as_deref() == Some("google-chrome")
+                && focused_window_wm_class.as_deref() == Some("Google-chrome")
+                && focused_browser_name.as_deref() == Some("Google Chrome")
+                && focused_browser_title.as_deref() == Some("Image Studio - Google Chrome")
+                && focused_browser_url.is_none()
+                && focused_browser_domain.is_none()
+                && focused_browser_url_source.is_none()
+                && source.as_deref() == Some("record-replay-hud")
+        ));
+        let artifact = fs::read_to_string(root.join("x11/0000-desktop-snapshot.json")).unwrap();
+        assert!(artifact.contains("Image Studio - Google Chrome"));
+        assert!(artifact.contains("google-chrome"));
+        assert!(!artifact.contains("image-studio.example"));
+
+        match previous {
+            Some(path) => std::env::set_var("CODEX_RECORD_REPLAY_STATUS_PATH", path),
+            None => std::env::remove_var("CODEX_RECORD_REPLAY_STATUS_PATH"),
+        }
+    }
 }

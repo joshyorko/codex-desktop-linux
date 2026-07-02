@@ -14,10 +14,13 @@ use std::{
 };
 
 use crate::{
-    available_recorders, bundle_draft_prompt, cancel_session, import_skill as import_skill_dir,
-    inspect_skill as inspect_skill_dir, mark_session, record_browser_trace, record_speech_context,
-    recording_backend_catalog, start_session, stop_session, validate_bundle_dir,
-    validate_draft_prompt, RecordStartOptions, RecordingRuntimeState, SkillImportOptions,
+    available_recorders, bundle_draft_prompt, cancel_session, capture_skysight_snapshot,
+    import_skill as import_skill_dir, inspect_skill as inspect_skill_dir, list_skysight_exclusions,
+    mark_session, pause_skysight, record_browser_trace, record_desktop_snapshot,
+    record_speech_context, recording_backend_catalog, resume_skysight, skysight_status,
+    start_session, start_skysight, stop_session, stop_skysight, update_skysight_exclusion,
+    validate_bundle_dir, validate_draft_prompt, RecordStartOptions, RecordingRuntimeState,
+    SkillImportOptions, SkysightExclusionUpdate, SkysightPaths, SkysightStartOptions,
 };
 
 const DEFAULT_MAX_DURATION_SECONDS: u64 = 30 * 60;
@@ -73,6 +76,159 @@ impl RecordReplayLinux {
     }
 
     #[tool(
+        name = "skysight_start",
+        description = "Start Linux Skysight so Codex can answer questions about recent activity."
+    )]
+    fn skysight_start(
+        &self,
+        Parameters(params): Parameters<SkysightStartParams>,
+    ) -> Json<ToolResponse> {
+        let paths = SkysightPaths::from_env();
+        match start_skysight(
+            &paths,
+            SkysightStartOptions {
+                interval_seconds: params.interval_seconds.unwrap_or(60),
+            },
+        ) {
+            Ok(status) => tool_json(json!({
+                "ok": true,
+                "command": "skysight_start",
+                "status": status,
+            })),
+            Err(error) => error_json("skysight_start", error),
+        }
+    }
+
+    #[tool(
+        name = "skysight_status",
+        description = "Get Linux Skysight status and paths to recent activity files."
+    )]
+    fn skysight_status(&self) -> Json<ToolResponse> {
+        let paths = SkysightPaths::from_env();
+        match skysight_status(&paths) {
+            Ok(status) => tool_json(json!({
+                "ok": true,
+                "command": "skysight_status",
+                "status": status,
+            })),
+            Err(error) => error_json("skysight_status", error),
+        }
+    }
+
+    #[tool(
+        name = "skysight_stop",
+        description = "Stop Linux Skysight and return the current status."
+    )]
+    fn skysight_stop(&self) -> Json<ToolResponse> {
+        let paths = SkysightPaths::from_env();
+        match stop_skysight(&paths) {
+            Ok(status) => tool_json(json!({
+                "ok": true,
+                "command": "skysight_stop",
+                "status": status,
+            })),
+            Err(error) => error_json("skysight_stop", error),
+        }
+    }
+
+    #[tool(
+        name = "skysight_pause",
+        description = "Pause Linux Skysight without deleting local Chronicle-compatible memory resources."
+    )]
+    fn skysight_pause(
+        &self,
+        Parameters(params): Parameters<SkysightPauseParams>,
+    ) -> Json<ToolResponse> {
+        let paths = SkysightPaths::from_env();
+        match pause_skysight(&paths, params.reason) {
+            Ok(status) => tool_json(json!({
+                "ok": true,
+                "command": "skysight_pause",
+                "status": status,
+            })),
+            Err(error) => error_json("skysight_pause", error),
+        }
+    }
+
+    #[tool(
+        name = "skysight_resume",
+        description = "Resume Linux Skysight after it has been paused."
+    )]
+    fn skysight_resume(&self) -> Json<ToolResponse> {
+        let paths = SkysightPaths::from_env();
+        match resume_skysight(&paths) {
+            Ok(status) => tool_json(json!({
+                "ok": true,
+                "command": "skysight_resume",
+                "status": status,
+            })),
+            Err(error) => error_json("skysight_resume", error),
+        }
+    }
+
+    #[tool(
+        name = "skysight_snapshot",
+        description = "Capture one Linux Skysight activity snapshot into local segment and memory resources."
+    )]
+    fn skysight_snapshot(
+        &self,
+        Parameters(params): Parameters<SkysightSnapshotParams>,
+    ) -> Json<ToolResponse> {
+        let paths = SkysightPaths::from_env();
+        match capture_skysight_snapshot(&paths, params.source.as_deref()) {
+            Ok(status) => tool_json(json!({
+                "ok": true,
+                "command": "skysight_snapshot",
+                "status": status,
+            })),
+            Err(error) => error_json("skysight_snapshot", error),
+        }
+    }
+
+    #[tool(
+        name = "skysight_update_exclusion",
+        description = "Add, update, or remove a Linux Skysight app/domain exclusion."
+    )]
+    fn skysight_update_exclusion(
+        &self,
+        Parameters(params): Parameters<SkysightExclusionParams>,
+    ) -> Json<ToolResponse> {
+        let paths = SkysightPaths::from_env();
+        match update_skysight_exclusion(
+            &paths,
+            SkysightExclusionUpdate {
+                kind: params.kind,
+                value: params.value,
+                reason: params.reason,
+                remove: params.remove.unwrap_or(false),
+            },
+        ) {
+            Ok(exclusions) => tool_json(json!({
+                "ok": true,
+                "command": "skysight_update_exclusion",
+                "exclusions": exclusions,
+            })),
+            Err(error) => error_json("skysight_update_exclusion", error),
+        }
+    }
+
+    #[tool(
+        name = "skysight_list_exclusions",
+        description = "List Linux Skysight app/domain exclusions."
+    )]
+    fn skysight_list_exclusions(&self) -> Json<ToolResponse> {
+        let paths = SkysightPaths::from_env();
+        match list_skysight_exclusions(&paths) {
+            Ok(exclusions) => tool_json(json!({
+                "ok": true,
+                "command": "skysight_list_exclusions",
+                "exclusions": exclusions,
+            })),
+            Err(error) => error_json("skysight_list_exclusions", error),
+        }
+    }
+
+    #[tool(
         name = "event_stream_start",
         description = "Start recording the user's actions for up to 30 minutes. If a recording is already active, return that active session instead of starting another one."
     )]
@@ -118,6 +274,7 @@ impl RecordReplayLinux {
             goal: params.goal,
             include_screenshot: params.include_screenshot.unwrap_or(true),
             include_accessibility: params.include_accessibility.unwrap_or(true),
+            include_audio: params.include_audio.unwrap_or(true),
         })
         .await;
         match result {
@@ -220,6 +377,38 @@ impl RecordReplayLinux {
     }
 
     #[tool(
+        name = "desktop_snapshot",
+        description = "Capture current focused desktop window metadata into the active recording bundle as semantic workflow evidence."
+    )]
+    async fn desktop_snapshot(
+        &self,
+        Parameters(params): Parameters<DesktopSnapshotParams>,
+    ) -> Json<ToolResponse> {
+        let Some(session_dir) = self.resolve_session(params.session_dir.as_deref(), true) else {
+            return message_json(
+                "desktop_snapshot",
+                "No active recording session. Call start first or pass session_dir.",
+            );
+        };
+        match record_desktop_snapshot(
+            &session_dir,
+            params
+                .source
+                .or_else(|| Some("desktop-window-metadata".to_string())),
+        )
+        .await
+        {
+            Ok(record) => tool_json(json!({
+                "ok": true,
+                "command": "desktop_snapshot",
+                "session_dir": session_dir,
+                "record": record,
+            })),
+            Err(error) => error_json("desktop_snapshot", error),
+        }
+    }
+
+    #[tool(
         name = "stop",
         description = "Stop the active or specified recording bundle and seal its manifest."
     )]
@@ -276,7 +465,7 @@ impl RecordReplayLinux {
                     "sessionDirectoryPath": session_dir,
                     "eventsPath": event_stream_events_path(&session_dir),
                     "metadataPath": event_stream_metadata_path(&session_dir),
-                    "suppressedEventsPath": Value::Null,
+                    "suppressedEventsPath": event_stream_suppressed_path(&session_dir),
                     "startedAt": manifest.as_ref().map(|manifest| manifest.started_at.clone()),
                     "endedAt": manifest.and_then(|manifest| manifest.ended_at),
                     "endReason": "recording_controls_stopped",
@@ -305,9 +494,9 @@ impl RecordReplayLinux {
                     .and_then(|manifest| manifest.end_reason.clone())
                     .or_else(|| {
                         Some(if discarded {
-                            "recording_controls_canceled_discarded".to_string()
+                            "recording_controls_cancelled_discarded".to_string()
                         } else {
-                            "recording_controls_canceled".to_string()
+                            "recording_controls_cancelled".to_string()
                         })
                     });
                 tool_json(json!({
@@ -415,7 +604,7 @@ impl RecordReplayLinux {
 #[tool_handler(
     name = "event-stream",
     version = "0.1.0-linux-alpha1",
-    instructions = "Use Event-stream to record Linux desktop/browser workflows and compile them into reusable Codex skills. Call doctor before first recording when readiness is uncertain. Use start, let the user perform the workflow, call speech_context when microphone or dictation transcript is available, call browser_trace when browser/CDP trace evidence is available, optionally call mark for important intent boundaries, call stop when the user says they are done, inspect the bundle, draft a skill prompt, create or refine SKILL.md, then import the skill when the user approves. Replay through Codex skills and Computer Use; do not replay raw pointer coordinates as the main architecture."
+    instructions = "Use Event-stream to record Linux desktop/browser workflows and compile them into reusable Codex skills. Call doctor before first recording when readiness is uncertain. Use skysight_start or skysight_snapshot when recent activity context will help the skill draft. Use start/event_stream_start, let the user perform the workflow, call desktop_snapshot at meaningful app/window changes, call speech_context only for additional transcript text that is explicitly available, call browser_trace when browser/CDP trace evidence is available, optionally call mark for meaningful intent boundaries, call stop/event_stream_stop when the user says they are done, inspect the bundle, draft a skill prompt, create or refine SKILL.md, then import the skill when the user approves. Replay through Codex skills and Computer Use; do not replay raw pointer coordinates as the main architecture."
 )]
 impl ServerHandler for RecordReplayLinux {}
 
@@ -463,7 +652,7 @@ impl RecordReplayLinux {
             "sessionDirectoryPath": session_dir,
             "eventsPath": session_dir.as_deref().map(event_stream_events_path),
             "metadataPath": session_dir.as_deref().map(event_stream_metadata_path),
-            "suppressedEventsPath": Value::Null,
+            "suppressedEventsPath": session_dir.as_deref().map(event_stream_suppressed_path),
             "startedAt": started_at,
             "endedAt": ended_at,
             "endReason": end_reason,
@@ -547,6 +736,38 @@ struct StartParams {
     include_screenshot: Option<bool>,
     /// Capture an initial AT-SPI accessibility snapshot. Defaults to true.
     include_accessibility: Option<bool>,
+    /// Capture native Linux audio evidence when an audio recorder is available. Defaults to true.
+    include_audio: Option<bool>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
+struct SkysightStartParams {
+    /// Seconds between daemon snapshots. Defaults to 60.
+    interval_seconds: Option<u64>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
+struct SkysightSnapshotParams {
+    /// Optional snapshot source label.
+    source: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
+struct SkysightPauseParams {
+    /// Optional user-visible reason for pausing activity memory.
+    reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct SkysightExclusionParams {
+    /// Exclusion kind, such as app or domain.
+    kind: String,
+    /// App name, bundle id, window title fragment, or domain to exclude.
+    value: String,
+    /// Optional reason shown in local diagnostics.
+    reason: Option<String>,
+    /// Remove the matching exclusion instead of adding/updating it.
+    remove: Option<bool>,
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -578,6 +799,14 @@ struct BrowserTraceParams {
     /// Optional page title for the trace.
     title: Option<String>,
     /// Trace source, such as chrome-cdp, browser-plugin, or manual-debug.
+    source: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct DesktopSnapshotParams {
+    /// Optional bundle directory. Defaults to the active recording session.
+    session_dir: Option<String>,
+    /// Snapshot source, such as hud, mcp, or workflow-checkpoint.
     source: Option<String>,
 }
 
@@ -696,7 +925,10 @@ fn add_event_stream_fields(value: &mut Value, is_recording: bool, end_reason: Op
             "metadataPath".to_string(),
             json!(event_stream_metadata_path(&session_dir)),
         );
-        map.insert("suppressedEventsPath".to_string(), Value::Null);
+        map.insert(
+            "suppressedEventsPath".to_string(),
+            json!(event_stream_suppressed_path(&session_dir)),
+        );
         map.insert(
             "startedAt".to_string(),
             json!(manifest
@@ -734,18 +966,108 @@ fn session_id_for(session_dir: &Path) -> String {
 }
 
 fn event_stream_events_path(session_dir: &Path) -> PathBuf {
-    session_dir.join(crate::manifest::TIMELINE_FILE_NAME)
+    session_dir.join(crate::manifest::EVENT_STREAM_EVENTS_FILE_NAME)
 }
 
 fn event_stream_metadata_path(session_dir: &Path) -> PathBuf {
-    session_dir.join(crate::manifest::MANIFEST_FILE_NAME)
+    session_dir.join(crate::manifest::EVENT_STREAM_SESSION_FILE_NAME)
+}
+
+fn event_stream_suppressed_path(session_dir: &Path) -> PathBuf {
+    session_dir.join(crate::manifest::EVENT_STREAM_SUPPRESSED_FILE_NAME)
 }
 
 fn event_stream_end_reason(state: &RecordingRuntimeState) -> Option<&'static str> {
     match state {
         RecordingRuntimeState::Stopped => Some("recording_controls_stopped"),
-        RecordingRuntimeState::Canceled => Some("recording_controls_canceled"),
+        RecordingRuntimeState::Canceled => Some("recording_controls_cancelled"),
         RecordingRuntimeState::Expired => Some("max_duration"),
         RecordingRuntimeState::Active | RecordingRuntimeState::Idle => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn add_event_stream_fields_includes_suppressed_events_path() {
+        let temp = tempfile::tempdir().unwrap();
+        let session_dir = temp.path().join("session");
+        std::fs::create_dir_all(&session_dir).unwrap();
+        let mut value = json!({
+            "session_dir": session_dir.to_string_lossy().to_string(),
+        });
+
+        add_event_stream_fields(&mut value, true, None);
+
+        assert_eq!(
+            value["suppressedEventsPath"].as_str(),
+            Some(
+                session_dir
+                    .join("suppressed.jsonl")
+                    .to_string_lossy()
+                    .as_ref()
+            )
+        );
+    }
+
+    #[test]
+    fn status_value_includes_suppressed_events_path() {
+        let temp = tempfile::tempdir().unwrap();
+        let session_dir = temp.path().join("session");
+        let server = RecordReplayLinux::default();
+        server.set_active_session(Some(session_dir.clone()));
+        let value = server.status_value("status");
+
+        assert_eq!(
+            value["suppressedEventsPath"].as_str(),
+            Some(
+                session_dir
+                    .join("suppressed.jsonl")
+                    .to_string_lossy()
+                    .as_ref()
+            )
+        );
+    }
+
+    #[test]
+    fn stop_recording_includes_suppressed_events_path() {
+        let temp = tempfile::tempdir().unwrap();
+        let session_dir = temp.path().join("session");
+        std::fs::create_dir_all(&session_dir).unwrap();
+        let manifest = crate::manifest::RecordingBundleManifest::new(
+            "fixture-session".to_string(),
+            "2026-06-30T12:00:00Z".to_string(),
+        );
+        crate::manifest::write_manifest(&session_dir, &manifest).unwrap();
+        std::fs::write(session_dir.join(crate::manifest::TIMELINE_FILE_NAME), "").unwrap();
+        let previous = std::env::var_os("CODEX_RECORD_REPLAY_STATUS_PATH");
+        let status_path = temp.path().join("status.json");
+        std::env::set_var("CODEX_RECORD_REPLAY_STATUS_PATH", &status_path);
+
+        let service = RecordReplayLinux::default();
+        let response = service.stop_recording(
+            StopParams {
+                session_dir: Some(session_dir.to_string_lossy().to_string()),
+            },
+            "stop",
+        );
+        let value = response.0.fields;
+
+        assert_eq!(
+            value["suppressedEventsPath"].as_str(),
+            Some(
+                session_dir
+                    .join("suppressed.jsonl")
+                    .to_string_lossy()
+                    .as_ref()
+            )
+        );
+
+        match previous {
+            Some(path) => std::env::set_var("CODEX_RECORD_REPLAY_STATUS_PATH", path),
+            None => std::env::remove_var("CODEX_RECORD_REPLAY_STATUS_PATH"),
+        }
     }
 }

@@ -35,13 +35,28 @@ Cargo and copies the release binary into `resources/native/`, the staged plugin
 - Records semantic evidence, not coordinate macro playback.
 - Creates bundles with `manifest.json`, `timeline.jsonl`, screenshots,
   accessibility snapshots, browser trace evidence, transcript context,
-  InputCapture/libei readiness, X11 session metadata, diagnostics, and
-  `draft-prompt.md`.
+  native audio metadata/recordings when available, InputCapture/libei
+  readiness, X11 session metadata, active desktop/window snapshots,
+  diagnostics, and `draft-prompt.md`.
+- Exposes Linux Skysight pause/resume, status, snapshots, exclusions, and a
+  rolling evidence daemon through the same `event-stream` MCP server so
+  Chronicle-compatible resources can feed skill drafting.
+- Skysight segment directories contain `events.jsonl`, `metadata.json`, and
+  bounded artifacts such as diagnostics, screenshots, window metadata, and
+  AT-SPI/accessibility evidence when available.
+- Writes rolling 10-minute markdown summaries and cadence-limited 6-hour
+  rollups instead of treating every snapshot as a fresh six-hour window.
 - Writes a structured `backend_catalog` into the bundle manifest and a matching
   `backend_catalog` observation into the timeline so testers can see why
   InputCapture/libei or X11 paths are available or missing.
 - Accepts browser/CDP-style trace JSON through the CLI, MCP, and Linux bridge
   as semantic evidence for skill drafting.
+- Captures active desktop/window snapshots through the CLI, MCP, Linux bridge,
+  and recording HUD so bundles can show focused apps/windows during a demo.
+- Treats Chronicle/Skysight as screen/event memory, not microphone
+  transcription.
+- See [docs/linux-chronicle-skysight.md](../../docs/linux-chronicle-skysight.md)
+  for the runtime resource contract and verification steps.
 - Exposes the plugin as `Record & Replay` with MCP server `event-stream` and
   skill `record-and-replay`.
 - Imports skills into `$HOME/.agents/skills` by default.
@@ -70,10 +85,19 @@ The feature adds allowlisted bridge methods:
 
 - `linux-record-replay-doctor`
 - `linux-record-replay-status`
+- `linux-record-replay-skysight-start`
+- `linux-record-replay-skysight-status`
+- `linux-record-replay-skysight-pause`
+- `linux-record-replay-skysight-resume`
+- `linux-record-replay-skysight-stop`
+- `linux-record-replay-skysight-snapshot`
+- `linux-record-replay-skysight-list-exclusions`
+- `linux-record-replay-skysight-update-exclusion`
 - `linux-record-replay-start`
 - `linux-record-replay-mark`
 - `linux-record-replay-speech-context`
 - `linux-record-replay-browser-trace`
+- `linux-record-replay-desktop-snapshot`
 - `linux-record-replay-stop`
 - `linux-record-replay-stop-active`
 - `linux-record-replay-cancel`
@@ -82,6 +106,13 @@ The feature adds allowlisted bridge methods:
 - `linux-record-replay-draft-skill`
 - `linux-record-replay-import-skill`
 - `linux-record-replay-inspect-skill`
+
+The Rust helper also exposes MCP tools `skysight_start`,
+`skysight_status`, `skysight_pause`, `skysight_resume`, `skysight_stop`,
+`skysight_snapshot`, `desktop_snapshot`, `skysight_update_exclusion`, and
+`skysight_list_exclusions`. Skysight runtime state defaults to
+`$XDG_RUNTIME_DIR/skysight`; memory resources default to
+`${CODEX_HOME:-$HOME/.codex}/memories_extensions/chronicle/resources`.
 
 All helper invocations use `execFile` with fixed command shapes. The bridge does
 not expose a shell or arbitrary argv surface.

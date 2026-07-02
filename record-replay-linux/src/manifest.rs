@@ -7,10 +7,14 @@ use std::{
 
 pub const MANIFEST_FILE_NAME: &str = "manifest.json";
 pub const TIMELINE_FILE_NAME: &str = "timeline.jsonl";
+pub const EVENT_STREAM_SESSION_FILE_NAME: &str = "session.json";
+pub const EVENT_STREAM_EVENTS_FILE_NAME: &str = "events.jsonl";
+pub const EVENT_STREAM_SUPPRESSED_FILE_NAME: &str = "suppressed.jsonl";
 pub const SCREENSHOTS_DIR_NAME: &str = "screenshots";
 pub const ACCESSIBILITY_DIR_NAME: &str = "accessibility";
 pub const BROWSER_DIR_NAME: &str = "browser";
 pub const TRANSCRIPTS_DIR_NAME: &str = "transcripts";
+pub const AUDIO_DIR_NAME: &str = "audio";
 pub const INPUT_CAPTURE_DIR_NAME: &str = "input-capture";
 pub const X11_DIR_NAME: &str = "x11";
 pub const DIAGNOSTICS_FILE_NAME: &str = "diagnostics.json";
@@ -28,6 +32,8 @@ pub struct FileShape {
     pub browser: String,
     #[serde(default = "default_transcripts")]
     pub transcripts: String,
+    #[serde(default = "default_audio")]
+    pub audio: String,
     #[serde(default = "default_input_capture")]
     pub input_capture: String,
     #[serde(default = "default_x11")]
@@ -46,6 +52,7 @@ impl Default for FileShape {
             accessibility: default_accessibility(),
             browser: default_browser(),
             transcripts: default_transcripts(),
+            audio: default_audio(),
             input_capture: default_input_capture(),
             x11: default_x11(),
             diagnostics: default_diagnostics(),
@@ -55,13 +62,14 @@ impl Default for FileShape {
 }
 
 impl FileShape {
-    pub fn entries(&self) -> [(&'static str, &str); 9] {
+    pub fn entries(&self) -> [(&'static str, &str); 10] {
         [
             ("timeline", self.timeline.as_str()),
             ("screenshots", self.screenshots.as_str()),
             ("accessibility", self.accessibility.as_str()),
             ("browser", self.browser.as_str()),
             ("transcripts", self.transcripts.as_str()),
+            ("audio", self.audio.as_str()),
             ("input_capture", self.input_capture.as_str()),
             ("x11", self.x11.as_str()),
             ("diagnostics", self.diagnostics.as_str()),
@@ -175,11 +183,45 @@ pub fn read_manifest(bundle_dir: &Path) -> Result<RecordingBundleManifest> {
 
 pub fn write_manifest(bundle_dir: &Path, manifest: &RecordingBundleManifest) -> Result<()> {
     let path = bundle_dir.join(MANIFEST_FILE_NAME);
+    let rendered = format!("{}\n", serde_json::to_string_pretty(manifest)?);
+    crate::secure_fs::write_private_file(&path, rendered.as_bytes())
+        .with_context(|| format!("failed to write manifest at {}", path.display()))?;
+    write_event_stream_session(bundle_dir, manifest)
+}
+
+pub(crate) fn refresh_event_stream_session(bundle_dir: &Path) -> Result<()> {
+    let manifest = read_manifest(bundle_dir)?;
+    write_event_stream_session(bundle_dir, &manifest)
+}
+
+fn write_event_stream_session(bundle_dir: &Path, manifest: &RecordingBundleManifest) -> Result<()> {
+    let event_stream_path = bundle_dir.join(EVENT_STREAM_SESSION_FILE_NAME);
+    let mut session = serde_json::to_value(manifest)?;
+    session["eventCount"] = serde_json::json!(count_jsonl_lines(
+        &bundle_dir.join(EVENT_STREAM_EVENTS_FILE_NAME)
+    )?);
+    session["suppressedEventCount"] = serde_json::json!(count_jsonl_lines(
+        &bundle_dir.join(EVENT_STREAM_SUPPRESSED_FILE_NAME)
+    )?);
     crate::secure_fs::write_private_file(
-        &path,
-        format!("{}\n", serde_json::to_string_pretty(manifest)?),
+        &event_stream_path,
+        format!("{}\n", serde_json::to_string_pretty(&session)?),
     )
-    .with_context(|| format!("failed to write manifest at {}", path.display()))
+    .with_context(|| {
+        format!(
+            "failed to write event-stream session at {}",
+            event_stream_path.display()
+        )
+    })
+}
+
+fn count_jsonl_lines(path: &Path) -> Result<u64> {
+    if !path.is_file() {
+        return Ok(0);
+    }
+    let raw =
+        fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?;
+    Ok(raw.lines().filter(|line| !line.trim().is_empty()).count() as u64)
 }
 
 pub fn validate_bundle_dir(bundle_dir: &Path) -> Result<BundleValidationReport> {
@@ -207,7 +249,13 @@ pub fn validate_bundle_dir(bundle_dir: &Path) -> Result<BundleValidationReport> 
         };
         let expected_dir = matches!(
             field,
-            "screenshots" | "accessibility" | "browser" | "transcripts" | "input_capture" | "x11"
+            "screenshots"
+                | "accessibility"
+                | "browser"
+                | "transcripts"
+                | "audio"
+                | "input_capture"
+                | "x11"
         );
         if !path.exists() {
             if field != "draft_prompt" {
@@ -435,6 +483,10 @@ fn default_browser() -> String {
 
 fn default_transcripts() -> String {
     TRANSCRIPTS_DIR_NAME.to_string()
+}
+
+fn default_audio() -> String {
+    AUDIO_DIR_NAME.to_string()
 }
 
 fn default_input_capture() -> String {

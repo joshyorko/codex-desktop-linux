@@ -27,7 +27,17 @@ pub enum TimelineEvent {
     SpeechContext {
         transcript: String,
         #[serde(skip_serializing_if = "Option::is_none")]
+        file: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
         source: Option<String>,
+    },
+    AudioRecording {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        file: Option<String>,
+        metadata_file: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provider: Option<String>,
+        status: String,
     },
     SessionStopped,
     SessionCancelled {
@@ -57,6 +67,30 @@ pub enum TimelineEvent {
         url: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         title: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        source: Option<String>,
+    },
+    DesktopSnapshot {
+        file: String,
+        window_count: usize,
+        #[serde(default)]
+        browser_observation_count: usize,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        focused_window_title: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        focused_window_app_id: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        focused_window_wm_class: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        focused_browser_name: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        focused_browser_title: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        focused_browser_url: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        focused_browser_domain: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        focused_browser_url_source: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         source: Option<String>,
     },
@@ -108,10 +142,31 @@ impl TimelineRecord {
                         .push(TimelineValidationError::MissingField("user_marker.note"));
                 }
             }
-            TimelineEvent::SpeechContext { transcript, .. } => {
+            TimelineEvent::SpeechContext {
+                transcript, file, ..
+            } => {
                 if transcript.trim().is_empty() {
                     report.errors.push(TimelineValidationError::MissingField(
                         "speech_context.transcript",
+                    ));
+                }
+                if let Some(file) = file {
+                    validate_event_path(file, "speech_context.file", &mut report);
+                }
+            }
+            TimelineEvent::AudioRecording {
+                file,
+                metadata_file,
+                status,
+                ..
+            } => {
+                if let Some(file) = file {
+                    validate_event_path(file, "audio_recording.file", &mut report);
+                }
+                validate_event_path(metadata_file, "audio_recording.metadata_file", &mut report);
+                if status.trim().is_empty() {
+                    report.errors.push(TimelineValidationError::MissingField(
+                        "audio_recording.status",
                     ));
                 }
             }
@@ -137,6 +192,9 @@ impl TimelineRecord {
             }
             TimelineEvent::BrowserTrace { file, .. } => {
                 validate_event_path(file, "browser_trace.file", &mut report);
+            }
+            TimelineEvent::DesktopSnapshot { file, .. } => {
+                validate_event_path(file, "desktop_snapshot.file", &mut report);
             }
             TimelineEvent::ProviderEvidence {
                 provider,
@@ -222,7 +280,9 @@ pub fn append_timeline_record(bundle_dir: &Path, event: TimelineEvent) -> Result
         0
     };
     let record = TimelineRecord::new(next_index, crate::recorder::now_timestamp(), event);
-    crate::secure_fs::append_private_line(&path, &record.to_json_line()?)?;
+    let line = record.to_json_line()?;
+    crate::secure_fs::append_private_line(&path, &line)?;
+    crate::event_stream::append_event_stream_record(bundle_dir, &record)?;
     Ok(record)
 }
 

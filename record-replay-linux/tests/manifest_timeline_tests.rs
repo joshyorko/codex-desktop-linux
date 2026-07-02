@@ -3,8 +3,8 @@ use std::path::Path;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use codex_record_replay_linux::{
-    bundle_draft_prompt, cancel_session, command_json, expire_session, mark_session,
-    parse_timeline_line, read_runtime_status, read_timeline, record_browser_trace,
+    append_timeline_record, bundle_draft_prompt, cancel_session, command_json, expire_session,
+    mark_session, parse_timeline_line, read_runtime_status, read_timeline, record_browser_trace,
     record_speech_context, start_session, stop_session, update_active_status, validate_bundle_dir,
     validate_draft_prompt, write_active_status, write_stopped_status, Commands, RecordCommand,
     RecordStartOptions, RecordingBundleManifest, RecordingRuntimeState, SessionCancelArgs,
@@ -65,6 +65,13 @@ fn timeline_has_expected_event_shape() {
     if let TimelineEvent::Navigation { url } = navigation.event {
         assert!(url.ends_with('/'));
     }
+    let screenshot = parse_timeline_line(lines.next().expect("screenshot line")).unwrap();
+    assert!(matches!(screenshot.event, TimelineEvent::Screenshot { .. }));
+    let accessibility = parse_timeline_line(lines.next().expect("accessibility line")).unwrap();
+    assert!(matches!(
+        accessibility.event,
+        TimelineEvent::AccessibilitySnapshot { count: 3, .. }
+    ));
 }
 
 #[test]
@@ -90,6 +97,15 @@ fn speech_context_is_timeline_evidence() {
     let raw = fs::read_to_string(root.join("timeline.jsonl")).unwrap();
     assert!(raw.contains("speech_context"));
     assert!(raw.contains("microphone-transcript"));
+    assert!(raw.contains("transcripts/0000.txt"));
+    assert_eq!(
+        fs::read_to_string(root.join("transcripts/0000.txt")).unwrap(),
+        "Use my spoken description as the expected workflow intent.\n",
+    );
+    let prompt = bundle_draft_prompt(root).unwrap();
+    assert!(prompt
+        .contains("speech context: Use my spoken description as the expected workflow intent."));
+    assert!(prompt.contains("file=transcripts/0000.txt"));
 }
 
 #[test]
@@ -129,6 +145,331 @@ fn browser_trace_is_bundle_artifact_evidence() {
 }
 
 #[test]
+fn desktop_snapshot_is_prompt_visible_bundle_evidence() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    fs::write(root.join("manifest.json"), MANIFEST_VALID_FIXTURE).unwrap();
+    fs::write(root.join("timeline.jsonl"), "").unwrap();
+    create_standard_bundle_dirs(root);
+    fs::write(root.join("diagnostics.json"), "{\"ok\":true}\n").unwrap();
+    fs::write(
+        root.join("x11/0000-desktop-snapshot.json"),
+        "{\"ok\":true}\n",
+    )
+    .unwrap();
+
+    let record = append_timeline_record(
+        root,
+        TimelineEvent::DesktopSnapshot {
+            file: "x11/0000-desktop-snapshot.json".to_string(),
+            window_count: 2,
+            browser_observation_count: 1,
+            focused_window_title: Some("Image Studio - Google Chrome".to_string()),
+            focused_window_app_id: Some("google-chrome".to_string()),
+            focused_window_wm_class: Some("Google-chrome".to_string()),
+            focused_browser_name: Some("Google Chrome".to_string()),
+            focused_browser_title: Some("Image Studio - Google Chrome".to_string()),
+            focused_browser_url: Some("https://image-studio.example/".to_string()),
+            focused_browser_domain: Some("image-studio.example".to_string()),
+            focused_browser_url_source: Some("browser_trace".to_string()),
+            source: Some("record-replay-hud".to_string()),
+        },
+    )
+    .unwrap();
+
+    assert!(record.validate().is_valid());
+    assert!(validate_bundle_dir(root).unwrap().is_valid());
+    let prompt = bundle_draft_prompt(root).unwrap();
+    assert!(prompt.contains("desktop snapshot x11/0000-desktop-snapshot.json"));
+    assert!(prompt.contains("Image Studio - Google Chrome"));
+    assert!(prompt.contains("google-chrome"));
+    assert!(prompt.contains("browser_url=https://image-studio.example/"));
+    assert!(prompt.contains("browser_domain=image-studio.example"));
+    assert!(prompt.contains("record-replay-hud"));
+}
+
+#[test]
+fn event_stream_uses_sky_compatible_event_kinds() {
+    let _guard = status_env_guard();
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("bundle");
+    let status_path = temp.path().join("status.json");
+    let previous = std::env::var_os("CODEX_RECORD_REPLAY_STATUS_PATH");
+    std::env::set_var("CODEX_RECORD_REPLAY_STATUS_PATH", &status_path);
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime
+        .block_on(start_session(RecordStartOptions {
+            session_dir: root.clone(),
+            app_id: None,
+            window_id: None,
+            goal: Some("record image generation workflow".to_string()),
+            include_screenshot: false,
+            include_accessibility: false,
+            include_audio: false,
+        }))
+        .unwrap();
+
+    record_speech_context(
+        &root,
+        "Open Chrome, open the image workspace, enter the image prompt, generate it, and download the image.",
+        Some("codex-dictation-send".to_string()),
+    )
+    .unwrap();
+    record_browser_trace(
+        &root,
+        serde_json::json!({
+            "events": [
+                { "method": "Page.navigate", "params": { "url": "https://image-studio.example/app" } }
+            ]
+        }),
+        Some("https://image-studio.example/app".to_string()),
+        Some("Image Studio - Google Chrome".to_string()),
+        Some("chrome-cdp".to_string()),
+    )
+    .unwrap();
+    fs::write(
+        root.join("x11/0002-desktop-snapshot.json"),
+        serde_json::json!({
+            "schema_version": 1,
+            "provider": "window-metadata",
+            "captured_at": "2026-06-30T20:20:41Z",
+            "source": "record-replay-hud",
+            "windows": [
+                {
+                    "window_id": 42,
+                    "title": "Image Studio - Google Chrome",
+                    "app_id": "google-chrome",
+                    "wm_class": "Google-chrome",
+                    "focused": true,
+                    "hidden": false,
+                    "backend": "test"
+                }
+            ],
+            "focused_window": {
+                "window_id": 42,
+                "title": "Image Studio - Google Chrome",
+                "app_id": "google-chrome",
+                "wm_class": "Google-chrome",
+                "pid": 1234
+            },
+            "window_count": 1,
+            "browser_observation_count": 1,
+            "focused_browser_observation": {
+                "browser": "Google Chrome",
+                "window_id": 42,
+                "title": "Image Studio - Google Chrome",
+                "app_id": "google-chrome",
+                "wm_class": "Google-chrome",
+                "pid": 1234,
+                "focused": true,
+                "url": "https://image-studio.example/",
+                "domain": "image-studio.example",
+                "url_source": "browser_trace"
+            }
+        })
+        .to_string(),
+    )
+    .unwrap();
+    append_timeline_record(
+        &root,
+        TimelineEvent::DesktopSnapshot {
+            file: "x11/0002-desktop-snapshot.json".to_string(),
+            window_count: 1,
+            browser_observation_count: 1,
+            focused_window_title: Some("Image Studio - Google Chrome".to_string()),
+            focused_window_app_id: Some("google-chrome".to_string()),
+            focused_window_wm_class: Some("Google-chrome".to_string()),
+            focused_browser_name: Some("Google Chrome".to_string()),
+            focused_browser_title: Some("Image Studio - Google Chrome".to_string()),
+            focused_browser_url: Some("https://image-studio.example/".to_string()),
+            focused_browser_domain: Some("image-studio.example".to_string()),
+            focused_browser_url_source: Some("browser_trace".to_string()),
+            source: Some("record-replay-hud".to_string()),
+        },
+    )
+    .unwrap();
+    stop_session(&root).unwrap();
+
+    let event_stream = read_jsonl_values(&root.join("events.jsonl"));
+    let kinds = event_stream
+        .iter()
+        .filter_map(|event| event["kind"].as_str())
+        .collect::<Vec<_>>();
+    assert!(kinds.contains(&"session.started"));
+    assert!(kinds.contains(&"keyboard.text_input"));
+    assert!(kinds.contains(&"window.changed"));
+    assert!(kinds.contains(&"session.ended"));
+    assert!(!kinds.contains(&"session_started"));
+    assert!(!kinds.contains(&"speech_context"));
+    assert!(!kinds.contains(&"desktop_snapshot"));
+    assert!(event_stream.iter().any(|event| {
+        event["kind"] == "keyboard.text_input"
+            && event["text"]
+                .as_str()
+                .is_some_and(|text| text.contains("Open Chrome, open the image workspace"))
+            && event["target"]["file"] == "transcripts/0000.txt"
+    }));
+    assert!(event_stream.iter().any(|event| {
+        event["kind"] == "window.changed"
+            && event["title"] == "Image Studio - Google Chrome"
+            && event["browser"] == "Google Chrome"
+            && event["url"] == "https://image-studio.example/"
+            && event["bundleIdentifier"] == "google-chrome"
+            && event["target"]["browserDomain"] == "image-studio.example"
+            && event["target"]["file"] == "x11/0002-desktop-snapshot.json"
+    }));
+    let session: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(root.join("session.json")).unwrap()).unwrap();
+    assert_eq!(
+        session["eventCount"].as_u64(),
+        Some(event_stream.len() as u64)
+    );
+    assert!(session["suppressedEventCount"].as_u64().is_some());
+
+    match previous {
+        Some(path) => std::env::set_var("CODEX_RECORD_REPLAY_STATUS_PATH", path),
+        None => std::env::remove_var("CODEX_RECORD_REPLAY_STATUS_PATH"),
+    }
+}
+
+#[test]
+fn image_generation_workflow_bundle_prompt_has_transcript_browser_and_window_context() {
+    let _guard = status_env_guard();
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("bundle");
+    let status_path = temp.path().join("status.json");
+    let previous = std::env::var_os("CODEX_RECORD_REPLAY_STATUS_PATH");
+    std::env::set_var("CODEX_RECORD_REPLAY_STATUS_PATH", &status_path);
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime
+        .block_on(start_session(RecordStartOptions {
+            session_dir: root.clone(),
+            app_id: None,
+            window_id: None,
+            goal: Some("record image generation workflow".to_string()),
+            include_screenshot: false,
+            include_accessibility: false,
+            include_audio: false,
+        }))
+        .unwrap();
+
+    record_speech_context(
+        &root,
+        "Open Chrome, open the image workspace, enter a prompt to create an image of a neon cabin, generate it, then download the image.",
+        Some("codex-dictation-send".to_string()),
+    )
+    .unwrap();
+    let browser_record = record_browser_trace(
+        &root,
+        serde_json::json!({
+            "events": [
+                {
+                    "method": "Page.navigate",
+                    "params": { "url": "https://image-studio.example/app" }
+                },
+                {
+                    "method": "Runtime.consoleAPICalled",
+                    "params": { "text": "image prompt submitted" }
+                }
+            ]
+        }),
+        Some("https://image-studio.example/app".to_string()),
+        Some("Image Studio - Google Chrome".to_string()),
+        Some("chrome-cdp".to_string()),
+    )
+    .unwrap();
+    let browser_trace_file = match &browser_record.event {
+        TimelineEvent::BrowserTrace { file, .. } => file.as_str(),
+        _ => panic!("expected browser trace record"),
+    };
+    fs::write(
+        root.join("x11/0002-desktop-snapshot.json"),
+        serde_json::json!({
+            "schema_version": 1,
+            "provider": "window-metadata",
+            "captured_at": "2026-06-30T20:20:41Z",
+            "source": "record-replay-hud",
+            "windows": [
+                {
+                    "window_id": 42,
+                    "title": "Image Studio - Google Chrome",
+                    "app_id": "google-chrome",
+                    "wm_class": "Google-chrome",
+                    "focused": true,
+                    "hidden": false,
+                    "backend": "test"
+                }
+            ],
+            "focused_window": {
+                "title": "Image Studio - Google Chrome",
+                "app_id": "google-chrome",
+                "wm_class": "Google-chrome"
+            },
+            "window_count": 1,
+            "browser_observation_count": 1,
+            "focused_browser_observation": {
+                "browser": "Google Chrome",
+                "title": "Image Studio - Google Chrome",
+                "focused": true,
+                "url": "https://image-studio.example/",
+                "domain": "image-studio.example",
+                "url_source": "browser_trace"
+            }
+        })
+        .to_string(),
+    )
+    .unwrap();
+    append_timeline_record(
+        &root,
+        TimelineEvent::DesktopSnapshot {
+            file: "x11/0002-desktop-snapshot.json".to_string(),
+            window_count: 1,
+            browser_observation_count: 1,
+            focused_window_title: Some("Image Studio - Google Chrome".to_string()),
+            focused_window_app_id: Some("google-chrome".to_string()),
+            focused_window_wm_class: Some("Google-chrome".to_string()),
+            focused_browser_name: Some("Google Chrome".to_string()),
+            focused_browser_title: Some("Image Studio - Google Chrome".to_string()),
+            focused_browser_url: Some("https://image-studio.example/".to_string()),
+            focused_browser_domain: Some("image-studio.example".to_string()),
+            focused_browser_url_source: Some("browser_trace".to_string()),
+            source: Some("record-replay-hud".to_string()),
+        },
+    )
+    .unwrap();
+
+    let prompt = bundle_draft_prompt(&root).unwrap();
+    assert!(root.join("session.json").is_file());
+    assert!(root.join("events.jsonl").is_file());
+    assert!(root.join("transcripts/0000.txt").is_file());
+    assert!(root.join(browser_trace_file).is_file());
+    assert!(root.join("x11/0002-desktop-snapshot.json").is_file());
+    let event_stream = fs::read_to_string(root.join("events.jsonl")).unwrap();
+    assert!(event_stream.contains("speech_context"));
+    assert!(event_stream.contains("browser_trace"));
+    assert!(event_stream.contains("desktop_snapshot"));
+    assert!(prompt.contains("Open Chrome, open the image workspace"));
+    assert!(prompt.contains("create an image of a neon cabin"));
+    assert!(prompt.contains("https://image-studio.example/app"));
+    assert!(prompt.contains("Image Studio - Google Chrome"));
+    assert!(prompt.contains("google-chrome"));
+    assert!(prompt.contains("download the image"));
+
+    match previous {
+        Some(path) => std::env::set_var("CODEX_RECORD_REPLAY_STATUS_PATH", path),
+        None => std::env::remove_var("CODEX_RECORD_REPLAY_STATUS_PATH"),
+    }
+}
+
+#[test]
 fn start_session_writes_browser_input_capture_and_x11_evidence() {
     let _guard = status_env_guard();
     let temp = tempfile::tempdir().unwrap();
@@ -150,13 +491,17 @@ fn start_session_writes_browser_input_capture_and_x11_evidence() {
             goal: Some("record backend evidence".to_string()),
             include_screenshot: false,
             include_accessibility: false,
+            include_audio: false,
         }))
         .unwrap();
 
     assert!(report.ok);
+    assert!(root.join("session.json").is_file());
+    assert!(root.join("events.jsonl").is_file());
     assert!(root.join("browser/0000-readiness.json").is_file());
     assert!(root.join("input-capture/0000-readiness.json").is_file());
     assert!(root.join("x11/0000-session.json").is_file());
+    assert!(root.join("x11/0001-window-metadata.json").is_file());
     let timeline = read_timeline(&root).unwrap();
     assert!(timeline.iter().any(|record| {
         matches!(&record.event, TimelineEvent::ProviderEvidence { provider, file, .. } if provider == "browser-trace" && file == "browser/0000-readiness.json")
@@ -166,6 +511,9 @@ fn start_session_writes_browser_input_capture_and_x11_evidence() {
     }));
     assert!(timeline.iter().any(|record| {
         matches!(&record.event, TimelineEvent::ProviderEvidence { provider, file, .. } if provider == "x11-recording" && file == "x11/0000-session.json")
+    }));
+    assert!(timeline.iter().any(|record| {
+        matches!(&record.event, TimelineEvent::ProviderEvidence { provider, file, .. } if provider == "window-metadata" && file == "x11/0001-window-metadata.json")
     }));
     assert!(validate_bundle_dir(&root).unwrap().is_valid());
 
@@ -199,6 +547,7 @@ fn start_session_creates_private_bundle_and_status_files() {
             goal: Some("private bundle".to_string()),
             include_screenshot: false,
             include_accessibility: false,
+            include_audio: false,
         }))
         .unwrap();
 
@@ -214,7 +563,9 @@ fn start_session_creates_private_bundle_and_status_files() {
     }
     for file in [
         root.join("manifest.json"),
+        root.join("session.json"),
         root.join("timeline.jsonl"),
+        root.join("events.jsonl"),
         root.join("diagnostics.json"),
         root.join("browser/0000-readiness.json"),
         root.join("input-capture/0000-readiness.json"),
@@ -228,6 +579,58 @@ fn start_session_creates_private_bundle_and_status_files() {
     match previous {
         Some(path) => std::env::set_var("CODEX_RECORD_REPLAY_STATUS_PATH", path),
         None => std::env::remove_var("CODEX_RECORD_REPLAY_STATUS_PATH"),
+    }
+}
+
+#[test]
+fn start_and_stop_session_records_audio_metadata_without_composer_dictation() {
+    let _guard = status_env_guard();
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("bundle");
+    let status_path = temp.path().join("status.json");
+    let previous_status = std::env::var_os("CODEX_RECORD_REPLAY_STATUS_PATH");
+    let previous_audio = std::env::var_os("CODEX_RECORD_REPLAY_AUDIO");
+    std::env::set_var("CODEX_RECORD_REPLAY_STATUS_PATH", &status_path);
+    std::env::set_var("CODEX_RECORD_REPLAY_AUDIO", "0");
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime
+        .block_on(start_session(RecordStartOptions {
+            session_dir: root.clone(),
+            app_id: None,
+            window_id: None,
+            goal: Some("audio metadata".to_string()),
+            include_screenshot: false,
+            include_accessibility: false,
+            include_audio: true,
+        }))
+        .unwrap();
+
+    assert!(root.join("audio/recording.json").is_file());
+    let timeline = read_timeline(&root).unwrap();
+    assert!(timeline.iter().any(|record| {
+        matches!(&record.event, TimelineEvent::AudioRecording { status, metadata_file, .. }
+            if status == "disabled" && metadata_file == "audio/recording.json")
+    }));
+
+    stop_session(&root).unwrap();
+    let timeline = read_timeline(&root).unwrap();
+    assert!(timeline.iter().any(|record| {
+        matches!(&record.event, TimelineEvent::AudioRecording { status, metadata_file, .. }
+            if status == "stopped" && metadata_file == "audio/recording.json")
+    }));
+    assert!(validate_bundle_dir(&root).unwrap().is_valid());
+
+    match previous_status {
+        Some(path) => std::env::set_var("CODEX_RECORD_REPLAY_STATUS_PATH", path),
+        None => std::env::remove_var("CODEX_RECORD_REPLAY_STATUS_PATH"),
+    }
+    match previous_audio {
+        Some(value) => std::env::set_var("CODEX_RECORD_REPLAY_AUDIO", value),
+        None => std::env::remove_var("CODEX_RECORD_REPLAY_AUDIO"),
     }
 }
 
@@ -289,6 +692,7 @@ fn start_session_rejects_existing_or_symlink_session_dir() {
         goal: None,
         include_screenshot: false,
         include_accessibility: false,
+        include_audio: false,
     }));
     assert!(
         result.is_err(),
@@ -310,6 +714,7 @@ fn start_session_rejects_existing_or_symlink_session_dir() {
         goal: None,
         include_screenshot: false,
         include_accessibility: false,
+        include_audio: false,
     }));
     assert!(result.is_err(), "session_dir symlinks must be rejected");
 
@@ -340,6 +745,7 @@ fn sealed_sessions_reject_mutations_and_terminal_rewrites() {
             goal: None,
             include_screenshot: false,
             include_accessibility: false,
+            include_audio: false,
         }))
         .unwrap();
 
@@ -474,6 +880,30 @@ fn validate_bundle_rejects_duplicate_timeline_indexes() {
         !report.is_valid(),
         "duplicate timeline indexes must invalidate the bundle"
     );
+}
+
+#[test]
+fn validate_bundle_rejects_unsafe_speech_context_file_paths() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    fs::write(root.join("manifest.json"), MANIFEST_VALID_FIXTURE).unwrap();
+    fs::write(
+        root.join("timeline.jsonl"),
+        concat!(
+            "{\"index\":0,\"recorded_at\":\"2026-06-28T12:00:00Z\",\"kind\":\"session_started\",\"payload\":{}}\n",
+            "{\"index\":1,\"recorded_at\":\"2026-06-28T12:00:01Z\",\"kind\":\"speech_context\",\"payload\":{\"transcript\":\"unsafe path\",\"file\":\"/tmp/transcript.txt\"}}\n",
+        ),
+    )
+    .unwrap();
+    create_standard_bundle_dirs(root);
+    fs::write(root.join("diagnostics.json"), "{}\n").unwrap();
+
+    let report = validate_bundle_dir(root).unwrap();
+    assert!(!report.is_valid());
+    assert!(report.errors.iter().any(|error| {
+        error.to_string().contains("speech_context.file")
+            && error.to_string().contains("must be relative")
+    }));
 }
 
 #[test]
@@ -771,23 +1201,31 @@ fn record_cancel_marks_bundle_as_canceled_and_discarded() {
     assert_eq!(response["isRecording"], false);
     assert_eq!(
         response["endReason"],
-        "recording_controls_canceled_discarded"
+        "recording_controls_cancelled_discarded"
     );
     assert_eq!(
         response["sessionDirectoryPath"].as_str(),
         Some(root.to_string_lossy().as_ref())
     );
+    assert_eq!(
+        response["eventsPath"].as_str(),
+        Some(root.join("events.jsonl").to_string_lossy().as_ref())
+    );
+    assert_eq!(
+        response["metadataPath"].as_str(),
+        Some(root.join("session.json").to_string_lossy().as_ref())
+    );
     let status = read_runtime_status();
     assert_eq!(status.state, RecordingRuntimeState::Canceled);
     assert_eq!(
         status.end_reason.as_deref(),
-        Some("recording_controls_canceled_discarded")
+        Some("recording_controls_cancelled_discarded")
     );
 
     let manifest = codex_record_replay_linux::manifest::read_manifest(&root).unwrap();
     assert_eq!(
         manifest.end_reason.as_deref(),
-        Some("recording_controls_canceled_discarded")
+        Some("recording_controls_cancelled_discarded")
     );
     assert!(manifest.ended_at.is_some());
 
@@ -861,9 +1299,19 @@ fn create_standard_bundle_dirs(root: &Path) {
         "accessibility",
         "browser",
         "transcripts",
+        "audio",
         "input-capture",
         "x11",
     ] {
         fs::create_dir(root.join(dir)).unwrap();
     }
+}
+
+fn read_jsonl_values(path: &Path) -> Vec<serde_json::Value> {
+    fs::read_to_string(path)
+        .unwrap()
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect()
 }

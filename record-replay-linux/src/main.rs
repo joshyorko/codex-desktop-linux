@@ -1,6 +1,8 @@
 use anyhow::{Context, Result};
 use clap::Parser;
-use codex_record_replay_linux::{command_json, mcp, Cli, Commands, EventStreamCommand};
+use codex_record_replay_linux::{
+    command_json, mcp, Cli, Commands, EventStreamCommand, SkysightCommand,
+};
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<()> {
@@ -10,6 +12,9 @@ async fn main() -> Result<()> {
         Commands::Mcp
             | Commands::EventStream {
                 command: EventStreamCommand::Mcp,
+            }
+            | Commands::Skysight {
+                command: SkysightCommand::Mcp,
             }
     ) {
         return mcp::serve_mcp().await;

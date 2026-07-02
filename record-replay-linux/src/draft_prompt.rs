@@ -158,14 +158,34 @@ fn timeline_summary(record: &crate::timeline::TimelineRecord) -> String {
             )
         }
         TimelineEvent::UserMarker { note } => format!("user marker: {note}"),
-        TimelineEvent::SpeechContext { transcript, source } => {
-            format!(
-                "speech context{}: {transcript}",
-                source
-                    .as_ref()
-                    .map(|s| format!(" via {s}"))
-                    .unwrap_or_default()
-            )
+        TimelineEvent::SpeechContext {
+            transcript,
+            file,
+            source,
+        } => {
+            let mut summary = format!("speech context: {transcript}");
+            if let Some(source) = source {
+                summary.push_str(&format!(" via {source}"));
+            }
+            if let Some(file) = file {
+                summary.push_str(&format!(" file={file}"));
+            }
+            summary
+        }
+        TimelineEvent::AudioRecording {
+            file,
+            metadata_file,
+            provider,
+            status,
+        } => {
+            let mut summary = format!("audio recording status={status} metadata={metadata_file}");
+            if let Some(file) = file {
+                summary.push_str(&format!(" file={file}"));
+            }
+            if let Some(provider) = provider {
+                summary.push_str(&format!(" provider={provider}"));
+            }
+            summary
         }
         TimelineEvent::SessionStopped => "session stopped".to_string(),
         TimelineEvent::SessionCancelled { discarded } => {
@@ -210,6 +230,55 @@ fn timeline_summary(record: &crate::timeline::TimelineRecord) -> String {
             }
             summary
         }
+        TimelineEvent::DesktopSnapshot {
+            file,
+            window_count,
+            browser_observation_count,
+            focused_window_title,
+            focused_window_app_id,
+            focused_window_wm_class,
+            focused_browser_name,
+            focused_browser_title,
+            focused_browser_url,
+            focused_browser_domain,
+            focused_browser_url_source,
+            source,
+        } => {
+            let mut summary = format!("desktop snapshot {file} ({window_count} visible windows)");
+            if let Some(title) = focused_window_title {
+                summary.push_str(&format!(" focused_title={title:?}"));
+            }
+            if let Some(app_id) = focused_window_app_id {
+                summary.push_str(&format!(" app_id={app_id:?}"));
+            }
+            if let Some(wm_class) = focused_window_wm_class {
+                summary.push_str(&format!(" wm_class={wm_class:?}"));
+            }
+            if *browser_observation_count > 0 {
+                summary.push_str(&format!(
+                    " browser_observations={browser_observation_count}"
+                ));
+            }
+            if let Some(browser) = focused_browser_name {
+                summary.push_str(&format!(" browser={browser:?}"));
+            }
+            if let Some(title) = focused_browser_title {
+                summary.push_str(&format!(" browser_title={title:?}"));
+            }
+            if let Some(url) = focused_browser_url {
+                summary.push_str(&format!(" browser_url={url}"));
+            }
+            if let Some(domain) = focused_browser_domain {
+                summary.push_str(&format!(" browser_domain={domain}"));
+            }
+            if let Some(url_source) = focused_browser_url_source {
+                summary.push_str(&format!(" browser_url_source={url_source}"));
+            }
+            if let Some(source) = source {
+                summary.push_str(&format!(" via {source}"));
+            }
+            summary
+        }
         TimelineEvent::ProviderEvidence {
             provider,
             file,
@@ -234,16 +303,15 @@ fn is_canceled_bundle(
     manifest: &crate::manifest::RecordingBundleManifest,
     timeline: &[crate::timeline::TimelineRecord],
 ) -> bool {
-    manifest
-        .end_reason
-        .as_deref()
-        .is_some_and(|reason| reason.starts_with("recording_controls_canceled"))
-        || timeline.iter().any(|record| {
-            matches!(
-                record.event,
-                crate::timeline::TimelineEvent::SessionCancelled { .. }
-            )
-        })
+    manifest.end_reason.as_deref().is_some_and(|reason| {
+        reason.starts_with("recording_controls_cancelled")
+            || reason.starts_with("recording_controls_canceled")
+    }) || timeline.iter().any(|record| {
+        matches!(
+            record.event,
+            crate::timeline::TimelineEvent::SessionCancelled { .. }
+        )
+    })
 }
 
 pub fn validate_draft_prompt(content: &str) -> DraftPromptValidation {

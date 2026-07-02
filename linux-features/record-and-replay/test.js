@@ -16,11 +16,14 @@ const {
   stageEnabledLinuxFeatureInstall,
 } = require("../../scripts/lib/linux-features.js");
 const {
+  applyRecordReplayDictationTranscriptPatch,
+  applyRecordReplayGlobalDictationTranscriptPatch,
   applyRecordReplayHudPatch,
   applyRecordReplayPluginGatePatch,
   applyRecordReplayMainBridgePatch,
   descriptors,
   recordReplayHelperSource,
+  recordReplayHudRuntimeSource,
 } = require("./patch.js");
 
 const featureDir = __dirname;
@@ -111,13 +114,31 @@ test("record-and-replay patch descriptor loads only when feature is enabled", ()
       "feature:record-and-replay:record-and-replay-plugin-gate",
       "feature:record-and-replay:linux-record-replay-main-bridge",
       "feature:record-and-replay:record-replay-hud",
+      "feature:record-and-replay:record-replay-dictation-transcript",
+      "feature:record-and-replay:record-replay-global-dictation-transcript",
     ]);
     assert.ok(loaded.every((descriptor) => descriptor.ciPolicy === "optional"));
   });
 });
 
+test("record-and-replay dictation descriptor tracks moved upstream composer bundle", () => {
+  const descriptor = descriptors.find((patch) => patch.id === "record-replay-dictation-transcript");
+  assert.ok(descriptor);
+  assert.equal(descriptor.pattern.test("app-initial~app-main~onboarding-page-BUwCKIcU.js"), true);
+  assert.equal(descriptor.pattern.test("use-dictation-BUwCKIcU.js"), true);
+  assert.equal(descriptor.pattern.test("use-dictation-hotkey-BUwCKIcU.js"), false);
+});
+
+test("record-and-replay global dictation descriptor tracks floating dictation bundles", () => {
+  const descriptor = descriptors.find((patch) => patch.id === "record-replay-global-dictation-transcript");
+  assert.ok(descriptor);
+  assert.equal(descriptor.pattern.test("global-dictation-orb-BTMuOubw.js"), true);
+  assert.equal(descriptor.pattern.test("global-dictation-page-C-bhTjfc.js"), true);
+  assert.equal(descriptor.pattern.test("use-dictation-BUwCKIcU.js"), false);
+});
+
 test("record-and-replay bridge patch is idempotent and uses execFile", () => {
-  assert.equal(descriptors.length, 3);
+  assert.equal(descriptors.length, 5);
   const source = [
     "const cp=require(\"node:child_process\"),fs=require(\"node:fs\"),path=require(\"node:path\");",
     "var bridge={\"get-global-state\":async({key:e})=>null};",
@@ -127,10 +148,27 @@ test("record-and-replay bridge patch is idempotent and uses execFile", () => {
   assert.notEqual(patched, source);
   assert.equal(applyRecordReplayMainBridgePatch(patched), patched);
   assert.match(patched, /"linux-record-replay-doctor":async/);
+  assert.match(patched, /"chronicle-permissions":async/);
+  assert.match(patched, /chronicleSidecarPresent/);
+  assert.match(patched, /chronicleSidecarProcessState/);
+  assert.match(patched, /"getChronicleSidecarControlState":async/);
+  assert.match(patched, /"toggleChronicleSidecar":async/);
+  assert.match(patched, /codexLinuxChronicleControlStateFromSkysight/);
+  assert.match(patched, /"skysight","status"/);
   assert.match(patched, /"linux-record-replay-status":async/);
   assert.match(patched, /"linux-record-replay-start":async/);
+  assert.match(patched, /"--no-audio"/);
+  assert.match(patched, /"linux-record-replay-skysight-start":async/);
+  assert.match(patched, /"linux-record-replay-skysight-status":async/);
+  assert.match(patched, /"linux-record-replay-skysight-pause":async/);
+  assert.match(patched, /"linux-record-replay-skysight-resume":async/);
+  assert.match(patched, /"linux-record-replay-skysight-update-exclusion":async/);
   assert.match(patched, /"linux-record-replay-speech-context":async/);
+  assert.match(patched, /"linux-record-replay-speech-context-active":async/);
+  assert.match(patched, /record\.speech-active/);
   assert.match(patched, /"linux-record-replay-browser-trace":async/);
+  assert.match(patched, /"linux-record-replay-desktop-snapshot":async/);
+  assert.match(patched, /"desktop-snapshot"/);
   assert.match(patched, /"linux-record-replay-stop-active":async/);
   assert.match(patched, /"linux-record-replay-cancel":async/);
   assert.match(patched, /"linux-record-replay-cancel-active":async/);
@@ -147,6 +185,98 @@ test("record-and-replay bridge patch is idempotent and uses execFile", () => {
   assert.doesNotMatch(patched, /"--target"/);
   assert.doesNotMatch(patched, /"--target-dir"/);
   assert.doesNotMatch(patched, /"--mode"/);
+});
+
+test("record-and-replay Chronicle helpers map Skysight status into upstream sidecar state", () => {
+  const helperSource = recordReplayHelperSource({
+    childProcessVar: "childProcess",
+    fsVar: "fs",
+    pathVar: "path",
+  });
+  const calls = [];
+  const context = {
+    childProcess: {
+      execFileSync(_bin, args) {
+        calls.push(args);
+        return JSON.stringify({ state: "running", is_running: true, paused: false });
+      },
+    },
+    fs,
+    path,
+    process: {
+      env: { CODEX_RECORD_REPLAY_LINUX_BIN: "/tmp/codex-record-replay-linux" },
+      cwd: () => "/tmp",
+      pid: 4242,
+    },
+    JSON,
+    String,
+  };
+
+  const state = vm.runInNewContext(`${helperSource};codexLinuxChronicleSidecarControlState()`, context);
+  assert.deepEqual(JSON.parse(JSON.stringify(calls)), [["skysight", "status"]]);
+  assert.equal(state.enabled, true);
+  assert.equal(state.running, true);
+  assert.equal(state.state, "running");
+
+  const paused = vm.runInNewContext(
+    `${helperSource};codexLinuxChronicleControlStateFromSkysight({ok:true,json:{state:"paused",is_running:true,paused:true}})`,
+    context,
+  );
+  assert.equal(paused.enabled, true);
+  assert.equal(paused.running, false);
+  assert.equal(paused.state, "stopped");
+
+  const missing = vm.runInNewContext(
+    `${helperSource};codexLinuxChronicleControlStateFromSkysight({ok:false,json:null})`,
+    context,
+  );
+  assert.equal(missing.enabled, false);
+  assert.equal(missing.running, false);
+  assert.equal(missing.state, "disabled");
+});
+
+test("record-and-replay patch wires Linux Chronicle tray controls to Skysight", () => {
+  const source = [
+    'const cp=require("node:child_process"),fs=require("node:fs"),path=require("node:path");',
+    "var tray={getChronicleSidecarControlState:()=>ue.appServerConnectionRegistry.getMaybeConnection(`local`)?.getChronicleSidecarControlState()??$9,toggleChronicleSidecar:async()=>{let e=ue.appServerConnectionRegistry.getMaybeConnection(B);return e==null?$9:e.getChronicleSidecarControlState().running?e.pauseChronicleSidecar():e.resumeChronicleSidecar()}};",
+    'var bridge={"get-global-state":async({key:e})=>null};',
+  ].join("");
+  const patched = applyRecordReplayMainBridgePatch(source);
+
+  assert.notEqual(patched, source);
+  assert.equal(applyRecordReplayMainBridgePatch(patched), patched);
+  assert.match(patched, /getChronicleSidecarControlState:\(\)=>process\.platform===`linux`\?codexLinuxChronicleSidecarControlState\(\)/);
+  assert.match(patched, /toggleChronicleSidecar:async\(\)=>\{if\(process\.platform===`linux`\)return codexLinuxChronicleToggleSidecar\(\)/);
+  assert.match(patched, /e\.pauseChronicleSidecar\(\):e\.resumeChronicleSidecar\(\)/);
+});
+
+test("record-and-replay bridge patch upgrades old patched bundles with active speech endpoint", () => {
+  const oldPatched =
+    'var bridge={"linux-record-replay-doctor":async()=>null,"linux-record-replay-speech-context":async()=>null,"linux-record-replay-browser-trace":async()=>null,"get-global-state":async({key:e})=>null};';
+  const patched = applyRecordReplayMainBridgePatch(oldPatched);
+
+  assert.notEqual(patched, oldPatched);
+  assert.equal(applyRecordReplayMainBridgePatch(patched), patched);
+  assert.match(patched, /"linux-record-replay-speech-context-active":async/);
+  assert.match(
+    patched,
+    /"linux-record-replay-speech-context":async\(\)=>null,"linux-record-replay-speech-context-active":async/,
+  );
+  assert.match(patched, /"linux-record-replay-browser-trace":async\(\)=>null/);
+  assert.doesNotMatch(patched, /"chronicle-permissions":async/);
+});
+
+test("record-and-replay docs mention pause resume and Chronicle-compatible resources", () => {
+  const readme = fs.readFileSync(path.join(__dirname, "README.md"), "utf8");
+  assert.match(readme, /linux-record-replay-skysight-pause/);
+  assert.match(readme, /linux-record-replay-skysight-resume/);
+  assert.match(readme, /Chronicle-compatible resources/);
+  assert.match(readme, /memories_extensions\/chronicle\/resources/);
+
+  const skill = fs.readFileSync(path.join(__dirname, "plugin-template/skills/record-and-replay/SKILL.md"), "utf8");
+  assert.match(skill, /pause/);
+  assert.match(skill, /resume/);
+  assert.match(skill, /Chronicle-compatible resources/);
 });
 
 test("record-and-replay bridge temp trace files are private", () => {
@@ -181,21 +311,205 @@ test("record-and-replay bridge temp trace files are private", () => {
 });
 
 test("record-and-replay HUD patch is idempotent and appends runtime UI", () => {
-  const source = "console.log('webview');";
+  const source = "console.log('webview');\n//# sourceMappingURL=index.js.map";
   const patched = applyRecordReplayHudPatch(source);
   assert.notEqual(patched, source);
   assert.equal(applyRecordReplayHudPatch(patched), patched);
+  assert.match(patched, /sourceMappingURL=index\.js\.map\n;\(\(\)=>/);
   assert.match(patched, /codexLinuxRecordReplayHudVersion/);
   assert.match(patched, /codex-linux-record-replay-hud/);
   assert.match(patched, /linux-record-replay-status/);
   assert.match(patched, /linux-record-replay-stop-active/);
   assert.match(patched, /linux-record-replay-cancel-active/);
+  assert.match(patched, /codexLinuxRecordReplayCaptureTranscript/);
+  assert.match(patched, /codexLinuxRecordReplayPendingTranscripts/);
+  assert.match(patched, /drainBootstrapTranscriptQueue/);
+  assert.match(patched, /flushPendingTranscripts/);
+  assert.match(patched, /linux-record-replay-speech-context/);
+  assert.match(patched, /codex-dictation-/);
+  assert.match(patched, /linux-record-replay-desktop-snapshot/);
+  assert.match(patched, /record-replay-hud/);
+  assert.match(patched, /captureDesktopSnapshot/);
   assert.match(patched, /I'm done recording\./);
   assert.match(patched, /submitDoneMessage/);
   assert.match(patched, /finishRecording/);
   assert.match(patched, /discardRecording/);
   assert.match(patched, /Discard this Record & Replay recording/);
-  assert.match(patched, /let stopped=await stopActive\(\),submitted=false/);
+  assert.doesNotMatch(patched, /codexLinuxRecordReplayVoiceControls/);
+  assert.doesNotMatch(patched, /startDictation/);
+  assert.doesNotMatch(patched, /stopDictation/);
+  assert.doesNotMatch(patched, /finalizeVoiceCapture/);
+});
+
+test("record-and-replay mirrors finalized dictation transcripts into active bundle", () => {
+  const source =
+    "function send(e,n){let i=`Create an image of a neon cabin`;i.length>0&&(j.getInstance().dispatchMessage(`global-dictation-record-history-item`,{text:i}),e===`send`?n.onTranscriptSend(i):n.onTranscriptInsert(i))}";
+  const patched = applyRecordReplayDictationTranscriptPatch(source);
+
+  assert.notEqual(patched, source);
+  assert.equal(applyRecordReplayDictationTranscriptPatch(patched), patched);
+  assert.match(patched, /codexLinuxRecordReplayCaptureTranscript\?\.\(i,e\)/);
+  assert.match(patched, /codexLinuxRecordReplayPendingTranscripts\?\?=\[\]/);
+  assert.match(patched, /global-dictation-record-history-item/);
+  assert.match(patched, /e===`send`\?n\.onTranscriptSend\(i\):n\.onTranscriptInsert\(i\)/);
+});
+
+test("record-and-replay mirrors global dictation completions into active bundle", () => {
+  const source =
+    "async function L(e,t,n=null){let r=await f({transcript:n==null?await y(e.audio):await R(n,e.audio),cleanupEnabled:t});U===e&&(U=null),a.dispatchMessage(`global-dictation-completed`,{sessionId:e.sessionId,text:r})}";
+  const patched = applyRecordReplayGlobalDictationTranscriptPatch(source);
+
+  assert.notEqual(patched, source);
+  assert.equal(applyRecordReplayGlobalDictationTranscriptPatch(patched), patched);
+  assert.match(patched, /codex-linux-record-replay-global-dictation/);
+  assert.match(patched, /linux-record-replay-speech-context-active/);
+  assert.match(patched, /source:"codex-global-dictation"/);
+  assert.match(patched, /a\.dispatchMessage\(`global-dictation-completed`,\{sessionId:e\.sessionId,text:r\}\)/);
+});
+
+test("record-and-replay generated transcript runtimes are syntactically valid", () => {
+  const source =
+    "function send(e,n){let i=`Create an image of a neon cabin`;i.length>0&&(j.getInstance().dispatchMessage(`global-dictation-record-history-item`,{text:i}),e===`send`?n.onTranscriptSend(i):n.onTranscriptInsert(i))}";
+  const globalDictationSource =
+    "async function L(e,t,n=null){let r=await f({transcript:n==null?await y(e.audio):await R(n,e.audio),cleanupEnabled:t});U===e&&(U=null),a.dispatchMessage(`global-dictation-completed`,{sessionId:e.sessionId,text:r})}";
+
+  assert.doesNotThrow(() => new vm.Script(recordReplayHudRuntimeSource()));
+  assert.doesNotThrow(() => new vm.Script(applyRecordReplayDictationTranscriptPatch(source)));
+  assert.doesNotThrow(() => new vm.Script(applyRecordReplayGlobalDictationTranscriptPatch(globalDictationSource)));
+});
+
+test("record-and-replay HUD drains queued dictation transcripts into active bundle", async () => {
+  const posted = [];
+  const listeners = {};
+  const makeElement = () => ({
+    className: "",
+    dataset: {},
+    disabled: false,
+    innerHTML: "",
+    style: {},
+    textContent: "",
+    title: "",
+    addEventListener() {},
+    appendChild() {},
+    closest() {
+      return null;
+    },
+    contains() {
+      return true;
+    },
+    focus() {},
+    getBoundingClientRect() {
+      return { height: 0, top: 0, width: 0 };
+    },
+    querySelector() {
+      return makeElement();
+    },
+    querySelectorAll() {
+      return [];
+    },
+    setAttribute() {},
+  });
+  const documentElement = makeElement();
+  const context = {
+    codexLinuxRecordReplayPendingTranscripts: [
+      { action: "send", queuedAt: Date.now(), transcript: "Create an image of a neon cabin" },
+    ],
+    clearTimeout,
+    CustomEvent: class {
+      constructor(type, init = {}) {
+        this.type = type;
+        this.detail = init.detail;
+      }
+    },
+    Date,
+    document: {
+      body: documentElement,
+      createElement: makeElement,
+      documentElement,
+      getElementById() {
+        return null;
+      },
+      head: documentElement,
+      querySelectorAll() {
+        return [];
+      },
+      readyState: "complete",
+    },
+    Error,
+    Event: class {},
+    HTMLInputElement: class {},
+    HTMLTextAreaElement: class {},
+    InputEvent: class {},
+    KeyboardEvent: class {},
+    Math,
+    MutationObserver: class {
+      observe() {}
+    },
+    Promise,
+    setInterval() {
+      return 1;
+    },
+    setTimeout,
+    String,
+  };
+  context.document.contains = () => true;
+  context.window = {
+    addEventListener(type, handler) {
+      listeners[type] = handler;
+    },
+    dispatchEvent() {},
+    electronBridge: {
+      sendMessageFromView(payload) {
+        const method = payload.url.split("/").pop();
+        const body = JSON.parse(payload.body ?? "{}");
+        posted.push({ body, method });
+        const response =
+          method === "linux-record-replay-status"
+            ? { json: { session_dir: "/tmp/recording", started_at: new Date().toISOString(), state: "active" } }
+            : { json: { ok: true }, ok: true };
+        setTimeout(() => {
+          listeners.message?.({
+            data: {
+              bodyJsonString: JSON.stringify(response),
+              requestId: payload.requestId,
+              responseType: "success",
+              type: "fetch-response",
+            },
+          });
+        }, 0);
+        return Promise.resolve();
+      },
+    },
+    innerHeight: 800,
+    innerWidth: 1200,
+  };
+
+  vm.runInNewContext(recordReplayHudRuntimeSource(), context);
+  await new Promise((resolve) => setTimeout(resolve, 25));
+
+  assert.ok(
+    posted.some(
+      (request) =>
+        request.method === "linux-record-replay-speech-context" &&
+        request.body.transcript === "Create an image of a neon cabin" &&
+        request.body.source === "codex-dictation-send",
+    ),
+  );
+});
+
+test("record-and-replay transcript hook composes after conversation mode transcript gate", () => {
+  const source =
+    "function send(e,n){let i=`Create an image of a neon cabin`;i.length>0&&e!==`discard`&&globalThis.codexLinuxConversationShouldSendTranscript?.(i,e)!==!1&&(j.getInstance().dispatchMessage(`global-dictation-record-history-item`,{text:i}),e===`send`?n.onTranscriptSend(i):n.onTranscriptInsert(i))}";
+  const patched = applyRecordReplayDictationTranscriptPatch(source);
+
+  assert.notEqual(patched, source);
+  assert.equal(applyRecordReplayDictationTranscriptPatch(patched), patched);
+  assert.match(
+    patched,
+    /codexLinuxConversationShouldSendTranscript\?\.\(i,e\)!==!1&&\(\(globalThis\.codexLinuxRecordReplayCaptureTranscript\?\.\(i,e\)\?\?/,
+  );
+  assert.match(patched, /codexLinuxRecordReplayPendingTranscripts\?\?=\[\]/);
+  assert.match(patched, /global-dictation-record-history-item/);
 });
 
 test("record-and-replay plugin gate is idempotent and linux-only", () => {

@@ -1437,6 +1437,50 @@ EOF
     [ "$(cat "$differing/Codex.dmg")" = "new" ] || fail "Expected differing metadata to refresh cache"
     assert_contains "$differing/curl.log" "GET"
 
+    local differing_pinned="$workspace/differing-pinned"
+    mkdir -p "$differing_pinned"
+    printf '%s' "old" >"$differing_pinned/Codex.dmg"
+    cat >"$differing_pinned/Codex.dmg.metadata" <<EOF
+url_sha256=$url_sha256
+etag=old-etag
+last_modified=Thu, 04 Jun 2026 00:00:00 GMT
+content_length=3
+EOF
+    run_dmg_cache_case "$differing_pinned" "$differing_pinned/output.log" \
+        CODEX_DMG_REFRESH_MODE=pinned \
+        TEST_ETAG=fresh-etag \
+        TEST_LAST_MODIFIED="Thu, 04 Jun 2026 00:00:00 GMT" \
+        TEST_CONTENT_LENGTH=3 \
+        TEST_DOWNLOAD_CONTENT=new
+    [ "$(cat "$differing_pinned/Codex.dmg")" = "old" ] || fail "Expected pinned stale cache to keep old DMG"
+    assert_not_contains "$differing_pinned/curl.log" "HEAD"
+    assert_not_contains "$differing_pinned/curl.log" "GET"
+    assert_contains "$differing_pinned/output.log" "CODEX_DMG_REFRESH_MODE=pinned"
+
+    local no_metadata_pinned="$workspace/no-metadata-pinned"
+    mkdir -p "$no_metadata_pinned"
+    printf '%s' "old" >"$no_metadata_pinned/Codex.dmg"
+    run_dmg_cache_case "$no_metadata_pinned" "$no_metadata_pinned/output.log" \
+        CODEX_DMG_REFRESH_MODE=pinned \
+        TEST_ETAG=fresh-etag \
+        TEST_LAST_MODIFIED="Thu, 04 Jun 2026 00:00:00 GMT" \
+        TEST_CONTENT_LENGTH=3 \
+        TEST_DOWNLOAD_CONTENT=new
+    [ "$(cat "$no_metadata_pinned/Codex.dmg")" = "old" ] || fail "Expected pinned missing metadata cache to keep old DMG"
+    assert_not_contains "$no_metadata_pinned/curl.log" "HEAD"
+    assert_not_contains "$no_metadata_pinned/curl.log" "GET"
+
+    local missing_pinned="$workspace/missing-pinned"
+    mkdir -p "$missing_pinned"
+    if run_dmg_cache_case "$missing_pinned" "$missing_pinned/output.log" \
+        CODEX_DMG_REFRESH_MODE=pinned
+    then
+        fail "Expected pinned mode without cached DMG to fail"
+    fi
+    assert_not_contains "$missing_pinned/curl.log" "HEAD"
+    assert_not_contains "$missing_pinned/curl.log" "GET"
+    assert_contains "$missing_pinned/output.log" "requires an existing cached DMG"
+
     local failed_get="$workspace/failed-get"
     mkdir -p "$failed_get"
     printf '%s' "old" >"$failed_get/Codex.dmg"
@@ -1676,6 +1720,34 @@ SCRIPT
 
     assert_file_not_exists "$source_dir/Codex.dmg"
     assert_file_not_exists "$source_dir/Codex.dmg.metadata"
+}
+
+test_fresh_pinned_dmg_preserves_cached_dmg_metadata() {
+    info "Checking --fresh preserves cached DMG metadata in pinned refresh mode"
+    local workspace="$TMP_DIR/fresh-pinned-dmg-metadata"
+    local source_dir="$workspace/source"
+
+    mkdir -p "$source_dir"
+    printf '%s' "cached" >"$source_dir/Codex.dmg"
+    printf '%s' "metadata" >"$source_dir/Codex.dmg.metadata"
+
+    TEST_SOURCE_DIR="$source_dir" REPO_DIR="$REPO_DIR" bash <<'SCRIPT'
+set -Eeuo pipefail
+
+SCRIPT_DIR="$TEST_SOURCE_DIR"
+WORK_DIR="$(mktemp -d)"
+INSTALL_DIR="$TEST_SOURCE_DIR/codex-app"
+CODEX_DMG_REFRESH_MODE=pinned
+# shellcheck disable=SC1091
+source "$REPO_DIR/scripts/lib/install-helpers.sh"
+
+FRESH_INSTALL=1
+REUSE_CACHED_DMG=0
+prepare_install
+SCRIPT
+
+    assert_file_exists "$source_dir/Codex.dmg"
+    assert_file_exists "$source_dir/Codex.dmg.metadata"
 }
 
 test_fresh_reuse_dmg_uses_cache_when_metadata_matches() {
@@ -5674,17 +5746,19 @@ test_linux_computer_use_gate_patch_smoke() {
     bundle_body="$(cat <<'JS'
 let n={app:{whenReady(){},quit(){},requestSingleInstanceLock(){},on(){},off(){}}};
 let Qt=`openai-bundled`,$t=`browser-use`,en=`chrome-internal`,tn=`computer-use`,nn=`latex-tectonic`;
-var $n=[{forceReload:!0,installWhenMissing:!0,name:$t,isEnabled:({features:e})=>e.browserAgentAvailable,migrate:cn},{name:en,isEnabled:({buildFlavor:e})=>rn(e)},{name:tn,isEnabled:({features:e,platform:t})=>t===`darwin`&&e.computerUse,migrate:wn},{name:nn,isEnabled:()=>!0}];
+function cl(e){if(!(e.platform!==`darwin`||!e.marketplacePluginNames.includes(`computer-use`)))return e.desktopFeatureAvailability.computerUseNodeRepl?`node-repl`:`legacy-mcp`}
+var $n=[{forceReload:!0,installWhenMissing:!0,name:$t,isEnabled:({features:e})=>e.browserAgentAvailable,migrate:cn},{name:en,isEnabled:({buildFlavor:e})=>rn(e)},{name:tn,isEnabled:cl,migrate:wn},{name:nn,isEnabled:()=>!0}];
 JS
 )"
     make_fake_extracted_asar "$extracted" "$bundle_body"
 
     node "$REPO_DIR/scripts/patch-linux-window-ui.js" "$extracted" >"$output_log" 2>&1
-    assert_contains "$extracted/.vite/build/main-test.js" '(t===`darwin`||t===`linux`)&&e.computerUse'
-    assert_not_contains "$extracted/.vite/build/main-test.js" 't===`darwin`&&e.computerUse'
+    assert_contains "$extracted/.vite/build/main-test.js" 'if(!((e.platform!==`darwin`&&e.platform!==`linux`)||!e.marketplacePluginNames.includes(`computer-use`))'
+    assert_contains "$extracted/.vite/build/main-test.js" 'return e.platform===`darwin`&&e.desktopFeatureAvailability.computerUseNodeRepl?`node-repl`:`legacy-mcp`'
+    assert_not_contains "$extracted/.vite/build/main-test.js" 'if(!(e.platform!==`darwin`||!e.marketplacePluginNames.includes(`computer-use`)))return e.desktopFeatureAvailability.computerUseNodeRepl?`node-repl`:`legacy-mcp`'
 
     node "$REPO_DIR/scripts/patch-linux-window-ui.js" "$extracted" >"$output_log" 2>&1
-    assert_occurrence_count "$extracted/.vite/build/main-test.js" '(t===`darwin`||t===`linux`)&&e.computerUse' '1'
+    assert_occurrence_count "$extracted/.vite/build/main-test.js" 'return e.platform===`darwin`&&e.desktopFeatureAvailability.computerUseNodeRepl?`node-repl`:`legacy-mcp`' '1'
 }
 
 test_linux_computer_use_ui_opt_in_smoke() {
@@ -5710,7 +5784,8 @@ test_linux_computer_use_ui_opt_in_smoke() {
 let n={app:{whenReady(){},quit(){},requestSingleInstanceLock(){},on(){},off(){}}};
 let cp=require(`node:child_process`),fs=require(`node:fs`),p=require(`node:path`),os=require(`node:os`);
 let Qt=`openai-bundled`,$t=`browser-use`,en=`chrome-internal`,tn=`computer-use`,nn=`latex-tectonic`;
-var $n=[{name:tn,isEnabled:({features:e,platform:t})=>t===`darwin`&&e.computerUse,migrate:wn}];
+function cl(e){if(!(e.platform!==`darwin`||!e.marketplacePluginNames.includes(`computer-use`)))return e.desktopFeatureAvailability.computerUseNodeRepl?`node-repl`:`legacy-mcp`}
+var $n=[{name:tn,isEnabled:cl,migrate:wn}];
 function me(e,{env:t=process.env,platform:n=process.platform}={}){return n!==`win32`||t.CODEX_ELECTRON_ENABLE_WINDOWS_COMPUTER_USE!==`1`?e:{...e,computerUse:!0,computerUseNodeRepl:!0}}
 var h={handlers:{"native-desktop-apps":async()=>({apps:[]})}};
 JS
@@ -5747,7 +5822,9 @@ JS
         env -u CODEX_LINUX_ENABLE_COMPUTER_USE_UI -u CODEX_LINUX_APP_ID -u CODEX_APP_ID -u CODEX_LINUX_SETTINGS_FILE \
         HOME="$fake_home" XDG_CONFIG_HOME="$fake_home/.config" \
         node "$REPO_DIR/scripts/patch-linux-window-ui.js" "$extracted" >"$output_log" 2>&1
-    assert_contains "$main_bundle" '(t===`darwin`||t===`linux`)&&e.computerUse'
+    assert_contains "$main_bundle" 'if(!((e.platform!==`darwin`&&e.platform!==`linux`)||!e.marketplacePluginNames.includes(`computer-use`))'
+    assert_contains "$main_bundle" 'return e.platform===`darwin`&&e.desktopFeatureAvailability.computerUseNodeRepl?`node-repl`:`legacy-mcp`'
+    assert_not_contains "$main_bundle" 'if(!(e.platform!==`darwin`||!e.marketplacePluginNames.includes(`computer-use`)))return e.desktopFeatureAvailability.computerUseNodeRepl?`node-repl`:`legacy-mcp`'
     assert_not_contains "$main_bundle" 'return n===`linux`?{...e,computerUse:!0,computerUseNodeRepl:!0}'
     assert_not_contains "$main_bundle" 'codexLinuxNativeDesktopApps'
     assert_not_contains "$renderer_asset" 'function hae(e){return e===`macOS`||e===`windows`||e===`linux`}'
@@ -5766,7 +5843,8 @@ JS
     env -u CODEX_LINUX_APP_ID -u CODEX_APP_ID -u CODEX_LINUX_SETTINGS_FILE \
         CODEX_LINUX_ENABLE_COMPUTER_USE_UI=1 HOME="$fake_home" XDG_CONFIG_HOME="$fake_home/.config" \
         node "$REPO_DIR/scripts/patch-linux-window-ui.js" "$extracted" >"$output_log" 2>&1
-    assert_contains "$main_bundle" '(t===`darwin`||t===`linux`)&&e.computerUse'
+    assert_contains "$main_bundle" 'if(!((e.platform!==`darwin`&&e.platform!==`linux`)||!e.marketplacePluginNames.includes(`computer-use`))'
+    assert_contains "$main_bundle" 'return e.platform===`darwin`&&e.desktopFeatureAvailability.computerUseNodeRepl?`node-repl`:`legacy-mcp`'
     assert_contains "$main_bundle" 'return n===`linux`?{...e,computerUse:!0,computerUseNodeRepl:!0}'
     assert_contains "$main_bundle" 'codexLinuxNativeDesktopApps'
     assert_contains "$main_bundle" '"computer-use-native-desktop-app-icon":async(e)=>process.platform===`linux`?codexLinuxNativeDesktopAppIcon(e):{iconSmall:``}'
@@ -6646,6 +6724,7 @@ main() {
     test_installer_refreshes_stale_cached_dmg_metadata
     test_extract_dmg_repairs_safe_7z_link_warnings
     test_fresh_install_removes_cached_dmg_metadata
+    test_fresh_pinned_dmg_preserves_cached_dmg_metadata
     test_fresh_reuse_dmg_uses_cache_when_metadata_matches
     test_rebuild_candidate_uses_validated_default_dmg
     test_native_shortcut_targets_compose_existing_flows

@@ -22,6 +22,11 @@ const WINDOW_CONTROL_XML = `
       <arg name="ok" type="b" direction="out"/>
       <arg name="message" type="s" direction="out"/>
     </method>
+    <method name="CaptureScreenshot">
+      <arg name="filename" type="s" direction="in"/>
+      <arg name="ok" type="b" direction="out"/>
+      <arg name="message" type="s" direction="out"/>
+    </method>
   </interface>
 </node>
 `;
@@ -89,6 +94,58 @@ class WindowControlDBus extends GObject.Object {
         }
     }
 
+    CaptureScreenshotAsync([filename], invocation) {
+        const path = String(filename ?? '').trim();
+        if (!this._isAllowedScreenshotPath(path)) {
+            invocation.return_value(new GLib.Variant('(bs)', [
+                false,
+                'Screenshot path must be an absolute Codex temp PNG path',
+            ]));
+            return;
+        }
+
+        let stream = null;
+        try {
+            const file = Gio.File.new_for_path(path);
+            stream = file.replace(null, false, Gio.FileCreateFlags.REPLACE_DESTINATION, null);
+            const screenshot = new Shell.Screenshot();
+            screenshot.screenshot(false, stream, (_object, result) => {
+                let ok = false;
+                let message = path;
+                try {
+                    const finishResult = screenshot.screenshot_finish(result);
+                    ok = Array.isArray(finishResult)
+                        ? Boolean(finishResult[0])
+                        : Boolean(finishResult);
+                    if (!ok)
+                        message = 'GNOME Shell screenshot returned false';
+                } catch (error) {
+                    message = `GNOME Shell screenshot failed: ${error.message}`;
+                } finally {
+                    try {
+                        stream.close(null);
+                    } catch (error) {
+                        if (ok) {
+                            ok = false;
+                            message = `Failed to close screenshot stream: ${error.message}`;
+                        }
+                    }
+                }
+                invocation.return_value(new GLib.Variant('(bs)', [ok, message]));
+            });
+        } catch (error) {
+            try {
+                stream?.close(null);
+            } catch (_) {
+                // Best effort cleanup after the original failure.
+            }
+            invocation.return_value(new GLib.Variant('(bs)', [
+                false,
+                `Failed to start GNOME Shell screenshot: ${error.message}`,
+            ]));
+        }
+    }
+
     _returnJson(invocation, value) {
         invocation.return_value(new GLib.Variant('(s)', [
             JSON.stringify(value),
@@ -134,6 +191,19 @@ class WindowControlDBus extends GObject.Object {
             client_type: clientTypeName(window.get_client_type?.()),
             backend: BACKEND,
         };
+    }
+
+    _isAllowedScreenshotPath(path) {
+        if (!path.endsWith('.png'))
+            return false;
+
+        const canonicalPath = GLib.canonicalize_filename(path, null);
+        const tmpDir = GLib.canonicalize_filename(GLib.get_tmp_dir(), null);
+        if (GLib.path_get_dirname(canonicalPath) !== tmpDir)
+            return false;
+
+        const basename = GLib.path_get_basename(canonicalPath);
+        return basename.startsWith('computer-use-linux-gnome-extension-');
     }
 });
 

@@ -80,6 +80,11 @@ explicit `DMG=/path/to/Codex.dmg` uses that file exactly.
 Native install shortcuts use `--fresh --reuse-dmg`, so they clean the generated
 app directory while still reusing the cached DMG when upstream metadata matches.
 
+For deterministic test rounds, set `CODEX_DMG_REFRESH_MODE=pinned`. Pinned mode
+reuses the existing cached `Codex.dmg` verbatim, skips upstream metadata checks,
+and fails instead of downloading when no cached DMG or explicit `DMG=...` path is
+available. This also keeps `--fresh` from deleting the cached DMG.
+
 Run the generated app:
 
 ```bash

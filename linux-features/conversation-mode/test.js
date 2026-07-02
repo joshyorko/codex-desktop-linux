@@ -122,6 +122,14 @@ const conversationGlobals = [
   "codexLinuxConversationVersion",
 ];
 
+test("dictation endpoint descriptor tracks moved upstream composer bundle", () => {
+  const descriptor = featurePatches.find((patch) => patch.id === "dictation-endpoint");
+  assert.ok(descriptor);
+  assert.equal(descriptor.pattern.test("app-initial~app-main~onboarding-page-BUwCKIcU.js"), true);
+  assert.equal(descriptor.pattern.test("use-dictation-BUwCKIcU.js"), true);
+  assert.equal(descriptor.pattern.test("use-dictation-hotkey-BUwCKIcU.js"), false);
+});
+
 function fetchBodies(events) {
   return events.map((event) => JSON.parse(event.body));
 }

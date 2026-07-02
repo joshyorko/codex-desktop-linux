@@ -5165,6 +5165,43 @@ test("adds installWhenMissing to an already Linux-enabled Computer Use gate", ()
   assert.equal((patched.match(/installWhenMissing:!0,name:tn/g) || []).length, 1);
 });
 
+test("patches marketplace selector Computer Use gate to keep Linux legacy MCP", () => {
+  const source = [
+    "function dl(e){if(!(e.platform!==`darwin`||!e.marketplacePluginNames.includes(`computer-use`)))return e.desktopFeatureAvailability.computerUseNodeRepl?`node-repl`:`legacy-mcp`}",
+  ].join("");
+
+  const patched = applyPatchTwice(applyLinuxComputerUsePluginGatePatch, source);
+
+  assert.match(
+    patched,
+    /if\(!\(\(\s*e.platform!==`darwin`&&e.platform!==`linux`\)\|\|!e.marketplacePluginNames.includes\(`computer-use`\)\)\)return e.platform===`darwin`&&e.desktopFeatureAvailability.computerUseNodeRepl\?`node-repl`:`legacy-mcp`/,
+  );
+  assert.doesNotMatch(
+    patched,
+    /if\(!\(e.platform!==`darwin`\|\|!e.marketplacePluginNames.includes\(`computer-use`\)\)\)return e.desktopFeatureAvailability.computerUseNodeRepl\?`node-repl`:`legacy-mcp`/,
+  );
+});
+
+test("patches marketplace selector and plugin gate in one pass", () => {
+  const source = [
+    "var tn=`computer-use`;",
+    "function dl(e){if(!(e.platform!==`darwin`||!e.marketplacePluginNames.includes(`computer-use`)))return e.desktopFeatureAvailability.computerUseNodeRepl?`node-repl`:`legacy-mcp`}",
+    "var $n=[{name:tn,isEnabled:({features:n,platform:r})=>r===`darwin`&&n.computerUse,migrate:wn}];",
+  ].join("");
+
+  const patched = applyPatchTwice(applyLinuxComputerUsePluginGatePatch, source);
+
+  assert.match(
+    patched,
+    /if\(!\(\(\s*e.platform!==`darwin`&&e.platform!==`linux`\)\|\|!e.marketplacePluginNames.includes\(`computer-use`\)\)\)return e.platform===`darwin`&&e.desktopFeatureAvailability.computerUseNodeRepl\?`node-repl`:`legacy-mcp`/,
+  );
+  assert.match(
+    patched,
+    /installWhenMissing:!0,name:tn,isEnabled:\(\{features:n,platform:r\}\)=>\(r===`darwin`\|\|r===`linux`\)&&n\.computerUse,migrate:wn/,
+  );
+  assert.doesNotMatch(patched, /r===`darwin`&&n\.computerUse/);
+});
+
 test("keeps scanning Computer Use gates after an already patched match", () => {
   const source = [
     "var tn=`computer-use`;",

@@ -1,11 +1,16 @@
+pub mod audio;
 pub mod backends;
+mod browser_observation;
 pub mod draft_prompt;
+pub mod event_stream;
 pub mod manifest;
 pub mod mcp;
+mod process_reaper;
 pub mod recorder;
 pub mod runtime_status;
 mod secure_fs;
 pub mod skill;
+pub mod skysight;
 pub mod timeline;
 
 use anyhow::Result;
@@ -13,6 +18,7 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use serde_json::Value;
 use std::path::PathBuf;
 
+pub use audio::{available_audio_recorders, AudioCaptureReport};
 pub use backends::{
     available_recorders, recording_backend_catalog, recording_backend_catalog_from_signals,
     recording_backend_observation, recording_backend_observation_from_signals, RecordingBackend,
@@ -27,8 +33,8 @@ pub use manifest::{
     RecordingBundleManifest,
 };
 pub use recorder::{
-    cancel_session, expire_session, mark_session, record_browser_trace, record_speech_context,
-    start_session, stop_session, RecordStartOptions,
+    cancel_session, expire_session, mark_session, record_browser_trace, record_desktop_snapshot,
+    record_speech_context, start_session, stop_session, RecordStartOptions,
 };
 pub use runtime_status::{
     read_runtime_status, refresh_runtime_status, status_path, update_active_status,
@@ -38,6 +44,12 @@ pub use runtime_status::{
 pub use skill::{
     import_skill, inspect_skill, ImportMode, ImportTarget, SkillCapability, SkillImportOptions,
     SkillImportReport, SkillInspection, SkillStatus,
+};
+pub use skysight::{
+    capture_skysight_snapshot, list_skysight_exclusions, pause_skysight, resume_skysight,
+    run_skysight_daemon, skysight_status, start_skysight, stop_skysight, update_skysight_exclusion,
+    SkysightExclusion, SkysightExclusionUpdate, SkysightPaths, SkysightStartOptions,
+    SkysightStatus,
 };
 pub use timeline::{
     append_timeline_record, parse_timeline_line, read_timeline, TimelineEvent, TimelineParseError,
@@ -81,12 +93,41 @@ pub enum Commands {
         #[command(subcommand)]
         command: SkillCommand,
     },
+    /// Manage Linux Skysight recent-activity memory.
+    Skysight {
+        #[command(subcommand)]
+        command: SkysightCommand,
+    },
 }
 
 #[derive(Debug, Subcommand)]
 pub enum EventStreamCommand {
     /// Run the Record & Replay event-stream MCP server.
     Mcp,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum SkysightCommand {
+    /// Run the Skysight MCP tools on the event-stream server.
+    Mcp,
+    /// Start the Linux Skysight background daemon.
+    Start(SkysightStartArgs),
+    /// Print current Linux Skysight status and resource paths.
+    Status,
+    /// Stop the Linux Skysight background daemon.
+    Stop,
+    /// Pause the Linux Skysight background daemon without deleting memory resources.
+    Pause(SkysightPauseArgs),
+    /// Resume the Linux Skysight background daemon after a pause.
+    Resume,
+    /// Capture one Skysight snapshot without starting a daemon.
+    Snapshot(SkysightSnapshotArgs),
+    /// Run the foreground Skysight daemon loop.
+    Daemon(SkysightStartArgs),
+    /// Add, update, or remove an app/domain exclusion.
+    UpdateExclusion(SkysightExclusionArgs),
+    /// List app/domain exclusions.
+    ListExclusions,
 }
 
 #[derive(Debug, Subcommand)]
@@ -99,6 +140,8 @@ pub enum RecordCommand {
     Speech(RecordSpeechArgs),
     /// Add a browser/CDP-style trace artifact to the recording timeline.
     BrowserTrace(RecordBrowserTraceArgs),
+    /// Capture focused desktop window metadata as semantic workflow evidence.
+    DesktopSnapshot(RecordDesktopSnapshotArgs),
     /// Stop a recording session and append the stop marker.
     Stop(SessionDirArgs),
     /// Cancel a recording session and mark whether the bundle was discarded.
@@ -119,6 +162,38 @@ pub struct RecordStartArgs {
     pub no_screenshot: bool,
     #[arg(long)]
     pub no_accessibility: bool,
+    #[arg(long)]
+    pub no_audio: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct SkysightStartArgs {
+    #[arg(long, default_value_t = 60)]
+    pub interval_seconds: u64,
+}
+
+#[derive(Debug, Args)]
+pub struct SkysightSnapshotArgs {
+    #[arg(long)]
+    pub source: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct SkysightPauseArgs {
+    #[arg(long)]
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct SkysightExclusionArgs {
+    #[arg(long)]
+    pub kind: String,
+    #[arg(long)]
+    pub value: String,
+    #[arg(long)]
+    pub reason: Option<String>,
+    #[arg(long)]
+    pub remove: bool,
 }
 
 #[derive(Debug, Args)]
@@ -151,6 +226,14 @@ pub struct RecordBrowserTraceArgs {
     pub url: Option<String>,
     #[arg(long)]
     pub title: Option<String>,
+    #[arg(long)]
+    pub source: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct RecordDesktopSnapshotArgs {
+    #[arg(long)]
+    pub session_dir: PathBuf,
     #[arg(long)]
     pub source: Option<String>,
 }
@@ -259,6 +342,56 @@ pub async fn command_json(command: Commands) -> Result<Value> {
                 "message": "Run `SkyLinuxComputerUseClient event-stream mcp` from the bundled plugin to start the stdio MCP server.",
             })),
         },
+        Commands::Skysight { command } => {
+            let paths = SkysightPaths::from_env();
+            match command {
+                SkysightCommand::Mcp => Ok(serde_json::json!({
+                    "ok": false,
+                    "command": "skysight mcp",
+                    "message": "Run `SkyLinuxComputerUseClient skysight mcp` to expose Skysight tools on the stdio MCP server.",
+                })),
+                SkysightCommand::Start(args) => Ok(serde_json::to_value(start_skysight(
+                    &paths,
+                    SkysightStartOptions {
+                        interval_seconds: args.interval_seconds,
+                    },
+                )?)?),
+                SkysightCommand::Status => Ok(serde_json::to_value(skysight_status(&paths)?)?),
+                SkysightCommand::Stop => Ok(serde_json::to_value(stop_skysight(&paths)?)?),
+                SkysightCommand::Pause(args) => {
+                    Ok(serde_json::to_value(pause_skysight(&paths, args.reason)?)?)
+                }
+                SkysightCommand::Resume => Ok(serde_json::to_value(resume_skysight(&paths)?)?),
+                SkysightCommand::Snapshot(args) => Ok(serde_json::to_value(
+                    capture_skysight_snapshot(&paths, args.source.as_deref())?,
+                )?),
+                SkysightCommand::Daemon(args) => {
+                    run_skysight_daemon(&paths, args.interval_seconds)?;
+                    Ok(serde_json::to_value(skysight_status(&paths)?)?)
+                }
+                SkysightCommand::UpdateExclusion(args) => {
+                    let exclusions = update_skysight_exclusion(
+                        &paths,
+                        SkysightExclusionUpdate {
+                            kind: args.kind,
+                            value: args.value,
+                            reason: args.reason,
+                            remove: args.remove,
+                        },
+                    )?;
+                    Ok(serde_json::json!({
+                        "ok": true,
+                        "command": "skysight.update-exclusion",
+                        "exclusions": exclusions,
+                    }))
+                }
+                SkysightCommand::ListExclusions => Ok(serde_json::json!({
+                    "ok": true,
+                    "command": "skysight.list-exclusions",
+                    "exclusions": list_skysight_exclusions(&paths)?,
+                })),
+            }
+        }
         Commands::Doctor => {
             codex_computer_use_linux::diagnostics::hydrate_session_bus_env();
             let diagnostics = codex_computer_use_linux::diagnostics::doctor_report();
@@ -282,6 +415,7 @@ pub async fn command_json(command: Commands) -> Result<Value> {
                     goal: args.goal,
                     include_screenshot: !args.no_screenshot,
                     include_accessibility: !args.no_accessibility,
+                    include_audio: !args.no_audio,
                 })
                 .await?;
                 Ok(serde_json::to_value(report)?)
@@ -317,6 +451,14 @@ pub async fn command_json(command: Commands) -> Result<Value> {
                     "record": record,
                 }))
             }
+            RecordCommand::DesktopSnapshot(args) => {
+                let record = record_desktop_snapshot(&args.session_dir, args.source).await?;
+                Ok(serde_json::json!({
+                    "ok": true,
+                    "command": "record.desktop-snapshot",
+                    "record": record,
+                }))
+            }
             RecordCommand::Stop(args) => {
                 let record = stop_session(&args.session_dir)?;
                 Ok(serde_json::json!({
@@ -335,8 +477,9 @@ pub async fn command_json(command: Commands) -> Result<Value> {
                     .map(str::to_string)
                     .unwrap_or_else(|| "recording".to_string());
                 let session_directory_path = session_dir.clone();
-                let events_path = session_dir.join(crate::manifest::TIMELINE_FILE_NAME);
-                let metadata_path = session_dir.join(crate::manifest::MANIFEST_FILE_NAME);
+                let events_path = session_dir.join(crate::manifest::EVENT_STREAM_EVENTS_FILE_NAME);
+                let metadata_path =
+                    session_dir.join(crate::manifest::EVENT_STREAM_SESSION_FILE_NAME);
                 Ok(serde_json::json!({
                     "ok": true,
                     "command": "record.cancel",
