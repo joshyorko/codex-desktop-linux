@@ -217,6 +217,45 @@ function applyRecordReplayChronicleTrayPatch(currentSource) {
   );
 }
 
+function applyRecordReplayChronicleSettingsPatch(currentSource) {
+  const patchName = "Record & Replay Chronicle settings bridge patch";
+  if (
+    currentSource.includes("linux-record-replay-skysight-start`,{summaryAgent:!0}") &&
+    currentSource.includes("linux-record-replay-skysight-resume`") &&
+    currentSource.includes("linux-record-replay-skysight-start`,{summaryAgent:!1}") &&
+    currentSource.includes("linux-record-replay-skysight-pause`")
+  ) {
+    return currentSource;
+  }
+
+  const rpcVar =
+    currentSource.match(/([A-Za-z_$][\w$]*)\(`batch-write-config-value`,\{hostId:/u)?.[1] ?? "ue";
+  let patchedSource = currentSource;
+  let patchedEnable = false;
+  let patchedDisable = false;
+
+  patchedSource = patchedSource.replace(
+    /await ([A-Za-z_$][\w$]*)\.mutateAsync\(\{enabled:!0\}\),([A-Za-z_$][\w$]*)\?\.\(([A-Za-z_$][\w$]*),!0\)/u,
+    (_match, mutationVar, callbackVar, previousEnabledVar) => {
+      patchedEnable = true;
+      return `await ${mutationVar}.mutateAsync({enabled:!0}),await Promise.allSettled([${rpcVar}(\`linux-record-replay-skysight-start\`,{summaryAgent:!0}),${rpcVar}(\`linux-record-replay-skysight-resume\`)]),${callbackVar}?.(${previousEnabledVar},!0)`;
+    },
+  );
+
+  patchedSource = patchedSource.replace(
+    /await ([A-Za-z_$][\w$]*)\.mutateAsync\(\{enabled:!1\}\),([A-Za-z_$][\w$]*)\?\.\(([A-Za-z_$][\w$]*),!1\)/u,
+    (_match, mutationVar, callbackVar, previousEnabledVar) => {
+      patchedDisable = true;
+      return `await ${mutationVar}.mutateAsync({enabled:!1}),await Promise.allSettled([${rpcVar}(\`linux-record-replay-skysight-start\`,{summaryAgent:!1}),${rpcVar}(\`linux-record-replay-skysight-pause\`)]),${callbackVar}?.(${previousEnabledVar},!1)`;
+    },
+  );
+
+  if (!patchedEnable || !patchedDisable) {
+    warn("Could not find Chronicle settings toggle callbacks", patchName);
+  }
+  return patchedSource;
+}
+
 function applyRecordReplayMainBridgePatch(currentSource) {
   const patchName = "Record & Replay main bridge patch";
   let patchedSource = currentSource;
@@ -398,6 +437,16 @@ const descriptors = [
     apply: applyRecordReplayMainBridgePatch,
   },
   {
+    id: "record-replay-chronicle-settings",
+    phase: "webview-asset",
+    order: 151,
+    ciPolicy: "optional",
+    pattern: /^personalization-settings-.*\.js$/,
+    missingDescription: "personalization settings bundle",
+    skipDescription: "Record & Replay Chronicle settings bridge patch",
+    apply: applyRecordReplayChronicleSettingsPatch,
+  },
+  {
     id: "record-replay-hud",
     phase: "webview-asset",
     order: 152,
@@ -433,6 +482,7 @@ const descriptors = [
 module.exports = {
   RECORD_REPLAY_PLUGIN_NAME,
   HUD_RUNTIME_VERSION,
+  applyRecordReplayChronicleSettingsPatch,
   applyRecordReplayDictationTranscriptPatch,
   applyRecordReplayGlobalDictationTranscriptPatch,
   applyRecordReplayPluginGatePatch,

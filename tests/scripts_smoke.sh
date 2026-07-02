@@ -472,6 +472,7 @@ test_update_builder_preserves_enabled_linux_features_config() {
     local staged_config="$root/opt/codex-desktop/update-builder/linux-features/features.json"
     local staged_local_manifest="$root/opt/codex-desktop/update-builder/linux-features/local/local-tool/feature.json"
     local source_info="$root/opt/codex-desktop/update-builder/.codex-linux/source-info.json"
+    local update_builder_manifest="$root/opt/codex-desktop/update-builder/.codex-linux/update-builder-manifest.txt"
 
     mkdir -p "$workspace"
     make_fake_app "$app_dir"
@@ -523,12 +524,16 @@ JSON
 
     assert_file_exists "$staged_config"
     assert_file_exists "$staged_local_manifest"
+    assert_file_exists "$update_builder_manifest"
     assert_contains "$staged_config" "example-feature"
     assert_contains "$staged_config" "local-tool"
     assert_contains "$staged_config" "tweaks"
     assert_contains "$staged_config" "mode"
     assert_not_contains "$staged_config" "localComment"
     assert_not_contains "$staged_config" "disabled-feature"
+    assert_contains "$update_builder_manifest" "record-replay-linux/Cargo.toml"
+    assert_contains "$update_builder_manifest" "assets/codex-linux.png"
+    assert_not_contains "$update_builder_manifest" "^node-runtime/"
 
     node - "$staged_config" <<'NODE' || fail "Expected staged Linux features config to be sanitized"
 const fs = require("node:fs");

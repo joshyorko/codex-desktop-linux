@@ -9,15 +9,18 @@ use anyhow::{Context, Result};
 use std::{
     ffi::OsString,
     fs,
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
 };
 use tokio::process::Command;
 use tracing::info;
 
-const REQUIRED_BUNDLE_FILES: [(&str, &str); 20] = [
+const UPDATE_BUILDER_MANIFEST: &str = ".codex-linux/update-builder-manifest.txt";
+
+const REQUIRED_BUNDLE_FILES: [(&str, &str); 22] = [
     ("Cargo.toml", "Cargo.toml"),
     ("Cargo.lock", "Cargo.lock"),
     ("computer-use-linux", "computer-use-linux"),
+    ("record-replay-linux", "record-replay-linux"),
     ("read-aloud-linux", "read-aloud-linux"),
     ("updater", "updater"),
     (
@@ -52,6 +55,7 @@ const REQUIRED_BUNDLE_FILES: [(&str, &str); 20] = [
     ("scripts/lib", "scripts/lib"),
     ("packaging/linux", "packaging/linux"),
     ("assets/codex.png", "assets/codex.png"),
+    ("assets/codex-linux.png", "assets/codex-linux.png"),
     ("linux-features", "linux-features"),
 ];
 const OPTIONAL_BUNDLE_FILES: [(&str, &str); 5] = [
@@ -248,6 +252,11 @@ fn package_build_script(bundle_dir: &Path) -> PathBuf {
 }
 
 fn copy_builder_bundle(source_root: &Path, destination_root: &Path) -> Result<()> {
+    let manifest_path = source_root.join(UPDATE_BUILDER_MANIFEST);
+    if manifest_path.exists() {
+        return copy_builder_bundle_from_manifest(source_root, destination_root, &manifest_path);
+    }
+
     for (source, destination) in REQUIRED_BUNDLE_FILES {
         copy_entry(
             &source_root.join(source),
@@ -265,6 +274,54 @@ fn copy_builder_bundle(source_root: &Path, destination_root: &Path) -> Result<()
     }
 
     Ok(())
+}
+
+fn copy_builder_bundle_from_manifest(
+    source_root: &Path,
+    destination_root: &Path,
+    manifest_path: &Path,
+) -> Result<()> {
+    let manifest = fs::read_to_string(manifest_path)
+        .with_context(|| format!("Failed to read {}", manifest_path.display()))?;
+
+    for (index, line) in manifest.lines().enumerate() {
+        let entry = line.trim();
+        if entry.is_empty() || entry.starts_with('#') {
+            continue;
+        }
+        let relative_path = Path::new(entry);
+        if !is_safe_manifest_relative_path(relative_path) {
+            anyhow::bail!(
+                "Unsafe update-builder manifest entry at line {}: {}",
+                index + 1,
+                entry
+            );
+        }
+        copy_entry(
+            &source_root.join(relative_path),
+            &destination_root.join(relative_path),
+            false,
+        )?;
+    }
+
+    copy_entry(
+        manifest_path,
+        &destination_root.join(UPDATE_BUILDER_MANIFEST),
+        false,
+    )?;
+    Ok(())
+}
+
+fn is_safe_manifest_relative_path(path: &Path) -> bool {
+    let mut has_component = false;
+    for component in path.components() {
+        match component {
+            Component::Normal(_) => has_component = true,
+            Component::CurDir => {}
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => return false,
+        }
+    }
+    has_component && !path.is_absolute()
 }
 
 fn copy_entry(source: &Path, destination: &Path, optional: bool) -> Result<()> {
@@ -526,7 +583,7 @@ touch "${DIST_DIR_OVERRIDE}/codex-desktop-${VER}-1-x86_64.pkg.tar.zst"
     fn write_fake_computer_use_bundle(root: &Path) -> Result<()> {
         fs::write(
             root.join("Cargo.toml"),
-            b"[workspace]\nmembers = [\"computer-use-linux\", \"read-aloud-linux\", \"updater\"]\n",
+            b"[workspace]\nmembers = [\"computer-use-linux\", \"record-replay-linux\", \"read-aloud-linux\", \"updater\"]\n",
         )?;
         fs::write(root.join("Cargo.lock"), b"# fake lock\n")?;
         fs::create_dir_all(root.join("computer-use-linux/src"))?;
@@ -544,6 +601,15 @@ touch "${DIST_DIR_OVERRIDE}/codex-desktop-${VER}-1-x86_64.pkg.tar.zst"
             b"[package]\nname = \"codex-read-aloud-linux\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
         )?;
         fs::write(root.join("read-aloud-linux/src/main.rs"), b"fn main() {}\n")?;
+        fs::create_dir_all(root.join("record-replay-linux/src"))?;
+        fs::write(
+            root.join("record-replay-linux/Cargo.toml"),
+            b"[package]\nname = \"codex-record-replay-linux\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )?;
+        fs::write(
+            root.join("record-replay-linux/src/main.rs"),
+            b"fn main() {}\n",
+        )?;
         fs::create_dir_all(root.join("updater/src"))?;
         fs::write(
             root.join("updater/Cargo.toml"),
@@ -624,6 +690,7 @@ touch "${DIST_DIR_OVERRIDE}/codex-desktop-${VER}-1-x86_64.pkg.tar.zst"
             b"console.log('fake remote control hosts');\n",
         )?;
         fs::write(bundle_root.join("assets/codex.png"), b"png")?;
+        fs::write(bundle_root.join("assets/codex-linux.png"), b"linux-png")?;
         fs::write(
             bundle_root.join("packaging/linux/control"),
             "Package: codex",
@@ -882,6 +949,7 @@ fi
             b"[Unit]\nDescription=Codex Update Manager\n",
         )?;
         fs::write(source_root.join("assets/codex.png"), b"png")?;
+        fs::write(source_root.join("assets/codex-linux.png"), b"linux-png")?;
 
         copy_builder_bundle(&source_root, &destination_root)?;
 
@@ -903,6 +971,7 @@ fi
             .join("scripts/patches/registry.js")
             .exists());
         assert!(destination_root.join("computer-use-linux").exists());
+        assert!(destination_root.join("record-replay-linux").exists());
         assert!(destination_root.join("read-aloud-linux").exists());
         assert!(destination_root.join("updater").exists());
         assert!(destination_root
@@ -917,8 +986,58 @@ fi
         assert!(destination_root
             .join("linux-features/features.example.json")
             .exists());
+        assert!(destination_root.join("assets/codex-linux.png").exists());
         assert!(!destination_root.join("scripts/build-rpm.sh").exists());
         assert!(!destination_root.join("scripts/build-pacman.sh").exists());
+        Ok(())
+    }
+
+    #[test]
+    fn bundle_copy_prefers_packaged_update_builder_manifest() -> Result<()> {
+        let temp = tempdir()?;
+        let source_root = temp.path().join("source");
+        let destination_root = temp.path().join("destination");
+        fs::create_dir_all(source_root.join(".codex-linux"))?;
+        fs::create_dir_all(source_root.join("assets"))?;
+        fs::create_dir_all(source_root.join("record-replay-linux/src"))?;
+        fs::write(source_root.join("assets/codex-linux.png"), b"linux-png")?;
+        fs::write(
+            source_root.join("record-replay-linux/Cargo.toml"),
+            b"[package]\nname = \"codex-record-replay-linux\"\n",
+        )?;
+        fs::write(source_root.join("unlisted.txt"), b"ignore me")?;
+        fs::write(
+            source_root.join(UPDATE_BUILDER_MANIFEST),
+            "assets/codex-linux.png\nrecord-replay-linux/Cargo.toml\n",
+        )?;
+
+        copy_builder_bundle(&source_root, &destination_root)?;
+
+        assert_eq!(
+            fs::read(destination_root.join("assets/codex-linux.png"))?,
+            b"linux-png"
+        );
+        assert!(destination_root
+            .join("record-replay-linux/Cargo.toml")
+            .exists());
+        assert!(destination_root.join(UPDATE_BUILDER_MANIFEST).exists());
+        assert!(!destination_root.join("unlisted.txt").exists());
+        Ok(())
+    }
+
+    #[test]
+    fn bundle_manifest_rejects_parent_paths() -> Result<()> {
+        let temp = tempdir()?;
+        let source_root = temp.path().join("source");
+        let destination_root = temp.path().join("destination");
+        fs::create_dir_all(source_root.join(".codex-linux"))?;
+        fs::write(source_root.join(UPDATE_BUILDER_MANIFEST), "../escape\n")?;
+
+        let error = copy_builder_bundle(&source_root, &destination_root)
+            .expect_err("unsafe manifest path should be rejected");
+        assert!(error
+            .to_string()
+            .contains("Unsafe update-builder manifest entry"));
         Ok(())
     }
 

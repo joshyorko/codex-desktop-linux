@@ -18,6 +18,7 @@ const {
 const {
   applyRecordReplayDictationTranscriptPatch,
   applyRecordReplayGlobalDictationTranscriptPatch,
+  applyRecordReplayChronicleSettingsPatch,
   applyRecordReplayHudPatch,
   applyRecordReplayPluginGatePatch,
   applyRecordReplayMainBridgePatch,
@@ -113,6 +114,7 @@ test("record-and-replay patch descriptor loads only when feature is enabled", ()
     assert.deepEqual(loaded.map((descriptor) => descriptor.id), [
       "feature:record-and-replay:record-and-replay-plugin-gate",
       "feature:record-and-replay:linux-record-replay-main-bridge",
+      "feature:record-and-replay:record-replay-chronicle-settings",
       "feature:record-and-replay:record-replay-hud",
       "feature:record-and-replay:record-replay-dictation-transcript",
       "feature:record-and-replay:record-replay-global-dictation-transcript",
@@ -138,7 +140,7 @@ test("record-and-replay global dictation descriptor tracks floating dictation bu
 });
 
 test("record-and-replay bridge patch is idempotent and uses execFile", () => {
-  assert.equal(descriptors.length, 5);
+  assert.equal(descriptors.length, 6);
   const source = [
     "const cp=require(\"node:child_process\"),fs=require(\"node:fs\"),path=require(\"node:path\");",
     "var bridge={\"get-global-state\":async({key:e})=>null};",
@@ -409,6 +411,24 @@ test("record-and-replay generic Skysight start can pass summary agent true or fa
   );
   assert.match(patched, /t===!0&&n\.push\("--summary-agent","enabled"\)/);
   assert.match(patched, /t===!1&&n\.push\("--summary-agent","disabled"\)/);
+});
+
+test("record-and-replay patch wires Chronicle Settings switch to Linux Skysight", () => {
+  const source = [
+    "function Bt(){",
+    "let F=async({rememberConsentAccepted:r,showSetupDialog:i})=>{let a=O;w(!0),S(null),_(!1),y(i);try{r===!0&&await H(t,k.CHRONICLE_CONSENT_ACCEPTED,!0),i||H(t,k.CHRONICLE_SETUP_COMPLETION_PENDING,!1),await c.mutateAsync({enabled:!0}),e?.(a,!0),await o.invalidateQueries({queryKey:m(`chronicle-permissions`)})}catch(e){let r=nn(e);H(t,k.CHRONICLE_SETUP_COMPLETION_PENDING,!1),S(r),n.error(`Failed to enable Chronicle`,{safe:{errorMessage:r},sensitive:{error:e}})}finally{w(!1)}};",
+    "let I=async()=>{let n=O;w(!0),S(null),H(t,k.CHRONICLE_SETUP_COMPLETION_PENDING,!1);try{await c.mutateAsync({enabled:!1}),e?.(n,!1)}catch{}finally{w(!1)}};",
+    "}",
+  ].join("");
+
+  const patched = applyRecordReplayChronicleSettingsPatch(source);
+
+  assert.notEqual(patched, source);
+  assert.equal(applyRecordReplayChronicleSettingsPatch(patched), patched);
+  assert.match(patched, /linux-record-replay-skysight-start`,\{summaryAgent:!0\}/);
+  assert.match(patched, /linux-record-replay-skysight-resume`/);
+  assert.match(patched, /linux-record-replay-skysight-start`,\{summaryAgent:!1\}/);
+  assert.match(patched, /linux-record-replay-skysight-pause`/);
 });
 
 test("record-and-replay patch wires Linux Chronicle tray controls to Skysight", () => {
