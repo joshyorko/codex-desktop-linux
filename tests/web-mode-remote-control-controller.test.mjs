@@ -501,6 +501,7 @@ async function main() {
 
     const fakeCodex = path.join(tmp, "fake-codex");
     await writeFakeAppServerBin(fakeCodex);
+    const configHome = path.join(tmp, "home", ".config");
     const stepUpToken = jwt({
       iat: now,
       exp: now + 300,
@@ -538,6 +539,7 @@ async function main() {
           CODEX_BROWSER_USE_BROWSER_COMMAND: path.join(tmp, "missing-browser"),
           CODEX_WEB_MODE_REMOTE_CONTROL_STEP_UP_TOKEN: stepUpToken,
           HOME: path.join(tmp, "home"),
+          XDG_CONFIG_HOME: configHome,
         },
         stdio: ["ignore", "pipe", "pipe"],
       },
@@ -561,7 +563,7 @@ async function main() {
     assert.equal(authorization.authorized, true);
     const electronGlobalState = await readJson(path.join(codexHome, ".codex-global-state.json"));
     assert.ok(electronGlobalState["electron-remote-control-client-enrollments"]);
-    const deviceKeyStore = await readJson(path.join(tmp, "home", ".config", "codex-desktop", "remote-control-device-keys-v1.json"));
+    const deviceKeyStore = await readJson(path.join(configHome, "codex-desktop", "remote-control-device-keys-v1.json"));
     assert.equal(Object.keys(deviceKeyStore.keys ?? {}).length, 1);
 
     const connect = await bridge(serveState.url, token, "set-remote-connection-auto-connect", {
