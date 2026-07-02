@@ -88,6 +88,7 @@ impl RecordReplayLinux {
             &paths,
             SkysightStartOptions {
                 interval_seconds: params.interval_seconds.unwrap_or(60),
+                summary_agent: params.summary_agent,
             },
         ) {
             Ok(status) => tool_json(json!({
@@ -744,6 +745,9 @@ struct StartParams {
 struct SkysightStartParams {
     /// Seconds between daemon snapshots. Defaults to 60.
     interval_seconds: Option<u64>,
+    /// Enable or disable the Chronicle summary agent for this running Skysight daemon.
+    #[serde(alias = "summaryAgent")]
+    summary_agent: Option<bool>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]

@@ -25,6 +25,7 @@ const RESOURCES_DIR_NAME: &str = "resources";
 const EXCLUSIONS_FILE_NAME: &str = "exclusions.json";
 const STOP_REQUEST_FILE_NAME: &str = "stop-requested";
 const PAUSE_REQUEST_FILE_NAME: &str = "pause-requested";
+const SUMMARY_AGENT_SETTING_FILE_NAME: &str = "summary-agent";
 const MEMORY_INSTRUCTIONS_FILE_NAME: &str = "SkysightMemoryInstructions.md";
 const CHRONICLE_INSTRUCTIONS_FILE_NAME: &str = "instructions.md";
 const SUMMARIZER_FILE_NAME: &str = "SkysightSummarizer.md";
@@ -52,6 +53,7 @@ pub struct SkysightPaths {
     pub status_path: PathBuf,
     pub stop_request_path: PathBuf,
     pub pause_request_path: PathBuf,
+    pub summary_agent_setting_path: PathBuf,
     pub memory_instructions_path: PathBuf,
     pub summarizer_path: PathBuf,
 }
@@ -78,6 +80,14 @@ pub struct SkysightStatus {
     pub next_capture_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_6h_rollup_at: Option<String>,
+    #[serde(default)]
+    pub summary_agent_enabled: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub summary_agent_enablement_source: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub summary_agent_config_path: Option<PathBuf>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_summary_agent_run_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rate_limit_posture: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -105,6 +115,8 @@ pub struct SkysightStatus {
     pub resources_dir: PathBuf,
     pub memory_extension_dir: PathBuf,
     pub exclusions_path: PathBuf,
+    #[serde(default)]
+    pub summary_agent_setting_path: PathBuf,
     pub status_path: PathBuf,
     pub memory_instructions_path: PathBuf,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -170,6 +182,8 @@ pub struct SkysightExclusionUpdate {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SkysightStartOptions {
     pub interval_seconds: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary_agent: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -214,12 +228,21 @@ struct SummaryAgentReport {
     state: String,
     ran_at: Option<String>,
     error: Option<String>,
+    next_run_at: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SummaryAgentPolicy {
+    enabled: bool,
+    source: String,
+    config_path: Option<PathBuf>,
 }
 
 impl Default for SkysightStartOptions {
     fn default() -> Self {
         Self {
             interval_seconds: DEFAULT_INTERVAL_SECONDS,
+            summary_agent: None,
         }
     }
 }
@@ -243,6 +266,7 @@ impl SkysightPaths {
             status_path: runtime_dir.join(STATUS_FILE_NAME),
             stop_request_path: runtime_dir.join(STOP_REQUEST_FILE_NAME),
             pause_request_path: runtime_dir.join(PAUSE_REQUEST_FILE_NAME),
+            summary_agent_setting_path: runtime_dir.join(SUMMARY_AGENT_SETTING_FILE_NAME),
             memory_instructions_path: memory_extension_dir.join(MEMORY_INSTRUCTIONS_FILE_NAME),
             summarizer_path: memory_extension_dir.join(SUMMARIZER_FILE_NAME),
             runtime_dir,
@@ -283,6 +307,7 @@ impl SkysightPaths {
         paths.status_path = paths.runtime_dir.join(STATUS_FILE_NAME);
         paths.stop_request_path = paths.runtime_dir.join(STOP_REQUEST_FILE_NAME);
         paths.pause_request_path = paths.runtime_dir.join(PAUSE_REQUEST_FILE_NAME);
+        paths.summary_agent_setting_path = paths.runtime_dir.join(SUMMARY_AGENT_SETTING_FILE_NAME);
         paths.memory_instructions_path = paths
             .memory_extension_dir
             .join(MEMORY_INSTRUCTIONS_FILE_NAME);
@@ -296,13 +321,16 @@ pub fn start_skysight(
     options: SkysightStartOptions,
 ) -> Result<SkysightStatus> {
     ensure_layout(paths)?;
+    if let Some(summary_agent) = options.summary_agent {
+        write_summary_agent_runtime_setting(paths, summary_agent)?;
+    }
     if let Ok(status) = read_status(paths) {
         if status.is_running
             && status
                 .pid
                 .is_some_and(|pid| process_is_alive(pid, status.process_start_time_ticks))
         {
-            return Ok(status);
+            return skysight_status(paths);
         }
     }
     let _ = fs::remove_file(&paths.stop_request_path);
@@ -346,8 +374,15 @@ pub fn start_skysight(
     Ok(status)
 }
 
-pub fn run_skysight_daemon(paths: &SkysightPaths, interval_seconds: u64) -> Result<()> {
+pub fn run_skysight_daemon(
+    paths: &SkysightPaths,
+    interval_seconds: u64,
+    summary_agent: Option<bool>,
+) -> Result<()> {
     ensure_layout(paths)?;
+    if let Some(summary_agent) = summary_agent {
+        write_summary_agent_runtime_setting(paths, summary_agent)?;
+    }
     let interval = Duration::from_secs(interval_seconds.max(1));
     write_chronicle_started_pid(std::process::id())?;
     loop {
@@ -583,8 +618,13 @@ pub fn capture_skysight_snapshot(
     status.last_capture_at = Some(recorded_at);
     status.next_capture_at = status.interval_seconds.map(next_timestamp_after_seconds);
     status.summary_agent_state = Some(summary_agent_report.state);
-    status.summary_agent_last_run_at = summary_agent_report.ran_at;
-    status.summary_agent_last_error = summary_agent_report.error;
+    if let Some(ran_at) = summary_agent_report.ran_at {
+        status.summary_agent_last_run_at = Some(ran_at);
+        status.summary_agent_last_error = summary_agent_report.error;
+    }
+    status.next_summary_agent_run_at = summary_agent_report
+        .next_run_at
+        .or_else(|| next_summary_agent_run_at(paths, &summary_agent_policy(paths), Some(&status)));
     write_status(paths, &status)?;
     Ok(status)
 }
@@ -605,6 +645,7 @@ pub fn skysight_status(paths: &SkysightPaths) -> Result<SkysightStatus> {
             status.capture_capabilities = capture_capabilities;
             status.summarizer_capability_notes = summarizer_capabilities.clone();
             status.summarizer_capabilities = summarizer_capabilities;
+            refresh_summary_agent_status(paths, &mut status);
             if status.is_running
                 && !status
                     .pid
@@ -618,6 +659,7 @@ pub fn skysight_status(paths: &SkysightPaths) -> Result<SkysightStatus> {
                 status.end_reason = Some("process-exited".to_string());
                 status.scheduler_state = Some("stopped".to_string());
                 status.next_capture_at = None;
+                status.next_summary_agent_run_at = None;
                 let _ = remove_chronicle_started_pid();
                 write_status(paths, &status)?;
             }
@@ -1852,14 +1894,20 @@ fn status_value(input: StatusValueInput<'_>) -> Result<SkysightStatus> {
         None
     };
     let next_6h_rollup_at = next_6h_rollup_at(input.paths)?;
-    let summary_agent_enabled = summary_agent_enabled();
-    let summary_agent_state = if summary_agent_enabled {
+    let summary_agent_policy = summary_agent_policy(input.paths);
+    let summary_agent_state = if summary_agent_policy.enabled {
         existing
             .as_ref()
             .and_then(|status| status.summary_agent_state.clone())
+            .filter(|state| state != "disabled")
             .or_else(|| Some("idle".to_string()))
     } else {
         Some("disabled".to_string())
+    };
+    let next_summary_agent_run_at = if input.is_running && !input.paused {
+        next_summary_agent_run_at(input.paths, &summary_agent_policy, existing.as_ref())
+    } else {
+        None
     };
     Ok(SkysightStatus {
         ok: true,
@@ -1885,8 +1933,12 @@ fn status_value(input: StatusValueInput<'_>) -> Result<SkysightStatus> {
         last_capture_at,
         next_capture_at,
         next_6h_rollup_at,
+        summary_agent_enabled: summary_agent_policy.enabled,
+        summary_agent_enablement_source: Some(summary_agent_policy.source),
+        summary_agent_config_path: summary_agent_policy.config_path,
+        next_summary_agent_run_at,
         rate_limit_posture: Some(
-            if summary_agent_enabled {
+            if summary_agent_policy.enabled {
                 "openai-memgen-background-summary-agent-enabled"
             } else {
                 "summary-agent-disabled"
@@ -1920,6 +1972,7 @@ fn status_value(input: StatusValueInput<'_>) -> Result<SkysightStatus> {
         resources_dir: input.paths.resources_dir.clone(),
         memory_extension_dir: input.paths.memory_extension_dir.clone(),
         exclusions_path: input.paths.exclusions_path.clone(),
+        summary_agent_setting_path: input.paths.summary_agent_setting_path.clone(),
         status_path: input.paths.status_path.clone(),
         memory_instructions_path: input.paths.memory_instructions_path.clone(),
         chronicle_instructions_path: Some(
@@ -1945,6 +1998,36 @@ fn status_value(input: StatusValueInput<'_>) -> Result<SkysightStatus> {
         recent_resources: recent_resources(input.paths)?,
         message: input.message,
     })
+}
+
+fn refresh_summary_agent_status(paths: &SkysightPaths, status: &mut SkysightStatus) {
+    let policy = summary_agent_policy(paths);
+    status.summary_agent_enabled = policy.enabled;
+    status.summary_agent_enablement_source = Some(policy.source.clone());
+    status.summary_agent_config_path = policy.config_path.clone();
+    status.rate_limit_posture = Some(
+        if policy.enabled {
+            "openai-memgen-background-summary-agent-enabled"
+        } else {
+            "summary-agent-disabled"
+        }
+        .to_string(),
+    );
+    if policy.enabled {
+        if status.summary_agent_state.as_deref() == Some("disabled")
+            || status.summary_agent_state.is_none()
+        {
+            status.summary_agent_state = Some("idle".to_string());
+        }
+        status.next_summary_agent_run_at = if status.is_running && !status.paused {
+            next_summary_agent_run_at(paths, &policy, Some(status))
+        } else {
+            None
+        };
+    } else {
+        status.summary_agent_state = Some("disabled".to_string());
+        status.next_summary_agent_run_at = None;
+    }
 }
 
 fn latest_segment(paths: &SkysightPaths) -> Result<Option<SegmentPaths>> {
@@ -2033,6 +2116,125 @@ fn write_6h_rollup(paths: &SkysightPaths) -> Result<PathBuf> {
     Ok(path)
 }
 
+fn write_summary_agent_runtime_setting(paths: &SkysightPaths, enabled: bool) -> Result<()> {
+    crate::secure_fs::write_private_file(
+        &paths.summary_agent_setting_path,
+        if enabled { "enabled\n" } else { "disabled\n" },
+    )
+}
+
+fn summary_agent_policy(paths: &SkysightPaths) -> SummaryAgentPolicy {
+    if let Ok(value) = env::var(SUMMARY_AGENT_ENABLE_ENV) {
+        return SummaryAgentPolicy {
+            enabled: parse_bool_setting(&value).unwrap_or(false),
+            source: format!("env:{SUMMARY_AGENT_ENABLE_ENV}"),
+            config_path: None,
+        };
+    }
+    if let Ok(value) = fs::read_to_string(&paths.summary_agent_setting_path) {
+        if let Some(enabled) = parse_bool_setting(&value) {
+            return SummaryAgentPolicy {
+                enabled,
+                source: "runtime-setting".to_string(),
+                config_path: Some(paths.summary_agent_setting_path.clone()),
+            };
+        }
+    }
+    if let Some((enabled, config_path)) = chronicle_feature_from_config() {
+        return SummaryAgentPolicy {
+            enabled,
+            source: "config:features.chronicle".to_string(),
+            config_path: Some(config_path),
+        };
+    }
+    SummaryAgentPolicy {
+        enabled: false,
+        source: "default".to_string(),
+        config_path: None,
+    }
+}
+
+fn parse_bool_setting(value: &str) -> Option<bool> {
+    match value
+        .trim()
+        .trim_matches('"')
+        .trim_matches('\'')
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "1" | "true" | "on" | "enabled" | "yes" => Some(true),
+        "0" | "false" | "off" | "disabled" | "no" => Some(false),
+        _ => None,
+    }
+}
+
+fn chronicle_feature_from_config() -> Option<(bool, PathBuf)> {
+    let config_path = codex_config_path()?;
+    let raw = fs::read_to_string(&config_path).ok()?;
+    let mut in_features = false;
+    for line in raw.lines() {
+        let trimmed = line.split('#').next().unwrap_or("").trim();
+        if trimmed.starts_with('[') && trimmed.ends_with(']') {
+            in_features = trimmed == "[features]";
+            continue;
+        }
+        if in_features {
+            if let Some((key, value)) = trimmed.split_once('=') {
+                if key.trim() != "chronicle" {
+                    continue;
+                }
+                return parse_bool_setting(value).map(|enabled| (enabled, config_path));
+            }
+        }
+    }
+    None
+}
+
+fn codex_config_path() -> Option<PathBuf> {
+    let code_home = env::var_os("CODEX_HOME")
+        .map(PathBuf::from)
+        .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".codex")))?;
+    Some(code_home.join("config.toml"))
+}
+
+fn summary_agent_skip_until(paths: &SkysightPaths, level: &str) -> Option<String> {
+    if level != "10min" {
+        return None;
+    }
+    let status = read_status(paths).ok()?;
+    let last_run_at = status.summary_agent_last_run_at.as_deref()?;
+    let next_run_at = timestamp(last_run_at)? + ChronoDuration::seconds(TEN_MINUTE_WINDOW_SECONDS);
+    (next_run_at > Utc::now()).then(|| next_run_at.to_rfc3339())
+}
+
+fn next_summary_agent_run_at(
+    _paths: &SkysightPaths,
+    policy: &SummaryAgentPolicy,
+    status: Option<&SkysightStatus>,
+) -> Option<String> {
+    if !policy.enabled {
+        return None;
+    }
+    next_summary_agent_run_after(
+        status.and_then(|status| status.summary_agent_last_run_at.as_deref()),
+    )
+}
+
+fn next_summary_agent_run_after(last_run_at: Option<&str>) -> Option<String> {
+    if let Some(last_run_at) = last_run_at.and_then(timestamp) {
+        let next_run_at = last_run_at + ChronoDuration::seconds(TEN_MINUTE_WINDOW_SECONDS);
+        return Some(
+            if next_run_at > Utc::now() {
+                next_run_at
+            } else {
+                Utc::now()
+            }
+            .to_rfc3339(),
+        );
+    }
+    Some(Utc::now().to_rfc3339())
+}
+
 fn write_resource_with_summary_agent(
     paths: &SkysightPaths,
     output_path: &Path,
@@ -2040,12 +2242,23 @@ fn write_resource_with_summary_agent(
     input_summary: &str,
     fallback: String,
 ) -> Result<SummaryAgentReport> {
-    if !summary_agent_enabled() {
+    let policy = summary_agent_policy(paths);
+    if !policy.enabled {
         crate::secure_fs::write_private_file(output_path, fallback)?;
         return Ok(SummaryAgentReport {
             state: "disabled".to_string(),
             ran_at: None,
             error: None,
+            next_run_at: None,
+        });
+    }
+    if let Some(next_run_at) = summary_agent_skip_until(paths, level) {
+        crate::secure_fs::write_private_file(output_path, fallback)?;
+        return Ok(SummaryAgentReport {
+            state: "scheduled".to_string(),
+            ran_at: None,
+            error: None,
+            next_run_at: Some(next_run_at),
         });
     }
 
@@ -2054,6 +2267,7 @@ fn write_resource_with_summary_agent(
     let prompt = summary_agent_prompt(level, input_summary);
     match run_summary_agent(paths, &prompt, &temp_output) {
         Ok(()) => {
+            let next_run_at = next_summary_agent_run_after(Some(&ran_at));
             let summary = fs::read_to_string(&temp_output)
                 .with_context(|| format!("failed to read {}", temp_output.display()))?;
             let _ = fs::remove_file(&temp_output);
@@ -2064,6 +2278,7 @@ fn write_resource_with_summary_agent(
                     state: "failed".to_string(),
                     ran_at: Some(ran_at),
                     error: Some("summary agent produced empty output".to_string()),
+                    next_run_at,
                 });
             }
             crate::secure_fs::write_private_file(output_path, format!("{summary}\n"))?;
@@ -2071,15 +2286,18 @@ fn write_resource_with_summary_agent(
                 state: "completed".to_string(),
                 ran_at: Some(ran_at),
                 error: None,
+                next_run_at,
             })
         }
         Err(error) => {
+            let next_run_at = next_summary_agent_run_after(Some(&ran_at));
             let _ = fs::remove_file(&temp_output);
             crate::secure_fs::write_private_file(output_path, fallback)?;
             Ok(SummaryAgentReport {
                 state: "failed".to_string(),
                 ran_at: Some(ran_at),
                 error: Some(error.to_string()),
+                next_run_at,
             })
         }
     }
@@ -2550,17 +2768,6 @@ fn remove_chronicle_started_pid() -> Result<()> {
     }
 }
 
-fn summary_agent_enabled() -> bool {
-    matches!(
-        env::var(SUMMARY_AGENT_ENABLE_ENV)
-            .unwrap_or_else(|_| "off".to_string())
-            .trim()
-            .to_ascii_lowercase()
-            .as_str(),
-        "1" | "true" | "on" | "enabled" | "yes"
-    )
-}
-
 fn active_status_pid(paths: &SkysightPaths) -> Option<u32> {
     read_status(paths).ok().and_then(|status| {
         let pid = status.pid?;
@@ -2832,22 +3039,200 @@ mod tests {
     }
 
     #[test]
-    fn summary_agent_is_explicit_opt_in() {
+    fn summary_agent_policy_uses_env_runtime_config_then_default() {
         let _guard = env_guard();
         let old_value = env::var_os(SUMMARY_AGENT_ENABLE_ENV);
-
+        let old_code_home = env::var_os("CODEX_HOME");
+        let old_home = env::var_os("HOME");
+        let temp = tempfile::tempdir().unwrap();
+        let paths = SkysightPaths::new(temp.path().join("runtime"), temp.path().join("resources"));
+        let code_home = temp.path().join("codex-home");
+        fs::create_dir_all(&code_home).unwrap();
+        env::set_var("CODEX_HOME", &code_home);
+        env::remove_var("HOME");
         env::remove_var(SUMMARY_AGENT_ENABLE_ENV);
-        assert!(!summary_agent_enabled());
+
+        let default_policy = summary_agent_policy(&paths);
+        assert!(!default_policy.enabled);
+        assert_eq!(default_policy.source, "default");
+
+        fs::write(
+            code_home.join("config.toml"),
+            "[features]\nchronicle = true\n",
+        )
+        .unwrap();
+        let config_policy = summary_agent_policy(&paths);
+        assert!(config_policy.enabled);
+        assert_eq!(config_policy.source, "config:features.chronicle");
+        assert_eq!(
+            config_policy.config_path,
+            Some(code_home.join("config.toml"))
+        );
+
+        write_summary_agent_runtime_setting(&paths, false).unwrap();
+        let runtime_policy = summary_agent_policy(&paths);
+        assert!(!runtime_policy.enabled);
+        assert_eq!(runtime_policy.source, "runtime-setting");
+        assert_eq!(
+            runtime_policy.config_path,
+            Some(paths.summary_agent_setting_path.clone())
+        );
 
         env::set_var(SUMMARY_AGENT_ENABLE_ENV, "enabled");
-        assert!(summary_agent_enabled());
+        let env_enabled = summary_agent_policy(&paths);
+        assert!(env_enabled.enabled);
+        assert_eq!(
+            env_enabled.source,
+            format!("env:{SUMMARY_AGENT_ENABLE_ENV}")
+        );
 
         env::set_var(SUMMARY_AGENT_ENABLE_ENV, "false");
-        assert!(!summary_agent_enabled());
+        let env_disabled = summary_agent_policy(&paths);
+        assert!(!env_disabled.enabled);
+        assert_eq!(
+            env_disabled.source,
+            format!("env:{SUMMARY_AGENT_ENABLE_ENV}")
+        );
 
         match old_value {
             Some(value) => env::set_var(SUMMARY_AGENT_ENABLE_ENV, value),
             None => env::remove_var(SUMMARY_AGENT_ENABLE_ENV),
+        }
+        match old_code_home {
+            Some(value) => env::set_var("CODEX_HOME", value),
+            None => env::remove_var("CODEX_HOME"),
+        }
+        match old_home {
+            Some(value) => env::set_var("HOME", value),
+            None => env::remove_var("HOME"),
+        }
+    }
+
+    #[test]
+    fn start_updates_summary_agent_runtime_setting_when_daemon_is_alive() {
+        let _guard = env_guard();
+        let old_value = env::var_os(SUMMARY_AGENT_ENABLE_ENV);
+        let old_code_home = env::var_os("CODEX_HOME");
+        let temp = tempfile::tempdir().unwrap();
+        let paths = SkysightPaths::new(temp.path().join("runtime"), temp.path().join("resources"));
+        env::remove_var(SUMMARY_AGENT_ENABLE_ENV);
+        env::set_var("CODEX_HOME", temp.path().join("codex-home"));
+
+        ensure_layout(&paths).unwrap();
+        let status = status_value(StatusValueInput {
+            paths: &paths,
+            state: "running",
+            is_running: true,
+            paused: false,
+            pause_reason: None,
+            interval_seconds: Some(60),
+            pid: Some(std::process::id()),
+            started_at: Some(now_timestamp()),
+            end_reason: None,
+            message: Some("test daemon alive".to_string()),
+        })
+        .unwrap();
+        write_status(&paths, &status).unwrap();
+
+        let updated = start_skysight(
+            &paths,
+            SkysightStartOptions {
+                interval_seconds: 60,
+                summary_agent: Some(true),
+            },
+        )
+        .unwrap();
+
+        assert!(updated.is_running);
+        assert!(updated.summary_agent_enabled);
+        assert_eq!(
+            updated.summary_agent_enablement_source.as_deref(),
+            Some("runtime-setting")
+        );
+        assert_eq!(
+            fs::read_to_string(&paths.summary_agent_setting_path).unwrap(),
+            "enabled\n"
+        );
+
+        match old_value {
+            Some(value) => env::set_var(SUMMARY_AGENT_ENABLE_ENV, value),
+            None => env::remove_var(SUMMARY_AGENT_ENABLE_ENV),
+        }
+        match old_code_home {
+            Some(value) => env::set_var("CODEX_HOME", value),
+            None => env::remove_var("CODEX_HOME"),
+        }
+    }
+
+    #[test]
+    fn summary_agent_10min_work_is_rate_limited() {
+        let _guard = env_guard();
+        let old_enable = env::var_os(SUMMARY_AGENT_ENABLE_ENV);
+        let old_cli = env::var_os("CODEX_SKYSIGHT_CODEX_CLI_PATH");
+        let old_code_home = env::var_os("CODEX_HOME");
+        let temp = tempfile::tempdir().unwrap();
+        let paths = SkysightPaths::new(temp.path().join("runtime"), temp.path().join("resources"));
+        env::set_var(SUMMARY_AGENT_ENABLE_ENV, "enabled");
+        env::set_var("CODEX_SKYSIGHT_CODEX_CLI_PATH", "/definitely/missing/codex");
+        env::set_var("CODEX_HOME", temp.path().join("codex-home"));
+        ensure_layout(&paths).unwrap();
+
+        let first_path = temp.path().join("first.md");
+        let first = write_resource_with_summary_agent(
+            &paths,
+            &first_path,
+            "10min",
+            "input",
+            "fallback one".to_string(),
+        )
+        .unwrap();
+        assert_eq!(first.state, "failed");
+        assert!(first.ran_at.is_some());
+        assert_eq!(fs::read_to_string(&first_path).unwrap(), "fallback one");
+
+        let mut status = status_value(StatusValueInput {
+            paths: &paths,
+            state: "running",
+            is_running: true,
+            paused: false,
+            pause_reason: None,
+            interval_seconds: Some(60),
+            pid: Some(std::process::id()),
+            started_at: Some(now_timestamp()),
+            end_reason: None,
+            message: None,
+        })
+        .unwrap();
+        status.summary_agent_state = Some(first.state);
+        status.summary_agent_last_run_at = first.ran_at;
+        status.summary_agent_last_error = first.error;
+        write_status(&paths, &status).unwrap();
+
+        let second_path = temp.path().join("second.md");
+        let second = write_resource_with_summary_agent(
+            &paths,
+            &second_path,
+            "10min",
+            "input",
+            "fallback two".to_string(),
+        )
+        .unwrap();
+        assert_eq!(second.state, "scheduled");
+        assert!(second.ran_at.is_none());
+        assert!(second.next_run_at.is_some());
+        assert_eq!(fs::read_to_string(&second_path).unwrap(), "fallback two");
+
+        match old_enable {
+            Some(value) => env::set_var(SUMMARY_AGENT_ENABLE_ENV, value),
+            None => env::remove_var(SUMMARY_AGENT_ENABLE_ENV),
+        }
+        match old_cli {
+            Some(value) => env::set_var("CODEX_SKYSIGHT_CODEX_CLI_PATH", value),
+            None => env::remove_var("CODEX_SKYSIGHT_CODEX_CLI_PATH"),
+        }
+        match old_code_home {
+            Some(value) => env::set_var("CODEX_HOME", value),
+            None => env::remove_var("CODEX_HOME"),
         }
     }
 

@@ -176,6 +176,20 @@ pub struct RecordStartArgs {
 pub struct SkysightStartArgs {
     #[arg(long, default_value_t = 60)]
     pub interval_seconds: u64,
+    #[arg(long, value_enum)]
+    pub summary_agent: Option<SkysightSummaryAgentArg>,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum SkysightSummaryAgentArg {
+    Enabled,
+    Disabled,
+}
+
+impl SkysightSummaryAgentArg {
+    fn as_bool(self) -> bool {
+        matches!(self, Self::Enabled)
+    }
 }
 
 #[derive(Debug, Args)]
@@ -360,6 +374,7 @@ pub async fn command_json(command: Commands) -> Result<Value> {
                     &paths,
                     SkysightStartOptions {
                         interval_seconds: args.interval_seconds,
+                        summary_agent: args.summary_agent.map(SkysightSummaryAgentArg::as_bool),
                     },
                 )?)?),
                 SkysightCommand::Status => Ok(serde_json::to_value(skysight_status(&paths)?)?),
@@ -372,7 +387,11 @@ pub async fn command_json(command: Commands) -> Result<Value> {
                     capture_skysight_snapshot(&paths, args.source.as_deref())?,
                 )?),
                 SkysightCommand::Daemon(args) => {
-                    run_skysight_daemon(&paths, args.interval_seconds)?;
+                    run_skysight_daemon(
+                        &paths,
+                        args.interval_seconds,
+                        args.summary_agent.map(SkysightSummaryAgentArg::as_bool),
+                    )?;
                     Ok(serde_json::to_value(skysight_status(&paths)?)?)
                 }
                 SkysightCommand::UpdateExclusion(args) => {
