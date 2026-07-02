@@ -616,7 +616,11 @@ pub fn capture_skysight_snapshot(
     status.last_10min_resource = Some(ten_minute_path);
     status.last_6h_resource = six_hour_path;
     status.last_capture_at = Some(recorded_at);
-    status.next_capture_at = status.interval_seconds.map(next_timestamp_after_seconds);
+    status.next_capture_at = if is_running {
+        status.interval_seconds.map(next_timestamp_after_seconds)
+    } else {
+        None
+    };
     status.summary_agent_state = Some(summary_agent_report.state);
     if let Some(ran_at) = summary_agent_report.ran_at {
         status.summary_agent_last_run_at = Some(ran_at);
@@ -709,6 +713,7 @@ pub fn stop_skysight(paths: &SkysightPaths) -> Result<SkysightStatus> {
 }
 
 pub fn list_skysight_exclusions(paths: &SkysightPaths) -> Result<Vec<SkysightExclusion>> {
+    ensure_parent_dirs(paths)?;
     if !paths.exclusions_path.exists() {
         return Ok(Vec::new());
     }
@@ -1820,7 +1825,53 @@ fn ensure_parent_dirs(paths: &SkysightPaths) -> Result<()> {
     if let Some(parent) = paths.summarizer_path.parent() {
         crate::secure_fs::create_private_dir_all(parent)?;
     }
+    migrate_legacy_exclusions_if_needed(paths)?;
     Ok(())
+}
+
+fn migrate_legacy_exclusions_if_needed(paths: &SkysightPaths) -> Result<()> {
+    if paths.exclusions_path.exists() {
+        return Ok(());
+    }
+    let Some(legacy_path) = legacy_default_exclusions_path(&paths.exclusions_path) else {
+        return Ok(());
+    };
+    if legacy_path == paths.exclusions_path || !legacy_path.exists() {
+        return Ok(());
+    }
+    let raw = fs::read_to_string(&legacy_path)
+        .with_context(|| format!("failed to read legacy exclusions {}", legacy_path.display()))?;
+    crate::secure_fs::write_private_file(&paths.exclusions_path, raw).with_context(|| {
+        format!(
+            "failed to migrate exclusions to {}",
+            paths.exclusions_path.display()
+        )
+    })
+}
+
+fn legacy_default_exclusions_path(exclusions_path: &Path) -> Option<PathBuf> {
+    if exclusions_path.file_name()? != EXCLUSIONS_FILE_NAME {
+        return None;
+    }
+    let chronicle_dir = exclusions_path.parent()?;
+    if chronicle_dir.file_name()? != "chronicle" {
+        return None;
+    }
+    let extensions_dir = chronicle_dir.parent()?;
+    if extensions_dir.file_name()? != "extensions" {
+        return None;
+    }
+    let memories_dir = extensions_dir.parent()?;
+    if memories_dir.file_name()? != "memories" {
+        return None;
+    }
+    let code_home = memories_dir.parent()?;
+    Some(
+        code_home
+            .join("memories_extensions")
+            .join("chronicle")
+            .join(EXCLUSIONS_FILE_NAME),
+    )
 }
 
 fn ensure_memory_prompts(paths: &SkysightPaths) -> Result<()> {
