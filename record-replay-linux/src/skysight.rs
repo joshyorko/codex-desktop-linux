@@ -836,10 +836,12 @@ async fn collect_desktop_evidence_async(
         &segment_dir,
         &recorded_at,
         &source,
-        visible_excluded_windows,
-        visible_domain_excluded_browser_windows,
-        visible_unverified_browser_domain_windows,
-        window_listing_unavailable && !exclusions.is_empty(),
+        ScreenshotSuppression {
+            visible_excluded_windows,
+            visible_domain_excluded_browser_windows,
+            visible_unverified_browser_domain_windows,
+            unverified_exclusions: window_listing_unavailable && !exclusions.is_empty(),
+        },
         &mut capture,
     )
     .await?;
@@ -849,8 +851,10 @@ async fn collect_desktop_evidence_async(
         &source,
         &exclusions,
         focused_window.as_ref(),
-        focused_exclusion,
-        focused_browser_domain_unverified,
+        AccessibilitySuppression {
+            focused_exclusion,
+            focused_browser_domain_unverified,
+        },
         &mut capture,
     )
     .await?;
@@ -989,17 +993,28 @@ fn capture_browser_observations(
     Ok(())
 }
 
-async fn capture_screenshot_evidence(
-    segment_dir: &Path,
-    recorded_at: &str,
-    source: &str,
+#[derive(Debug, Clone, Copy, Default)]
+struct ScreenshotSuppression {
     visible_excluded_windows: usize,
     visible_domain_excluded_browser_windows: usize,
     visible_unverified_browser_domain_windows: usize,
     unverified_exclusions: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct AccessibilitySuppression<'a> {
+    focused_exclusion: Option<&'a SkysightExclusion>,
+    focused_browser_domain_unverified: bool,
+}
+
+async fn capture_screenshot_evidence(
+    segment_dir: &Path,
+    recorded_at: &str,
+    source: &str,
+    suppression: ScreenshotSuppression,
     capture: &mut DesktopEvidenceCapture,
 ) -> Result<()> {
-    if unverified_exclusions {
+    if suppression.unverified_exclusions {
         capture.events.push(json!({
             "schema_version": 1,
             "recorded_at": recorded_at,
@@ -1012,40 +1027,40 @@ async fn capture_screenshot_evidence(
         return Ok(());
     }
 
-    if visible_unverified_browser_domain_windows > 0 {
+    if suppression.visible_unverified_browser_domain_windows > 0 {
         capture.events.push(json!({
             "schema_version": 1,
             "recorded_at": recorded_at,
             "source": source,
             "kind": "suppressed_evidence",
             "provider": "screenshot",
-            "count": visible_unverified_browser_domain_windows,
+            "count": suppression.visible_unverified_browser_domain_windows,
             "reason": "browser URL/domain could not be verified while domain exclusions were active; full-screen screenshot was skipped",
         }));
         return Ok(());
     }
 
-    if visible_domain_excluded_browser_windows > 0 {
+    if suppression.visible_domain_excluded_browser_windows > 0 {
         capture.events.push(json!({
             "schema_version": 1,
             "recorded_at": recorded_at,
             "source": source,
             "kind": "suppressed_evidence",
             "provider": "screenshot",
-            "count": visible_domain_excluded_browser_windows,
+            "count": suppression.visible_domain_excluded_browser_windows,
             "reason": "browser URL/domain matched a Skysight domain exclusion; full-screen screenshot was skipped",
         }));
         return Ok(());
     }
 
-    if visible_excluded_windows > 0 {
+    if suppression.visible_excluded_windows > 0 {
         capture.events.push(json!({
             "schema_version": 1,
             "recorded_at": recorded_at,
             "source": source,
             "kind": "suppressed_evidence",
             "provider": "screenshot",
-            "count": visible_excluded_windows,
+            "count": suppression.visible_excluded_windows,
             "reason": "visible window matched a Skysight exclusion; full-screen screenshot was skipped",
         }));
         return Ok(());
@@ -1094,11 +1109,10 @@ async fn capture_accessibility_evidence(
     source: &str,
     exclusions: &[SkysightExclusion],
     focused_window: Option<&windowing::WindowInfo>,
-    focused_exclusion: Option<&SkysightExclusion>,
-    focused_browser_domain_unverified: bool,
+    suppression: AccessibilitySuppression<'_>,
     capture: &mut DesktopEvidenceCapture,
 ) -> Result<()> {
-    if focused_browser_domain_unverified {
+    if suppression.focused_browser_domain_unverified {
         capture.events.push(json!({
             "schema_version": 1,
             "recorded_at": recorded_at,
@@ -1111,7 +1125,7 @@ async fn capture_accessibility_evidence(
         return Ok(());
     }
 
-    if let Some(rule) = focused_exclusion {
+    if let Some(rule) = suppression.focused_exclusion {
         capture.events.push(suppressed_event(
             "accessibility",
             recorded_at,
@@ -2190,10 +2204,10 @@ mod tests {
                 temp.path(),
                 "2026-06-30T00:00:00Z",
                 "test",
-                0,
-                0,
-                0,
-                true,
+                ScreenshotSuppression {
+                    unverified_exclusions: true,
+                    ..Default::default()
+                },
                 &mut capture,
             ))
             .unwrap();
@@ -2220,8 +2234,10 @@ mod tests {
                 "test",
                 &[exclusion("domain", "bank.example")],
                 None,
-                None,
-                true,
+                AccessibilitySuppression {
+                    focused_exclusion: None,
+                    focused_browser_domain_unverified: true,
+                },
                 &mut capture,
             ))
             .unwrap();
