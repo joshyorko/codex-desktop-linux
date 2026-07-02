@@ -315,7 +315,7 @@ test("record-and-replay docs mention pause resume and Chronicle-compatible resou
   assert.match(readme, /linux-record-replay-skysight-pause/);
   assert.match(readme, /linux-record-replay-skysight-resume/);
   assert.match(readme, /Chronicle-compatible resources/);
-  assert.match(readme, /memories_extensions\/chronicle\/resources/);
+  assert.match(readme, /memories\/extensions\/chronicle\/resources/);
 
   const skill = fs.readFileSync(path.join(__dirname, "plugin-template/skills/record-and-replay/SKILL.md"), "utf8");
   assert.match(skill, /pause/);

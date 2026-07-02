@@ -16,7 +16,7 @@ transcription system.
 
 - Runtime state: `$XDG_RUNTIME_DIR/skysight`
 - Chronicle-compatible resources:
-  `${CODEX_HOME:-$HOME/.codex}/memories_extensions/chronicle/resources`
+  `${CODEX_HOME:-$HOME/.codex}/memories/extensions/chronicle/resources`
 - Segment evidence:
   `$XDG_RUNTIME_DIR/skysight/segments/<timestamp>-linux-activity/`
 

@@ -41,7 +41,8 @@ fn skysight_paths_default_to_chronicle_resources_dir() {
     assert_eq!(
         paths.resources_dir,
         code_home
-            .join("memories_extensions")
+            .join("memories")
+            .join("extensions")
             .join("chronicle")
             .join("resources")
     );

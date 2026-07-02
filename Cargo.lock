@@ -522,6 +522,7 @@ name = "codex-record-replay-linux"
 version = "0.1.0-linux-alpha1"
 dependencies = [
  "anyhow",
+ "base64",
  "chrono",
  "clap",
  "codex-computer-use-linux",

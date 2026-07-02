@@ -209,7 +209,11 @@ fn create_private_dir(path: &Path) -> Result<()> {
     let mut builder = DirBuilder::new();
     #[cfg(unix)]
     builder.mode(PRIVATE_DIR_MODE);
-    builder.create(path)?;
+    match builder.create(path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == ErrorKind::AlreadyExists && path.is_dir() => {}
+        Err(error) => return Err(error.into()),
+    }
     set_private_dir_mode(path)?;
     Ok(())
 }

@@ -64,7 +64,7 @@ exclusion methods so the app can keep the active capture session alive while
 the backend moves between recording states.
 
 Chronicle-compatible resources are written under
-`${CODEX_HOME:-$HOME/.codex}/memories_extensions/chronicle/resources`, while the
+`${CODEX_HOME:-$HOME/.codex}/memories/extensions/chronicle/resources`, while the
 runtime state directory remains `$XDG_RUNTIME_DIR/skysight`.
 
 Each Linux Skysight snapshot now writes a segment directory with `events.jsonl`,

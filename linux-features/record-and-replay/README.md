@@ -112,7 +112,7 @@ The Rust helper also exposes MCP tools `skysight_start`,
 `skysight_snapshot`, `desktop_snapshot`, `skysight_update_exclusion`, and
 `skysight_list_exclusions`. Skysight runtime state defaults to
 `$XDG_RUNTIME_DIR/skysight`; memory resources default to
-`${CODEX_HOME:-$HOME/.codex}/memories_extensions/chronicle/resources`.
+`${CODEX_HOME:-$HOME/.codex}/memories/extensions/chronicle/resources`.
 
 All helper invocations use `execFile` with fixed command shapes. The bridge does
 not expose a shell or arbitrary argv surface.
