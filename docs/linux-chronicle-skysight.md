@@ -33,6 +33,44 @@ cadence-limited `*-6h-*.md` rollups. Exclusion rules suppress matching
 window/app/accessibility evidence and record suppression counts instead of
 copying excluded content into resources.
 
+## Local OCR
+
+Linux Chronicle OCR is local-only and optional. When `tesseract` and the
+requested traineddata are available, Skysight runs the Tesseract CLI after the
+screenshot privacy gate passes, parses TSV word boxes into line observations,
+and appends recognized text plus bounding boxes to `*.ocr.jsonl`.
+
+When OCR is disabled or unavailable, Skysight still writes the Chronicle OCR
+history contract with `runs_ocr=false`, empty `normalized_text`, and an
+explicit `ocr_status` such as `disabled`, `backend_unavailable`, or
+`required_backend_unavailable`. This is a truthful local capability status, not
+Apple Vision parity.
+
+OCR never runs before screenshot/domain/window exclusions. If screenshot
+evidence is suppressed, no OCR attempt is made. If recognized OCR text matches
+an exclusion value before persistence, the OCR row is kept but text and
+observations are stripped and `ocr_status` becomes
+`suppressed_by_exclusion_text`. Rolling markdown resources summarize OCR
+status, paths, and byte counts; they do not dump raw OCR text by default.
+
+Tesseract is the first shippable local backend because it is broadly packaged,
+offline, and emits word boxes through TSV. The OCR provider surface should stay
+pluggable: a follow-up backend can add RapidOCR/ONNXRuntime or PaddleOCR model
+packs for higher screenshot accuracy without making the default package heavy
+or network-dependent.
+
+Runtime controls:
+
+```bash
+CODEX_SKYSIGHT_OCR=auto|enabled|required|disabled
+CODEX_CHRONICLE_OCR=auto|enabled|required|disabled
+CODEX_SKYSIGHT_TESSERACT_PATH=/path/to/tesseract
+CODEX_CHRONICLE_TESSERACT_PATH=/path/to/tesseract
+CODEX_SKYSIGHT_OCR_LANG=eng
+CODEX_SKYSIGHT_OCR_PSM=11
+CODEX_SKYSIGHT_OCR_TIMEOUT_MS=10000
+```
+
 ## Verification After Rebuild
 
 1. Run `node --test linux-features/record-and-replay/test.js`.

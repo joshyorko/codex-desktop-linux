@@ -96,7 +96,7 @@ function applyRecordReplayPluginGatePatch(currentSource) {
 
 function recordReplayBridgeSource({ childProcessVar, fsVar, pathVar }) {
   return [
-    `"chronicle-permissions":async()=>{let e=await codexLinuxChronicleSidecarControlStateAsync(),t=e.enabled===!0?"granted":"unknown";return{accessibility:t,screenRecording:t,chronicleSidecarPresent:e.enabled===!0,chronicleSidecarProcessState:e.state??"disabled"}}`,
+    `"chronicle-permissions":async()=>{let e=await codexLinuxChronicleSidecarControlStateAsync(),t=e.enabled===!0?"granted":"unknown";return{accessibility:t,screenRecording:t,chronicleSidecarPresent:e.enabled===!0,chronicleSidecarProcessState:e.state??"disabled",chronicleOcrAvailable:e.chronicleOcrAvailable===!0,chronicleOcrStatus:e.chronicleOcrStatus??"unknown",chronicleOcrBackend:e.chronicleOcrBackend??null,chronicleOcrLanguage:e.chronicleOcrLanguage??null}}`,
     `"getChronicleSidecarControlState":async()=>codexLinuxChronicleSidecarControlStateAsync()`,
     `"toggleChronicleSidecar":async()=>codexLinuxChronicleToggleSidecar()`,
     `"linux-record-replay-doctor":async()=>codexLinuxRecordReplayRun([${JSON.stringify("doctor")}],15000)`,
@@ -141,7 +141,7 @@ ${recordReplayChronicleHelperSource({ childProcessVar })}`;
 
 function recordReplayChronicleHelperSource({ childProcessVar }) {
   return `function codexLinuxRecordReplayRunSync(e,t){let n=codexLinuxRecordReplayBin();try{let r=${childProcessVar}.execFileSync(n,e,{encoding:"utf8",timeout:t,maxBuffer:16777216});return{ok:!0,command:n,args:e,stdout:r||"",stderr:"",json:codexLinuxRecordReplayParse(r)}}catch(r){let a=typeof r?.stdout==="string"?r.stdout:r?.stdout?String(r.stdout):"",o=typeof r?.stderr==="string"?r.stderr:r?.stderr?String(r.stderr):"";return{ok:!1,command:n,args:e,message:r instanceof Error?r.message:String(r),code:r?.status??r?.code??null,stdout:a,stderr:o,json:codexLinuxRecordReplayParse(a)}}}
-function codexLinuxChronicleControlStateFromSkysight(e){let t=e?.json&&typeof e.json==="object"?e.json:null;if(!e?.ok&&t==null)return{enabled:!1,running:!1,state:"disabled"};let n=String(t?.state||""),r=t?.is_running===!0||t?.isRunning===!0,a=t?.paused===!0||t?.is_paused===!0||t?.isPaused===!0||n==="paused",o=n==="running"&&r&&!a;return{enabled:!0,running:o,state:o?"running":"stopped",skysight:t}}
+function codexLinuxChronicleControlStateFromSkysight(e){let t=e?.json&&typeof e.json==="object"?e.json:null;if(!e?.ok&&t==null)return{enabled:!1,running:!1,state:"disabled"};let n=String(t?.state||""),r=t?.is_running===!0||t?.isRunning===!0,a=t?.paused===!0||t?.is_paused===!0||t?.isPaused===!0||n==="paused",o=n==="running"&&r&&!a;return{enabled:!0,running:o,state:o?"running":"stopped",skysight:t,chronicleOcrAvailable:t?.ocr_available===!0||t?.ocrAvailable===!0,chronicleOcrStatus:t?.ocr_status??t?.ocrStatus??"unknown",chronicleOcrBackend:t?.ocr_backend??t?.ocrBackend??null,chronicleOcrLanguage:t?.ocr_language??t?.ocrLanguage??null}}
 function codexLinuxChronicleSidecarControlState(){return codexLinuxChronicleControlStateFromSkysight(codexLinuxRecordReplayRunSync(["skysight","status"],3000))}
 async function codexLinuxChronicleSidecarControlStateAsync(){return codexLinuxChronicleControlStateFromSkysight(await codexLinuxRecordReplayRun(["skysight","status"],5000))}
 function codexLinuxChronicleSummaryAgentArgs(e){return e===!0?["--summary-agent","enabled"]:e===!1?["--summary-agent","disabled"]:[]}

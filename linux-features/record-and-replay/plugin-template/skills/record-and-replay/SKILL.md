@@ -24,8 +24,11 @@ client, implemented by the Rust `codex-record-replay-linux` backend.
    point-in-time local activity summary. Use `skysight_pause` and
    `skysight_resume` to stop or continue Chronicle-compatible resources
    without losing the active session, and use `skysight_status` to find the
-   resource paths. Respect `skysight_list_exclusions` and update exclusions
-   before recording sensitive apps or domains.
+   resource paths and local OCR availability. Respect
+   `skysight_list_exclusions` and update exclusions before recording sensitive
+   apps or domains. Treat OCR as local screen evidence metadata; do not copy raw
+   OCR text into durable skill drafts unless it is necessary for the reusable
+   workflow and safe to retain.
 3. Call `event_stream_start` with a short `goal` when matching the upstream
    Record & Replay flow, or `start` when you need Linux-specific options. The
    Linux app should show the active Record & Replay recording HUD while the

@@ -98,6 +98,26 @@ pub struct SkysightStatus {
     pub summary_agent_last_run_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub summary_agent_last_error: Option<String>,
+    #[serde(default)]
+    pub ocr_enabled: bool,
+    #[serde(default)]
+    pub ocr_available: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ocr_mode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ocr_status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ocr_backend: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ocr_backend_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ocr_language: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ocr_dependency_hint: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ocr_last_run_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ocr_last_error: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pid: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -770,6 +790,8 @@ fn provider_readiness_event(
     source: &str,
     diagnostics: &codex_computer_use_linux::diagnostics::DoctorReport,
 ) -> Value {
+    let ocr_policy = crate::ocr::OcrPolicy::from_env();
+    let ocr_readiness = ocr_policy.readiness();
     json!({
         "schema_version": 1,
         "recorded_at": recorded_at,
@@ -800,6 +822,18 @@ fn provider_readiness_event(
                 "status": "available_from_window_metadata",
                 "url_hints_supported": false,
                 "note": "Linux Skysight records browser window/title evidence after applying exclusions. URL evidence is ingested from explicit browser traces or observations.",
+            },
+            "ocr": {
+                "backend": ocr_readiness.backend,
+                "mode": ocr_policy.mode_name(),
+                "enabled": ocr_readiness.enabled,
+                "available": ocr_readiness.available,
+                "status": ocr_readiness.status,
+                "language": ocr_readiness.language,
+                "network": false,
+                "version": ocr_readiness.version,
+                "dependency_hint": ocr_readiness.dependency_hint,
+                "error": ocr_readiness.error,
             },
             "input_capture_libei": {
                 "portal": &diagnostics.portals.input_capture,
@@ -992,6 +1026,7 @@ async fn collect_desktop_evidence_async(
             visible_unverified_browser_domain_windows,
             unverified_exclusions: window_listing_unavailable && !exclusions.is_empty(),
         },
+        &exclusions,
         Some(&screen_recording_dir),
         &mut capture,
     )
@@ -1163,6 +1198,7 @@ async fn capture_screenshot_evidence(
     recorded_at: &str,
     source: &str,
     suppression: ScreenshotSuppression,
+    exclusions: &[SkysightExclusion],
     screen_recording_dir: Option<&Path>,
     capture: &mut DesktopEvidenceCapture,
 ) -> Result<()> {
@@ -1225,8 +1261,12 @@ async fn capture_screenshot_evidence(
             } else {
                 "png"
             };
-            let chronicle_event =
-                write_chronicle_screen_recording_artifacts(screen_recording_dir, recorded_at, &raw);
+            let chronicle_event = write_chronicle_screen_recording_artifacts(
+                screen_recording_dir,
+                recorded_at,
+                &raw,
+                exclusions,
+            );
             let relative =
                 PathBuf::from(ARTIFACTS_DIR_NAME).join(format!("screenshot.{extension}"));
             let absolute = segment_dir.join(&relative);
@@ -1383,9 +1423,15 @@ fn write_chronicle_screen_recording_artifacts(
     screen_recording_dir: Option<&Path>,
     recorded_at: &str,
     raw: &screenshot::RawScreenshotCapture,
+    exclusions: &[SkysightExclusion],
 ) -> Option<Value> {
     let screen_recording_dir = screen_recording_dir?;
-    match write_chronicle_screen_recording_artifacts_inner(screen_recording_dir, recorded_at, raw) {
+    match write_chronicle_screen_recording_artifacts_inner(
+        screen_recording_dir,
+        recorded_at,
+        raw,
+        exclusions,
+    ) {
         Ok(event) => Some(event),
         Err(error) => Some(capture_error_event(
             "chronicle_screen_recording",
@@ -1400,6 +1446,7 @@ fn write_chronicle_screen_recording_artifacts_inner(
     screen_recording_dir: &Path,
     recorded_at: &str,
     raw: &screenshot::RawScreenshotCapture,
+    exclusions: &[SkysightExclusion],
 ) -> Result<Value> {
     let captured_at = timestamp(recorded_at).unwrap_or_else(Utc::now);
     let display_id = "0";
@@ -1435,6 +1482,18 @@ fn write_chronicle_screen_recording_artifacts_inner(
     crate::secure_fs::write_private_file(&latest_frame_path, &jpeg_bytes)?;
     crate::secure_fs::write_private_file(&sparse_frame_path, &jpeg_bytes)?;
     crate::secure_fs::write_private_file(&capture_marker_path, "active\n")?;
+    let ocr_policy = crate::ocr::OcrPolicy::from_env();
+    let exclusion_values = exclusions
+        .iter()
+        .map(|rule| rule.value.clone())
+        .collect::<Vec<_>>();
+    let ocr_result = crate::ocr::recognize_frame(
+        &ocr_policy,
+        &sparse_frame_path,
+        jpeg_payload.width,
+        jpeg_payload.height,
+        &exclusion_values,
+    );
     write_json_artifact(
         &capture_metadata_path,
         &json!({
@@ -1452,21 +1511,25 @@ fn write_chronicle_screen_recording_artifacts_inner(
             "safe_to_persist": true,
             "privacy_filter": {
                 "source": "linux-skysight-exclusion-filter",
-                "ocr": "unavailable-linux"
+                "screenshot_gate": "passed-before-ocr",
+                "ocr": {
+                    "status": ocr_result.status,
+                    "backend": ocr_result.backend,
+                    "language": ocr_result.language,
+                    "text_exclusion_filter": "applied"
+                }
             }
         }),
     )?;
     crate::secure_fs::append_private_line(
         &ocr_path,
-        &serde_json::to_string(&json!({
-            "schema_version": 1,
-            "captured_at": recorded_at,
-            "frame_index": frame_index,
-            "persisted_frame_path": sparse_frame_path,
-            "normalized_text": "",
-            "runs_ocr": false,
-            "ocr_status": "unavailable-linux"
-        }))?,
+        &serde_json::to_string(&ocr_result.to_json_line(
+            recorded_at,
+            frame_index,
+            &sparse_frame_path,
+            &latest_frame_path,
+            display_id,
+        ))?,
     )?;
     let pruned_file_count = prune_expired_chronicle_screen_recordings(screen_recording_dir)?;
 
@@ -1480,6 +1543,13 @@ fn write_chronicle_screen_recording_artifacts_inner(
         "capture_metadata_path": capture_metadata_path,
         "ocr_path": ocr_path,
         "sparse_frame_path": sparse_frame_path,
+        "ocr_status": ocr_result.status,
+        "ocr_backend": ocr_result.backend,
+        "ocr_language": ocr_result.language,
+        "ocr_runs": ocr_result.runs_ocr,
+        "ocr_truncated": ocr_result.truncated,
+        "ocr_text_observation_count": ocr_result.observations.len(),
+        "ocr_normalized_text_bytes": ocr_result.normalized_text.len(),
         "display_id": display_id,
         "frame_index": frame_index,
         "pruned_file_count": pruned_file_count,
@@ -1952,6 +2022,8 @@ fn status_value(input: StatusValueInput<'_>) -> Result<SkysightStatus> {
     let latest = latest_segment(input.paths)?;
     let exclusions_count = list_skysight_exclusions(input.paths)?.len();
     let capture_capabilities = capture_capability_notes();
+    let ocr_policy = crate::ocr::OcrPolicy::from_env();
+    let ocr_readiness = ocr_policy.readiness();
     let summarizer_capabilities = summarizer_capability_notes();
     let process_start_time_ticks = input
         .pid
@@ -1986,7 +2058,7 @@ fn status_value(input: StatusValueInput<'_>) -> Result<SkysightStatus> {
     };
     Ok(SkysightStatus {
         ok: true,
-        schema_version: 2,
+        schema_version: 3,
         state: input.state.to_string(),
         is_running: input.is_running,
         paused: input.paused,
@@ -2028,6 +2100,22 @@ fn status_value(input: StatusValueInput<'_>) -> Result<SkysightStatus> {
         summary_agent_last_error: existing
             .as_ref()
             .and_then(|status| status.summary_agent_last_error.clone()),
+        ocr_enabled: ocr_readiness.enabled,
+        ocr_available: ocr_readiness.available,
+        ocr_mode: Some(ocr_policy.mode_name().to_string()),
+        ocr_status: Some(ocr_readiness.status),
+        ocr_backend: Some(ocr_readiness.backend),
+        ocr_backend_version: ocr_readiness.version,
+        ocr_language: Some(ocr_readiness.language),
+        ocr_dependency_hint: ocr_readiness.dependency_hint,
+        ocr_last_run_at: existing
+            .as_ref()
+            .and_then(|status| status.ocr_last_run_at.clone()),
+        ocr_last_error: ocr_readiness.error.or_else(|| {
+            existing
+                .as_ref()
+                .and_then(|status| status.ocr_last_error.clone())
+        }),
         pid: input.pid,
         process_start_time_ticks,
         started_at: input.started_at.or_else(|| {
@@ -2625,6 +2713,7 @@ fn format_10min_resource(
         .cloned()
         .unwrap_or(Value::Null);
     let browser_summary = browser_observation_summary(events).unwrap_or(Value::Null);
+    let ocr_summary = ocr_event_summary(events);
     let event_kinds = event_kind_counts(events);
     let segment_count = recent_segments.len().max(1);
     let event_total: usize = recent_segments
@@ -2643,7 +2732,7 @@ fn format_10min_resource(
         .sum::<usize>()
         .max(metadata.suppressed_event_count);
     format!(
-        "# Skysight Activity Summary\n\n## Memory summary\n\nLinux Skysight captured local activity at `{recorded_at}` from `{source}` and folded it into the current 10-minute window. The segment contains Computer Use diagnostics, provider readiness, and bounded desktop evidence artifacts for future Codex context. [skysight memory]\n\n### Relevant prior context\n\nThis summary covers `{segment_count}` segment(s) in the recent 10-minute window.\n\n### Important non-obvious context about the user\n\n- Linux Record & Replay Skysight wrote this segment under `{segment_dir}`.\n- Exclusion rules active during capture: `{exclusion_count}`.\n- Suppressed evidence records in the window: `{suppressed_total}`.\n\n## Recording summary\n\n- Segment events: `{events_path}`.\n- Segment metadata: `{metadata_path}`.\n- Event records in window: `{event_total}`.\n- Evidence artifacts in window: `{artifact_total}`.\n- Event kinds captured in this segment:\n\n```json\n{event_kinds}\n```\n\n- Windowing readiness is captured in the diagnostics payload and window metadata artifact when available.\n- Browser observation evidence is captured from filtered browser windows when available.\n- Accessibility readiness is captured in the diagnostics payload and AT-SPI artifact when available.\n- Browser observations:\n\n```json\n{browser_summary}\n```\n\n- Diagnostics summary:\n\n```json\n{diagnostics_summary}\n```\n\n- Capture capabilities:\n\n```json\n{capabilities}\n```\n\n## Citations\n\n- {events_path}\n- {metadata_path}\n",
+        "# Skysight Activity Summary\n\n## Memory summary\n\nLinux Skysight captured local activity at `{recorded_at}` from `{source}` and folded it into the current 10-minute window. The segment contains Computer Use diagnostics, provider readiness, and bounded desktop evidence artifacts for future Codex context. [skysight memory]\n\n### Relevant prior context\n\nThis summary covers `{segment_count}` segment(s) in the recent 10-minute window.\n\n### Important non-obvious context about the user\n\n- Linux Record & Replay Skysight wrote this segment under `{segment_dir}`.\n- Exclusion rules active during capture: `{exclusion_count}`.\n- Suppressed evidence records in the window: `{suppressed_total}`.\n\n## Recording summary\n\n- Segment events: `{events_path}`.\n- Segment metadata: `{metadata_path}`.\n- Event records in window: `{event_total}`.\n- Evidence artifacts in window: `{artifact_total}`.\n- Event kinds captured in this segment:\n\n```json\n{event_kinds}\n```\n\n- Windowing readiness is captured in the diagnostics payload and window metadata artifact when available.\n- Browser observation evidence is captured from filtered browser windows when available.\n- Accessibility readiness is captured in the diagnostics payload and AT-SPI artifact when available.\n- Browser observations:\n\n```json\n{browser_summary}\n```\n\n- OCR evidence:\n\n```json\n{ocr_summary}\n```\n\n- Diagnostics summary:\n\n```json\n{diagnostics_summary}\n```\n\n- Capture capabilities:\n\n```json\n{capabilities}\n```\n\n## Citations\n\n- {events_path}\n- {metadata_path}\n",
         segment_dir = metadata
             .metadata_path
             .parent()
@@ -2661,9 +2750,49 @@ fn format_10min_resource(
             .unwrap_or_else(|_| "null".to_string()),
         browser_summary =
             serde_json::to_string_pretty(&browser_summary).unwrap_or_else(|_| "null".to_string()),
+        ocr_summary =
+            serde_json::to_string_pretty(&ocr_summary).unwrap_or_else(|_| "null".to_string()),
         capabilities =
             serde_json::to_string_pretty(&capabilities).unwrap_or_else(|_| "null".to_string()),
     )
+}
+
+fn ocr_event_summary(events: &[Value]) -> Value {
+    let mut status_counts = std::collections::BTreeMap::<String, usize>::new();
+    let mut paths = Vec::<String>::new();
+    let mut normalized_text_bytes = 0_u64;
+    let mut truncated_count = 0_usize;
+
+    for event in events.iter().filter(|event| {
+        event.get("kind").and_then(Value::as_str) == Some("chronicle_screen_recording")
+    }) {
+        let status = event
+            .get("ocr_status")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown");
+        *status_counts.entry(status.to_string()).or_default() += 1;
+        if let Some(path) = event.get("ocr_path").and_then(Value::as_str) {
+            paths.push(path.to_string());
+        }
+        normalized_text_bytes += event
+            .get("ocr_normalized_text_bytes")
+            .and_then(Value::as_u64)
+            .unwrap_or_default();
+        if event
+            .get("ocr_truncated")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        {
+            truncated_count += 1;
+        }
+    }
+
+    json!({
+        "status_counts": status_counts,
+        "ocr_paths": paths,
+        "normalized_text_bytes": normalized_text_bytes,
+        "truncated_count": truncated_count,
+    })
 }
 
 fn format_6h_resource(
@@ -3409,6 +3538,7 @@ mod tests {
                     unverified_exclusions: true,
                     ..Default::default()
                 },
+                &[],
                 None,
                 &mut capture,
             ))

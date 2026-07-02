@@ -153,6 +153,9 @@ test("record-and-replay bridge patch is idempotent and uses execFile", () => {
   assert.match(patched, /"chronicle-permissions":async/);
   assert.match(patched, /chronicleSidecarPresent/);
   assert.match(patched, /chronicleSidecarProcessState/);
+  assert.match(patched, /chronicleOcrAvailable/);
+  assert.match(patched, /chronicleOcrStatus/);
+  assert.match(patched, /chronicleOcrBackend/);
   assert.match(patched, /"getChronicleSidecarControlState":async/);
   assert.match(patched, /"toggleChronicleSidecar":async/);
   assert.match(patched, /codexLinuxChronicleControlStateFromSkysight/);
@@ -226,6 +229,15 @@ test("record-and-replay Chronicle helpers map Skysight status into upstream side
   assert.equal(state.enabled, true);
   assert.equal(state.running, true);
   assert.equal(state.state, "running");
+
+  const ocrState = vm.runInNewContext(
+    `${helperSource};codexLinuxChronicleControlStateFromSkysight({ok:true,json:{state:"running",is_running:true,ocr_available:true,ocr_status:"completed",ocr_backend:"tesseract-cli",ocr_language:"eng"}})`,
+    context,
+  );
+  assert.equal(ocrState.chronicleOcrAvailable, true);
+  assert.equal(ocrState.chronicleOcrStatus, "completed");
+  assert.equal(ocrState.chronicleOcrBackend, "tesseract-cli");
+  assert.equal(ocrState.chronicleOcrLanguage, "eng");
 
   const paused = vm.runInNewContext(
     `${helperSource};codexLinuxChronicleControlStateFromSkysight({ok:true,json:{state:"paused",is_running:true,paused:true}})`,

@@ -5,6 +5,7 @@ pub mod draft_prompt;
 pub mod event_stream;
 pub mod manifest;
 pub mod mcp;
+mod ocr;
 mod process_identity;
 mod process_reaper;
 pub mod recorder;
