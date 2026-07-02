@@ -154,6 +154,8 @@ test("record-and-replay bridge patch is idempotent and uses execFile", () => {
   assert.match(patched, /"getChronicleSidecarControlState":async/);
   assert.match(patched, /"toggleChronicleSidecar":async/);
   assert.match(patched, /codexLinuxChronicleControlStateFromSkysight/);
+  assert.match(patched, /codexLinuxChronicleEnsureSidecarRunning/);
+  assert.match(patched, /"chronicle-permissions":async\(\)=>\{let e=await codexLinuxChronicleEnsureSidecarRunning\(\)/);
   assert.match(patched, /"skysight","status"/);
   assert.match(patched, /"linux-record-replay-status":async/);
   assert.match(patched, /"linux-record-replay-start":async/);
@@ -235,6 +237,46 @@ test("record-and-replay Chronicle helpers map Skysight status into upstream side
   assert.equal(missing.enabled, false);
   assert.equal(missing.running, false);
   assert.equal(missing.state, "disabled");
+});
+
+test("record-and-replay Chronicle setup probe starts stopped Linux Skysight", async () => {
+  const helperSource = recordReplayHelperSource({
+    childProcessVar: "childProcess",
+    fsVar: "fs",
+    pathVar: "path",
+  });
+  const calls = [];
+  const responses = [
+    { state: "stopped", is_running: false, paused: false },
+    { state: "running", is_running: true, paused: false },
+  ];
+  const context = {
+    childProcess: {
+      execFile(_bin, args, _options, callback) {
+        calls.push(args);
+        callback(null, JSON.stringify(responses.shift()), "");
+      },
+    },
+    fs,
+    path,
+    process: {
+      env: { CODEX_RECORD_REPLAY_LINUX_BIN: "/tmp/codex-record-replay-linux" },
+      cwd: () => "/tmp",
+      pid: 4242,
+    },
+    JSON,
+    Promise,
+    String,
+  };
+
+  const state = await vm.runInNewContext(`${helperSource};codexLinuxChronicleEnsureSidecarRunning()`, context);
+  assert.deepEqual(JSON.parse(JSON.stringify(calls)), [
+    ["skysight", "status"],
+    ["skysight", "start"],
+  ]);
+  assert.equal(state.enabled, true);
+  assert.equal(state.running, true);
+  assert.equal(state.state, "running");
 });
 
 test("record-and-replay patch wires Linux Chronicle tray controls to Skysight", () => {

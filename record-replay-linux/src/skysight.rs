@@ -276,7 +276,8 @@ pub fn start_skysight(
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
-    let pid = crate::process_reaper::spawn_reaped(&mut command, "failed to spawn Skysight daemon")?;
+    let pid =
+        crate::process_reaper::spawn_detached(&mut command, "failed to spawn Skysight daemon")?;
 
     let status = status_value(StatusValueInput {
         paths,
@@ -330,7 +331,20 @@ pub fn run_skysight_daemon(paths: &SkysightPaths, interval_seconds: u64) -> Resu
             thread::sleep(interval);
             continue;
         }
-        capture_skysight_snapshot(paths, Some("daemon"))?;
+        if let Err(error) = capture_skysight_snapshot(paths, Some("daemon")) {
+            let status = status_value(StatusValueInput {
+                paths,
+                state: "running",
+                is_running: true,
+                paused: false,
+                pause_reason: None,
+                pid: Some(std::process::id()),
+                started_at: None,
+                end_reason: None,
+                message: Some(format!("Skysight snapshot failed: {error:#}")),
+            })?;
+            write_status(paths, &status)?;
+        }
         thread::sleep(interval);
     }
 }

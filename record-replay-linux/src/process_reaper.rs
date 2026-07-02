@@ -26,3 +26,14 @@ pub(crate) fn spawn_reaped(command: &mut Command, context: &str) -> Result<u32> 
     }
     Ok(pid)
 }
+
+pub(crate) fn spawn_detached(command: &mut Command, context: &str) -> Result<u32> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+
+    let child = command.spawn().with_context(|| context.to_string())?;
+    Ok(child.id())
+}
