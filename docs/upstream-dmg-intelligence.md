@@ -181,10 +181,13 @@ agent convenience wrapper around the same devcontainer-backed tool:
 ```bash
 dagger functions
 dagger call verify-dmg-intel
+dagger call inspect-upstream-dmg-url
 dagger call inspect-upstream-dmg --candidate ./Codex.dmg export --path /tmp/codex-dmg-intel-report
 ```
 
-The `inspect-upstream-dmg` function accepts a candidate DMG file and optional
+The `inspect-upstream-dmg-url` function downloads the current upstream DMG URL
+inside Dagger and returns a compact JSON summary for Codex/MCP use. The
+`inspect-upstream-dmg` function accepts a candidate DMG file and optional
 baseline and patch-report files, then returns the generated report directory.
 The Dagger source context ignores DMGs, build outputs, generated reports,
 `target/`, and app extraction trees; pass large DMGs as explicit file

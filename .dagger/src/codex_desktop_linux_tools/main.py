@@ -21,6 +21,7 @@ SOURCE_IGNORE = [
     "reports",
     "target",
 ]
+DEFAULT_DMG_URL = "https://persistent.oaistatic.com/codex-app-prod/Codex.dmg"
 
 
 @object_type
@@ -74,21 +75,84 @@ class CodexDesktopLinuxTools:
         patch_report: dagger.File | None = None,
     ) -> dagger.Directory:
         """Run upstream DMG intelligence and return the generated report directory."""
-        container = self._devcontainer(source).with_file("/inputs/candidate.dmg", candidate)
+        container = self._devcontainer(source).with_file("/tmp/inputs/candidate.dmg", candidate)
         args = [
             "node",
             "scripts/dev/upstream-dmg-intel.js",
             "--candidate",
-            "/inputs/candidate.dmg",
+            "/tmp/inputs/candidate.dmg",
             "--output-dir",
-            "/reports/upstream-dmg-intel",
+            "/tmp/reports/upstream-dmg-intel",
         ]
         if baseline is not None:
-            container = container.with_file("/inputs/baseline.dmg", baseline)
-            args.extend(["--baseline", "/inputs/baseline.dmg"])
+            container = container.with_file("/tmp/inputs/baseline.dmg", baseline)
+            args.extend(["--baseline", "/tmp/inputs/baseline.dmg"])
 
         if patch_report is not None:
-            container = container.with_file("/inputs/patch-report.json", patch_report)
-            args.extend(["--patch-report", "/inputs/patch-report.json"])
+            container = container.with_file("/tmp/inputs/patch-report.json", patch_report)
+            args.extend(["--patch-report", "/tmp/inputs/patch-report.json"])
 
-        return container.with_exec(args).directory("/reports/upstream-dmg-intel")
+        return container.with_exec(args).directory("/tmp/reports/upstream-dmg-intel")
+
+    @function
+    async def inspect_upstream_dmg_url(
+        self,
+        source: Annotated[
+            dagger.Directory,
+            DefaultPath("."),
+            Ignore(SOURCE_IGNORE),
+        ],
+        candidate_url: str = DEFAULT_DMG_URL,
+    ) -> str:
+        """Download a DMG URL in Dagger and return a compact intelligence summary."""
+        script = r"""
+set -euo pipefail
+mkdir -p /tmp/inputs /tmp/reports/upstream-dmg-intel
+curl -fsSL --retry 3 --connect-timeout 30 --max-time 600 \
+  -o /tmp/inputs/candidate.dmg "$CODEX_DMG_INTEL_CANDIDATE_URL"
+node scripts/dev/upstream-dmg-intel.js \
+  --candidate /tmp/inputs/candidate.dmg \
+  --no-baseline \
+  --output-dir /tmp/reports/upstream-dmg-intel \
+  > /tmp/codex-dmg-intel-summary.json
+node <<'NODE'
+const fs = require("node:fs");
+const reportDir = "/tmp/reports/upstream-dmg-intel";
+const summary = JSON.parse(fs.readFileSync("/tmp/codex-dmg-intel-summary.json", "utf8"));
+const protectedSurfaces = JSON.parse(fs.readFileSync(`${reportDir}/protected-surfaces.json`, "utf8"));
+const driftReport = JSON.parse(fs.readFileSync(`${reportDir}/drift-report.json`, "utf8"));
+const surfaces = protectedSurfaces.surfaces.map((surface) => ({
+  id: surface.id,
+  status: surface.status,
+  confidence: surface.confidence,
+  evidenceCount: surface.evidence.length,
+  missingAnchors: (surface.missingAnchors ?? []).map((anchor) => anchor.id),
+}));
+const surfaceCounts = surfaces.reduce((counts, surface) => {
+  counts[surface.status] = (counts[surface.status] ?? 0) + 1;
+  return counts;
+}, {});
+const actionable = driftReport.surfaceDrift
+  .filter((entry) => entry.classification !== "UNCHANGED")
+  .slice(0, 25)
+  .map((entry) => ({
+    surfaceId: entry.surfaceId,
+    classification: entry.classification,
+    candidateStatus: entry.candidateStatus,
+    missingAnchors: (entry.missingAnchors ?? []).map((anchor) => anchor.id),
+  }));
+process.stdout.write(JSON.stringify({
+  summary,
+  surfaceCounts,
+  classificationCounts: driftReport.classificationCounts,
+  surfaces,
+  actionable,
+}, null, 2) + "\n");
+NODE
+"""
+        return await (
+            self._devcontainer(source)
+            .with_env_variable("CODEX_DMG_INTEL_CANDIDATE_URL", candidate_url)
+            .with_exec(["bash", "-lc", script])
+            .stdout()
+        )
