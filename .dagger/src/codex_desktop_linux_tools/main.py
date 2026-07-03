@@ -102,17 +102,21 @@ class CodexDesktopLinuxTools:
             DefaultPath("."),
             Ignore(SOURCE_IGNORE),
         ],
+        baseline: Annotated[
+            dagger.File,
+            DefaultPath("Codex.dmg"),
+        ],
         candidate_url: str = DEFAULT_DMG_URL,
     ) -> str:
-        """Download a DMG URL in Dagger and return a compact intelligence summary."""
+        """Download a DMG URL, compare it to repo Codex.dmg, and return a compact drift summary."""
         script = r"""
 set -euo pipefail
-mkdir -p /tmp/inputs /tmp/reports/upstream-dmg-intel
+mkdir -p /tmp/codex-dmg-intel-download /tmp/reports/upstream-dmg-intel
 curl -fsSL --retry 3 --connect-timeout 30 --max-time 600 \
-  -o /tmp/inputs/candidate.dmg "$CODEX_DMG_INTEL_CANDIDATE_URL"
+  -o /tmp/codex-dmg-intel-download/candidate.dmg "$CODEX_DMG_INTEL_CANDIDATE_URL"
 node scripts/dev/upstream-dmg-intel.js \
-  --candidate /tmp/inputs/candidate.dmg \
-  --no-baseline \
+  --candidate /tmp/codex-dmg-intel-download/candidate.dmg \
+  --baseline /tmp/codex-dmg-intel-baseline.dmg \
   --output-dir /tmp/reports/upstream-dmg-intel \
   > /tmp/codex-dmg-intel-summary.json
 node <<'NODE'
@@ -121,6 +125,7 @@ const reportDir = "/tmp/reports/upstream-dmg-intel";
 const summary = JSON.parse(fs.readFileSync("/tmp/codex-dmg-intel-summary.json", "utf8"));
 const protectedSurfaces = JSON.parse(fs.readFileSync(`${reportDir}/protected-surfaces.json`, "utf8"));
 const driftReport = JSON.parse(fs.readFileSync(`${reportDir}/drift-report.json`, "utf8"));
+const mapDrift = JSON.parse(fs.readFileSync(`${reportDir}/map-drift.json`, "utf8"));
 const surfaces = protectedSurfaces.surfaces.map((surface) => ({
   id: surface.id,
   status: surface.status,
@@ -132,26 +137,46 @@ const surfaceCounts = surfaces.reduce((counts, surface) => {
   counts[surface.status] = (counts[surface.status] ?? 0) + 1;
   return counts;
 }, {});
-const actionable = driftReport.surfaceDrift
+const blockingClassifications = new Set([
+  "REMOVED",
+  "PATCH_BROKEN",
+  "LINUX_SUBSTRATE_GAP",
+  "PROTECTED_SURFACE_MISSING",
+  "PROTECTED_SURFACE_PARTIAL",
+]);
+const changedSurfaces = driftReport.surfaceDrift
   .filter((entry) => entry.classification !== "UNCHANGED")
-  .slice(0, 25)
   .map((entry) => ({
     surfaceId: entry.surfaceId,
     classification: entry.classification,
     candidateStatus: entry.candidateStatus,
     missingAnchors: (entry.missingAnchors ?? []).map((anchor) => anchor.id),
   }));
+const blockers = changedSurfaces.filter((entry) => blockingClassifications.has(entry.classification));
+const reviewItems = changedSurfaces.filter((entry) => !blockingClassifications.has(entry.classification));
+const allProtectedSurfacesPresent = surfaces.every((surface) => surface.status === "PRESENT");
 process.stdout.write(JSON.stringify({
+  decision: {
+    acceptance: blockers.length === 0 ? "no-blockers" : "blocked",
+    baselineComparison: mapDrift.mode === "baselineComparison",
+    allProtectedSurfacesPresent,
+    blockersCount: blockers.length,
+    reviewItemsCount: reviewItems.length,
+  },
   summary,
   surfaceCounts,
   classificationCounts: driftReport.classificationCounts,
+  structuralDriftSummary: driftReport.structuralDriftSummary,
+  mapMode: mapDrift.mode,
   surfaces,
-  actionable,
+  blockers,
+  reviewItems: reviewItems.slice(0, 25),
 }, null, 2) + "\n");
 NODE
 """
         return await (
             self._devcontainer(source)
+            .with_file("/tmp/codex-dmg-intel-baseline.dmg", baseline)
             .with_env_variable("CODEX_DMG_INTEL_CANDIDATE_URL", candidate_url)
             .with_exec(["bash", "-lc", script])
             .stdout()

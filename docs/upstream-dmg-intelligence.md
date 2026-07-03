@@ -186,8 +186,9 @@ dagger call inspect-upstream-dmg --candidate ./Codex.dmg export --path /tmp/code
 ```
 
 The `inspect-upstream-dmg-url` function downloads the current upstream DMG URL
-inside Dagger and returns a compact JSON summary for Codex/MCP use. The
-`inspect-upstream-dmg` function accepts a candidate DMG file and optional
+inside Dagger, compares it to repo `Codex.dmg`, and returns a compact JSON
+summary for Codex/MCP use with `decision`, `blockers`, and review-only drift.
+The `inspect-upstream-dmg` function accepts a candidate DMG file and optional
 baseline and patch-report files, then returns the generated report directory.
 The Dagger source context ignores DMGs, build outputs, generated reports,
 `target/`, and app extraction trees; pass large DMGs as explicit file
