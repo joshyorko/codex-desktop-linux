@@ -219,11 +219,16 @@ function applyRecordReplayChronicleTrayPatch(currentSource) {
 
 function applyRecordReplayChronicleSettingsPatch(currentSource) {
   const patchName = "Record & Replay Chronicle settings bridge patch";
+  const hasConcurrentChronicleToggle =
+    /Promise\.allSettled\(\[[^\]]*linux-record-replay-skysight-(?:start|resume|pause)/u.test(
+      currentSource,
+    );
   if (
     currentSource.includes("linux-record-replay-skysight-start`,{summaryAgent:!0}") &&
     currentSource.includes("linux-record-replay-skysight-resume`") &&
     currentSource.includes("linux-record-replay-skysight-start`,{summaryAgent:!1}") &&
-    currentSource.includes("linux-record-replay-skysight-pause`")
+    currentSource.includes("linux-record-replay-skysight-pause`") &&
+    !hasConcurrentChronicleToggle
   ) {
     return currentSource;
   }
@@ -235,10 +240,26 @@ function applyRecordReplayChronicleSettingsPatch(currentSource) {
   let patchedDisable = false;
 
   patchedSource = patchedSource.replace(
+    /await Promise\.allSettled\(\[([A-Za-z_$][\w$]*)\(`linux-record-replay-skysight-start`,\{summaryAgent:!0\}\),\1\(`linux-record-replay-skysight-resume`\)\]\)/u,
+    (_match, rpc) => {
+      patchedEnable = true;
+      return `await ${rpc}(\`linux-record-replay-skysight-start\`,{summaryAgent:!0}),await ${rpc}(\`linux-record-replay-skysight-resume\`)`;
+    },
+  );
+
+  patchedSource = patchedSource.replace(
+    /await Promise\.allSettled\(\[([A-Za-z_$][\w$]*)\(`linux-record-replay-skysight-start`,\{summaryAgent:!1\}\),\1\(`linux-record-replay-skysight-pause`\)\]\)/u,
+    (_match, rpc) => {
+      patchedDisable = true;
+      return `await ${rpc}(\`linux-record-replay-skysight-start\`,{summaryAgent:!1}),await ${rpc}(\`linux-record-replay-skysight-pause\`)`;
+    },
+  );
+
+  patchedSource = patchedSource.replace(
     /await ([A-Za-z_$][\w$]*)\.mutateAsync\(\{enabled:!0\}\),([A-Za-z_$][\w$]*)\?\.\(([A-Za-z_$][\w$]*),!0\)/u,
     (_match, mutationVar, callbackVar, previousEnabledVar) => {
       patchedEnable = true;
-      return `await ${mutationVar}.mutateAsync({enabled:!0}),await Promise.allSettled([${rpcVar}(\`linux-record-replay-skysight-start\`,{summaryAgent:!0}),${rpcVar}(\`linux-record-replay-skysight-resume\`)]),${callbackVar}?.(${previousEnabledVar},!0)`;
+      return `await ${mutationVar}.mutateAsync({enabled:!0}),await ${rpcVar}(\`linux-record-replay-skysight-start\`,{summaryAgent:!0}),await ${rpcVar}(\`linux-record-replay-skysight-resume\`),${callbackVar}?.(${previousEnabledVar},!0)`;
     },
   );
 
@@ -246,7 +267,7 @@ function applyRecordReplayChronicleSettingsPatch(currentSource) {
     /await ([A-Za-z_$][\w$]*)\.mutateAsync\(\{enabled:!1\}\),([A-Za-z_$][\w$]*)\?\.\(([A-Za-z_$][\w$]*),!1\)/u,
     (_match, mutationVar, callbackVar, previousEnabledVar) => {
       patchedDisable = true;
-      return `await ${mutationVar}.mutateAsync({enabled:!1}),await Promise.allSettled([${rpcVar}(\`linux-record-replay-skysight-start\`,{summaryAgent:!1}),${rpcVar}(\`linux-record-replay-skysight-pause\`)]),${callbackVar}?.(${previousEnabledVar},!1)`;
+      return `await ${mutationVar}.mutateAsync({enabled:!1}),await ${rpcVar}(\`linux-record-replay-skysight-start\`,{summaryAgent:!1}),await ${rpcVar}(\`linux-record-replay-skysight-pause\`),${callbackVar}?.(${previousEnabledVar},!1)`;
     },
   );
 

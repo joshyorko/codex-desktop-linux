@@ -441,6 +441,38 @@ test("record-and-replay patch wires Chronicle Settings switch to Linux Skysight"
   assert.match(patched, /linux-record-replay-skysight-resume`/);
   assert.match(patched, /linux-record-replay-skysight-start`,\{summaryAgent:!1\}/);
   assert.match(patched, /linux-record-replay-skysight-pause`/);
+  assert.match(
+    patched,
+    /await ue\(`linux-record-replay-skysight-start`,\{summaryAgent:!0\}\),await ue\(`linux-record-replay-skysight-resume`\)/,
+  );
+  assert.match(
+    patched,
+    /await ue\(`linux-record-replay-skysight-start`,\{summaryAgent:!1\}\),await ue\(`linux-record-replay-skysight-pause`\)/,
+  );
+  assert.doesNotMatch(patched, /Promise\.allSettled\(\[[^\]]*linux-record-replay-skysight/);
+});
+
+test("record-and-replay patch upgrades concurrent Chronicle Settings bridge", () => {
+  const source = [
+    "function Bt(){",
+    "let F=async()=>{try{await c.mutateAsync({enabled:!0}),await Promise.allSettled([ue(`linux-record-replay-skysight-start`,{summaryAgent:!0}),ue(`linux-record-replay-skysight-resume`)]),e?.(a,!0)}catch(e){}};",
+    "let I=async()=>{try{await c.mutateAsync({enabled:!1}),await Promise.allSettled([ue(`linux-record-replay-skysight-start`,{summaryAgent:!1}),ue(`linux-record-replay-skysight-pause`)]),e?.(n,!1)}catch(e){}};",
+    "}",
+  ].join("");
+
+  const patched = applyRecordReplayChronicleSettingsPatch(source);
+
+  assert.notEqual(patched, source);
+  assert.equal(applyRecordReplayChronicleSettingsPatch(patched), patched);
+  assert.match(
+    patched,
+    /await ue\(`linux-record-replay-skysight-start`,\{summaryAgent:!0\}\),await ue\(`linux-record-replay-skysight-resume`\)/,
+  );
+  assert.match(
+    patched,
+    /await ue\(`linux-record-replay-skysight-start`,\{summaryAgent:!1\}\),await ue\(`linux-record-replay-skysight-pause`\)/,
+  );
+  assert.doesNotMatch(patched, /Promise\.allSettled\(\[[^\]]*linux-record-replay-skysight/);
 });
 
 test("record-and-replay patch wires Linux Chronicle tray controls to Skysight", () => {
