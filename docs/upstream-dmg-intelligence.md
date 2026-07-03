@@ -10,28 +10,36 @@ is gitignored; check in only deliberate fixtures or registry changes.
 
 ## Commands
 
-Candidate-only inventory, using the repo devcontainer image:
+Current upstream-vs-cached baseline check, using the repo devcontainer image:
 
 ```bash
-make inspect-upstream-intel-devcontainer DMG=./Codex.dmg
+make inspect-upstream-intel-devcontainer
 ```
 
 The devcontainer wrapper is the preferred path for real DMG checks because it
 keeps `7zz`, Node, `jq`, and report-generation dependencies inside the project
-container. It builds `codex-desktop-linux-devcontainer:local` from
+container. With no `DMG=...`, it downloads the current upstream DMG into the
+gitignored `reports/upstream-dmg/downloads/` directory and automatically uses
+repo `./Codex.dmg` as the baseline when that cached file exists and differs
+from the candidate. It builds `codex-desktop-linux-devcontainer:local` from
 `.devcontainer/Dockerfile` if that image is missing, mounts outside candidate
 or baseline paths into the container, and writes only the ignored report bundle
 under `reports/upstream-dmg/` by default.
+
+Inspect a specific candidate DMG without spelling out the baseline:
+
+```bash
+make inspect-upstream-intel-devcontainer DMG=/tmp/Codex-new.dmg
+```
 
 Host-side candidate-only inventory is still available when the host already has
 the same toolchain:
 
 ```bash
-scripts/dev/upstream-dmg-intel.js --candidate ./Codex.dmg
 make inspect-upstream-intel DMG=./Codex.dmg
 ```
 
-Baseline comparison:
+Explicit baseline comparison remains available for older known-good builds:
 
 ```bash
 scripts/dev/upstream-dmg-intel.js \
@@ -43,9 +51,7 @@ Pair it with the existing patch report path:
 
 ```bash
 make inspect-upstream DMG=/path/to/new/Codex.dmg
-make inspect-upstream-intel-devcontainer \
-  DMG=/path/to/new/Codex.dmg \
-  UPSTREAM_INTEL_BASELINE=/path/to/known-good/Codex.app
+make inspect-upstream-intel-devcontainer DMG=/path/to/new/Codex.dmg
 ```
 
 When `dist-next/rebuild/patch-report.json` exists, `make inspect-upstream-intel`
@@ -143,13 +149,12 @@ review item before accepting the upstream DMG.
 The automated tests use synthetic `.app` fixtures and `app.asar.extracted`
 directories so normal verification does not rebuild Electron or require the real
 DMG. Manual real-DMG verification is still required before accepting a new
-upstream build. Use a known-good baseline plus the candidate DMG:
+upstream build. The normal path downloads current upstream and compares it to
+the cached repo baseline:
 
 ```bash
 node --test scripts/dev/upstream-dmg-intel.test.js
 scripts/dev/upstream-dmg-intel-devcontainer \
-  --baseline /path/to/known-good/Codex.dmg \
-  --candidate /path/to/new/Codex.dmg \
   --output-dir reports/upstream-dmg/<run-id>
 ```
 

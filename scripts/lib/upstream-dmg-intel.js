@@ -1482,7 +1482,30 @@ function publicInventory(inventory) {
   };
 }
 
+function sameResolvedPath(left, right) {
+  try {
+    return fs.realpathSync(left) === fs.realpathSync(right);
+  } catch {
+    return path.resolve(left) === path.resolve(right);
+  }
+}
+
+function resolveBaselinePath({ autoBaseline = false, baselinePath = null, candidatePath, repoRoot = process.cwd() } = {}) {
+  if (baselinePath != null || !autoBaseline) {
+    return baselinePath;
+  }
+  const defaultBaselinePath = path.join(repoRoot, "Codex.dmg");
+  if (!fs.existsSync(defaultBaselinePath)) {
+    return null;
+  }
+  if (candidatePath != null && sameResolvedPath(defaultBaselinePath, candidatePath)) {
+    return null;
+  }
+  return defaultBaselinePath;
+}
+
 function buildIntelReports({
+  autoBaseline = false,
   baselinePath = null,
   candidatePath,
   outputDir,
@@ -1494,6 +1517,12 @@ function buildIntelReports({
   if (candidatePath == null) {
     throw new Error("candidatePath is required");
   }
+  const resolvedBaselinePath = resolveBaselinePath({
+    autoBaseline,
+    baselinePath,
+    candidatePath,
+    repoRoot,
+  });
   const reportDir =
     outputDir ??
     path.join(
@@ -1503,9 +1532,9 @@ function buildIntelReports({
     );
   const candidateInventory = createInventory({ registry, sourcePath: candidatePath });
   const candidateProtected = extractProtectedSurfaces({ inventory: candidateInventory, registry, repoRoot });
-  const baselineInventory = baselinePath == null ? null : createInventory({ registry, sourcePath: baselinePath });
+  const baselineInventory = resolvedBaselinePath == null ? null : createInventory({ registry, sourcePath: resolvedBaselinePath });
   const baselineProtected =
-    baselinePath == null
+    resolvedBaselinePath == null
       ? null
       : extractProtectedSurfaces({
           inventory: baselineInventory,
@@ -1570,4 +1599,5 @@ module.exports = {
   extractProtectedSurfaces,
   renderActionPlanMarkdown,
   renderDriftMarkdown,
+  resolveBaselinePath,
 };

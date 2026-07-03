@@ -4,7 +4,8 @@ SHELL := bash
 APP_DIR := $(CURDIR)/codex-app
 NEXT_APP_DIR := $(CURDIR)/codex-app-next
 REBUILD_REPORT_DIR := $(CURDIR)/dist-next/rebuild
-UPSTREAM_INTEL_CANDIDATE ?= $(if $(strip $(DMG)),$(DMG),$(CURDIR)/Codex.dmg)
+UPSTREAM_INTEL_CANDIDATE ?= $(strip $(DMG))
+UPSTREAM_INTEL_HOST_CANDIDATE := $(if $(strip $(UPSTREAM_INTEL_CANDIDATE)),$(UPSTREAM_INTEL_CANDIDATE),$(CURDIR)/Codex.dmg)
 UPSTREAM_INTEL_BASELINE ?=
 UPSTREAM_INTEL_PATCH_REPORT ?= $(REBUILD_REPORT_DIR)/patch-report.json
 UPSTREAM_INTEL_IMAGE ?= codex-desktop-linux-devcontainer:local
@@ -98,8 +99,8 @@ help:
 	@printf '  %-18s %s\n' "make clean-dist" "Remove generated dist/ artifacts"
 	@printf '  %-18s %s\n' "make clean-state" "Remove updater runtime state from XDG directories"
 	@printf '\nVariables:\n\n'
-	@printf '  %-18s %s\n' "DMG=/path/file.dmg" "Override the DMG; rebuild commands auto-find ./Codex.dmg"
-	@printf '  %-18s %s\n' "UPSTREAM_INTEL_BASELINE=..." "Optional known-good DMG/.app for make inspect-upstream-intel"
+	@printf '  %-18s %s\n' "DMG=/path/file.dmg" "Override the DMG; devcontainer intel downloads latest when omitted"
+	@printf '  %-18s %s\n' "UPSTREAM_INTEL_BASELINE=..." "Optional known-good DMG/.app; defaults to ./Codex.dmg when different"
 	@printf '  %-18s %s\n' "UPSTREAM_INTEL_PATCH_REPORT=..." "Optional patch-report.json folded into upstream intelligence drift"
 	@printf '  %-18s %s\n' "UPSTREAM_INTEL_IMAGE=..." "Docker image for make inspect-upstream-intel-devcontainer"
 	@printf '  %-18s %s\n' "NEXT_APP_DIR=..." "Override side-by-side rebuild candidate directory"
@@ -126,8 +127,9 @@ help:
 	@printf '  %s\n' "make install-native"
 	@printf '  %s\n' "PACKAGE_WITH_UPDATER=0 make update-native"
 	@printf '  %s\n' "make inspect-upstream DMG=/tmp/Codex.dmg"
-	@printf '  %s\n' "make inspect-upstream-intel DMG=/tmp/Codex.dmg UPSTREAM_INTEL_BASELINE=/tmp/known-good/Codex.app"
-	@printf '  %s\n' "make inspect-upstream-intel-devcontainer DMG=/tmp/Codex.dmg UPSTREAM_INTEL_BASELINE=./Codex.dmg"
+	@printf '  %s\n' "make inspect-upstream-intel DMG=/tmp/Codex-new.dmg"
+	@printf '  %s\n' "make inspect-upstream-intel-devcontainer"
+	@printf '  %s\n' "make inspect-upstream-intel-devcontainer DMG=/tmp/Codex-new.dmg"
 	@printf '  %s\n' "make rebuild-next DMG=/tmp/Codex.dmg"
 	@printf '  %s\n' "make run-app"
 	@printf '  %s\n' "make build-dev-app"
@@ -184,7 +186,7 @@ inspect-upstream:
 
 inspect-upstream-intel:
 	@echo "[make] Building upstream DMG intelligence report"
-	@args=(--candidate "$(UPSTREAM_INTEL_CANDIDATE)"); \
+	@args=(--candidate "$(UPSTREAM_INTEL_HOST_CANDIDATE)"); \
 	if [ -n "$(UPSTREAM_INTEL_BASELINE)" ]; then \
 		args+=("--baseline" "$(UPSTREAM_INTEL_BASELINE)"); \
 	fi; \
@@ -195,7 +197,10 @@ inspect-upstream-intel:
 
 inspect-upstream-intel-devcontainer:
 	@echo "[make] Building upstream DMG intelligence report in devcontainer"
-	@args=(--candidate "$(UPSTREAM_INTEL_CANDIDATE)" --image "$(UPSTREAM_INTEL_IMAGE)"); \
+	@args=(--image "$(UPSTREAM_INTEL_IMAGE)"); \
+	if [ -n "$(UPSTREAM_INTEL_CANDIDATE)" ]; then \
+		args+=("--candidate" "$(UPSTREAM_INTEL_CANDIDATE)"); \
+	fi; \
 	if [ -n "$(UPSTREAM_INTEL_BASELINE)" ]; then \
 		args+=("--baseline" "$(UPSTREAM_INTEL_BASELINE)"); \
 	fi; \

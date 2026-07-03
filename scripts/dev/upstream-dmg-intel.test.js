@@ -13,6 +13,7 @@ const {
   createInventory,
   extractProtectedSurfaces,
   renderActionPlanMarkdown,
+  resolveBaselinePath,
 } = require("../lib/upstream-dmg-intel.js");
 
 const registry = {
@@ -522,6 +523,47 @@ test("writes the expected report bundle for candidate-only and comparison runs",
       actionPlan,
       /update patch descriptors, staging paths, and Linux mirror code to the candidate evidence paths/,
     );
+  }));
+
+test("auto-baseline uses repo Codex.dmg when candidate is different", () =>
+  withTempDir((workspace) => {
+    const repoRoot = path.join(workspace, "repo");
+    fs.mkdirSync(repoRoot, { recursive: true });
+    const baselineApp = createFixtureApp(workspace, "baseline");
+    const candidateApp = createFixtureApp(workspace, "candidate");
+    const baselineCache = path.join(repoRoot, "Codex.dmg");
+    fs.cpSync(baselineApp, baselineCache, { recursive: true });
+
+    assert.equal(
+      resolveBaselinePath({
+        autoBaseline: true,
+        candidatePath: candidateApp,
+        repoRoot,
+      }),
+      baselineCache,
+    );
+    assert.equal(
+      resolveBaselinePath({
+        autoBaseline: true,
+        candidatePath: baselineCache,
+        repoRoot,
+      }),
+      null,
+    );
+
+    const outputDir = path.join(workspace, "auto-baseline-report");
+    const reports = buildIntelReports({
+      autoBaseline: true,
+      candidatePath: candidateApp,
+      outputDir,
+      registry,
+      repoRoot,
+    });
+
+    assert.equal(reports.mapDrift.mode, "baselineComparison");
+    assert.ok(fs.existsSync(path.join(outputDir, "baseline/inventory.json")));
+    assert.ok(fs.existsSync(path.join(outputDir, "candidate/inventory.json")));
+    assert.ok(findClassification(reports.driftReport, "chronicle_sidecar", "NEW_UPSTREAM_CAPABILITY"));
   }));
 
 test("CLI loads the checked-in registry and writes the report bundle", () =>

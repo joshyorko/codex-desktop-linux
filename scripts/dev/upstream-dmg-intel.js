@@ -16,7 +16,8 @@ Build an upstream DMG intelligence report without mutating codex-app/.
 
 Options:
   --candidate PATH       Candidate Codex.dmg, extracted .app, or extracted app resources directory
-  --baseline PATH        Optional known-good baseline DMG or extracted .app
+  --baseline PATH        Optional known-good baseline DMG or extracted .app; defaults to ./Codex.dmg when different
+  --no-baseline          Do a candidate-only scan even when ./Codex.dmg exists
   --patch-report PATH    Optional patch-report.json to fold PATCH_BROKEN into drift-report.json
   --registry PATH        Protected surface registry (default: scripts/dev/upstream-dmg-protected-surfaces.json)
   --output-dir DIR       Exact output directory (default: reports/upstream-dmg/<timestamp>)
@@ -27,6 +28,7 @@ Options:
 
 function parseArgs(argv) {
   const args = {
+    autoBaseline: true,
     baselinePath: null,
     candidatePath: null,
     outputDir: null,
@@ -41,6 +43,9 @@ function parseArgs(argv) {
       args.candidatePath = argv[++index];
     } else if (arg === "--baseline") {
       args.baselinePath = argv[++index];
+    } else if (arg === "--no-baseline") {
+      args.autoBaseline = false;
+      args.baselinePath = null;
     } else if (arg === "--patch-report") {
       args.patchReportPath = argv[++index];
     } else if (arg === "--registry") {
@@ -88,6 +93,7 @@ function main(argv = process.argv.slice(2)) {
 
   const registry = JSON.parse(fs.readFileSync(args.registryPath, "utf8"));
   const reports = buildIntelReports({
+    autoBaseline: args.autoBaseline,
     baselinePath: args.baselinePath,
     candidatePath: args.candidatePath,
     outputDir: args.outputDir,
@@ -104,6 +110,7 @@ function main(argv = process.argv.slice(2)) {
     driftReport: path.join(reports.outputDir, "drift-report.json"),
     driftMarkdown: path.join(reports.outputDir, "drift-report.md"),
     substrateActionPlan: path.join(reports.outputDir, "substrate-action-plan.md"),
+    baselineSource: reports.driftReport.baselineSource,
     classificationCounts: reports.driftReport.classificationCounts,
   };
   process.stdout.write(`${JSON.stringify(summary, null, 2)}\n`);

@@ -91,16 +91,16 @@ surfaces:
 
 ```bash
 make inspect-upstream DMG=/path/to/Codex.dmg
-make inspect-upstream-intel-devcontainer DMG=/path/to/Codex.dmg
+make inspect-upstream-intel-devcontainer
 ```
 
-For baseline comparison and drift classifications, pass a known-good extracted
-`.app` or DMG:
+The devcontainer intelligence target downloads the current upstream DMG into
+`reports/upstream-dmg/downloads/` when `DMG=...` is omitted and automatically
+compares it against repo `./Codex.dmg` when that cached baseline exists.
+For an already downloaded candidate, pass only that one path:
 
 ```bash
-make inspect-upstream-intel-devcontainer \
-  DMG=/path/to/new/Codex.dmg \
-  UPSTREAM_INTEL_BASELINE=/path/to/known-good/Codex.app
+make inspect-upstream-intel-devcontainer DMG=/path/to/new/Codex.dmg
 ```
 
 See `docs/upstream-dmg-intelligence.md` for the protected-surface registry,
