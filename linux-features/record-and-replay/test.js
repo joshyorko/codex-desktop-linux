@@ -559,6 +559,29 @@ test("record-and-replay patch upgrades concurrent Chronicle Settings bridge", ()
   assert.doesNotMatch(patched, /Promise\.allSettled\(\[[^\]]*linux-record-replay-skysight/);
 });
 
+test("record-and-replay patch syncs Skysight when broad Memory toggle controls Chronicle", () => {
+  const source = [
+    "function fn(){",
+    "let E=Nt(),he=a.kind===`local`,w=ue(S);",
+    "ve(`batch-write-config-value`,{hostId:i});",
+    "let R=e=>{un({productLogger:r,previousState:L(),selectedEnabled:e,featureWrite:()=>w.mutateAsync({featureName:ee,enabled:e}),configWrite:()=>x.mutateAsync({edits:[{keyPath:`memories.generate_memories`,value:e},{keyPath:`memories.use_memories`,value:e}]}),...!e&&he?{chronicleDisable:()=>E.mutateAsync({enabled:!1})}:{}})};",
+    "}",
+  ].join("");
+
+  const patched = applyRecordReplayChronicleSettingsPatch(source);
+
+  assert.notEqual(patched, source);
+  assert.equal(applyRecordReplayChronicleSettingsPatch(patched), patched);
+  assert.match(
+    patched,
+    /let R=async e=>\{e&&he&&\(await ve\(`linux-record-replay-skysight-start`,\{summaryAgent:!0\}\),await ve\(`linux-record-replay-skysight-resume`\)\);un/,
+  );
+  assert.match(
+    patched,
+    /chronicleDisable:async\(\)=>\{await E\.mutateAsync\(\{enabled:!1\}\),await ve\(`linux-record-replay-skysight-start`,\{summaryAgent:!1\}\),await ve\(`linux-record-replay-skysight-pause`\)\}/,
+  );
+});
+
 test("record-and-replay patch wires Linux Chronicle tray controls to Skysight", () => {
   const source = [
     'const cp=require("node:child_process"),fs=require("node:fs"),path=require("node:path");',

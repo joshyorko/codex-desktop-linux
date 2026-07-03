@@ -224,21 +224,46 @@ function applyRecordReplayChronicleSettingsPatch(currentSource) {
     /Promise\.allSettled\(\[[^\]]*linux-record-replay-skysight-(?:start|resume|pause)/u.test(
       currentSource,
     );
-  if (
+  const hasPatchedChronicleToggle =
     currentSource.includes("linux-record-replay-skysight-start`,{summaryAgent:!0}") &&
     currentSource.includes("linux-record-replay-skysight-resume`") &&
     currentSource.includes("linux-record-replay-skysight-start`,{summaryAgent:!1}") &&
     currentSource.includes("linux-record-replay-skysight-pause`") &&
-    !hasConcurrentChronicleToggle
+    !hasConcurrentChronicleToggle;
+  const hasUnpatchedMemoryDisable =
+    /chronicleDisable:\(\)=>[A-Za-z_$][\w$]*\.mutateAsync\(\{enabled:!1\}\)/u.test(
+      currentSource,
+    );
+  const hasUnpatchedMemoryEnable =
+    /[A-Za-z_$][\w$]*=e=>\{un\(\{productLogger:[^;]*selectedEnabled:e,featureWrite:/u.test(
+      currentSource,
+    );
+  const hasPatchedMemoryDisable =
+    /chronicleDisable:async\(\)=>\{await [A-Za-z_$][\w$]*\.mutateAsync\(\{enabled:!1\}\),await [A-Za-z_$][\w$]*\(`linux-record-replay-skysight-start`,\{summaryAgent:!1\}\),await [A-Za-z_$][\w$]*\(`linux-record-replay-skysight-pause`\)\}/u.test(
+      currentSource,
+    );
+  const hasPatchedMemoryEnable =
+    /[A-Za-z_$][\w$]*=async e=>\{e&&[A-Za-z_$][\w$]*&&\(await [A-Za-z_$][\w$]*\(`linux-record-replay-skysight-start`,\{summaryAgent:!0\}\),await [A-Za-z_$][\w$]*\(`linux-record-replay-skysight-resume`\)\);un\(\{productLogger:/u.test(
+      currentSource,
+    );
+  if (
+    hasPatchedChronicleToggle &&
+    (!hasUnpatchedMemoryDisable || hasPatchedMemoryDisable) &&
+    (!hasUnpatchedMemoryEnable || hasPatchedMemoryEnable)
   ) {
     return currentSource;
   }
 
   const rpcVar =
     currentSource.match(/([A-Za-z_$][\w$]*)\(`batch-write-config-value`,\{hostId:/u)?.[1] ?? "ue";
+  const localHostVar =
+    currentSource.match(/([A-Za-z_$][\w$]*)=[A-Za-z_$][\w$]*\.kind===`local`/u)?.[1] ??
+    "he";
   let patchedSource = currentSource;
   let patchedEnable = false;
   let patchedDisable = false;
+  let patchedMemoryEnable = false;
+  let patchedMemoryDisable = false;
 
   patchedSource = patchedSource.replace(
     /await Promise\.allSettled\(\[([A-Za-z_$][\w$]*)\(`linux-record-replay-skysight-start`,\{summaryAgent:!0\}\),\1\(`linux-record-replay-skysight-resume`\)\]\)/u,
@@ -272,8 +297,30 @@ function applyRecordReplayChronicleSettingsPatch(currentSource) {
     },
   );
 
-  if (!patchedEnable || !patchedDisable) {
+  patchedSource = patchedSource.replace(
+    /chronicleDisable:\(\)=>([A-Za-z_$][\w$]*)\.mutateAsync\(\{enabled:!1\}\)/u,
+    (_match, mutationVar) => {
+      patchedMemoryDisable = true;
+      return `chronicleDisable:async()=>{await ${mutationVar}.mutateAsync({enabled:!1}),await ${rpcVar}(\`linux-record-replay-skysight-start\`,{summaryAgent:!1}),await ${rpcVar}(\`linux-record-replay-skysight-pause\`)}`;
+    },
+  );
+
+  patchedSource = patchedSource.replace(
+    /([A-Za-z_$][\w$]*)=e=>\{un\(\{productLogger:/u,
+    (_match, handlerVar) => {
+      patchedMemoryEnable = true;
+      return `${handlerVar}=async e=>{e&&${localHostVar}&&(await ${rpcVar}(\`linux-record-replay-skysight-start\`,{summaryAgent:!0}),await ${rpcVar}(\`linux-record-replay-skysight-resume\`));un({productLogger:`;
+    },
+  );
+
+  if (!hasPatchedChronicleToggle && (!patchedEnable || !patchedDisable)) {
     warn("Could not find Chronicle settings toggle callbacks", patchName);
+  }
+  if (hasUnpatchedMemoryEnable && !patchedMemoryEnable) {
+    warn("Could not find Chronicle memory enable callback", patchName);
+  }
+  if (hasUnpatchedMemoryDisable && !patchedMemoryDisable) {
+    warn("Could not find Chronicle memory disable callback", patchName);
   }
   return patchedSource;
 }
