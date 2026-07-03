@@ -59,6 +59,37 @@ pluggable: a follow-up backend can add RapidOCR/ONNXRuntime or PaddleOCR model
 packs for higher screenshot accuracy without making the default package heavy
 or network-dependent.
 
+### OCR Backend Direction
+
+Tesseract remains the default Linux Chronicle OCR backend because it is local,
+small enough for host installation, distro/Homebrew packaged, offline, and
+produces word-level TSV boxes without pulling model weights at runtime. That
+makes it a good privacy-preserving baseline for continuous screen memory.
+
+The backend boundary should stay pluggable. Stronger deep-learning OCR stacks
+are better candidates for an opt-in follow-up than for the default package:
+
+- RapidOCR/ONNXRuntime is the preferred optional advanced provider target. It
+  packages PaddleOCR-style models for fast offline deployment, supports local
+  CPU inference, and keeps the default feature from depending on the larger
+  PaddlePaddle/PyTorch runtime stack.
+- PaddleOCR remains the upstream model family to watch for accuracy and model
+  refreshes. Its PP-OCR deployment paths cover broad multilingual scene OCR and
+  acceleration through OpenVINO, ONNX Runtime, TensorRT, and native inference
+  paths.
+- Surya is attractive for document-heavy workflows that need layout, reading
+  order, tables, and OCR together, but its current model stack and inference
+  server requirements are heavier than a per-minute desktop-memory default.
+- EasyOCR is easy to try and multilingual, but it is older and PyTorch-heavy
+  compared with current PaddleOCR and Surya options.
+- docTR is a clean deep-learning document OCR library, but it is less focused
+  on lightweight desktop screenshot memory than the options above.
+
+The practical target is therefore: keep `tesseract-cli` as the default, add a
+future `rapidocr`/ONNXRuntime provider behind the same OCR result contract, and
+never make model downloads or GPU frameworks mandatory for the base Chronicle
+feature.
+
 Runtime controls:
 
 ```bash

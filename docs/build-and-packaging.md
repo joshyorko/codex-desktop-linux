@@ -85,6 +85,27 @@ reuses the existing cached `Codex.dmg` verbatim, skips upstream metadata checks,
 and fails instead of downloading when no cached DMG or explicit `DMG=...` path is
 available. This also keeps `--fresh` from deleting the cached DMG.
 
+Before accepting a fast-moving upstream DMG, run the report-only intelligence
+lane to inventory protected Sky/Chronicle/Skysight/Computer Use/Record & Replay
+surfaces:
+
+```bash
+make inspect-upstream DMG=/path/to/Codex.dmg
+make inspect-upstream-intel DMG=/path/to/Codex.dmg
+```
+
+For baseline comparison and drift classifications, pass a known-good extracted
+`.app` or DMG:
+
+```bash
+make inspect-upstream-intel \
+  DMG=/path/to/new/Codex.dmg \
+  UPSTREAM_INTEL_BASELINE=/path/to/known-good/Codex.app
+```
+
+See `docs/upstream-dmg-intelligence.md` for the protected-surface registry,
+JSON/Markdown report outputs, and fixture-based test strategy.
+
 Run the generated app:
 
 ```bash
