@@ -91,14 +91,14 @@ surfaces:
 
 ```bash
 make inspect-upstream DMG=/path/to/Codex.dmg
-make inspect-upstream-intel DMG=/path/to/Codex.dmg
+make inspect-upstream-intel-devcontainer DMG=/path/to/Codex.dmg
 ```
 
 For baseline comparison and drift classifications, pass a known-good extracted
 `.app` or DMG:
 
 ```bash
-make inspect-upstream-intel \
+make inspect-upstream-intel-devcontainer \
   DMG=/path/to/new/Codex.dmg \
   UPSTREAM_INTEL_BASELINE=/path/to/known-good/Codex.app
 ```

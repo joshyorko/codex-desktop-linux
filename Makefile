@@ -7,6 +7,7 @@ REBUILD_REPORT_DIR := $(CURDIR)/dist-next/rebuild
 UPSTREAM_INTEL_CANDIDATE ?= $(if $(strip $(DMG)),$(DMG),$(CURDIR)/Codex.dmg)
 UPSTREAM_INTEL_BASELINE ?=
 UPSTREAM_INTEL_PATCH_REPORT ?= $(REBUILD_REPORT_DIR)/patch-report.json
+UPSTREAM_INTEL_IMAGE ?= codex-desktop-linux-devcontainer:local
 PACKAGE_NAME := codex-desktop
 PACKAGE_WITH_UPDATER ?= 1
 MAX_BUILD_THREADS ?= 0
@@ -63,7 +64,7 @@ if [ -z "$$format" ]; then \
 fi; \
 printf '%s\n' "$$format"
 
-.PHONY: help check test build-updater maybe-build-updater update rebuild rebuild-install inspect-upstream inspect-upstream-intel build-app build-app-fresh setup-native bootstrap-native install-native update-native rebuild-next run-app build-dev-app run-dev-app deb rpm pacman appimage package install service-enable service-status clean-dist clean-state
+.PHONY: help check test build-updater maybe-build-updater update rebuild rebuild-install inspect-upstream inspect-upstream-intel inspect-upstream-intel-devcontainer build-app build-app-fresh setup-native bootstrap-native install-native update-native rebuild-next run-app build-dev-app run-dev-app deb rpm pacman appimage package install service-enable service-status clean-dist clean-state
 
 help:
 	@printf '\nCodex Desktop Linux Make Targets\n\n'
@@ -75,6 +76,7 @@ help:
 	@printf '  %-18s %s\n' "make rebuild-install" "Find a DMG, rebuild, and install into codex-app/"
 	@printf '  %-18s %s\n' "make inspect-upstream" "Inspect a DMG and write rebuild reports without changing codex-app/"
 	@printf '  %-18s %s\n' "make inspect-upstream-intel" "Inventory protected upstream DMG surfaces and write drift reports"
+	@printf '  %-18s %s\n' "make inspect-upstream-intel-devcontainer" "Run upstream DMG intelligence inside the devcontainer image"
 	@printf '  %-18s %s\n' "make build-app" "Run install.sh and regenerate codex-app/ (reuses cached Codex.dmg)"
 	@printf '  %-18s %s\n' "make build-app-fresh" "Remove generated app and refresh cached Codex.dmg by default"
 	@printf '  %-18s %s\n' "make setup-native" "Guided setup summary and Linux feature config helper"
@@ -99,6 +101,7 @@ help:
 	@printf '  %-18s %s\n' "DMG=/path/file.dmg" "Override the DMG; rebuild commands auto-find ./Codex.dmg"
 	@printf '  %-18s %s\n' "UPSTREAM_INTEL_BASELINE=..." "Optional known-good DMG/.app for make inspect-upstream-intel"
 	@printf '  %-18s %s\n' "UPSTREAM_INTEL_PATCH_REPORT=..." "Optional patch-report.json folded into upstream intelligence drift"
+	@printf '  %-18s %s\n' "UPSTREAM_INTEL_IMAGE=..." "Docker image for make inspect-upstream-intel-devcontainer"
 	@printf '  %-18s %s\n' "NEXT_APP_DIR=..." "Override side-by-side rebuild candidate directory"
 	@printf '  %-18s %s\n' "APP_DIR=..." "Override final app directory for make rebuild-install"
 	@printf '  %-18s %s\n' "REBUILD_REPORT_DIR=..." "Override inspect/rebuild report output directory"
@@ -124,6 +127,7 @@ help:
 	@printf '  %s\n' "PACKAGE_WITH_UPDATER=0 make update-native"
 	@printf '  %s\n' "make inspect-upstream DMG=/tmp/Codex.dmg"
 	@printf '  %s\n' "make inspect-upstream-intel DMG=/tmp/Codex.dmg UPSTREAM_INTEL_BASELINE=/tmp/known-good/Codex.app"
+	@printf '  %s\n' "make inspect-upstream-intel-devcontainer DMG=/tmp/Codex.dmg UPSTREAM_INTEL_BASELINE=./Codex.dmg"
 	@printf '  %s\n' "make rebuild-next DMG=/tmp/Codex.dmg"
 	@printf '  %s\n' "make run-app"
 	@printf '  %s\n' "make build-dev-app"
@@ -188,6 +192,17 @@ inspect-upstream-intel:
 		args+=("--patch-report" "$(UPSTREAM_INTEL_PATCH_REPORT)"); \
 	fi; \
 	node scripts/dev/upstream-dmg-intel.js "$${args[@]}"
+
+inspect-upstream-intel-devcontainer:
+	@echo "[make] Building upstream DMG intelligence report in devcontainer"
+	@args=(--candidate "$(UPSTREAM_INTEL_CANDIDATE)" --image "$(UPSTREAM_INTEL_IMAGE)"); \
+	if [ -n "$(UPSTREAM_INTEL_BASELINE)" ]; then \
+		args+=("--baseline" "$(UPSTREAM_INTEL_BASELINE)"); \
+	fi; \
+	if [ -f "$(UPSTREAM_INTEL_PATCH_REPORT)" ]; then \
+		args+=("--patch-report" "$(UPSTREAM_INTEL_PATCH_REPORT)"); \
+	fi; \
+	scripts/dev/upstream-dmg-intel-devcontainer "$${args[@]}"
 
 build-app:
 	@echo "[make] Regenerating codex-app from DMG"

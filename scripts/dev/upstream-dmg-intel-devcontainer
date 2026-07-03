@@ -1,0 +1,234 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage: scripts/dev/upstream-dmg-intel-devcontainer --candidate PATH [options]
+
+Run upstream DMG intelligence inside the repo devcontainer image. This keeps
+7zz/Node/tooling requirements out of the host while writing reports under the
+gitignored reports/upstream-dmg/ tree by default.
+
+Options:
+  --candidate PATH       Candidate Codex.dmg, extracted .app, or resources dir
+  --baseline PATH        Optional known-good baseline DMG or extracted .app
+  --patch-report PATH    Optional patch-report.json
+  --registry PATH        Optional protected-surface registry path
+  --output-dir DIR       Output dir inside this repo; default is tool default
+  --timestamp VALUE      Timestamp slug used when --output-dir is omitted
+  --image IMAGE          Devcontainer image (default: codex-desktop-linux-devcontainer:local)
+  --build-image          Build the devcontainer image if missing
+  --no-build-image       Fail if the devcontainer image is missing
+  -h, --help             Show this help
+
+Examples:
+  scripts/dev/upstream-dmg-intel-devcontainer --candidate /tmp/Codex.dmg
+  scripts/dev/upstream-dmg-intel-devcontainer --baseline ./Codex.dmg --candidate /tmp/Codex-new.dmg
+EOF
+}
+
+repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+image="${CODEX_DMG_INTEL_IMAGE:-codex-desktop-linux-devcontainer:local}"
+build_image=auto
+candidate_path=""
+baseline_path=""
+patch_report_path=""
+registry_path=""
+output_dir=""
+timestamp=""
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --candidate)
+      candidate_path="${2:-}"
+      shift 2
+      ;;
+    --baseline)
+      baseline_path="${2:-}"
+      shift 2
+      ;;
+    --patch-report)
+      patch_report_path="${2:-}"
+      shift 2
+      ;;
+    --registry)
+      registry_path="${2:-}"
+      shift 2
+      ;;
+    --output-dir)
+      output_dir="${2:-}"
+      shift 2
+      ;;
+    --timestamp)
+      timestamp="${2:-}"
+      shift 2
+      ;;
+    --image)
+      image="${2:-}"
+      shift 2
+      ;;
+    --build-image)
+      build_image=yes
+      shift
+      ;;
+    --no-build-image)
+      build_image=no
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      if [[ -z "$candidate_path" && "${1:0:1}" != "-" ]]; then
+        candidate_path="$1"
+        shift
+      else
+        echo "Unknown argument: $1" >&2
+        echo >&2
+        usage >&2
+        exit 2
+      fi
+      ;;
+  esac
+done
+
+if [[ -z "$candidate_path" ]]; then
+  echo "--candidate is required" >&2
+  echo >&2
+  usage >&2
+  exit 2
+fi
+
+if ! command -v docker >/dev/null 2>&1; then
+  echo "docker is required for upstream-dmg-intel-devcontainer" >&2
+  exit 127
+fi
+
+if ! docker image inspect "$image" >/dev/null 2>&1; then
+  case "$build_image" in
+    no)
+      echo "Docker image not found: $image" >&2
+      echo "Run with --build-image or build the devcontainer image first." >&2
+      exit 2
+      ;;
+    auto|yes)
+      docker build -t "$image" -f "$repo_root/.devcontainer/Dockerfile" "$repo_root"
+      ;;
+  esac
+fi
+
+resolve_existing() {
+  local label="$1"
+  local value="$2"
+  if [[ -z "$value" ]]; then
+    return 0
+  fi
+  if [[ ! -e "$value" ]]; then
+    echo "$label not found: $value" >&2
+    exit 2
+  fi
+  python3 - "$value" <<'PY'
+import sys
+from pathlib import Path
+
+print(Path(sys.argv[1]).expanduser().resolve())
+PY
+}
+
+repo_real="$(python3 - "$repo_root" <<'PY'
+import sys
+from pathlib import Path
+
+print(Path(sys.argv[1]).resolve())
+PY
+)"
+
+mounts=(-v "$repo_real:/workspaces/codex-desktop-linux")
+container_args=()
+mount_index=0
+mapped_path=""
+
+map_input_path() {
+  local label="$1"
+  local value="$2"
+  local abs rel base target
+  abs="$(resolve_existing "$label" "$value")"
+  case "$abs" in
+    "$repo_real"/*)
+      rel="${abs#"$repo_real"/}"
+      mapped_path="/workspaces/codex-desktop-linux/$rel"
+      ;;
+    "$repo_real")
+      mapped_path="/workspaces/codex-desktop-linux"
+      ;;
+    *)
+      base="$(basename "$abs")"
+      target="/mnt/upstream-dmg-intel/${mount_index}-${base}"
+      mount_index=$((mount_index + 1))
+      mounts+=(-v "$abs:$target:ro")
+      mapped_path="$target"
+      ;;
+  esac
+}
+
+map_output_dir() {
+  local value="$1"
+  local abs rel
+  if [[ -z "$value" ]]; then
+    return 0
+  fi
+  abs="$(python3 - "$value" <<'PY'
+import sys
+from pathlib import Path
+
+print(Path(sys.argv[1]).expanduser().resolve())
+PY
+)"
+  case "$abs" in
+    "$repo_real"/*)
+      rel="${abs#"$repo_real"/}"
+      mapped_path="/workspaces/codex-desktop-linux/$rel"
+      ;;
+    *)
+      echo "--output-dir must be inside the repository so report output stays scoped and gitignored: $value" >&2
+      exit 2
+      ;;
+  esac
+}
+
+map_input_path "Candidate" "$candidate_path"
+container_args+=(--candidate "$mapped_path")
+
+if [[ -n "$baseline_path" ]]; then
+  map_input_path "Baseline" "$baseline_path"
+  container_args+=(--baseline "$mapped_path")
+fi
+
+if [[ -z "$patch_report_path" && -f "$repo_real/dist-next/rebuild/patch-report.json" ]]; then
+  patch_report_path="$repo_real/dist-next/rebuild/patch-report.json"
+fi
+if [[ -n "$patch_report_path" ]]; then
+  map_input_path "Patch report" "$patch_report_path"
+  container_args+=(--patch-report "$mapped_path")
+fi
+
+if [[ -n "$registry_path" ]]; then
+  map_input_path "Registry" "$registry_path"
+  container_args+=(--registry "$mapped_path")
+fi
+
+if [[ -n "$output_dir" ]]; then
+  map_output_dir "$output_dir"
+  container_args+=(--output-dir "$mapped_path")
+fi
+
+if [[ -n "$timestamp" ]]; then
+  container_args+=(--timestamp "$timestamp")
+fi
+
+exec docker run --rm \
+  "${mounts[@]}" \
+  -w /workspaces/codex-desktop-linux \
+  "$image" \
+  node scripts/dev/upstream-dmg-intel.js "${container_args[@]}"

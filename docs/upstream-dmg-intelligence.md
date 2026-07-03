@@ -10,7 +10,21 @@ is gitignored; check in only deliberate fixtures or registry changes.
 
 ## Commands
 
-Candidate-only inventory:
+Candidate-only inventory, using the repo devcontainer image:
+
+```bash
+make inspect-upstream-intel-devcontainer DMG=./Codex.dmg
+```
+
+The devcontainer wrapper is the preferred path for real DMG checks because it
+keeps `7zz`, Node, `jq`, and report-generation dependencies inside the project
+container. It builds `codex-desktop-linux-devcontainer:local` from
+`.devcontainer/Dockerfile` if that image is missing, mounts outside candidate
+or baseline paths into the container, and writes only the ignored report bundle
+under `reports/upstream-dmg/` by default.
+
+Host-side candidate-only inventory is still available when the host already has
+the same toolchain:
 
 ```bash
 scripts/dev/upstream-dmg-intel.js --candidate ./Codex.dmg
@@ -29,7 +43,7 @@ Pair it with the existing patch report path:
 
 ```bash
 make inspect-upstream DMG=/path/to/new/Codex.dmg
-make inspect-upstream-intel \
+make inspect-upstream-intel-devcontainer \
   DMG=/path/to/new/Codex.dmg \
   UPSTREAM_INTEL_BASELINE=/path/to/known-good/Codex.app
 ```
@@ -133,7 +147,7 @@ upstream build. Use a known-good baseline plus the candidate DMG:
 
 ```bash
 node --test scripts/dev/upstream-dmg-intel.test.js
-scripts/dev/upstream-dmg-intel.js \
+scripts/dev/upstream-dmg-intel-devcontainer \
   --baseline /path/to/known-good/Codex.dmg \
   --candidate /path/to/new/Codex.dmg \
   --output-dir reports/upstream-dmg/<run-id>
@@ -153,3 +167,35 @@ navigation layer:
 - `REMOVED`, `PROTECTED_SURFACE_MISSING`, `PROTECTED_SURFACE_PARTIAL`,
   `PATCH_BROKEN`, and `LINUX_SUBSTRATE_GAP` are acceptance blockers until the
   registry, patch, or Linux substrate action is resolved.
+
+## Optional Dagger MCP
+
+The Dagger module is not the primary entry point. It exists as a self-hosted
+agent convenience wrapper around the same devcontainer-backed tool:
+
+```bash
+dagger functions
+dagger call verify-dmg-intel
+dagger call inspect-upstream-dmg --candidate ./Codex.dmg export --path /tmp/codex-dmg-intel-report
+```
+
+The `inspect-upstream-dmg` function accepts a candidate DMG file and optional
+baseline and patch-report files, then returns the generated report directory.
+The Dagger source context ignores DMGs, build outputs, generated reports,
+`target/`, and app extraction trees; pass large DMGs as explicit file
+arguments instead of baking them into the module context.
+
+To expose it as an MCP server in Codex, add the bridge to repo-local
+`.codex/config.toml` and restart the Codex session:
+
+```toml
+[mcp_servers.codex-dmg-intel-dagger]
+command = "/home/kdlocpanda/second_brain/Areas/devcontainers/codex-desktop-linux/scripts/codex-dmg-intel-dagger-mcp"
+```
+
+Use a pinned repo env only when Codex may start outside this checkout:
+
+```toml
+[mcp_servers.codex-dmg-intel-dagger.env]
+CODEX_DMG_INTEL_DAGGER_REPO = "/home/kdlocpanda/second_brain/Areas/devcontainers/codex-desktop-linux"
+```
