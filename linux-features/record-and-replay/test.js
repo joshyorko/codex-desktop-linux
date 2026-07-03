@@ -160,8 +160,11 @@ test("record-and-replay bridge patch is idempotent and uses execFile", () => {
   assert.match(patched, /"toggleChronicleSidecar":async/);
   assert.match(patched, /codexLinuxChronicleControlStateFromSkysight/);
   assert.match(patched, /codexLinuxChronicleEnsureSidecarRunning/);
-  assert.match(patched, /"chronicle-permissions":async\(\)=>\{let e=await codexLinuxChronicleSidecarControlStateAsync\(\)/);
-  assert.doesNotMatch(patched, /"chronicle-permissions":async\(\)=>\{let e=await codexLinuxChronicleEnsureSidecarRunning/);
+  assert.match(
+    patched,
+    /"chronicle-permissions":async\(\)=>\{let e=await codexLinuxChronicleSidecarControlStateOrStartIfEnabled\(\)/,
+  );
+  assert.match(patched, /codexLinuxChronicleSidecarControlStateOrStartIfEnabled/);
   assert.match(patched, /"skysight","status"/);
   assert.match(patched, /"linux-record-replay-status":async/);
   assert.match(patched, /"linux-record-replay-start":async/);
@@ -283,6 +286,87 @@ test("record-and-replay Chronicle permissions probe is side-effect free", async 
   };
 
   const state = await vm.runInNewContext(`${helperSource};codexLinuxChronicleSidecarControlStateAsync()`, context);
+  assert.deepEqual(JSON.parse(JSON.stringify(calls)), [["skysight", "status"]]);
+  assert.equal(state.enabled, true);
+  assert.equal(state.running, false);
+  assert.equal(state.state, "stopped");
+});
+
+test("record-and-replay Chronicle permissions bridge starts when summary agent policy is enabled", async () => {
+  const helperSource = recordReplayHelperSource({
+    childProcessVar: "childProcess",
+    fsVar: "fs",
+    pathVar: "path",
+  });
+  const calls = [];
+  const responses = [
+    { state: "stopped", is_running: false, paused: false, summary_agent_enabled: true },
+    { state: "stopped", is_running: false, paused: false, summary_agent_enabled: true },
+    { state: "running", is_running: true, paused: false, summary_agent_enabled: true },
+  ];
+  const context = {
+    childProcess: {
+      execFile(_bin, args, _options, callback) {
+        calls.push(args);
+        callback(null, JSON.stringify(responses.shift()), "");
+      },
+    },
+    fs,
+    path,
+    process: {
+      env: { CODEX_RECORD_REPLAY_LINUX_BIN: "/tmp/codex-record-replay-linux" },
+      cwd: () => "/tmp",
+      pid: 4242,
+    },
+    JSON,
+    Promise,
+    String,
+  };
+
+  const state = await vm.runInNewContext(
+    `${helperSource};codexLinuxChronicleSidecarControlStateOrStartIfEnabled()`,
+    context,
+  );
+  assert.deepEqual(JSON.parse(JSON.stringify(calls)), [
+    ["skysight", "status"],
+    ["skysight", "status"],
+    ["skysight", "start", "--summary-agent", "enabled"],
+  ]);
+  assert.equal(state.enabled, true);
+  assert.equal(state.running, true);
+  assert.equal(state.state, "running");
+});
+
+test("record-and-replay Chronicle permissions bridge stays passive when summary agent policy is disabled", async () => {
+  const helperSource = recordReplayHelperSource({
+    childProcessVar: "childProcess",
+    fsVar: "fs",
+    pathVar: "path",
+  });
+  const calls = [];
+  const context = {
+    childProcess: {
+      execFile(_bin, args, _options, callback) {
+        calls.push(args);
+        callback(null, JSON.stringify({ state: "stopped", is_running: false, paused: false, summary_agent_enabled: false }), "");
+      },
+    },
+    fs,
+    path,
+    process: {
+      env: { CODEX_RECORD_REPLAY_LINUX_BIN: "/tmp/codex-record-replay-linux" },
+      cwd: () => "/tmp",
+      pid: 4242,
+    },
+    JSON,
+    Promise,
+    String,
+  };
+
+  const state = await vm.runInNewContext(
+    `${helperSource};codexLinuxChronicleSidecarControlStateOrStartIfEnabled()`,
+    context,
+  );
   assert.deepEqual(JSON.parse(JSON.stringify(calls)), [["skysight", "status"]]);
   assert.equal(state.enabled, true);
   assert.equal(state.running, false);
