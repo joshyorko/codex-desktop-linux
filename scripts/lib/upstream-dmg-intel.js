@@ -15,6 +15,7 @@ const DRIFT_CHANGED_SAMPLE_LIMIT = 12;
 const MARKDOWN_PATH_SAMPLE_LIMIT = 3;
 const ACTION_PLAN_PATH_SAMPLE_LIMIT = 3;
 const SUCCESSFUL_PATCH_STATUSES = new Set(["applied", "already-applied", "skipped-target", "skipped-disabled"]);
+const BLOCKING_PATCH_STATUSES = new Set(["failed-required"]);
 const ACTIONABLE_CLASSIFICATIONS = new Set([
   "MOVED",
   "RENAMED",
@@ -22,6 +23,7 @@ const ACTIONABLE_CLASSIFICATIONS = new Set([
   "REMOVED",
   "NEW_UPSTREAM_CAPABILITY",
   "PATCH_BROKEN",
+  "PATCH_REVIEW",
   "LINUX_SUBSTRATE_GAP",
   "PROTECTED_SURFACE_PARTIAL",
   "PROTECTED_SURFACE_MISSING",
@@ -956,13 +958,14 @@ function classifySurfaceDrift({ baselineSurface, candidateSurface }) {
   return ["UNCHANGED"];
 }
 
-function patchFailuresBySurface(patchReport, surfacesById = {}) {
+function patchFindingsBySurface(patchReport, surfacesById = {}) {
   const map = new Map();
   const surfaces = Object.values(surfacesById);
   for (const patch of patchReport?.patches ?? []) {
     if (SUCCESSFUL_PATCH_STATUSES.has(patch.status)) {
       continue;
     }
+    const classification = BLOCKING_PATCH_STATUSES.has(patch.status) ? "PATCH_BROKEN" : "PATCH_REVIEW";
     const explicitSurfaceId = patch.surfaceId ?? patch.protectedSurfaceId ?? null;
     const matchedSurfaceIds = new Set();
     if (explicitSurfaceId != null) {
@@ -980,7 +983,9 @@ function patchFailuresBySurface(patchReport, surfacesById = {}) {
     for (const surfaceId of matchedSurfaceIds) {
       const list = map.get(surfaceId) ?? [];
       list.push({
+        classification,
         name: patch.name,
+        reviewOnly: classification === "PATCH_REVIEW",
         status: patch.status,
         reason: patch.reason ?? null,
       });
@@ -992,7 +997,7 @@ function patchFailuresBySurface(patchReport, surfacesById = {}) {
 
 function compareProtectedSurfaces({ baseline, candidate, patchReport = null } = {}) {
   const hasBaseline = baseline != null;
-  const patchFailures = patchFailuresBySurface(patchReport, {
+  const patchFindings = patchFindingsBySurface(patchReport, {
     ...(baseline?.surfacesById ?? {}),
     ...(candidate?.surfacesById ?? {}),
   });
@@ -1036,14 +1041,22 @@ function compareProtectedSurfaces({ baseline, candidate, patchReport = null } = 
         missingPaths: candidateSurface.linuxSubstrate.missingPaths,
       });
     }
-    if (patchFailures.has(surfaceId)) {
-      surfaceDrift.push({
-        surfaceId,
-        title: candidateSurface?.title ?? baselineSurface?.title ?? surfaceId,
-        category: candidateSurface?.category ?? baselineSurface?.category ?? "unknown",
-        classification: "PATCH_BROKEN",
-        patches: patchFailures.get(surfaceId),
-      });
+    if (patchFindings.has(surfaceId)) {
+      const findingsByClassification = new Map();
+      for (const finding of patchFindings.get(surfaceId)) {
+        const list = findingsByClassification.get(finding.classification) ?? [];
+        list.push(finding);
+        findingsByClassification.set(finding.classification, list);
+      }
+      for (const [classification, patches] of findingsByClassification) {
+        surfaceDrift.push({
+          surfaceId,
+          title: candidateSurface?.title ?? baselineSurface?.title ?? surfaceId,
+          category: candidateSurface?.category ?? baselineSurface?.category ?? "unknown",
+          classification,
+          patches,
+        });
+      }
     }
   }
 
@@ -1479,6 +1492,8 @@ function renderActionPlanMarkdown(driftReport, candidateProtected, mapDrift = nu
       lines.push("Action: decide whether Linux needs a port, shim, explicit unsupported gate, or new optional feature.");
     } else if (item.classification === "PATCH_BROKEN") {
       lines.push("Action: repair the patch descriptor or feature patch before accepting the DMG.");
+    } else if (item.classification === "PATCH_REVIEW") {
+      lines.push("Action: review optional patch warning/skip details; do not block DMG acceptance unless a protected surface is also missing or broken.");
     } else if (item.classification === "LINUX_SUBSTRATE_GAP") {
       lines.push("Action: add or map the missing Linux substrate path before claiming parity.");
       lines.push(`Missing paths: ${(item.missingPaths ?? []).join(", ")}`);

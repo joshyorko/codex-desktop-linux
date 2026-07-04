@@ -380,7 +380,35 @@ test("classifies protected-surface drift from baseline to candidate", () =>
     assert.ok(findClassification(driftReport, "dictation_transcript_finalization", "REMOVED"));
     assert.ok(findClassification(driftReport, "chronicle_sidecar", "NEW_UPSTREAM_CAPABILITY"));
     assert.ok(findClassification(driftReport, "future_skysight_bridge", "LINUX_SUBSTRATE_GAP"));
+    assert.ok(findClassification(driftReport, "record_and_replay_event_stream", "PATCH_REVIEW"));
+    assert.ok(!findClassification(driftReport, "record_and_replay_event_stream", "PATCH_BROKEN"));
+  }));
+
+test("classifies required patch-report failures as acceptance blockers", () =>
+  withTempDir((workspace) => {
+    const candidateApp = createFixtureApp(workspace, "candidate");
+    const candidate = extractProtectedSurfaces({
+      inventory: createInventory({ registry, sourcePath: candidateApp }),
+      registry,
+      repoRoot: process.cwd(),
+    });
+
+    const driftReport = compareProtectedSurfaces({
+      candidate,
+      patchReport: {
+        patches: [
+          {
+            name: "record-and-replay bridge patch",
+            status: "failed-required",
+            reason: "upstream bridge marker moved",
+            surfaceId: "record_and_replay_event_stream",
+          },
+        ],
+      },
+    });
+
     assert.ok(findClassification(driftReport, "record_and_replay_event_stream", "PATCH_BROKEN"));
+    assert.ok(!findClassification(driftReport, "record_and_replay_event_stream", "PATCH_REVIEW"));
   }));
 
 test("keeps drift report evidence compact and marks hashed asset churn", () => {
@@ -707,4 +735,67 @@ test("CLI exits nonzero with --fail-on-blockers when acceptance blockers are pre
     assert.ok(summary.decision.blockersCount > 0);
     assert.match(result.stderr, /protected-surface acceptance blocker/);
     assert.ok(fs.existsSync(path.join(outputDir, "drift-report.json")));
+  }));
+
+test("CLI keeps optional patch-report skips review-only under --fail-on-blockers", () =>
+  withTempDir((workspace) => {
+    const candidateApp = createFixtureApp(workspace, "candidate");
+    const outputDir = path.join(workspace, "cli-optional-patch-report");
+    const cliPath = path.join(process.cwd(), "scripts/dev/upstream-dmg-intel.js");
+    const registryPath = path.join(workspace, "registry.json");
+    const patchReportPath = path.join(workspace, "patch-report.json");
+
+    writeJson(registryPath, {
+      version: 1,
+      surfaces: [
+        {
+          id: "record_and_replay_event_stream",
+          title: "Record & Replay event stream MCP",
+          category: "plugin",
+          pathPatterns: ["record-and-replay"],
+          contentNeedles: ["event_stream_start", "browser_trace", "speech_context"],
+          pluginIds: ["record-and-replay"],
+          linuxSubstrate: {
+            requiredPaths: ["record-replay-linux/src/main.rs"],
+          },
+        },
+      ],
+    });
+    writeJson(patchReportPath, {
+      patches: [
+        {
+          name: "record-and-replay bridge patch",
+          status: "skipped-optional",
+          reason: "upstream bridge marker moved",
+          surfaceId: "record_and_replay_event_stream",
+        },
+      ],
+    });
+
+    const result = spawnSync(
+      process.execPath,
+      [
+        cliPath,
+        "--candidate",
+        candidateApp,
+        "--no-baseline",
+        "--registry",
+        registryPath,
+        "--patch-report",
+        patchReportPath,
+        "--output-dir",
+        outputDir,
+        "--fail-on-blockers",
+      ],
+      { encoding: "utf8" },
+    );
+
+    assert.equal(result.status, 0, result.stderr);
+    const summary = JSON.parse(result.stdout);
+    assert.equal(summary.decision.acceptance, "review");
+    assert.equal(summary.decision.blockersCount, 0);
+    assert.equal(summary.decision.reviewItemsCount, 1);
+    const driftReport = JSON.parse(fs.readFileSync(path.join(outputDir, "drift-report.json"), "utf8"));
+    assert.ok(findClassification(driftReport, "record_and_replay_event_stream", "PATCH_REVIEW"));
+    assert.ok(!findClassification(driftReport, "record_and_replay_event_stream", "PATCH_BROKEN"));
   }));

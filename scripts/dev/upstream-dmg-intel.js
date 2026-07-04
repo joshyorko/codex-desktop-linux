@@ -25,7 +25,7 @@ Options:
   --candidate PATH       Candidate Codex.dmg, extracted .app, or extracted app resources directory
   --baseline PATH        Optional known-good baseline DMG or extracted .app; defaults to ./Codex.dmg when different
   --no-baseline          Do a candidate-only scan even when ./Codex.dmg exists
-  --patch-report PATH    Optional patch-report.json to fold PATCH_BROKEN into drift-report.json
+  --patch-report PATH    Optional patch-report.json to fold patch blockers/review items into drift-report.json
   --registry PATH        Protected surface registry (default: scripts/dev/upstream-dmg-protected-surfaces.json)
   --output-dir DIR       Exact output directory (default: reports/upstream-dmg/<timestamp>)
   --timestamp VALUE      Timestamp slug used when --output-dir is omitted
