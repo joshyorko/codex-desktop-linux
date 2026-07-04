@@ -39,6 +39,15 @@ the same toolchain:
 make inspect-upstream-intel DMG=./Codex.dmg
 ```
 
+For CI or release acceptance, keep report generation unchanged but fail the
+command when protected-surface blockers are present:
+
+```bash
+scripts/dev/upstream-dmg-intel.js \
+  --candidate /path/to/new/Codex.dmg \
+  --fail-on-blockers
+```
+
 Explicit baseline comparison remains available for older known-good builds:
 
 ```bash
@@ -76,6 +85,11 @@ Each run writes:
 - `drift-report.json` and `drift-report.md`: machine and human drift summaries.
 - `substrate-action-plan.md`: Linux follow-up paths for moved, changed, missing,
   newly discovered, patch-broken, or substrate-gap surfaces.
+
+The CLI stdout summary includes `decision.acceptance`, `blockersCount`,
+`reviewItemsCount`, protected-surface status counts, and whether every protected
+surface is fully present. `--fail-on-blockers` exits with status `2` after
+writing the report bundle when `decision.blockersCount` is nonzero.
 
 When a baseline is provided, the command also writes `baseline/` and
 `candidate/` subdirectories with their own inventory, protected-surface,
@@ -199,7 +213,7 @@ To expose it as an MCP server in Codex, add the bridge to repo-local
 
 ```toml
 [mcp_servers.codex-dmg-intel-dagger]
-command = "/home/kdlocpanda/second_brain/Areas/devcontainers/codex-desktop-linux/scripts/codex-dmg-intel-dagger-mcp"
+command = "/path/to/codex-desktop-linux/scripts/codex-dmg-intel-dagger-mcp"
 ```
 
 Use a pinned repo env only when Codex may start outside this checkout:

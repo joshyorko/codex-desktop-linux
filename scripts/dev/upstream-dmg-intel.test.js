@@ -589,6 +589,9 @@ test("CLI loads the checked-in registry and writes the report bundle", () =>
     assert.equal(result.status, 0, result.stderr);
     const summary = JSON.parse(result.stdout);
     assert.equal(summary.outputDir, outputDir);
+    assert.equal(summary.decision.acceptance, "blocked");
+    assert.ok(summary.decision.blockersCount > 0);
+    assert.equal(summary.decision.allProtectedSurfacesPresent, false);
     assert.ok(fs.existsSync(path.join(outputDir, "inventory.json")));
     assert.ok(fs.existsSync(path.join(outputDir, "protected-surfaces.json")));
     assert.ok(fs.existsSync(path.join(outputDir, "substrate-action-plan.md")));
@@ -598,4 +601,31 @@ test("CLI loads the checked-in registry and writes the report bundle", () =>
     assert.equal(protectedSurfaces.surfacesById.record_and_replay_plugin.status, "PRESENT");
     assert.equal(protectedSurfaces.surfacesById.codex_chronicle.status, "PRESENT");
     assert.equal(protectedSurfaces.surfacesById.chronicle_settings_toggles.status, "PRESENT");
+  }));
+
+test("CLI exits nonzero with --fail-on-blockers when acceptance blockers are present", () =>
+  withTempDir((workspace) => {
+    const candidateApp = createFixtureApp(workspace, "candidate");
+    const outputDir = path.join(workspace, "cli-fail-report");
+    const cliPath = path.join(process.cwd(), "scripts/dev/upstream-dmg-intel.js");
+
+    const result = spawnSync(
+      process.execPath,
+      [
+        cliPath,
+        "--candidate",
+        candidateApp,
+        "--output-dir",
+        outputDir,
+        "--fail-on-blockers",
+      ],
+      { encoding: "utf8" },
+    );
+
+    assert.equal(result.status, 2, result.stderr);
+    const summary = JSON.parse(result.stdout);
+    assert.equal(summary.decision.acceptance, "blocked");
+    assert.ok(summary.decision.blockersCount > 0);
+    assert.match(result.stderr, /protected-surface acceptance blocker/);
+    assert.ok(fs.existsSync(path.join(outputDir, "drift-report.json")));
   }));

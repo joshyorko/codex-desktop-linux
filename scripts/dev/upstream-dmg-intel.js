@@ -8,6 +8,13 @@ const { buildIntelReports } = require("../lib/upstream-dmg-intel.js");
 
 const repoRoot = path.resolve(__dirname, "../..");
 const defaultRegistryPath = path.join(__dirname, "upstream-dmg-protected-surfaces.json");
+const BLOCKING_CLASSIFICATIONS = new Set([
+  "REMOVED",
+  "PATCH_BROKEN",
+  "LINUX_SUBSTRATE_GAP",
+  "PROTECTED_SURFACE_PARTIAL",
+  "PROTECTED_SURFACE_MISSING",
+]);
 
 function usage() {
   return `Usage: scripts/dev/upstream-dmg-intel.js --candidate PATH [options]
@@ -22,6 +29,7 @@ Options:
   --registry PATH        Protected surface registry (default: scripts/dev/upstream-dmg-protected-surfaces.json)
   --output-dir DIR       Exact output directory (default: reports/upstream-dmg/<timestamp>)
   --timestamp VALUE      Timestamp slug used when --output-dir is omitted
+  --fail-on-blockers     Exit nonzero when protected-surface acceptance blockers are present
   -h, --help             Show this help
 `;
 }
@@ -32,6 +40,7 @@ function parseArgs(argv) {
     baselinePath: null,
     candidatePath: null,
     outputDir: null,
+    failOnBlockers: false,
     patchReportPath: null,
     registryPath: defaultRegistryPath,
     timestamp: null,
@@ -54,6 +63,8 @@ function parseArgs(argv) {
       args.outputDir = argv[++index];
     } else if (arg === "--timestamp") {
       args.timestamp = argv[++index];
+    } else if (arg === "--fail-on-blockers") {
+      args.failOnBlockers = true;
     } else if (arg === "-h" || arg === "--help") {
       args.help = true;
     } else if (!arg.startsWith("-") && args.candidatePath == null) {
@@ -73,6 +84,34 @@ function requireReadable(label, filePath) {
   if (!fs.existsSync(filePath)) {
     throw new Error(`${label} not found: ${filePath}`);
   }
+}
+
+function statusCounts(surfaces = []) {
+  const counts = {};
+  for (const surface of surfaces) {
+    counts[surface.status] = (counts[surface.status] ?? 0) + 1;
+  }
+  return counts;
+}
+
+function buildDecision({ driftReport, protectedSurfaces }) {
+  const surfaceDrift = driftReport.surfaceDrift ?? [];
+  const blockers = surfaceDrift.filter((item) => BLOCKING_CLASSIFICATIONS.has(item.classification));
+  const reviewItems = surfaceDrift.filter((item) => !BLOCKING_CLASSIFICATIONS.has(item.classification));
+  const protectedSurfaceStatusCounts = statusCounts(protectedSurfaces.surfaces ?? []);
+  const allProtectedSurfacesPresent =
+    (protectedSurfaces.surfaces ?? []).length > 0 &&
+    (protectedSurfaces.surfaces ?? []).every((surface) => surface.status === "PRESENT");
+  const acceptance = blockers.length > 0 ? "blocked" : (reviewItems.length > 0 ? "review" : "accepted");
+
+  return {
+    acceptance,
+    blockersCount: blockers.length,
+    reviewItemsCount: reviewItems.length,
+    allProtectedSurfacesPresent,
+    protectedSurfaceStatusCounts,
+    blockerClassifications: [...new Set(blockers.map((item) => item.classification))].sort(),
+  };
 }
 
 function main(argv = process.argv.slice(2)) {
@@ -102,6 +141,10 @@ function main(argv = process.argv.slice(2)) {
     repoRoot,
     timestamp: args.timestamp,
   });
+  const decision = buildDecision({
+    driftReport: reports.driftReport,
+    protectedSurfaces: reports.protectedSurfaces,
+  });
 
   const summary = {
     outputDir: reports.outputDir,
@@ -112,8 +155,15 @@ function main(argv = process.argv.slice(2)) {
     substrateActionPlan: path.join(reports.outputDir, "substrate-action-plan.md"),
     baselineSource: reports.driftReport.baselineSource,
     classificationCounts: reports.driftReport.classificationCounts,
+    decision,
   };
   process.stdout.write(`${JSON.stringify(summary, null, 2)}\n`);
+  if (args.failOnBlockers && decision.blockersCount > 0) {
+    console.error(
+      `Upstream DMG intelligence found ${decision.blockersCount} protected-surface acceptance blocker(s).`,
+    );
+    return 2;
+  }
   return 0;
 }
 
@@ -128,4 +178,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = { main, parseArgs };
+module.exports = { buildDecision, main, parseArgs };
