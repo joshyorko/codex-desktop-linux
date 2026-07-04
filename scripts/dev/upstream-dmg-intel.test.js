@@ -457,6 +457,54 @@ test("keeps drift report evidence compact and marks hashed asset churn", () => {
   );
 });
 
+test("does not collapse multi-hyphen hashed asset stems", () => {
+  const baseline = {
+    source: { path: "baseline.app" },
+    surfacesById: {
+      record_asset_bridge: {
+        id: "record_asset_bridge",
+        title: "Record asset bridge",
+        category: "bridge",
+        status: "PRESENT",
+        evidence: [
+          {
+            path: ".vite/build/record-and-replay-CNod9zFW.js",
+            sha256: "baseline-hash",
+            size: 100,
+            source: "asar",
+            type: "text",
+          },
+        ],
+      },
+    },
+  };
+  const candidate = {
+    source: { path: "candidate.app" },
+    surfacesById: {
+      record_asset_bridge: {
+        id: "record_asset_bridge",
+        title: "Record asset bridge",
+        category: "bridge",
+        status: "PRESENT",
+        evidence: [
+          {
+            path: ".vite/build/record-settings-NsW8qoL2.js",
+            sha256: "candidate-hash",
+            size: 100,
+            source: "asar",
+            type: "text",
+          },
+        ],
+      },
+    },
+  };
+
+  const driftReport = compareProtectedSurfaces({ baseline, candidate });
+  const drift = findClassification(driftReport, "record_asset_bridge", "MOVED");
+  assert.ok(drift);
+  assert.equal(drift.evidenceDrift.pathMovementKind, "mixed_hashed_asset_churn");
+});
+
 test("writes the expected report bundle for candidate-only and comparison runs", () =>
   withTempDir((workspace) => {
     const baselineApp = createFixtureApp(workspace, "baseline");

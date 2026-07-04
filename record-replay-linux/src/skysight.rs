@@ -241,6 +241,26 @@ struct SegmentPaths {
 struct DesktopEvidenceCapture {
     events: Vec<Value>,
     artifact_count: usize,
+    ocr_last_run_at: Option<String>,
+    ocr_last_error: Option<String>,
+}
+
+fn record_ocr_capture_status(
+    capture: &mut DesktopEvidenceCapture,
+    recorded_at: &str,
+    event: &Value,
+) {
+    if event
+        .get("ocr_runs")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        capture.ocr_last_run_at = Some(recorded_at.to_string());
+        capture.ocr_last_error = event
+            .get("ocr_error")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -374,8 +394,7 @@ pub fn start_skysight(
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
-    let pid =
-        crate::process_reaper::spawn_detached(&mut command, "failed to spawn Skysight daemon")?;
+    let pid = crate::process_reaper::spawn_reaped(&mut command, "failed to spawn Skysight daemon")?;
     write_chronicle_started_pid(pid)?;
 
     let status = status_value(StatusValueInput {
@@ -389,6 +408,8 @@ pub fn start_skysight(
         started_at: Some(now_timestamp()),
         end_reason: None,
         message: Some("Skysight daemon started".to_string()),
+        ocr_policy: None,
+        ocr_readiness: None,
     })?;
     write_status(paths, &status)?;
     Ok(status)
@@ -418,6 +439,8 @@ pub fn run_skysight_daemon(
                 started_at: None,
                 end_reason: Some("stop-requested".to_string()),
                 message: Some("Skysight daemon stopped".to_string()),
+                ocr_policy: None,
+                ocr_readiness: None,
             })?;
             write_status(paths, &status)?;
             let _ = fs::remove_file(&paths.stop_request_path);
@@ -437,6 +460,8 @@ pub fn run_skysight_daemon(
                 started_at: None,
                 end_reason: None,
                 message: Some("Skysight daemon paused".to_string()),
+                ocr_policy: None,
+                ocr_readiness: None,
             })?;
             write_status(paths, &status)?;
             thread::sleep(interval);
@@ -454,6 +479,8 @@ pub fn run_skysight_daemon(
                 started_at: None,
                 end_reason: None,
                 message: Some(format!("Skysight snapshot failed: {error:#}")),
+                ocr_policy: None,
+                ocr_readiness: None,
             })?;
             write_status(paths, &status)?;
         }
@@ -485,6 +512,8 @@ pub fn pause_skysight<S: Into<String>>(
         started_at: None,
         end_reason: None,
         message: Some("Skysight paused".to_string()),
+        ocr_policy: None,
+        ocr_readiness: None,
     })?;
     write_status(paths, &status)?;
     Ok(status)
@@ -510,6 +539,8 @@ pub fn resume_skysight(paths: &SkysightPaths) -> Result<SkysightStatus> {
         } else {
             "Skysight pause cleared; daemon is not running".to_string()
         }),
+        ocr_policy: None,
+        ocr_readiness: None,
     })?;
     write_status(paths, &status)?;
     Ok(status)
@@ -534,6 +565,8 @@ pub fn capture_skysight_snapshot(
             started_at: None,
             end_reason: None,
             message: Some("Skysight is paused; resume before capturing a snapshot".to_string()),
+            ocr_policy: None,
+            ocr_readiness: None,
         })?;
         write_status(paths, &status)?;
         return Ok(status);
@@ -541,6 +574,8 @@ pub fn capture_skysight_snapshot(
 
     codex_computer_use_linux::diagnostics::hydrate_session_bus_env();
     let diagnostics = codex_computer_use_linux::diagnostics::doctor_report();
+    let ocr_policy = crate::ocr::OcrPolicy::from_env();
+    let ocr_readiness = ocr_policy.readiness();
     let recorded_at = now_timestamp();
     let window_ended_at = Utc::now();
     let source = source.unwrap_or("snapshot");
@@ -555,12 +590,25 @@ pub fn capture_skysight_snapshot(
         "diagnostics": &diagnostics,
         "exclusions": &exclusions,
     })];
-    events.push(provider_readiness_event(&recorded_at, source, &diagnostics));
+    events.push(provider_readiness_event(
+        &recorded_at,
+        source,
+        &diagnostics,
+        &ocr_policy,
+        &ocr_readiness,
+    ));
     let diagnostics_artifact =
         write_diagnostics_artifact(&segment, &recorded_at, source, &diagnostics, &exclusions)?;
     events.push(diagnostics_artifact);
-    let desktop_evidence =
-        collect_desktop_evidence(paths, &segment, &recorded_at, source, &exclusions);
+    let desktop_evidence = collect_desktop_evidence(
+        paths,
+        &segment,
+        &recorded_at,
+        source,
+        &exclusions,
+        ocr_policy.clone(),
+        ocr_readiness.clone(),
+    );
     events.extend(desktop_evidence.events);
     let event_count = events.len();
     let suppressed_event_count = suppressed_event_count(&events);
@@ -631,6 +679,8 @@ pub fn capture_skysight_snapshot(
         } else {
             "Skysight snapshot captured; daemon is not running".to_string()
         }),
+        ocr_policy: Some(ocr_policy),
+        ocr_readiness: Some(ocr_readiness),
     })?;
     let mut status = status;
     status.last_10min_resource = Some(ten_minute_path);
@@ -645,6 +695,10 @@ pub fn capture_skysight_snapshot(
     if let Some(ran_at) = summary_agent_report.ran_at {
         status.summary_agent_last_run_at = Some(ran_at);
         status.summary_agent_last_error = summary_agent_report.error;
+    }
+    if let Some(ran_at) = desktop_evidence.ocr_last_run_at {
+        status.ocr_last_run_at = Some(ran_at);
+        status.ocr_last_error = desktop_evidence.ocr_last_error;
     }
     status.next_summary_agent_run_at = summary_agent_report
         .next_run_at
@@ -700,6 +754,8 @@ pub fn skysight_status(paths: &SkysightPaths) -> Result<SkysightStatus> {
             started_at: None,
             end_reason: Some("not-started".to_string()),
             message: Some("Skysight has not been started".to_string()),
+            ocr_policy: None,
+            ocr_readiness: None,
         }),
     }
 }
@@ -727,6 +783,8 @@ pub fn stop_skysight(paths: &SkysightPaths) -> Result<SkysightStatus> {
         started_at: None,
         end_reason: Some("recording_controls_stopped".to_string()),
         message: Some("Skysight stopped".to_string()),
+        ocr_policy: None,
+        ocr_readiness: None,
     })?;
     write_status(paths, &status)?;
     Ok(status)
@@ -789,9 +847,9 @@ fn provider_readiness_event(
     recorded_at: &str,
     source: &str,
     diagnostics: &codex_computer_use_linux::diagnostics::DoctorReport,
+    ocr_policy: &crate::ocr::OcrPolicy,
+    ocr_readiness: &crate::ocr::OcrReadiness,
 ) -> Value {
-    let ocr_policy = crate::ocr::OcrPolicy::from_env();
-    let ocr_readiness = ocr_policy.readiness();
     json!({
         "schema_version": 1,
         "recorded_at": recorded_at,
@@ -884,6 +942,8 @@ fn collect_desktop_evidence(
     recorded_at: &str,
     source: &str,
     exclusions: &[SkysightExclusion],
+    ocr_policy: crate::ocr::OcrPolicy,
+    ocr_readiness: crate::ocr::OcrReadiness,
 ) -> DesktopEvidenceCapture {
     let segment_dir = segment.segment_dir.clone();
     let screen_recording_dir = chronicle_screen_recording_dir();
@@ -905,6 +965,8 @@ fn collect_desktop_evidence(
             worker_recorded_at,
             worker_source,
             exclusions,
+            ocr_policy,
+            ocr_readiness,
         ))
     })
     .join()
@@ -918,6 +980,8 @@ fn collect_desktop_evidence(
                 error.to_string(),
             )],
             artifact_count: 0,
+            ocr_last_run_at: None,
+            ocr_last_error: None,
         },
         Err(_) => DesktopEvidenceCapture {
             events: vec![capture_error_event(
@@ -927,6 +991,8 @@ fn collect_desktop_evidence(
                 "desktop evidence capture thread panicked",
             )],
             artifact_count: 0,
+            ocr_last_run_at: None,
+            ocr_last_error: None,
         },
     }
 }
@@ -937,6 +1003,8 @@ async fn collect_desktop_evidence_async(
     recorded_at: String,
     source: String,
     exclusions: Vec<SkysightExclusion>,
+    ocr_policy: crate::ocr::OcrPolicy,
+    ocr_readiness: crate::ocr::OcrReadiness,
 ) -> Result<DesktopEvidenceCapture> {
     let artifacts_dir = segment_dir.join(ARTIFACTS_DIR_NAME);
     crate::secure_fs::create_private_dir_all(&artifacts_dir)?;
@@ -1017,9 +1085,14 @@ async fn collect_desktop_evidence_async(
         .or(focused_browser_domain_exclusion);
 
     capture_screenshot_evidence(
-        &segment_dir,
-        &recorded_at,
-        &source,
+        ScreenshotEvidenceContext {
+            segment_dir: &segment_dir,
+            recorded_at: &recorded_at,
+            source: &source,
+            screen_recording_dir: Some(&screen_recording_dir),
+            ocr_policy: &ocr_policy,
+            ocr_readiness: &ocr_readiness,
+        },
         ScreenshotSuppression {
             visible_excluded_windows,
             visible_domain_excluded_browser_windows,
@@ -1027,7 +1100,6 @@ async fn collect_desktop_evidence_async(
             unverified_exclusions: window_listing_unavailable && !exclusions.is_empty(),
         },
         &exclusions,
-        Some(&screen_recording_dir),
         &mut capture,
     )
     .await?;
@@ -1193,20 +1265,27 @@ struct AccessibilitySuppression<'a> {
     focused_browser_domain_unverified: bool,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct ScreenshotEvidenceContext<'a> {
+    segment_dir: &'a Path,
+    recorded_at: &'a str,
+    source: &'a str,
+    screen_recording_dir: Option<&'a Path>,
+    ocr_policy: &'a crate::ocr::OcrPolicy,
+    ocr_readiness: &'a crate::ocr::OcrReadiness,
+}
+
 async fn capture_screenshot_evidence(
-    segment_dir: &Path,
-    recorded_at: &str,
-    source: &str,
+    context: ScreenshotEvidenceContext<'_>,
     suppression: ScreenshotSuppression,
     exclusions: &[SkysightExclusion],
-    screen_recording_dir: Option<&Path>,
     capture: &mut DesktopEvidenceCapture,
 ) -> Result<()> {
     if suppression.unverified_exclusions {
         capture.events.push(json!({
             "schema_version": 1,
-            "recorded_at": recorded_at,
-            "source": source,
+            "recorded_at": context.recorded_at,
+            "source": context.source,
             "kind": "suppressed_evidence",
             "provider": "screenshot",
             "count": 1,
@@ -1218,8 +1297,8 @@ async fn capture_screenshot_evidence(
     if suppression.visible_unverified_browser_domain_windows > 0 {
         capture.events.push(json!({
             "schema_version": 1,
-            "recorded_at": recorded_at,
-            "source": source,
+            "recorded_at": context.recorded_at,
+            "source": context.source,
             "kind": "suppressed_evidence",
             "provider": "screenshot",
             "count": suppression.visible_unverified_browser_domain_windows,
@@ -1231,8 +1310,8 @@ async fn capture_screenshot_evidence(
     if suppression.visible_domain_excluded_browser_windows > 0 {
         capture.events.push(json!({
             "schema_version": 1,
-            "recorded_at": recorded_at,
-            "source": source,
+            "recorded_at": context.recorded_at,
+            "source": context.source,
             "kind": "suppressed_evidence",
             "provider": "screenshot",
             "count": suppression.visible_domain_excluded_browser_windows,
@@ -1244,8 +1323,8 @@ async fn capture_screenshot_evidence(
     if suppression.visible_excluded_windows > 0 {
         capture.events.push(json!({
             "schema_version": 1,
-            "recorded_at": recorded_at,
-            "source": source,
+            "recorded_at": context.recorded_at,
+            "source": context.source,
             "kind": "suppressed_evidence",
             "provider": "screenshot",
             "count": suppression.visible_excluded_windows,
@@ -1262,21 +1341,23 @@ async fn capture_screenshot_evidence(
                 "png"
             };
             let chronicle_event = write_chronicle_screen_recording_artifacts(
-                screen_recording_dir,
-                recorded_at,
+                context.screen_recording_dir,
+                context.recorded_at,
                 &raw,
                 exclusions,
+                context.ocr_policy,
+                context.ocr_readiness,
             );
             let relative =
                 PathBuf::from(ARTIFACTS_DIR_NAME).join(format!("screenshot.{extension}"));
-            let absolute = segment_dir.join(&relative);
+            let absolute = context.segment_dir.join(&relative);
             let byte_count = raw.bytes.len();
             crate::secure_fs::write_private_file(&absolute, raw.bytes)?;
             capture.artifact_count += 1;
             capture.events.push(json!({
                 "schema_version": 1,
-                "recorded_at": recorded_at,
-                "source": source,
+                "recorded_at": context.recorded_at,
+                "source": context.source,
                 "kind": "screenshot",
                 "file": relative.to_string_lossy(),
                 "path": absolute,
@@ -1287,13 +1368,14 @@ async fn capture_screenshot_evidence(
                 "bytes": byte_count,
             }));
             if let Some(event) = chronicle_event {
+                record_ocr_capture_status(capture, context.recorded_at, &event);
                 capture.events.push(event);
             }
         }
         Err(error) => capture.events.push(capture_error_event(
             "screenshot",
-            recorded_at,
-            source,
+            context.recorded_at,
+            context.source,
             error.to_string(),
         )),
     }
@@ -1424,6 +1506,8 @@ fn write_chronicle_screen_recording_artifacts(
     recorded_at: &str,
     raw: &screenshot::RawScreenshotCapture,
     exclusions: &[SkysightExclusion],
+    ocr_policy: &crate::ocr::OcrPolicy,
+    ocr_readiness: &crate::ocr::OcrReadiness,
 ) -> Option<Value> {
     let screen_recording_dir = screen_recording_dir?;
     match write_chronicle_screen_recording_artifacts_inner(
@@ -1431,6 +1515,8 @@ fn write_chronicle_screen_recording_artifacts(
         recorded_at,
         raw,
         exclusions,
+        ocr_policy,
+        ocr_readiness,
     ) {
         Ok(event) => Some(event),
         Err(error) => Some(capture_error_event(
@@ -1447,6 +1533,8 @@ fn write_chronicle_screen_recording_artifacts_inner(
     recorded_at: &str,
     raw: &screenshot::RawScreenshotCapture,
     exclusions: &[SkysightExclusion],
+    ocr_policy: &crate::ocr::OcrPolicy,
+    ocr_readiness: &crate::ocr::OcrReadiness,
 ) -> Result<Value> {
     let captured_at = timestamp(recorded_at).unwrap_or_else(Utc::now);
     let display_id = "0";
@@ -1482,13 +1570,13 @@ fn write_chronicle_screen_recording_artifacts_inner(
     crate::secure_fs::write_private_file(&latest_frame_path, &jpeg_bytes)?;
     crate::secure_fs::write_private_file(&sparse_frame_path, &jpeg_bytes)?;
     crate::secure_fs::write_private_file(&capture_marker_path, "active\n")?;
-    let ocr_policy = crate::ocr::OcrPolicy::from_env();
     let exclusion_values = exclusions
         .iter()
         .map(|rule| rule.value.clone())
         .collect::<Vec<_>>();
-    let ocr_result = crate::ocr::recognize_frame(
-        &ocr_policy,
+    let ocr_result = crate::ocr::recognize_frame_with_readiness(
+        ocr_policy,
+        ocr_readiness,
         &sparse_frame_path,
         jpeg_payload.width,
         jpeg_payload.height,
@@ -1550,6 +1638,7 @@ fn write_chronicle_screen_recording_artifacts_inner(
         "ocr_truncated": ocr_result.truncated,
         "ocr_text_observation_count": ocr_result.observations.len(),
         "ocr_normalized_text_bytes": ocr_result.normalized_text.len(),
+        "ocr_error": ocr_result.error,
         "display_id": display_id,
         "frame_index": frame_index,
         "pruned_file_count": pruned_file_count,
@@ -2015,6 +2104,8 @@ struct StatusValueInput<'a> {
     started_at: Option<String>,
     end_reason: Option<String>,
     message: Option<String>,
+    ocr_policy: Option<crate::ocr::OcrPolicy>,
+    ocr_readiness: Option<crate::ocr::OcrReadiness>,
 }
 
 fn status_value(input: StatusValueInput<'_>) -> Result<SkysightStatus> {
@@ -2022,8 +2113,12 @@ fn status_value(input: StatusValueInput<'_>) -> Result<SkysightStatus> {
     let latest = latest_segment(input.paths)?;
     let exclusions_count = list_skysight_exclusions(input.paths)?.len();
     let capture_capabilities = capture_capability_notes();
-    let ocr_policy = crate::ocr::OcrPolicy::from_env();
-    let ocr_readiness = ocr_policy.readiness();
+    let ocr_policy = input
+        .ocr_policy
+        .unwrap_or_else(crate::ocr::OcrPolicy::from_env);
+    let ocr_readiness = input
+        .ocr_readiness
+        .unwrap_or_else(|| ocr_policy.readiness());
     let summarizer_capabilities = summarizer_capability_notes();
     let process_start_time_ticks = input
         .pid
@@ -2111,11 +2206,9 @@ fn status_value(input: StatusValueInput<'_>) -> Result<SkysightStatus> {
         ocr_last_run_at: existing
             .as_ref()
             .and_then(|status| status.ocr_last_run_at.clone()),
-        ocr_last_error: ocr_readiness.error.or_else(|| {
-            existing
-                .as_ref()
-                .and_then(|status| status.ocr_last_error.clone())
-        }),
+        ocr_last_error: existing
+            .as_ref()
+            .and_then(|status| status.ocr_last_error.clone()),
         pid: input.pid,
         process_start_time_ticks,
         started_at: input.started_at.or_else(|| {
@@ -3235,6 +3328,89 @@ mod tests {
     }
 
     #[test]
+    fn ocr_capture_status_tracks_only_actual_ocr_runs() {
+        let mut capture = DesktopEvidenceCapture::default();
+
+        record_ocr_capture_status(
+            &mut capture,
+            "2026-06-30T00:00:00Z",
+            &json!({
+                "ocr_runs": false,
+                "ocr_error": "provider probe failed",
+            }),
+        );
+        assert_eq!(capture.ocr_last_run_at, None);
+        assert_eq!(capture.ocr_last_error, None);
+
+        record_ocr_capture_status(
+            &mut capture,
+            "2026-06-30T00:01:00Z",
+            &json!({
+                "ocr_runs": true,
+                "ocr_error": "recognition failed",
+            }),
+        );
+        assert_eq!(
+            capture.ocr_last_run_at.as_deref(),
+            Some("2026-06-30T00:01:00Z")
+        );
+        assert_eq!(
+            capture.ocr_last_error.as_deref(),
+            Some("recognition failed")
+        );
+
+        record_ocr_capture_status(
+            &mut capture,
+            "2026-06-30T00:02:00Z",
+            &json!({
+                "ocr_runs": true,
+            }),
+        );
+        assert_eq!(
+            capture.ocr_last_run_at.as_deref(),
+            Some("2026-06-30T00:02:00Z")
+        );
+        assert_eq!(capture.ocr_last_error, None);
+    }
+
+    #[test]
+    fn status_value_does_not_report_readiness_probe_error_as_ocr_last_error() {
+        let _guard = env_guard();
+        let temp = tempfile::tempdir().unwrap();
+        let paths = SkysightPaths::new(temp.path().join("runtime"), temp.path().join("resources"));
+        ensure_layout(&paths).unwrap();
+
+        let status = status_value(StatusValueInput {
+            paths: &paths,
+            state: "running",
+            is_running: true,
+            paused: false,
+            pause_reason: None,
+            interval_seconds: Some(60),
+            pid: Some(std::process::id()),
+            started_at: Some(now_timestamp()),
+            end_reason: None,
+            message: None,
+            ocr_policy: Some(crate::ocr::OcrPolicy::from_env()),
+            ocr_readiness: Some(crate::ocr::OcrReadiness {
+                enabled: true,
+                available: false,
+                backend: "rapidocr-python".to_string(),
+                status: "backend_unavailable".to_string(),
+                language: "en".to_string(),
+                version: None,
+                dependency_hint: Some("install rapidocr".to_string()),
+                error: Some("readiness probe failed".to_string()),
+            }),
+        })
+        .unwrap();
+
+        assert_eq!(status.ocr_status.as_deref(), Some("backend_unavailable"));
+        assert_eq!(status.ocr_last_run_at, None);
+        assert_eq!(status.ocr_last_error, None);
+    }
+
+    #[test]
     fn resource_timestamp_parses_chronicle_style_names() {
         let path = PathBuf::from("2026-06-30T15-04-05-abcd-6h-linux-activity.md");
         let parsed = resource_timestamp(&path).unwrap();
@@ -3334,6 +3510,8 @@ mod tests {
             started_at: Some(now_timestamp()),
             end_reason: None,
             message: Some("test daemon alive".to_string()),
+            ocr_policy: None,
+            ocr_readiness: None,
         })
         .unwrap();
         write_status(&paths, &status).unwrap();
@@ -3405,6 +3583,8 @@ mod tests {
             started_at: Some(now_timestamp()),
             end_reason: None,
             message: None,
+            ocr_policy: None,
+            ocr_readiness: None,
         })
         .unwrap();
         status.summary_agent_state = Some(first.state);
@@ -3524,6 +3704,17 @@ mod tests {
     fn screenshot_is_suppressed_when_exclusions_cannot_be_verified() {
         let temp = tempfile::tempdir().unwrap();
         let mut capture = DesktopEvidenceCapture::default();
+        let ocr_policy = crate::ocr::OcrPolicy::from_env();
+        let ocr_readiness = crate::ocr::OcrReadiness {
+            enabled: false,
+            available: false,
+            backend: "auto".to_string(),
+            status: "disabled".to_string(),
+            language: "eng".to_string(),
+            version: None,
+            dependency_hint: None,
+            error: None,
+        };
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -3531,15 +3722,19 @@ mod tests {
 
         runtime
             .block_on(capture_screenshot_evidence(
-                temp.path(),
-                "2026-06-30T00:00:00Z",
-                "test",
+                ScreenshotEvidenceContext {
+                    segment_dir: temp.path(),
+                    recorded_at: "2026-06-30T00:00:00Z",
+                    source: "test",
+                    screen_recording_dir: None,
+                    ocr_policy: &ocr_policy,
+                    ocr_readiness: &ocr_readiness,
+                },
                 ScreenshotSuppression {
                     unverified_exclusions: true,
                     ..Default::default()
                 },
                 &[],
-                None,
                 &mut capture,
             ))
             .unwrap();

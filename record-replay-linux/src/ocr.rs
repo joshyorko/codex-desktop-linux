@@ -59,8 +59,10 @@ def as_list(value):
         return value.tolist()
     return list(value)
 
-lang_type = sys.argv[1] if len(sys.argv) > 2 else "ch"
-image_path = sys.argv[2] if len(sys.argv) > 2 else sys.argv[1]
+if len(sys.argv) != 3:
+    raise SystemExit("expected rapidocr language and image path arguments")
+lang_type = sys.argv[1]
+image_path = sys.argv[2]
 engine = RapidOCR(params={"Rec.lang_type": lang_type})
 result = engine(image_path)
 payload = {
@@ -632,6 +634,7 @@ impl OcrFrameResult {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn recognize_frame(
     policy: &OcrPolicy,
     frame_path: &Path,
@@ -640,27 +643,45 @@ pub(crate) fn recognize_frame(
     exclusion_values: &[String],
 ) -> OcrFrameResult {
     let readiness = policy.readiness();
+    recognize_frame_with_readiness(
+        policy,
+        &readiness,
+        frame_path,
+        image_width,
+        image_height,
+        exclusion_values,
+    )
+}
+
+pub(crate) fn recognize_frame_with_readiness(
+    policy: &OcrPolicy,
+    readiness: &OcrReadiness,
+    frame_path: &Path,
+    image_width: u32,
+    image_height: u32,
+    exclusion_values: &[String],
+) -> OcrFrameResult {
     if policy.mode == OcrMode::Disabled {
-        return OcrFrameResult::skipped(&readiness);
+        return OcrFrameResult::skipped(readiness);
     }
     if !readiness.available {
         return if policy.mode == OcrMode::Required {
-            OcrFrameResult::required_unavailable(&readiness)
+            OcrFrameResult::required_unavailable(readiness)
         } else {
-            OcrFrameResult::skipped(&readiness)
+            OcrFrameResult::skipped(readiness)
         };
     }
 
     let started = Instant::now();
-    match recognize_frame_inner(policy, &readiness, frame_path, image_width, image_height) {
+    match recognize_frame_inner(policy, readiness, frame_path, image_width, image_height) {
         Ok(mut result) => {
-            result.backend_version = readiness.version;
+            result.backend_version = readiness.version.clone();
             result.apply_text_exclusions(exclusion_values);
             result.apply_persistence_limits();
             result
         }
         Err(error) => OcrFrameResult::failure(
-            &readiness,
+            readiness,
             if started.elapsed() >= policy.timeout {
                 "timeout"
             } else {
@@ -1244,6 +1265,13 @@ mod tests {
         assert_eq!(policy.rapidocr_language, "ch");
         assert_eq!(policy.page_segmentation_mode, "11");
         assert_eq!(policy.timeout.as_secs(), 10);
+    }
+
+    #[test]
+    fn rapidocr_run_script_requires_language_and_image_path() {
+        assert!(RAPIDOCR_RUN_SCRIPT.contains("len(sys.argv) != 3"));
+        assert!(RAPIDOCR_RUN_SCRIPT.contains("expected rapidocr language and image path"));
+        assert!(!RAPIDOCR_RUN_SCRIPT.contains("else sys.argv[1]"));
     }
 
     #[test]

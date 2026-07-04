@@ -1020,6 +1020,10 @@ mod tests {
     fn status_value_includes_suppressed_events_path() {
         let temp = tempfile::tempdir().unwrap();
         let session_dir = temp.path().join("session");
+        let previous = std::env::var_os("CODEX_RECORD_REPLAY_STATUS_PATH");
+        let status_path = temp.path().join("status.json");
+        std::env::set_var("CODEX_RECORD_REPLAY_STATUS_PATH", &status_path);
+
         let server = RecordReplayLinux::default();
         server.set_active_session(Some(session_dir.clone()));
         let value = server.status_value("status");
@@ -1033,6 +1037,11 @@ mod tests {
                     .as_ref()
             )
         );
+
+        match previous {
+            Some(path) => std::env::set_var("CODEX_RECORD_REPLAY_STATUS_PATH", path),
+            None => std::env::remove_var("CODEX_RECORD_REPLAY_STATUS_PATH"),
+        }
     }
 
     #[test]

@@ -1090,7 +1090,7 @@ function normalizedHashedAssetPath(entryPath) {
   const normalized = normalizePath(entryPath);
   const directory = path.posix.dirname(normalized);
   const basename = path.posix.basename(normalized);
-  const match = basename.match(/^(.+?)-[A-Za-z0-9_-]{6,}(\.[A-Za-z0-9.]+)$/);
+  const match = basename.match(/^(.+)-[A-Za-z0-9_-]{6,}(\.[A-Za-z0-9.]+)$/);
   if (match == null) {
     return null;
   }
@@ -1517,75 +1517,91 @@ function buildIntelReports({
   if (candidatePath == null) {
     throw new Error("candidatePath is required");
   }
-  const resolvedBaselinePath = resolveBaselinePath({
-    autoBaseline,
-    baselinePath,
-    candidatePath,
-    repoRoot,
-  });
-  const reportDir =
-    outputDir ??
-    path.join(
+  const scratchRoot = fs.mkdtempSync(path.join(os.tmpdir(), "codex-upstream-intel-report-"));
+  try {
+    const resolvedBaselinePath = resolveBaselinePath({
+      autoBaseline,
+      baselinePath,
+      candidatePath,
       repoRoot,
-      "reports/upstream-dmg",
-      timestamp ?? new Date().toISOString().replace(/[:.]/g, "-"),
+    });
+    const reportDir =
+      outputDir ??
+      path.join(
+        repoRoot,
+        "reports/upstream-dmg",
+        timestamp ?? new Date().toISOString().replace(/[:.]/g, "-"),
+      );
+    const candidateInventory = createInventory({
+      registry,
+      sourcePath: candidatePath,
+      workDir: path.join(scratchRoot, "candidate"),
+    });
+    const candidateProtected = extractProtectedSurfaces({ inventory: candidateInventory, registry, repoRoot });
+    const baselineInventory =
+      resolvedBaselinePath == null
+        ? null
+        : createInventory({
+            registry,
+            sourcePath: resolvedBaselinePath,
+            workDir: path.join(scratchRoot, "baseline"),
+          });
+    const baselineProtected =
+      resolvedBaselinePath == null
+        ? null
+        : extractProtectedSurfaces({
+            inventory: baselineInventory,
+            registry,
+            repoRoot,
+          });
+    const patchReport =
+      patchReportPath != null && fs.existsSync(patchReportPath) ? readJson(patchReportPath) : null;
+    const driftReport = compareProtectedSurfaces({
+      baseline: baselineProtected,
+      candidate: candidateProtected,
+      patchReport,
+    });
+    const mapDrift = compareMaps({ baselineProtected, candidateProtected });
+    driftReport.structuralDriftSummary = summarizeMapDrift(mapDrift);
+
+    fs.mkdirSync(reportDir, { recursive: true });
+    writeJson(path.join(reportDir, "inventory.json"), publicInventory(candidateInventory));
+    writeJson(path.join(reportDir, "protected-surfaces.json"), candidateProtected);
+    writeJson(path.join(reportDir, "bridge-map.json"), candidateProtected.bridgeMap);
+    writeJson(path.join(reportDir, "plugin-map.json"), candidateProtected.pluginMap);
+    writeJson(path.join(reportDir, "native-binary-map.json"), candidateProtected.nativeBinaryMap);
+    writeJson(path.join(reportDir, "map-drift.json"), mapDrift);
+    writeJson(path.join(reportDir, "drift-report.json"), driftReport);
+    fs.writeFileSync(path.join(reportDir, "drift-report.md"), renderDriftMarkdown(driftReport), "utf8");
+    fs.writeFileSync(
+      path.join(reportDir, "substrate-action-plan.md"),
+      renderActionPlanMarkdown(driftReport, candidateProtected, mapDrift),
+      "utf8",
     );
-  const candidateInventory = createInventory({ registry, sourcePath: candidatePath });
-  const candidateProtected = extractProtectedSurfaces({ inventory: candidateInventory, registry, repoRoot });
-  const baselineInventory = resolvedBaselinePath == null ? null : createInventory({ registry, sourcePath: resolvedBaselinePath });
-  const baselineProtected =
-    resolvedBaselinePath == null
-      ? null
-      : extractProtectedSurfaces({
-          inventory: baselineInventory,
-          registry,
-          repoRoot,
-        });
-  const patchReport =
-    patchReportPath != null && fs.existsSync(patchReportPath) ? readJson(patchReportPath) : null;
-  const driftReport = compareProtectedSurfaces({
-    baseline: baselineProtected,
-    candidate: candidateProtected,
-    patchReport,
-  });
-  const mapDrift = compareMaps({ baselineProtected, candidateProtected });
-  driftReport.structuralDriftSummary = summarizeMapDrift(mapDrift);
 
-  fs.mkdirSync(reportDir, { recursive: true });
-  writeJson(path.join(reportDir, "inventory.json"), publicInventory(candidateInventory));
-  writeJson(path.join(reportDir, "protected-surfaces.json"), candidateProtected);
-  writeJson(path.join(reportDir, "bridge-map.json"), candidateProtected.bridgeMap);
-  writeJson(path.join(reportDir, "plugin-map.json"), candidateProtected.pluginMap);
-  writeJson(path.join(reportDir, "native-binary-map.json"), candidateProtected.nativeBinaryMap);
-  writeJson(path.join(reportDir, "map-drift.json"), mapDrift);
-  writeJson(path.join(reportDir, "drift-report.json"), driftReport);
-  fs.writeFileSync(path.join(reportDir, "drift-report.md"), renderDriftMarkdown(driftReport), "utf8");
-  fs.writeFileSync(
-    path.join(reportDir, "substrate-action-plan.md"),
-    renderActionPlanMarkdown(driftReport, candidateProtected, mapDrift),
-    "utf8",
-  );
+    if (baselineProtected != null) {
+      writeJson(path.join(reportDir, "baseline/inventory.json"), publicInventory(baselineInventory));
+      writeJson(path.join(reportDir, "baseline/protected-surfaces.json"), baselineProtected);
+      writeJson(path.join(reportDir, "baseline/bridge-map.json"), baselineProtected.bridgeMap);
+      writeJson(path.join(reportDir, "baseline/plugin-map.json"), baselineProtected.pluginMap);
+      writeJson(path.join(reportDir, "baseline/native-binary-map.json"), baselineProtected.nativeBinaryMap);
+      writeJson(path.join(reportDir, "candidate/inventory.json"), publicInventory(candidateInventory));
+      writeJson(path.join(reportDir, "candidate/protected-surfaces.json"), candidateProtected);
+      writeJson(path.join(reportDir, "candidate/bridge-map.json"), candidateProtected.bridgeMap);
+      writeJson(path.join(reportDir, "candidate/plugin-map.json"), candidateProtected.pluginMap);
+      writeJson(path.join(reportDir, "candidate/native-binary-map.json"), candidateProtected.nativeBinaryMap);
+    }
 
-  if (baselineProtected != null) {
-    writeJson(path.join(reportDir, "baseline/inventory.json"), publicInventory(baselineInventory));
-    writeJson(path.join(reportDir, "baseline/protected-surfaces.json"), baselineProtected);
-    writeJson(path.join(reportDir, "baseline/bridge-map.json"), baselineProtected.bridgeMap);
-    writeJson(path.join(reportDir, "baseline/plugin-map.json"), baselineProtected.pluginMap);
-    writeJson(path.join(reportDir, "baseline/native-binary-map.json"), baselineProtected.nativeBinaryMap);
-    writeJson(path.join(reportDir, "candidate/inventory.json"), publicInventory(candidateInventory));
-    writeJson(path.join(reportDir, "candidate/protected-surfaces.json"), candidateProtected);
-    writeJson(path.join(reportDir, "candidate/bridge-map.json"), candidateProtected.bridgeMap);
-    writeJson(path.join(reportDir, "candidate/plugin-map.json"), candidateProtected.pluginMap);
-    writeJson(path.join(reportDir, "candidate/native-binary-map.json"), candidateProtected.nativeBinaryMap);
+    return {
+      outputDir: reportDir,
+      inventory: candidateInventory,
+      protectedSurfaces: candidateProtected,
+      driftReport,
+      mapDrift,
+    };
+  } finally {
+    fs.rmSync(scratchRoot, { force: true, recursive: true });
   }
-
-  return {
-    outputDir: reportDir,
-    inventory: candidateInventory,
-    protectedSurfaces: candidateProtected,
-    driftReport,
-    mapDrift,
-  };
 }
 
 module.exports = {
