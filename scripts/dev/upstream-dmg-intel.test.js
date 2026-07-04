@@ -510,15 +510,39 @@ test("writes the expected report bundle for candidate-only and comparison runs",
     const baselineApp = createFixtureApp(workspace, "baseline");
     const candidateApp = createFixtureApp(workspace, "candidate");
     const outputDir = path.join(workspace, "reports");
+    const fakeBin = path.join(workspace, "bin");
+    fs.mkdirSync(fakeBin, { recursive: true });
+    for (const tool of ["llvm-nm", "nm"]) {
+      writeFile(
+        path.join(fakeBin, tool),
+        `#!/usr/bin/env bash
+set -euo pipefail
+test -f "$2"
+printf '00000000 T _SkyComputerUseClient\\n'
+`,
+        0o755,
+      );
+    }
+    const oldPath = process.env.PATH;
+    process.env.PATH = `${fakeBin}${path.delimiter}${oldPath ?? ""}`;
 
-    const reports = buildIntelReports({
-      baselinePath: baselineApp,
-      candidatePath: candidateApp,
-      outputDir,
-      registry,
-      repoRoot: process.cwd(),
-      timestamp: "2026-07-03T12-00-00Z",
-    });
+    let reports;
+    try {
+      reports = buildIntelReports({
+        baselinePath: baselineApp,
+        candidatePath: candidateApp,
+        outputDir,
+        registry,
+        repoRoot: process.cwd(),
+        timestamp: "2026-07-03T12-00-00Z",
+      });
+    } finally {
+      if (oldPath === undefined) {
+        delete process.env.PATH;
+      } else {
+        process.env.PATH = oldPath;
+      }
+    }
 
     for (const reportName of [
       "inventory.json",
@@ -562,6 +586,13 @@ test("writes the expected report bundle for candidate-only and comparison runs",
     assert.ok(
       nativeBinaryMap.binaries.some((binary) =>
         binary.protectedStringHits.some((hit) => hit.needle === "recording_controls"),
+      ),
+    );
+    assert.ok(
+      nativeBinaryMap.binaries.some(
+        (binary) =>
+          binary.symbols?.tool === "llvm-nm -g" &&
+          binary.symbols.symbols.includes("00000000 T _SkyComputerUseClient"),
       ),
     );
     assert.equal(mapDrift.mode, "baselineComparison");

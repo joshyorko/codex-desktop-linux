@@ -218,19 +218,43 @@ function extractDmgToApp({ dmgPath, workDir }) {
 }
 
 function commandOnPath(command) {
-  if (commandPathCache.has(command)) {
-    return commandPathCache.get(command);
+  const cacheKey = `${process.env.PATH ?? ""}\0${command}`;
+  if (commandPathCache.has(cacheKey)) {
+    return commandPathCache.get(cacheKey);
   }
-  const result = spawnSync("sh", ["-lc", `command -v ${command}`], {
-    encoding: "utf8",
-  });
-  if (result.status !== 0) {
-    commandPathCache.set(command, null);
+  const resolved = resolveCommandOnPath(command);
+  commandPathCache.set(cacheKey, resolved);
+  return resolved;
+}
+
+function resolveCommandOnPath(command) {
+  if (command.includes(path.sep)) {
+    return executablePathOrNull(command);
+  }
+  for (const entry of (process.env.PATH ?? "").split(path.delimiter)) {
+    if (!entry) {
+      continue;
+    }
+    const candidate = path.join(entry, command);
+    const resolved = executablePathOrNull(candidate);
+    if (resolved != null) {
+      return resolved;
+    }
+  }
+  return null;
+}
+
+function executablePathOrNull(candidate) {
+  try {
+    fs.accessSync(candidate, fs.constants.X_OK);
+    const stat = fs.statSync(candidate);
+    if (stat.isFile()) {
+      return candidate;
+    }
+  } catch {
     return null;
   }
-  const resolved = result.stdout.trim() || command;
-  commandPathCache.set(command, resolved);
-  return resolved;
+  return null;
 }
 
 function collectInventoryFiles(appDir, options = {}) {
@@ -307,6 +331,7 @@ function enrichInventoryFile(file, options = {}) {
   const type = fileType(file);
   const buffer = file.unpacked ? null : readFileBuffer(file);
   const enriched = {
+    absolutePath: file.absolutePath,
     mode: file.mode == null ? null : `0${(file.mode & 0o777).toString(8)}`,
     relativePath: normalizePath(file.relativePath),
     size: file.size ?? buffer?.length ?? 0,

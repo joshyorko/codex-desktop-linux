@@ -425,8 +425,11 @@ pub fn run_skysight_daemon(
         write_summary_agent_runtime_setting(paths, summary_agent)?;
     }
     let interval = Duration::from_secs(interval_seconds.max(1));
+    let ocr_policy = crate::ocr::OcrPolicy::from_env();
+    let mut ocr_readiness = None;
     write_chronicle_started_pid(std::process::id())?;
     loop {
+        let cached_ocr_readiness = cached_ocr_readiness(&ocr_policy, &mut ocr_readiness);
         if paths.stop_request_path.exists() {
             let status = status_value(StatusValueInput {
                 paths,
@@ -439,8 +442,8 @@ pub fn run_skysight_daemon(
                 started_at: None,
                 end_reason: Some("stop-requested".to_string()),
                 message: Some("Skysight daemon stopped".to_string()),
-                ocr_policy: None,
-                ocr_readiness: None,
+                ocr_policy: Some(ocr_policy.clone()),
+                ocr_readiness: Some(cached_ocr_readiness),
             })?;
             write_status(paths, &status)?;
             let _ = fs::remove_file(&paths.stop_request_path);
@@ -460,14 +463,19 @@ pub fn run_skysight_daemon(
                 started_at: None,
                 end_reason: None,
                 message: Some("Skysight daemon paused".to_string()),
-                ocr_policy: None,
-                ocr_readiness: None,
+                ocr_policy: Some(ocr_policy.clone()),
+                ocr_readiness: Some(cached_ocr_readiness),
             })?;
             write_status(paths, &status)?;
             thread::sleep(interval);
             continue;
         }
-        if let Err(error) = capture_skysight_snapshot(paths, Some("daemon")) {
+        if let Err(error) = capture_skysight_snapshot_with_ocr(
+            paths,
+            Some("daemon"),
+            ocr_policy.clone(),
+            cached_ocr_readiness.clone(),
+        ) {
             let status = status_value(StatusValueInput {
                 paths,
                 state: "running",
@@ -479,13 +487,20 @@ pub fn run_skysight_daemon(
                 started_at: None,
                 end_reason: None,
                 message: Some(format!("Skysight snapshot failed: {error:#}")),
-                ocr_policy: None,
-                ocr_readiness: None,
+                ocr_policy: Some(ocr_policy.clone()),
+                ocr_readiness: Some(cached_ocr_readiness),
             })?;
             write_status(paths, &status)?;
         }
         thread::sleep(interval);
     }
+}
+
+fn cached_ocr_readiness(
+    policy: &crate::ocr::OcrPolicy,
+    cache: &mut Option<crate::ocr::OcrReadiness>,
+) -> crate::ocr::OcrReadiness {
+    cache.get_or_insert_with(|| policy.readiness()).clone()
 }
 
 pub fn pause_skysight<S: Into<String>>(
@@ -550,6 +565,17 @@ pub fn capture_skysight_snapshot(
     paths: &SkysightPaths,
     source: Option<&str>,
 ) -> Result<SkysightStatus> {
+    let ocr_policy = crate::ocr::OcrPolicy::from_env();
+    let ocr_readiness = ocr_policy.readiness();
+    capture_skysight_snapshot_with_ocr(paths, source, ocr_policy, ocr_readiness)
+}
+
+fn capture_skysight_snapshot_with_ocr(
+    paths: &SkysightPaths,
+    source: Option<&str>,
+    ocr_policy: crate::ocr::OcrPolicy,
+    ocr_readiness: crate::ocr::OcrReadiness,
+) -> Result<SkysightStatus> {
     ensure_layout(paths)?;
     if let Some(reason) = read_pause_reason(paths)? {
         let pid = active_status_pid(paths);
@@ -574,8 +600,6 @@ pub fn capture_skysight_snapshot(
 
     codex_computer_use_linux::diagnostics::hydrate_session_bus_env();
     let diagnostics = codex_computer_use_linux::diagnostics::doctor_report();
-    let ocr_policy = crate::ocr::OcrPolicy::from_env();
-    let ocr_readiness = ocr_policy.readiness();
     let recorded_at = now_timestamp();
     let window_ended_at = Utc::now();
     let source = source.unwrap_or("snapshot");
@@ -3089,6 +3113,7 @@ fn request_process_stop(pid: u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::fs::PermissionsExt;
     use std::sync::{Mutex, OnceLock};
 
     fn env_guard() -> std::sync::MutexGuard<'static, ()> {
@@ -3408,6 +3433,68 @@ mod tests {
         assert_eq!(status.ocr_status.as_deref(), Some("backend_unavailable"));
         assert_eq!(status.ocr_last_run_at, None);
         assert_eq!(status.ocr_last_error, None);
+    }
+
+    #[test]
+    fn cached_ocr_readiness_reuses_daemon_session_probe() {
+        let _guard = env_guard();
+        let env_keys = [
+            "CODEX_SKYSIGHT_OCR",
+            "CODEX_CHRONICLE_OCR",
+            "CODEX_SKYSIGHT_OCR_BACKEND",
+            "CODEX_CHRONICLE_OCR_BACKEND",
+            "CODEX_SKYSIGHT_RAPIDOCR_PYTHON",
+            "CODEX_CHRONICLE_RAPIDOCR_PYTHON",
+            "CODEX_SKYSIGHT_RAPIDOCR_LANG",
+            "CODEX_CHRONICLE_RAPIDOCR_LANG",
+        ];
+        let old_env = env_keys
+            .iter()
+            .map(|key| (*key, env::var_os(key)))
+            .collect::<Vec<_>>();
+        for key in env_keys {
+            env::remove_var(key);
+        }
+
+        let temp = tempfile::tempdir().unwrap();
+        let counter = temp.path().join("rapidocr-readiness-count");
+        let fake_python = temp.path().join("fake-python");
+        fs::write(
+            &fake_python,
+            format!(
+                r#"#!/usr/bin/env bash
+set -euo pipefail
+printf x >> '{}'
+echo '__CODEX_RAPIDOCR_JSON__{{"rapidocr":"3.9.1","onnxruntime":"1.22.0","lang_type":"en"}}'
+"#,
+                counter.display()
+            ),
+        )
+        .unwrap();
+        let mut permissions = fs::metadata(&fake_python).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&fake_python, permissions).unwrap();
+
+        env::set_var("CODEX_SKYSIGHT_OCR", "enabled");
+        env::set_var("CODEX_SKYSIGHT_OCR_BACKEND", "rapidocr");
+        env::set_var("CODEX_SKYSIGHT_RAPIDOCR_PYTHON", &fake_python);
+        env::set_var("CODEX_SKYSIGHT_RAPIDOCR_LANG", "en");
+
+        let policy = crate::ocr::OcrPolicy::from_env();
+        let mut cache = None;
+        let first = cached_ocr_readiness(&policy, &mut cache);
+        let second = cached_ocr_readiness(&policy, &mut cache);
+
+        assert!(first.available);
+        assert_eq!(second, first);
+        assert_eq!(fs::read_to_string(&counter).unwrap(), "x");
+
+        for (key, value) in old_env {
+            match value {
+                Some(value) => env::set_var(key, value),
+                None => env::remove_var(key),
+            }
+        }
     }
 
     #[test]

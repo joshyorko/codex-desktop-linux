@@ -1093,8 +1093,8 @@ fn observation_from_rect(
     let y2 = y2.clamp(y1, max_y);
     let pixel_x = x1.floor() as u32;
     let pixel_y = y1.floor() as u32;
-    let pixel_width = x2.ceil().saturating_sub_f64(x1.floor());
-    let pixel_height = y2.ceil().saturating_sub_f64(y1.floor());
+    let pixel_width = (x2 - x1).max(0.0).min(u32::MAX as f64) as u32;
+    let pixel_height = (y2 - y1).max(0.0).min(u32::MAX as f64) as u32;
     let text = text.to_string();
 
     OcrObservation {
@@ -1175,19 +1175,6 @@ fn truncate_string_to_bytes(value: &mut String, max_bytes: usize) -> bool {
     }
     value.truncate(end);
     true
-}
-
-trait SaturatingSubF64 {
-    fn saturating_sub_f64(self, rhs: f64) -> u32;
-}
-
-impl SaturatingSubF64 for f64 {
-    fn saturating_sub_f64(self, rhs: f64) -> u32 {
-        if !self.is_finite() || !rhs.is_finite() || self <= rhs {
-            return 0;
-        }
-        (self - rhs).min(u32::MAX as f64) as u32
-    }
 }
 
 fn wait_with_output_timeout(mut child: Child, timeout: Duration) -> Result<Output> {
@@ -1453,6 +1440,28 @@ TSV
         assert_eq!(result.normalized_text, "");
         assert!(result.observations.is_empty());
         assert_eq!(result.suppressed_text_observation_count, 1);
+    }
+
+    #[test]
+    fn rapidocr_zero_area_boxes_stay_zero_area_pixels() {
+        let payload = serde_json::json!({
+            "boxes": [[
+                [10.0, 20.0],
+                [10.0, 20.0],
+                [10.0, 20.0],
+                [10.0, 20.0]
+            ]],
+            "txts": ["dot"],
+            "scores": [0.8]
+        });
+
+        let observations = observations_from_rapidocr_json(&payload, 100, 50).unwrap();
+
+        assert_eq!(observations.len(), 1);
+        assert_eq!(observations[0].pixel_bounding_box.x, 10);
+        assert_eq!(observations[0].pixel_bounding_box.y, 20);
+        assert_eq!(observations[0].pixel_bounding_box.width, 0);
+        assert_eq!(observations[0].pixel_bounding_box.height, 0);
     }
 
     #[test]
