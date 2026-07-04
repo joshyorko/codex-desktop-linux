@@ -500,6 +500,47 @@ function applyLinuxComputerUseRendererAvailabilityPatch(currentSource) {
     },
   );
 
+  const currentSettingsAvailablePluginsPattern =
+    /let ([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*),([A-Za-z_$][\w$]*)\),([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)\(\3\),([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*)\),([A-Za-z_$][\w$]*);/g;
+  patchedSource = patchedSource.replace(
+    currentSettingsAvailablePluginsPattern,
+    (
+      match,
+      pluginsQueryVar,
+      pluginsHookVar,
+      selectedHostVar,
+      emptyPluginsVar,
+      marketplacePathVar,
+      marketplacePathHookVar,
+      featureFlagVar,
+      featureFlagHookVar,
+      featureFlagArgVar,
+      computerUsePluginVar,
+      offset,
+    ) => {
+      const contextStart = Math.max(0, offset - 900);
+      const lookback = patchedSource.slice(contextStart, offset);
+      const nextSource = patchedSource.slice(offset + match.length, offset + match.length + 800);
+      const platformVar = lookback.match(/\{computerUseAvailability:[A-Za-z_$][\w$]*,platform:([A-Za-z_$][\w$]*)\}=/)?.[1] ?? null;
+      const selectorMatch = nextSource.match(
+        new RegExp(
+          String.raw`${computerUsePluginVar}=[A-Za-z_$][\w$]*\(${pluginsQueryVar}\.availablePlugins,([A-Za-z_$][\w$]*),${marketplacePathVar}\)`,
+        ),
+      );
+      const pluginNameVar = selectorMatch?.[1] ?? null;
+      if (
+        platformVar == null ||
+        pluginNameVar == null ||
+        !nextSource.includes(`${pluginsQueryVar}.availablePlugins`) ||
+        nextSource.startsWith(`${platformVar}===\`linux\`&&!${pluginsQueryVar}.availablePlugins.some`)
+      ) {
+        return match;
+      }
+      availabilityChanged = true;
+      return `let ${pluginsQueryVar}=${pluginsHookVar}(${selectedHostVar},${emptyPluginsVar}),${marketplacePathVar}=${marketplacePathHookVar}(${selectedHostVar}),${featureFlagVar}=${featureFlagHookVar}(${featureFlagArgVar});${platformVar}===\`linux\`&&!${pluginsQueryVar}.availablePlugins.some(e=>e.plugin?.name===${pluginNameVar}||e.plugin?.id?.split(\`@\`)[0]===${pluginNameVar})&&(${pluginsQueryVar}={...${pluginsQueryVar},availablePlugins:[...${pluginsQueryVar}.availablePlugins,{marketplaceName:\`openai-curated\`,marketplacePath:\`openai-bundled/plugins/computer-use\`,plugin:{id:${pluginNameVar},name:${pluginNameVar},installed:!0,enabled:!0}}]});let ${computerUsePluginVar};`;
+    },
+  );
+
   if (patchedSource.includes("native-desktop-apps") && hasComputerUseLiteral(patchedSource)) {
     const nativeAppsPlatformPattern =
       /([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)&&\(([A-Za-z_$][\w$]*)===`macOS`\|\|\3===`windows`\)/g;

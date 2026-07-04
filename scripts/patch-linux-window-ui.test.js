@@ -5920,6 +5920,20 @@ test("shows current Computer Use settings Any App row on Linux", () => {
   assert.match(patched, /e\[16\]===i\.available/);
 });
 
+test("shows current Computer Use settings Any App row when plugin list omits desktop plugin on Linux", () => {
+  const source =
+    "function Lt(e){let t=(0,Z.c)(35),{computerUseAvailability:n,platform:r}=e,{selectedHostId:o}=Ie(),v;t[4]===Symbol.for(`react.memo_cache_sentinel`)?(v=[],t[4]=v):v=t[4];let y=Me(o,v),b=ut(o),x=j(Ne),S;t[5]!==b||t[6]!==y.availablePlugins?(S=K(y.availablePlugins,an,b),t[5]=b,t[6]=y.availablePlugins,t[7]=S):S=t[7];let w=S,R=[];if(n.available&&w!=null){let e,n;t[19]===Symbol.for(`react.memo_cache_sentinel`)?(e=(0,Q.jsx)(m,{...X.anyApp}),n=(0,Q.jsx)(m,{id:`settings.computerUse.anyApp.description`,defaultMessage:`Let row`}),t[19]=e,t[20]=n):(e=t[19],n=t[20]);let r;t[21]===w?r=t[22]:(r={plugin:w,title:e,description:n},t[21]=w,t[22]=r),R.push(r)}return R}var an=`computer-use`;";
+
+  const patched = applyPatchTwice(
+    applyLinuxComputerUseRendererAvailabilityPatch,
+    source,
+    /r===`linux`&&!y\.availablePlugins\.some\(e=>e\.plugin\?\.name===an\|\|e\.plugin\?\.id\?\.split\(`@`\)\[0\]===an\)&&\(y=\{\.\.\.y,availablePlugins:\[\.\.\.y\.availablePlugins,\{marketplaceName:`openai-curated`,marketplacePath:`openai-bundled\/plugins\/computer-use`,plugin:\{id:an,name:an,installed:!0,enabled:!0\}\}\]\}\);let S;/,
+  );
+
+  assert.match(patched, /let y=Me\(o,v\),b=ut\(o\),x=j\(Ne\);/);
+  assert.match(patched, /S=K\(y\.availablePlugins,an,b\)/);
+});
+
 test("Computer Use availability descriptor matches current settings and shared hook bundles", () => {
   const descriptors = require("./patches/core/all-linux/webview/computer-use-ui/patch.js");
   const descriptor = descriptors.find((entry) => entry.id === "linux-computer-use-ui-availability");
