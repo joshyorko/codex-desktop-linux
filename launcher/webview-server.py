@@ -4,8 +4,10 @@ import ctypes.util
 import functools
 import http.server
 import os
+import posixpath
 import signal
 import sys
+import urllib.parse
 
 
 def _install_parent_death_signal():
@@ -39,16 +41,33 @@ if len(sys.argv) >= 4 and sys.argv[2] == "--bind":
 
 
 class CodexWebviewHandler(http.server.SimpleHTTPRequestHandler):
+    def normalized_request_path(self):
+        request_path = urllib.parse.urlsplit(self.path).path
+        decoded_path = urllib.parse.unquote(request_path)
+        normalized_path = posixpath.normpath(decoded_path)
+        if decoded_path.endswith("/") and not normalized_path.endswith("/"):
+            normalized_path += "/"
+        if not normalized_path.startswith("/"):
+            normalized_path = "/" + normalized_path
+        return normalized_path
+
+    def is_immutable_asset_request(self):
+        return self.normalized_request_path().startswith("/assets/")
+
     def send_head(self):
-        for header in ("If-Modified-Since", "If-None-Match"):
-            if header in self.headers:
-                del self.headers[header]
+        if not self.is_immutable_asset_request():
+            for header in ("If-Modified-Since", "If-None-Match"):
+                if header in self.headers:
+                    del self.headers[header]
         return super().send_head()
 
     def end_headers(self):
-        self.send_header("Cache-Control", "no-store, max-age=0")
-        self.send_header("Pragma", "no-cache")
-        self.send_header("Expires", "0")
+        if self.is_immutable_asset_request():
+            self.send_header("Cache-Control", "public, max-age=31536000, immutable")
+        else:
+            self.send_header("Cache-Control", "no-store, max-age=0")
+            self.send_header("Pragma", "no-cache")
+            self.send_header("Expires", "0")
         super().end_headers()
 
 
