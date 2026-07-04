@@ -4,6 +4,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 
 const {
+  PATCH_STATUS_FAILED_REQUIRED,
   patchStatusFromChange,
   recordPatch,
 } = require("../lib/patch-report.js");
@@ -18,7 +19,7 @@ const {
 const {
   findIconAsset,
   findMainBundle,
-} = require("./shared.js");
+} = require("./lib/assets.js");
 const {
   applyExtractedAppPatchDescriptors,
   applyMainBundlePatchDescriptors,
@@ -27,14 +28,18 @@ const {
   normalizePatchDescriptors,
 } = require("./engine.js");
 const {
+  PHASE_EXTRACTED_APP_POST_WEBVIEW,
+  PHASE_EXTRACTED_APP_PRE_WEBVIEW,
+  PHASE_MAIN_BUNDLE,
+} = require("./descriptor.js");
+const {
   isComputerUseUiEnabled,
-} = require("./computer-use.js");
+} = require("./impl/computer-use.js");
 
 const REQUIRED_UPSTREAM = "required-upstream";
 const OPTIONAL = "optional";
 const OPT_IN = "opt-in";
 const CORE_PATCH_ROOT = path.join(__dirname, "core");
-const EXTRACTED_APP_WEBVIEW_SPLIT_ORDER = 2020;
 
 const CUSTOM_PATCH_POLICIES = [
   { name: "main-process-ui", ciPolicy: REQUIRED_UPSTREAM, phase: "main-bundle" },
@@ -55,10 +60,6 @@ function normalizeDiscoveredCorePatchDescriptors(options = {}) {
 
 function corePatchDescriptors(options = {}) {
   return normalizeDiscoveredCorePatchDescriptors(options);
-}
-
-function legacyCorePatchDescriptors(options = {}) {
-  return corePatchDescriptors(options);
 }
 
 function featurePatchDescriptors(options = {}) {
@@ -107,8 +108,8 @@ function setReportLinuxTarget(report, linux) {
 function mainBundlePatchDescriptors(context) {
   return normalizePatchDescriptors([
     ...corePatchDescriptors({ corePatchRoot: context.corePatchRoot })
-      .filter((patch) => patch.phase === "main-bundle"),
-    ...featurePatchDescriptors(context.featurePatchOptions).filter((patch) => patch.phase === "main-bundle"),
+      .filter((patch) => patch.phase === PHASE_MAIN_BUNDLE),
+    ...featurePatchDescriptors(context.featurePatchOptions).filter((patch) => patch.phase === PHASE_MAIN_BUNDLE),
   ]);
 }
 
@@ -142,7 +143,7 @@ function patchExtractedApp(extractedDir, options = {}) {
   if (main == null) {
     const reason = `Could not find main bundle in ${path.join(extractedDir, ".vite", "build")}`;
     console.warn(`WARN: ${reason} — skipping main-process UI patches`);
-    recordMainProcessUiPatch(report, "failed-required", reason);
+    recordMainProcessUiPatch(report, PATCH_STATUS_FAILED_REQUIRED, reason);
   }
 
   const iconAsset = findIconAsset(extractedDir);
@@ -184,9 +185,10 @@ function patchExtractedApp(extractedDir, options = {}) {
 
   applyExtractedAppPatchDescriptors(
     extractedDir,
-    patchDescriptors.filter((patch) => patch.order < EXTRACTED_APP_WEBVIEW_SPLIT_ORDER),
+    patchDescriptors,
     assetContext,
     report,
+    PHASE_EXTRACTED_APP_PRE_WEBVIEW,
   );
 
   applyWebviewAssetPatchDescriptors(
@@ -198,9 +200,10 @@ function patchExtractedApp(extractedDir, options = {}) {
 
   applyExtractedAppPatchDescriptors(
     extractedDir,
-    patchDescriptors.filter((patch) => patch.order >= EXTRACTED_APP_WEBVIEW_SPLIT_ORDER),
+    patchDescriptors,
     assetContext,
     report,
+    PHASE_EXTRACTED_APP_POST_WEBVIEW,
   );
 
   const desktopName = assetContext.desktopName ?? report?.desktopName ?? null;
@@ -242,26 +245,15 @@ function requiredPatchNamesForProfile(profile, options = {}) {
     .map((patch) => patch.name);
 }
 
-const EXPORTED_CORE_PATCHES = corePatchDescriptors();
-const MAIN_BUNDLE_PATCHES = EXPORTED_CORE_PATCHES.filter((patch) => patch.phase === "main-bundle");
-const WEBVIEW_ASSET_PATCHES = EXPORTED_CORE_PATCHES.filter((patch) => patch.phase === "webview-asset");
-const COMPUTER_USE_UI_ASSET_PATCHES = WEBVIEW_ASSET_PATCHES.filter((patch) =>
-  patch.id.startsWith("linux-computer-use-"),
-);
-
 module.exports = {
-  COMPUTER_USE_UI_ASSET_PATCHES,
   CUSTOM_PATCH_POLICIES,
-  MAIN_BUNDLE_PATCHES,
   OPTIONAL,
   OPT_IN,
   REQUIRED_UPSTREAM,
-  WEBVIEW_ASSET_PATCHES,
   allPatchPolicies,
   corePatchDescriptors,
   createMainBundleContext,
   featurePatchDescriptors,
-  legacyCorePatchDescriptors,
   patchExtractedApp,
   patchMainBundleSource,
   requiredPatchNamesForProfile,

@@ -19,7 +19,7 @@ const {
   applySettingsPatch,
   applySettingsSectionsNavPatch,
   applySettingsSharedNavPatch,
-  patches: featurePatches,
+  descriptors: featurePatches,
 } = require("./patch.js");
 
 function twice(fn, source) {

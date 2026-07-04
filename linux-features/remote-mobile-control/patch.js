@@ -1588,7 +1588,7 @@ module.exports = [
   },
   {
     id: "linux-remote-mobile-app-server-remote-control",
-    phase: "extracted-app",
+    phase: "extracted-app:post-webview",
     order: 20_117,
     ciPolicy: "optional",
     apply: applyLinuxRemoteMobileAppServerRemoteControlExtractedAppPatch,

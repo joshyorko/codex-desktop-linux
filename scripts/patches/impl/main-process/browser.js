@@ -5,7 +5,7 @@ const path = require("node:path");
 
 const {
   requireName,
-} = require("../shared.js");
+} = require("../../lib/minified-js.js");
 
 function applyBrowserUseNodeReplApprovalPatch(currentSource) {
   const approvalPatch =

@@ -14,9 +14,11 @@ const {
 } = require("../../scripts/lib/linux-features.js");
 const {
   createPatchReport,
+} = require("../../scripts/lib/patch-report.js");
+const {
   patchExtractedApp,
   patchMainBundleSource,
-} = require("../../scripts/patch-linux-window-ui.js");
+} = require("../../scripts/patches/runner.js");
 const {
   applyLinuxRemoteControlDeviceKeyPatch,
   applyLinuxRemoteControlClientAccountCompatibilityPatch,
@@ -715,7 +717,7 @@ test("remote mobile control feature exposes opt-in main-bundle and webview patch
       "main-bundle",
       "main-bundle",
       "main-bundle",
-      "extracted-app",
+      "extracted-app:post-webview",
       "webview-asset",
       "webview-asset",
       "webview-asset",

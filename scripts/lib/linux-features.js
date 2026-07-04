@@ -460,8 +460,6 @@ function wrapFeaturePatchDescriptor(feature, descriptor, sourcePath, index, feat
 
 function featurePatchDescriptorListFromExports(feature, moduleExports, sourcePath, featureIndex) {
   const exported = moduleExports?.descriptors ??
-    moduleExports?.patches ??
-    moduleExports?.default ??
     moduleExports;
   if (exported == null) {
     console.warn(`WARN: Linux feature '${feature.id}' patchDescriptors entrypoint must export descriptors`);
@@ -479,28 +477,8 @@ function featurePatchDescriptorListFromExports(feature, moduleExports, sourcePat
 function loadLinuxFeaturePatchDescriptors(options = {}) {
   const descriptors = [];
   for (const [featureIndex, feature] of loadEnabledLinuxFeatures(options).entries()) {
-    const loaded = loadFeatureEntrypointModule(feature, "patchDescriptors") ??
-      loadFeatureEntrypointModule(feature, "patches");
+    const loaded = loadFeatureEntrypointModule(feature, "patchDescriptors");
     if (loaded == null) {
-      const legacyLoaded = loadFeatureEntrypointModule(feature, "mainBundlePatch");
-      if (legacyLoaded == null) {
-        continue;
-      }
-
-      const moduleExports = legacyLoaded.moduleExports;
-      const apply = moduleExports.applyMainBundlePatch ?? moduleExports.apply ?? moduleExports;
-      if (typeof apply !== "function") {
-        console.warn(`WARN: Linux feature '${feature.id}' mainBundlePatch must export a function`);
-        continue;
-      }
-
-      descriptors.push({
-        id: `feature:${feature.id}`,
-        name: `feature:${feature.id}`,
-        phase: "main-bundle",
-        ciPolicy: "optional",
-        apply: (source, context) => apply(source, featureContext(context, feature)),
-      });
       continue;
     }
     descriptors.push(
@@ -513,12 +491,6 @@ function loadLinuxFeaturePatchDescriptors(options = {}) {
     );
   }
   return descriptors;
-}
-
-function loadLinuxFeatureMainBundlePatches(options = {}) {
-  return loadLinuxFeaturePatchDescriptors(options)
-    .filter((patch) => (patch.phase ?? "main-bundle") === "main-bundle")
-    .map(({ apply, ciPolicy, id, name }) => ({ apply, ciPolicy, id, name }));
 }
 
 function enabledLinuxFeatureStageHooks(options = {}) {
@@ -891,7 +863,6 @@ module.exports = {
   featuresJsonSummary,
   loadEnabledLinuxFeatures,
   loadLinuxFeaturePatchDescriptors,
-  loadLinuxFeatureMainBundlePatches,
   linuxFeatureManifestMap,
   linuxFeaturesConfigPath,
   linuxFeaturesRoot,

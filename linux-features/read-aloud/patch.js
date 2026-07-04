@@ -5,8 +5,10 @@ const path = require("node:path");
 
 const {
   linuxSettingsKeys,
+} = require("../../scripts/patches/lib/settings-keys.js");
+const {
   requireName,
-} = require("../../scripts/patches/shared.js");
+} = require("../../scripts/patches/lib/minified-js.js");
 
 const SETTINGS_KEY = "codex-linux-read-aloud-enabled";
 const KOKORO_MODEL_KEY = "codex-linux-read-aloud-kokoro-model";
@@ -733,7 +735,7 @@ module.exports = {
   applySettingsPatch,
   applySettingsSectionsNavPatch,
   applySettingsSharedNavPatch,
-  patches: [
+  descriptors: [
     {
       id: "main-handler",
       phase: "main-bundle",
@@ -753,7 +755,7 @@ module.exports = {
     },
     {
       id: "settings-toggle",
-      phase: "extracted-app",
+      phase: "extracted-app:post-webview",
       order: 20640,
       ciPolicy: "optional",
       apply: applySettingsAssetPatch,

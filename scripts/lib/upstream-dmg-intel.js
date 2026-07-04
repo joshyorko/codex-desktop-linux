@@ -5,6 +5,13 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
+const {
+  PATCH_STATUS_ALREADY_APPLIED,
+  PATCH_STATUS_APPLIED,
+  PATCH_STATUS_FAILED_REQUIRED,
+  PATCH_STATUS_SKIPPED_DISABLED,
+  PATCH_STATUS_SKIPPED_TARGET,
+} = require("./patch-report.js");
 
 const TEXT_FILE_PATTERN = /\.(cjs|css|html|js|json|mjs|md|text|ts|tsx|txt|xml|yml|yaml)$/i;
 const NATIVE_FILE_PATTERN = /(^|\/)(codex_chronicle|SkyComputerUseClient|sky\.node|node_repl|node|[^/]+\.(node|dylib))$/i;
@@ -14,8 +21,13 @@ const DRIFT_PATH_SAMPLE_LIMIT = 8;
 const DRIFT_CHANGED_SAMPLE_LIMIT = 12;
 const MARKDOWN_PATH_SAMPLE_LIMIT = 3;
 const ACTION_PLAN_PATH_SAMPLE_LIMIT = 3;
-const SUCCESSFUL_PATCH_STATUSES = new Set(["applied", "already-applied", "skipped-target", "skipped-disabled"]);
-const BLOCKING_PATCH_STATUSES = new Set(["failed-required"]);
+const SUCCESSFUL_PATCH_STATUSES = new Set([
+  PATCH_STATUS_APPLIED,
+  PATCH_STATUS_ALREADY_APPLIED,
+  PATCH_STATUS_SKIPPED_TARGET,
+  PATCH_STATUS_SKIPPED_DISABLED,
+]);
+const BLOCKING_PATCH_STATUSES = new Set([PATCH_STATUS_FAILED_REQUIRED]);
 const ACTIONABLE_CLASSIFICATIONS = new Set([
   "MOVED",
   "RENAMED",

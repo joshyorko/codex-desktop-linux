@@ -2,7 +2,7 @@
 
 const {
   escapeRegExp,
-} = require("../shared.js");
+} = require("../../lib/minified-js.js");
 
 const LINUX_TITLEBAR_OVERLAY_HEIGHT = 30;
 const LINUX_TITLEBAR_OVERLAY_HELPER = "codexLinuxTitleBarOverlay";

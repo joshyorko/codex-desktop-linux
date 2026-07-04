@@ -111,7 +111,7 @@ function applySidebarProjectNameStylePatch(source, context = {}) {
   }
 }
 
-const patches = [
+const descriptors = [
   {
     id: "sidebar-project-name-style",
     phase: "webview-asset",
@@ -132,8 +132,8 @@ module.exports = {
   RUNTIME_MARKER,
   STYLE_ID,
   applySidebarProjectNameStylePatch,
+  descriptors,
   normalizedProjectNameStyle,
-  patches,
   sidebarProjectNameCss,
   sidebarProjectNameStyleRuntimeSource,
 };

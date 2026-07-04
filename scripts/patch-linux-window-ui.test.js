@@ -20,88 +20,114 @@ process.env.CODEX_LINUX_FEATURES_CONFIG = path.join(
 );
 
 const {
+  applyAutomationScheduleMultiTimePatch,
+  patchAutomationScheduleAssets,
+} = require("./patches/impl/automation-schedule.js");
+const {
   COMPUTER_USE_UI_ENV_VAR,
   COMPUTER_USE_UI_SETTINGS_KEY,
-  applyAutomationScheduleMultiTimePatch,
   applyLinuxComputerUseFeaturePatch,
   applyLinuxComputerUseInstallFlowPatch,
   applyLinuxNativeDesktopAppsHandlerPatch,
   applyLinuxComputerUsePluginGatePatch,
   applyLinuxComputerUseRendererAvailabilityPatch,
-  applyLinuxDesktopSettingsIndexPatch,
-  applyLinuxAvatarOverlayMousePassthroughPatch,
-  applyBrowserUseNodeReplApprovalPatch,
-  applyLinuxBrowserUseRouteLivenessPatch,
-  applyLinuxChromeExtensionStatusPatch,
-  applyLinuxChromeNativeHostRuntimePatch,
-  applyLinuxChromePluginAutoInstallPatch,
-  applyLinuxTerminalUserPathPatch,
-  applyLinuxAppUpdaterBridgePatch,
-  applyLinuxAppUpdaterMenuPatch,
-  applyLinuxAboutDialogPatch,
-  applyLinuxApplicationMenuPatch,
-  applyLinuxBuildInfoTrayPatch,
-  applyLinuxExplicitIpcQuitPatch,
-  applyLinuxExplicitQuitPromptBypassPatch,
-  applyLinuxExplicitTrayQuitPatch,
-  applyLinuxExternalOpenEnvPatch,
-  applyLinuxFileManagerPatch,
-  applyLinuxGitOriginsSourceFallbackPatch,
-  applyLinuxWorkerFileManagerPatch,
-  applyLinuxQuitGuardPatch,
-  applyLinuxHotkeyWindowPrewarmPatch,
-  applyLinuxLaunchActionArgsPatch,
-  applyLinuxSettingsPersistencePatch,
-  applyLinuxMenuPatch,
-  applyLinuxNativeTitlebarPatch,
-  applyLinuxLocalAppServerFeatureEnablementHandlerPatch,
-  applyLinuxMultiInstanceBootstrapPatch,
-  applyLinuxAppSunsetPatch,
-  applyLinuxBrowserUseAvailabilityPatch,
-  applyLinuxBrowserUseExternalAvailabilityPatch,
-  applyLinuxProjectlessXdgDocumentsDirPatch,
-  applyLinuxBrowserUseNonLocalNavigationPatch,
-  applyLinuxAppServerBackfillWaitPatch,
-  applyLinuxOpaqueBackgroundPatch,
-  applyLinuxOwlFeatureBindingFallbackPatch,
-  applyLinuxFastModeModelGuardPatch,
-  applyLinuxOpaqueWindowsDefaultPatch,
-  applyLinuxReadyToShowWindowStatePatch,
-  applyLinuxResizeRepaintPatch,
-  applyLinuxSetIconPatch,
-  applyLinuxRemoteControlConfigPreservationPatch,
-  applyLinuxSingleInstancePatch,
-  applyLinuxTrayCloseSettingPatch,
-  applyLinuxTrayPatch,
-  applyLinuxWillQuitDrainTimeoutPatch,
-  applyLinuxWindowOptionsPatch,
-  applyLinuxXdgDocumentsDirPatch,
-  applySubagentNicknameMetadataPatch,
   isComputerUseUiEnabled,
-  patchMainBundleSource,
-  patchExtractedApp,
-  patchPackageJson,
-  patchLinuxAppUpdaterBridge,
-  patchProjectlessDocumentsAssets,
-  patchKeybindsSettingsAssets,
-  patchAutomationScheduleAssets,
-  patchLinuxOwlFeatureBindingFallbackAssets,
-  createPatchReport,
-  corePatchDescriptors,
-  detectLinuxTargetContext,
-  discoverCorePatchDescriptors,
-  enabledLinuxFeatureIds,
-  linuxTargetSummary,
-  normalizePatchDescriptors,
-  parseOsRelease,
-  resolveDesktopName,
-} = require("./patch-linux-window-ui.js");
+} = require("./patches/impl/computer-use.js");
 const {
   keybindsSettingsAsset,
   linuxDesktopSettingsAsset,
+  applyLinuxDesktopSettingsIndexPatch,
   applyLinuxDesktopSettingsSectionsPatch,
   applyLinuxDesktopSettingsSharedPatch,
-} = require("./patches/keybinds-settings.js");
+  patchKeybindsSettingsAssets,
+} = require("./patches/impl/keybinds-settings.js");
+const {
+  applyLinuxAvatarOverlayMousePassthroughPatch,
+} = require("./patches/impl/avatar-overlay.js");
+const {
+  applyBrowserUseNodeReplApprovalPatch,
+  applyLinuxBrowserUseRouteLivenessPatch,
+  applyLinuxChromeExtensionStatusPatch,
+  applyLinuxExternalOpenEnvPatch,
+} = require("./patches/impl/main-process/browser.js");
+const {
+  applyLinuxChromeNativeHostRuntimePatch,
+  applyLinuxChromePluginAutoInstallPatch,
+} = require("./patches/impl/chrome-plugin.js");
+const {
+  applyLinuxAboutDialogPatch,
+  applyLinuxApplicationMenuPatch,
+  applyLinuxMenuPatch,
+  applyLinuxNativeTitlebarPatch,
+  applyLinuxOpaqueBackgroundPatch,
+  applyLinuxReadyToShowWindowStatePatch,
+  applyLinuxResizeRepaintPatch,
+  applyLinuxSetIconPatch,
+  applyLinuxWindowOptionsPatch,
+} = require("./patches/impl/main-process/window.js");
+const {
+  applyLinuxBuildInfoTrayPatch,
+  applyLinuxSingleInstancePatch,
+  applyLinuxTrayPatch,
+} = require("./patches/impl/main-process/tray.js");
+const {
+  applyLinuxExplicitIpcQuitPatch,
+  applyLinuxExplicitQuitPromptBypassPatch,
+  applyLinuxExplicitTrayQuitPatch,
+  applyLinuxQuitGuardPatch,
+  applyLinuxWillQuitDrainTimeoutPatch,
+} = require("./patches/impl/main-process/quit-lifecycle.js");
+const {
+  applyLinuxFileManagerPatch,
+  applyLinuxGitOriginsSourceFallbackPatch,
+  applyLinuxLocalAppServerFeatureEnablementHandlerPatch,
+  applyLinuxOwlFeatureBindingFallbackPatch,
+  applyLinuxRemoteControlConfigPreservationPatch,
+  applyLinuxTerminalUserPathPatch,
+  applyLinuxWorkerFileManagerPatch,
+  applyLinuxXdgDocumentsDirPatch,
+  patchLinuxOwlFeatureBindingFallbackAssets,
+} = require("./patches/impl/main-process/misc.js");
+const {
+  applyLinuxHotkeyWindowPrewarmPatch,
+  applyLinuxLaunchActionArgsPatch,
+  applyLinuxSettingsPersistencePatch,
+  applyLinuxTrayCloseSettingPatch,
+} = require("./patches/impl/launch-actions.js");
+const {
+  applyLinuxMultiInstanceBootstrapPatch,
+} = require("./patches/impl/bootstrap.js");
+const {
+  applyLinuxProjectlessXdgDocumentsDirPatch,
+  patchProjectlessDocumentsAssets,
+} = require("./patches/impl/projectless-documents.js");
+const {
+  patchPackageJson,
+  resolveDesktopName,
+} = require("./patches/impl/package-json.js");
+const {
+  patchExtractedApp,
+  patchMainBundleSource,
+  corePatchDescriptors,
+  featurePatchDescriptors,
+} = require("./patches/runner.js");
+const {
+  discoverCorePatchDescriptors,
+  normalizePatchDescriptors,
+} = require("./patches/engine.js");
+const {
+  detectLinuxTargetContext,
+  linuxTargetSummary,
+  parseOsRelease,
+} = require("./lib/linux-target-context.js");
+const {
+  enabledLinuxFeatureIds,
+} = require("./lib/linux-features.js");
+const {
+  applyLinuxAppUpdaterBridgePatch,
+  applyLinuxAppUpdaterMenuPatch,
+  patchLinuxAppUpdaterBridge,
+} = require("./lib/linux-update-bridge-patch.js");
 const {
   validateReport,
 } = require("./ci/validate-patch-report.js");
@@ -112,6 +138,7 @@ const {
   sourceInfo,
 } = require("./lib/build-info.js");
 const {
+  createPatchReport,
   criticalFailuresFromReport,
   optionalDriftFromReport,
   summarizePatchReport,
@@ -120,22 +147,29 @@ const {
   applyBrowserAnnotationScreenshotPatch,
   applyLocalEnvironmentActionModalDraftPatch,
   applyPersistentRateLimitFooterPatch,
+  applyLinuxAppServerBackfillWaitPatch,
   applyLinuxAppServerFeatureEnablementPatch,
+  applyLinuxAppSunsetPatch,
+  applyLinuxBrowserUseAvailabilityPatch,
+  applyLinuxBrowserUseExternalAvailabilityPatch,
+  applyLinuxBrowserUseNonLocalNavigationPatch,
   applyLinuxChatSearchHydrationPatch,
   applyLinuxConfigWriteVersionConflictPatch,
+  applyLinuxFastModeModelGuardPatch,
   applyLinuxI18nGatePatch,
+  applyLinuxOpaqueWindowsDefaultPatch,
   applyLinuxProfileSettingsMenuPatch,
   applyLinuxSafeMonospaceFontStackPatch,
   applyLinuxSkillsListDedupePatch,
   applyLinuxThreadSidePanelNativeTooltipPatch,
   applyLinuxTooltipWindowControlsCollisionPatch,
   applyLinuxWindowControlsSafeAreaPatch,
-} = require("./patches/webview-assets.js");
+  applySubagentNicknameMetadataPatch,
+} = require("./patches/impl/webview/index.js");
 const {
   findCodexRequestWebviewAsset,
   patchAssetFiles,
-} = require("./patches/shared.js");
-const { featurePatchDescriptors } = require("./patches/registry.js");
+} = require("./patches/lib/assets.js");
 
 const mainBundlePrefix =
   "let n=require(`electron`),i=require(`node:path`),o=require(`node:fs`);";
@@ -870,11 +904,11 @@ test("default core patch descriptors are grouped and unique", () => {
   assert.ok(descriptors.every((descriptor) => descriptor.sourcePath.includes(`${path.sep}core${path.sep}`)));
   assert.equal(
     descriptors.find((descriptor) => descriptor.id === "package-desktop-name")?.phase,
-    "extracted-app",
+    "extracted-app:post-webview",
   );
   assert.equal(
     descriptors.find((descriptor) => descriptor.id === "linux-owl-feature-binding-fallback")?.phase,
-    "extracted-app",
+    "extracted-app:pre-webview",
   );
   assert.match(
     descriptors.find((descriptor) => descriptor.id === "linux-chrome-plugin-auto-install")?.sourcePath,
@@ -4190,7 +4224,7 @@ test("fails loudly when current Codex request API asset detection is ambiguous",
 
     assert.throws(
       () => findCodexRequestWebviewAsset(assetsDir),
-      /found multiple Codex request API assets \(app-a\.js, app-b\.js\)/,
+      /Found multiple Codex request API assets \(app-a\.js, app-b\.js\)/,
     );
   } finally {
     fs.rmSync(extractedDir, { recursive: true, force: true });
@@ -7244,7 +7278,7 @@ test("feature patch descriptors honor explicit feature config overrides", () => 
         id: "temp-feature",
         title: "Temp Feature",
         defaultEnabled: false,
-        entrypoints: { patches: "./patch.js" },
+        entrypoints: { patchDescriptors: "./patch.js" },
       }),
     );
     fs.writeFileSync(path.join(featureDir, "README.md"), "# Temp Feature\n");
@@ -7297,7 +7331,7 @@ test("patchExtractedApp report honors explicit feature config overrides", () => 
         id: "temp-feature",
         title: "Temp Feature",
         defaultEnabled: false,
-        entrypoints: { patches: "./patch.js" },
+        entrypoints: { patchDescriptors: "./patch.js" },
       }),
     );
     fs.writeFileSync(path.join(featureDir, "README.md"), "# Temp Feature\n");
@@ -8043,7 +8077,7 @@ test("terminal user PATH patch drift is reported as optional", () => {
     writeCorePatchFixture(coreRoot, "sample/terminal-path", [
       "\"use strict\";",
       "const { applyLinuxTerminalUserPathPatch } = require(",
-      `  ${JSON.stringify(path.join(__dirname, "patches", "main-process", "misc.js"))},`,
+      `  ${JSON.stringify(path.join(__dirname, "patches", "impl", "main-process", "misc.js"))},`,
       ");",
       "module.exports = {",
       "  id: \"linux-terminal-user-path\",",
@@ -8237,7 +8271,7 @@ test("strategy telemetry recorded during apply lands on the patch report entry",
       "  ciPolicy: \"optional\",",
       "  order: 100,",
       "  apply: (source) => {",
-      "    recordStrategy(\"sample-group\", \"legacy:old-shape\");",
+      "    recordStrategy(\"sample-group\", \"upstream-alt-shape\");",
       "    return source.replace(\"codexLinuxStrategyFixture()\", \"codexLinuxStrategyPatched()\");",
       "  },",
       "};",
@@ -8252,7 +8286,7 @@ test("strategy telemetry recorded during apply lands on the patch report entry",
 
     const entry = report.patches.find((patch) => patch.name === "instrumented-sample");
     assert.equal(entry?.status, "applied");
-    assert.deepEqual(entry?.strategies, [{ group: "sample-group", strategy: "legacy:old-shape" }]);
+    assert.deepEqual(entry?.strategies, [{ group: "sample-group", strategy: "upstream-alt-shape" }]);
   } finally {
     fs.rmSync(coreRoot, { recursive: true, force: true });
     fs.rmSync(tempApp, { recursive: true, force: true });

@@ -1,6 +1,6 @@
 "use strict";
 
-const { recordStrategy } = require("./strategy-telemetry.js");
+const { recordStrategy } = require("../../strategy-telemetry.js");
 
 const fs = require("node:fs");
 const path = require("node:path");
@@ -8,7 +8,7 @@ const path = require("node:path");
 const {
   escapeRegExp,
   findMatchingBrace,
-} = require("./shared.js");
+} = require("../../lib/minified-js.js");
 
 // Webview asset patches target hashed browser chunks copied out of app.asar.
 // They stay fail-soft because upstream chunk names and minified symbols drift.
@@ -788,10 +788,6 @@ function applyLinuxAppServerBackfillWaitPatch(currentSource) {
     const currentTopLevelAnchors = [
       "function fi(e,t){let n=hi(t.originalException);",
     ];
-    const legacyAnchors = [
-      "function za(e){let t=La.safeParse(e);return t.success?new Ba(t.data):e}",
-      "function za(e){",
-    ];
     let inserted = false;
     for (const anchor of currentTopLevelAnchors) {
       const anchorIndex = patchedSource.indexOf(anchor);
@@ -803,14 +799,6 @@ function applyLinuxAppServerBackfillWaitPatch(currentSource) {
         changed = true;
         inserted = true;
         break;
-      }
-    }
-    if (!inserted) {
-      const legacyAnchor = legacyAnchors.find((anchor) => patchedSource.includes(anchor));
-      if (legacyAnchor != null) {
-        patchedSource = patchedSource.replace(legacyAnchor, `${helperSource}${legacyAnchor}`);
-        changed = true;
-        inserted = true;
       }
     }
     if (!inserted && shouldPatchTimeout) {
@@ -1583,8 +1571,6 @@ function applyPersistentRateLimitFooterPatch(currentSource) {
     ? null
     : `(0,Q.jsx)(codexLinuxRateLimitFooter,{conversationId:${homeFooterConversationIdVar}})`;
 
-  const legacyFooterFunction =
-    `function codexLinuxRateLimitFooter({conversationId:e}){try{let t=(0,Z.c)(22),n=ea(),{modelSettings:r}=Bi(e),i=r.model??null,{data:a=null}=li(Fn),o=Ro(a),s=Zo(a),c=Xo(Jo(o,{activeLimitName:s,selectedModel:i})).slice(0,2);c.length===0&&(c=Xo(Jo(o,{activeLimitName:s,selectedModel:null})).slice(0,2));if(c.length===0)return null;let l;t[0]!==n?(l=(0,Q.jsx)(X,{id:\`composer.linuxRateLimitFooter.tooltip\`,defaultMessage:\`Rate limits remaining\`,description:\`Tooltip for compact footer rate limit status\`}),t[0]=n,t[1]=l):l=t[1];let u;if(t[2]!==c){u=c.map((e,t)=>{let n=No(e.bucket.usedPercent??0);return(0,Q.jsxs)(\`span\`,{className:\`flex items-center gap-1 whitespace-nowrap\`,children:[t>0?(0,Q.jsx)(\`span\`,{className:\`text-token-input-placeholder-foreground\`,children:\`/\`}):null,(0,Q.jsx)(\`span\`,{children:(0,Q.jsx)(V_,{minutes:e.bucket.windowDurationMins,variant:\`summary\`})}),(0,Q.jsx)(\`span\`,{className:\`font-medium text-token-text-primary\`,children:Do(n)})]},e.key)}),t[2]=c,t[3]=u}else u=t[3];let d;t[4]!==u?(d=(0,Q.jsx)(\`span\`,{className:\`${footerLabelClass}\`,children:u}),t[4]=u,t[5]=d):d=t[5];let f;return t[6]!==l||t[7]!==d?(f=(0,Q.jsx)(nc,{tooltipContent:l,children:d}),t[6]=l,t[7]=d,t[8]=f):f=t[8],f}catch(e){return null}}`;
   const currentFooterFunction = currentSymbols == null
     ? null
     : `function codexLinuxRateLimitFooter({conversationId:e}){try{let t=(0,Z.c)(22),{activeMode:n}=Bi(e),r=n?.settings.model??null,{data:i}=ci(${currentSymbols.accountSignalVar}),a=i===void 0?null:i,o=Ro(a),s=Zo(a),c=Xo(Jo(o,{activeLimitName:s,selectedModel:r})).slice(0,2);c.length===0&&(c=Xo(Jo(o,{activeLimitName:s,selectedModel:null})).slice(0,2));if(c.length===0)return null;let l;t[0]===Symbol.for(\`react.memo_cache_sentinel\`)?(l=(0,Q.jsx)(X,{id:\`composer.linuxRateLimitFooter.tooltip\`,defaultMessage:\`Rate limits remaining\`,description:\`Tooltip for compact footer rate limit status\`}),t[0]=l):l=t[0];let u;if(t[1]!==c){u=c.map((e,t)=>{let n=No(e.bucket.usedPercent??0);return(0,Q.jsxs)(\`span\`,{className:\`flex items-center gap-1 whitespace-nowrap\`,children:[t>0?(0,Q.jsx)(\`span\`,{className:\`text-token-input-placeholder-foreground\`,children:\`/\`}):null,(0,Q.jsx)(\`span\`,{children:(0,Q.jsx)(${currentSymbols.durationComponent},{minutes:e.bucket.windowDurationMins,variant:\`summary\`})}),(0,Q.jsx)(\`span\`,{className:\`font-medium text-token-text-primary\`,children:Do(n)})]},e.key)}),t[1]=c,t[2]=u}else u=t[2];let d;t[3]!==u?(d=(0,Q.jsx)(\`span\`,{className:\`${footerLabelClass}\`,children:u}),t[3]=u,t[4]=d):d=t[4];let f;return t[5]!==l||t[6]!==d?(f=(0,Q.jsx)(nc,{tooltipContent:l,children:d}),t[5]=l,t[6]=d,t[7]=f):f=t[7],f}catch(e){return null}}`;
@@ -1603,7 +1589,6 @@ function applyPersistentRateLimitFooterPatch(currentSource) {
     : `function codexLinuxRateLimitFooter({conversationId:e}){try{let t=${currentPermissionsFooterSymbols.activeModeHook}(e)?.activeMode?.settings.model??null,{data:n}=${currentPermissionsFooterSymbols.queryHook}(${currentPermissionsFooterSymbols.queryKey}),r=${currentPermissionsFooterSymbols.entriesFn}(n),i=${currentPermissionsFooterSymbols.activeLimitFn}(n),a=${currentPermissionsFooterSymbols.summaryFn}(r,{activeLimitName:i,selectedModel:t});if(a==null)return null;let o=[];if(a.windowMinutes!=null){let e=a.windowMinutes;o.push(e>=1440?\`\${Math.ceil(e/1440)}d\`:e>=60?\`\${Math.ceil(e/60)}h\`:\`\${Math.ceil(e)}m\`)}a.remainingPercent!=null&&o.push(\`\${Math.round(a.remainingPercent)}%\`);if(o.length===0)return null;return(0,${currentPermissionsFooterSymbols.jsxAlias}.jsx)(\`span\`,{className:\`${footerLabelClass}\`,children:o.join(\` \`)})}catch(e){return null}}`;
 
   if (!patchedSource.includes("function codexLinuxRateLimitFooter(")) {
-    const legacyInsertionNeedle = "function TF(e){";
     if (currentPermissionsFooterSymbols != null && currentPermissionsFooterFunction != null) {
       patchedSource = patchedSource.replace(
         currentPermissionsFooterSymbols.insertionNeedle,
@@ -1625,11 +1610,6 @@ function applyPersistentRateLimitFooterPatch(currentSource) {
         currentComposerStatusNeedle,
         `${currentComposerFooterFunction}${currentComposerStatusNeedle}`,
       );
-    } else if (patchedSource.includes(legacyInsertionNeedle)) {
-      patchedSource = patchedSource.replace(
-        legacyInsertionNeedle,
-        `${legacyFooterFunction}${legacyInsertionNeedle}`,
-      );
     }
   } else if (currentPermissionsFooterSymbols != null && currentPermissionsFooterFunction != null) {
     patchedSource = replaceCodexLinuxRateLimitFooterFunction(
@@ -1650,11 +1630,6 @@ function applyPersistentRateLimitFooterPatch(currentSource) {
     patchedSource = replaceCodexLinuxRateLimitFooterFunction(
       patchedSource,
       latestFooterFunction,
-    );
-  } else {
-    patchedSource = replaceCodexLinuxRateLimitFooterFunction(
-      patchedSource,
-      legacyFooterFunction,
     );
   }
 

@@ -3,8 +3,8 @@
 const {
   findMatchingBrace,
   requireName,
-} = require("./shared.js");
-const { recordStrategy } = require("./strategy-telemetry.js");
+} = require("../lib/minified-js.js");
+const { recordStrategy } = require("../strategy-telemetry.js");
 
 function findAvatarMethod(source, signatureRegex) {
   const match = source.match(signatureRegex);

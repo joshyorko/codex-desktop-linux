@@ -4,11 +4,15 @@ const fs = require("node:fs");
 const path = require("node:path");
 const {
   escapeRegExp,
+} = require("../lib/minified-js.js");
+const {
   findCodexRequestWebviewAsset,
   findImportedAsset,
   findRequiredWebviewAsset,
+} = require("../lib/assets.js");
+const {
   linuxSettingsKeys,
-} = require("./shared.js");
+} = require("../lib/settings-keys.js");
 
 // Keybind settings are transactional: either all dependent webview assets are
 // updated together, or the patch logs a warning and leaves the app usable.

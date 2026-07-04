@@ -5,6 +5,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Changed
+
+- Refactored ASAR patching internals so `scripts/patch-linux-window-ui.js` is a
+  CLI-only entrypoint and patch descriptors/implementations live under
+  `scripts/patches/`.
+
+### Removed
+
+- Removed legacy external Linux feature patch contracts:
+  `entrypoints.patches`, `entrypoints.mainBundlePatch`, `.patches`/`.default`
+  descriptor exports, the unsuffixed `extracted-app` phase, and
+  `patch-linux-window-ui.js` module exports.
+
 ## [0.8.4] - 2026-06-20
 
 ### Added

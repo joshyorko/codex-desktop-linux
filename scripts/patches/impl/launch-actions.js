@@ -9,8 +9,10 @@ const {
   findLinuxGlobalStateExpression,
   findMatchingBrace,
   inferModuleAlias,
+} = require("../lib/minified-js.js");
+const {
   linuxSettingsKeys,
-} = require("./shared.js");
+} = require("../lib/settings-keys.js");
 
 // Launch-action patches keep second launches, hotkey windows, and persisted
 // Linux settings coordinated with the generated launcher.
