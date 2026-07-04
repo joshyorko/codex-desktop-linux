@@ -187,7 +187,10 @@ fn skysight_snapshot_creates_segment_directory_and_rollup_resources() {
         .is_some_and(|name| name.contains("-6h-")));
     assert_eq!(status.exclusions_count, 0);
     assert!(!status.capture_capability_notes.is_empty());
-    assert_eq!(status.ocr_backend.as_deref(), Some("tesseract-cli"));
+    assert!(status
+        .ocr_backend
+        .as_deref()
+        .is_some_and(|backend| matches!(backend, "rapidocr-python" | "tesseract-cli" | "auto")));
     assert_eq!(status.ocr_language.as_deref(), Some("eng"));
     assert!(status
         .ocr_status
@@ -273,6 +276,7 @@ fn skysight_snapshot_creates_segment_directory_and_rollup_resources() {
 fn skysight_status_reports_fake_tesseract_ocr_readiness() {
     let _guard = env_guard();
     let old_ocr = env::var_os("CODEX_SKYSIGHT_OCR");
+    let old_backend = env::var_os("CODEX_SKYSIGHT_OCR_BACKEND");
     let old_tesseract = env::var_os("CODEX_SKYSIGHT_TESSERACT_PATH");
     let old_lang = env::var_os("CODEX_SKYSIGHT_OCR_LANG");
 
@@ -280,6 +284,7 @@ fn skysight_status_reports_fake_tesseract_ocr_readiness() {
     let fake_tesseract = temp.path().join("fake-tesseract");
     write_fake_tesseract(&fake_tesseract, "version-only");
     env::set_var("CODEX_SKYSIGHT_OCR", "enabled");
+    env::set_var("CODEX_SKYSIGHT_OCR_BACKEND", "tesseract");
     env::set_var("CODEX_SKYSIGHT_TESSERACT_PATH", &fake_tesseract);
     env::set_var("CODEX_SKYSIGHT_OCR_LANG", "eng");
 
@@ -298,6 +303,7 @@ fn skysight_status_reports_fake_tesseract_ocr_readiness() {
         .is_some_and(|version| version.contains("tesseract")));
 
     restore_env("CODEX_SKYSIGHT_OCR", old_ocr);
+    restore_env("CODEX_SKYSIGHT_OCR_BACKEND", old_backend);
     restore_env("CODEX_SKYSIGHT_TESSERACT_PATH", old_tesseract);
     restore_env("CODEX_SKYSIGHT_OCR_LANG", old_lang);
 }

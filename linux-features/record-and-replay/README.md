@@ -44,10 +44,10 @@ Cargo and copies the release binary into `resources/native/`, the staged plugin
 - Skysight segment directories contain `events.jsonl`, `metadata.json`, and
   bounded artifacts such as diagnostics, screenshots, window metadata, and
   AT-SPI/accessibility evidence when available.
-- Runs optional local-only Chronicle OCR through the Tesseract CLI when
-  available. Missing OCR dependencies are non-fatal unless OCR is marked
-  required, and are surfaced in `skysight status`, provider readiness, and
-  `.ocr.jsonl` rows.
+- Runs optional local-only Chronicle OCR through RapidOCR/ONNXRuntime when
+  available, with Tesseract CLI fallback. Missing OCR dependencies are
+  non-fatal unless OCR is marked required, and are surfaced in
+  `skysight status`, provider readiness, and `.ocr.jsonl` rows.
 - Applies screenshot exclusions before OCR and strips recognized text before
   persistence if it matches an exclusion value.
 - Writes rolling 10-minute markdown summaries and cadence-limited 6-hour

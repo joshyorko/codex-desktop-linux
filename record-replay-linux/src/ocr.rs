@@ -1,21 +1,77 @@
 use anyhow::{Context, Result};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
     fs,
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::{Child, Command, Output, Stdio},
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 const DEFAULT_TESSERACT: &str = "tesseract";
+const DEFAULT_RAPIDOCR_PYTHON: &str = "python3";
 const DEFAULT_LANGUAGE: &str = "eng";
+const DEFAULT_RAPIDOCR_LANGUAGE: &str = "ch";
 const DEFAULT_PSM: &str = "11";
 const DEFAULT_TIMEOUT_MS: u64 = 10_000;
+const TESSERACT_BACKEND_NAME: &str = "tesseract-cli";
+const RAPIDOCR_BACKEND_NAME: &str = "rapidocr-python";
+const AUTO_BACKEND_NAME: &str = "auto";
+const RAPIDOCR_JSON_PREFIX: &str = "__CODEX_RAPIDOCR_JSON__";
 const MAX_OCR_OBSERVATIONS: usize = 200;
 const MAX_OCR_NORMALIZED_TEXT_BYTES: usize = 32 * 1024;
 const MAX_OCR_CANDIDATE_TEXT_BYTES: usize = 512;
+
+const RAPIDOCR_CHECK_SCRIPT: &str = r#"
+import importlib.metadata as metadata
+import json
+import sys
+
+try:
+    import onnxruntime  # noqa: F401
+    from rapidocr import RapidOCR
+
+    lang_type = sys.argv[1] if len(sys.argv) > 1 else "ch"
+    engine = RapidOCR(params={"Rec.lang_type": lang_type})
+    payload = {
+        "rapidocr": metadata.version("rapidocr"),
+        "onnxruntime": metadata.version("onnxruntime"),
+        "lang_type": str(getattr(engine.cfg.Rec, "lang_type", lang_type)),
+    }
+    print("__CODEX_RAPIDOCR_JSON__" + json.dumps(payload, ensure_ascii=False))
+except Exception as exc:
+    payload = {"error": f"{type(exc).__name__}: {exc}"}
+    print("__CODEX_RAPIDOCR_JSON__" + json.dumps(payload, ensure_ascii=False))
+    raise
+"#;
+
+const RAPIDOCR_RUN_SCRIPT: &str = r#"
+import json
+import sys
+
+from rapidocr import RapidOCR
+
+def as_list(value):
+    if value is None:
+        return []
+    if hasattr(value, "tolist"):
+        return value.tolist()
+    return list(value)
+
+lang_type = sys.argv[1] if len(sys.argv) > 2 else "ch"
+image_path = sys.argv[2] if len(sys.argv) > 2 else sys.argv[1]
+engine = RapidOCR(params={"Rec.lang_type": lang_type})
+result = engine(image_path)
+payload = {
+    "boxes": as_list(getattr(result, "boxes", None)),
+    "txts": as_list(getattr(result, "txts", None)),
+    "scores": as_list(getattr(result, "scores", None)),
+    "elapse": getattr(result, "elapse", None),
+    "lang_type": str(getattr(engine.cfg.Rec, "lang_type", lang_type)),
+}
+print("__CODEX_RAPIDOCR_JSON__" + json.dumps(payload, ensure_ascii=False))
+"#;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum OcrMode {
@@ -25,11 +81,21 @@ pub(crate) enum OcrMode {
     Disabled,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum OcrBackendPreference {
+    Auto,
+    RapidOcr,
+    Tesseract,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct OcrPolicy {
     pub(crate) mode: OcrMode,
-    executable: PathBuf,
+    pub(crate) backend_preference: OcrBackendPreference,
+    tesseract_executable: PathBuf,
+    rapidocr_python: PathBuf,
     pub(crate) language: String,
+    pub(crate) rapidocr_language: String,
     pub(crate) page_segmentation_mode: String,
     pub(crate) timeout: Duration,
 }
@@ -123,6 +189,14 @@ struct TsvWord {
     text: String,
 }
 
+#[derive(Debug, Deserialize)]
+struct RapidOcrVersions {
+    rapidocr: Option<String>,
+    onnxruntime: Option<String>,
+    lang_type: Option<String>,
+    error: Option<String>,
+}
+
 impl OcrPolicy {
     pub(crate) fn from_env() -> Self {
         let mode = env_value("CODEX_SKYSIGHT_OCR")
@@ -134,11 +208,25 @@ impl OcrPolicy {
                 _ => OcrMode::Auto,
             })
             .unwrap_or(OcrMode::Auto);
-        let executable = env_value("CODEX_SKYSIGHT_TESSERACT_PATH")
+        let backend_preference = env_value("CODEX_SKYSIGHT_OCR_BACKEND")
+            .or_else(|| env_value("CODEX_CHRONICLE_OCR_BACKEND"))
+            .map(|value| match value.trim().to_ascii_lowercase().as_str() {
+                "rapidocr" | "rapidocr-python" | "rapid-ocr" => OcrBackendPreference::RapidOcr,
+                "tesseract" | "tesseract-cli" => OcrBackendPreference::Tesseract,
+                _ => OcrBackendPreference::Auto,
+            })
+            .unwrap_or(OcrBackendPreference::Auto);
+        let tesseract_executable = env_value("CODEX_SKYSIGHT_TESSERACT_PATH")
             .or_else(|| env_value("CODEX_CHRONICLE_TESSERACT_PATH"))
             .unwrap_or_else(|| DEFAULT_TESSERACT.to_string());
+        let rapidocr_python = env_value("CODEX_SKYSIGHT_RAPIDOCR_PYTHON")
+            .or_else(|| env_value("CODEX_CHRONICLE_RAPIDOCR_PYTHON"))
+            .unwrap_or_else(|| DEFAULT_RAPIDOCR_PYTHON.to_string());
         let language =
             env_value("CODEX_SKYSIGHT_OCR_LANG").unwrap_or_else(|| DEFAULT_LANGUAGE.to_string());
+        let rapidocr_language = env_value("CODEX_SKYSIGHT_RAPIDOCR_LANG")
+            .or_else(|| env_value("CODEX_CHRONICLE_RAPIDOCR_LANG"))
+            .unwrap_or_else(|| DEFAULT_RAPIDOCR_LANGUAGE.to_string());
         let page_segmentation_mode =
             env_value("CODEX_SKYSIGHT_OCR_PSM").unwrap_or_else(|| DEFAULT_PSM.to_string());
         let timeout_ms = env_value("CODEX_SKYSIGHT_OCR_TIMEOUT_MS")
@@ -148,15 +236,22 @@ impl OcrPolicy {
 
         Self {
             mode,
-            executable: PathBuf::from(executable),
+            backend_preference,
+            tesseract_executable: PathBuf::from(tesseract_executable),
+            rapidocr_python: PathBuf::from(rapidocr_python),
             language,
+            rapidocr_language,
             page_segmentation_mode,
             timeout: Duration::from_millis(timeout_ms),
         }
     }
 
     pub(crate) fn backend_name(&self) -> &'static str {
-        "tesseract-cli"
+        match self.backend_preference {
+            OcrBackendPreference::Auto => AUTO_BACKEND_NAME,
+            OcrBackendPreference::RapidOcr => RAPIDOCR_BACKEND_NAME,
+            OcrBackendPreference::Tesseract => TESSERACT_BACKEND_NAME,
+        }
     }
 
     pub(crate) fn mode_name(&self) -> &'static str {
@@ -182,14 +277,141 @@ impl OcrPolicy {
             };
         }
 
-        match Command::new(&self.executable).arg("--version").output() {
+        match self.backend_preference {
+            OcrBackendPreference::RapidOcr => self.rapidocr_readiness(),
+            OcrBackendPreference::Tesseract => self.tesseract_readiness(),
+            OcrBackendPreference::Auto => {
+                let rapidocr = self.rapidocr_readiness();
+                if rapidocr.available {
+                    return rapidocr;
+                }
+                let tesseract = self.tesseract_readiness();
+                if tesseract.available {
+                    return tesseract;
+                }
+                OcrReadiness {
+                    enabled: true,
+                    available: false,
+                    backend: AUTO_BACKEND_NAME.to_string(),
+                    status: "backend_unavailable".to_string(),
+                    language: self.language.clone(),
+                    version: None,
+                    dependency_hint: Some(auto_dependency_hint(&self.language)),
+                    error: Some(format!(
+                        "RapidOCR unavailable: {}; Tesseract unavailable: {}",
+                        rapidocr
+                            .error
+                            .unwrap_or_else(|| rapidocr.status.to_string()),
+                        tesseract
+                            .error
+                            .unwrap_or_else(|| tesseract.status.to_string())
+                    )),
+                }
+            }
+        }
+    }
+
+    fn rapidocr_readiness(&self) -> OcrReadiness {
+        let child = Command::new(&self.rapidocr_python)
+            .arg("-c")
+            .arg(RAPIDOCR_CHECK_SCRIPT)
+            .arg(&self.rapidocr_language)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn();
+        let output = match child {
+            Ok(child) => match wait_with_output_timeout(child, self.timeout) {
+                Ok(output) => output,
+                Err(error) => {
+                    return OcrReadiness {
+                        enabled: true,
+                        available: false,
+                        backend: RAPIDOCR_BACKEND_NAME.to_string(),
+                        status: "backend_unavailable".to_string(),
+                        language: self.rapidocr_language.clone(),
+                        version: None,
+                        dependency_hint: Some(rapidocr_dependency_hint()),
+                        error: Some(error.to_string()),
+                    };
+                }
+            },
+            Err(error) => {
+                return OcrReadiness {
+                    enabled: true,
+                    available: false,
+                    backend: RAPIDOCR_BACKEND_NAME.to_string(),
+                    status: "backend_unavailable".to_string(),
+                    language: self.rapidocr_language.clone(),
+                    version: None,
+                    dependency_hint: Some(rapidocr_dependency_hint()),
+                    error: Some(error.to_string()),
+                };
+            }
+        };
+
+        if !output.status.success() {
+            return OcrReadiness {
+                enabled: true,
+                available: false,
+                backend: RAPIDOCR_BACKEND_NAME.to_string(),
+                status: "backend_unavailable".to_string(),
+                language: self.rapidocr_language.clone(),
+                version: None,
+                dependency_hint: Some(rapidocr_dependency_hint()),
+                error: Some(
+                    parse_rapidocr_versions(&output)
+                        .ok()
+                        .and_then(|versions| versions.error)
+                        .unwrap_or_else(|| format!("RapidOCR check exited with {}", output.status)),
+                ),
+            };
+        }
+
+        match parse_rapidocr_versions(&output) {
+            Ok(versions) => OcrReadiness {
+                enabled: true,
+                available: true,
+                backend: RAPIDOCR_BACKEND_NAME.to_string(),
+                status: "available".to_string(),
+                language: versions
+                    .lang_type
+                    .unwrap_or_else(|| self.rapidocr_language.clone()),
+                version: Some(format!(
+                    "rapidocr {}; onnxruntime {}",
+                    versions.rapidocr.unwrap_or_else(|| "unknown".to_string()),
+                    versions
+                        .onnxruntime
+                        .unwrap_or_else(|| "unknown".to_string())
+                )),
+                dependency_hint: None,
+                error: None,
+            },
+            Err(error) => OcrReadiness {
+                enabled: true,
+                available: false,
+                backend: RAPIDOCR_BACKEND_NAME.to_string(),
+                status: "backend_unavailable".to_string(),
+                language: self.rapidocr_language.clone(),
+                version: None,
+                dependency_hint: Some(rapidocr_dependency_hint()),
+                error: Some(error.to_string()),
+            },
+        }
+    }
+
+    fn tesseract_readiness(&self) -> OcrReadiness {
+        match Command::new(&self.tesseract_executable)
+            .arg("--version")
+            .output()
+        {
             Ok(output) if output.status.success() => {
                 let stdout = String::from_utf8_lossy(&output.stdout);
                 let version = stdout.lines().next().map(str::trim).map(str::to_string);
                 OcrReadiness {
                     enabled: true,
                     available: true,
-                    backend: self.backend_name().to_string(),
+                    backend: TESSERACT_BACKEND_NAME.to_string(),
                     status: "available".to_string(),
                     language: self.language.clone(),
                     version,
@@ -200,21 +422,21 @@ impl OcrPolicy {
             Ok(output) => OcrReadiness {
                 enabled: true,
                 available: false,
-                backend: self.backend_name().to_string(),
+                backend: TESSERACT_BACKEND_NAME.to_string(),
                 status: "backend_unavailable".to_string(),
                 language: self.language.clone(),
                 version: None,
-                dependency_hint: Some(dependency_hint(&self.language)),
+                dependency_hint: Some(tesseract_dependency_hint(&self.language)),
                 error: Some(format!("tesseract --version exited with {}", output.status)),
             },
             Err(error) => OcrReadiness {
                 enabled: true,
                 available: false,
-                backend: self.backend_name().to_string(),
+                backend: TESSERACT_BACKEND_NAME.to_string(),
                 status: "backend_unavailable".to_string(),
                 language: self.language.clone(),
                 version: None,
-                dependency_hint: Some(dependency_hint(&self.language)),
+                dependency_hint: Some(tesseract_dependency_hint(&self.language)),
                 error: Some(error.to_string()),
             },
         }
@@ -222,12 +444,12 @@ impl OcrPolicy {
 }
 
 impl OcrFrameResult {
-    fn skipped(policy: &OcrPolicy, readiness: &OcrReadiness) -> Self {
+    fn skipped(readiness: &OcrReadiness) -> Self {
         Self {
             runs_ocr: false,
             status: readiness.status.clone(),
-            backend: policy.backend_name().to_string(),
-            language: policy.language.clone(),
+            backend: readiness.backend.clone(),
+            language: readiness.language.clone(),
             backend_version: readiness.version.clone(),
             normalized_text: String::new(),
             dependency_hint: readiness.dependency_hint.clone(),
@@ -239,13 +461,13 @@ impl OcrFrameResult {
         }
     }
 
-    fn failure(policy: &OcrPolicy, status: &str, duration_ms: u128, error: String) -> Self {
+    fn failure(readiness: &OcrReadiness, status: &str, duration_ms: u128, error: String) -> Self {
         Self {
             runs_ocr: true,
             status: status.to_string(),
-            backend: policy.backend_name().to_string(),
-            language: policy.language.clone(),
-            backend_version: policy.readiness().version,
+            backend: readiness.backend.clone(),
+            language: readiness.language.clone(),
+            backend_version: readiness.version.clone(),
             normalized_text: String::new(),
             dependency_hint: None,
             error: Some(error),
@@ -256,12 +478,12 @@ impl OcrFrameResult {
         }
     }
 
-    fn required_unavailable(policy: &OcrPolicy, readiness: &OcrReadiness) -> Self {
+    fn required_unavailable(readiness: &OcrReadiness) -> Self {
         Self {
             runs_ocr: false,
             status: "required_backend_unavailable".to_string(),
-            backend: policy.backend_name().to_string(),
-            language: policy.language.clone(),
+            backend: readiness.backend.clone(),
+            language: readiness.language.clone(),
             backend_version: readiness.version.clone(),
             normalized_text: String::new(),
             dependency_hint: readiness.dependency_hint.clone(),
@@ -419,18 +641,18 @@ pub(crate) fn recognize_frame(
 ) -> OcrFrameResult {
     let readiness = policy.readiness();
     if policy.mode == OcrMode::Disabled {
-        return OcrFrameResult::skipped(policy, &readiness);
+        return OcrFrameResult::skipped(&readiness);
     }
     if !readiness.available {
         return if policy.mode == OcrMode::Required {
-            OcrFrameResult::required_unavailable(policy, &readiness)
+            OcrFrameResult::required_unavailable(&readiness)
         } else {
-            OcrFrameResult::skipped(policy, &readiness)
+            OcrFrameResult::skipped(&readiness)
         };
     }
 
     let started = Instant::now();
-    match recognize_frame_inner(policy, frame_path, image_width, image_height) {
+    match recognize_frame_inner(policy, &readiness, frame_path, image_width, image_height) {
         Ok(mut result) => {
             result.backend_version = readiness.version;
             result.apply_text_exclusions(exclusion_values);
@@ -438,7 +660,7 @@ pub(crate) fn recognize_frame(
             result
         }
         Err(error) => OcrFrameResult::failure(
-            policy,
+            &readiness,
             if started.elapsed() >= policy.timeout {
                 "timeout"
             } else {
@@ -452,6 +674,24 @@ pub(crate) fn recognize_frame(
 
 fn recognize_frame_inner(
     policy: &OcrPolicy,
+    readiness: &OcrReadiness,
+    frame_path: &Path,
+    image_width: u32,
+    image_height: u32,
+) -> Result<OcrFrameResult> {
+    match readiness.backend.as_str() {
+        RAPIDOCR_BACKEND_NAME => {
+            recognize_frame_rapidocr(policy, frame_path, image_width, image_height)
+        }
+        TESSERACT_BACKEND_NAME => {
+            recognize_frame_tesseract(policy, frame_path, image_width, image_height)
+        }
+        backend => anyhow::bail!("OCR backend `{backend}` is not runnable"),
+    }
+}
+
+fn recognize_frame_tesseract(
+    policy: &OcrPolicy,
     frame_path: &Path,
     image_width: u32,
     image_height: u32,
@@ -463,7 +703,7 @@ fn recognize_frame_inner(
         .join(format!(".ocr-{}-{}", std::process::id(), unique_nanos()));
     crate::secure_fs::create_private_dir_all(&temp_dir)?;
     let output_base = temp_dir.join("frame");
-    let mut child = Command::new(&policy.executable)
+    let mut child = Command::new(&policy.tesseract_executable)
         .arg(frame_path)
         .arg(&output_base)
         .arg("-l")
@@ -475,7 +715,7 @@ fn recognize_frame_inner(
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
-        .with_context(|| format!("failed to start {}", policy.executable.display()))?;
+        .with_context(|| format!("failed to start {}", policy.tesseract_executable.display()))?;
 
     let status = loop {
         if let Some(status) = child.try_wait()? {
@@ -511,8 +751,54 @@ fn recognize_frame_inner(
     Ok(OcrFrameResult {
         runs_ocr: true,
         status: "completed".to_string(),
-        backend: policy.backend_name().to_string(),
+        backend: TESSERACT_BACKEND_NAME.to_string(),
         language: policy.language.clone(),
+        backend_version: None,
+        normalized_text,
+        dependency_hint: None,
+        error: None,
+        duration_ms: started.elapsed().as_millis(),
+        truncated: false,
+        suppressed_text_observation_count: 0,
+        observations,
+    })
+}
+
+fn recognize_frame_rapidocr(
+    policy: &OcrPolicy,
+    frame_path: &Path,
+    image_width: u32,
+    image_height: u32,
+) -> Result<OcrFrameResult> {
+    let started = Instant::now();
+    let child = Command::new(&policy.rapidocr_python)
+        .arg("-c")
+        .arg(RAPIDOCR_RUN_SCRIPT)
+        .arg(&policy.rapidocr_language)
+        .arg(frame_path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .with_context(|| format!("failed to start {}", policy.rapidocr_python.display()))?;
+    let output = wait_with_output_timeout(child, policy.timeout)?;
+    if !output.status.success() {
+        anyhow::bail!("RapidOCR exited with {}", output.status);
+    }
+
+    let payload = parse_rapidocr_json_line(&output)?;
+    let observations = observations_from_rapidocr_json(&payload, image_width, image_height)?;
+    let normalized_text = observations
+        .iter()
+        .map(|observation| observation.normalized_text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    Ok(OcrFrameResult {
+        runs_ocr: true,
+        status: "completed".to_string(),
+        backend: RAPIDOCR_BACKEND_NAME.to_string(),
+        language: policy.rapidocr_language.clone(),
         backend_version: None,
         normalized_text,
         dependency_hint: None,
@@ -680,6 +966,155 @@ fn observation_from_words(
     }
 }
 
+fn observations_from_rapidocr_json(
+    payload: &Value,
+    image_width: u32,
+    image_height: u32,
+) -> Result<Vec<OcrObservation>> {
+    let boxes = payload
+        .get("boxes")
+        .and_then(Value::as_array)
+        .context("RapidOCR output missing boxes")?;
+    let txts = payload
+        .get("txts")
+        .and_then(Value::as_array)
+        .context("RapidOCR output missing txts")?;
+    let scores = payload
+        .get("scores")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+
+    let mut observations = Vec::new();
+    for (index, text_value) in txts.iter().enumerate() {
+        let text = text_value
+            .as_str()
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+            .unwrap_or_default();
+        if text.is_empty() {
+            continue;
+        }
+        let Some(box_value) = boxes.get(index) else {
+            continue;
+        };
+        let Some((x1, y1, x2, y2)) = rapidocr_box_bounds(box_value) else {
+            continue;
+        };
+        let confidence = scores
+            .get(index)
+            .and_then(Value::as_f64)
+            .unwrap_or(0.0)
+            .clamp(0.0, 1.0);
+        observations.push(observation_from_rect(
+            x1,
+            y1,
+            x2,
+            y2,
+            image_width,
+            image_height,
+            text,
+            confidence,
+        ));
+    }
+
+    Ok(observations)
+}
+
+fn rapidocr_box_bounds(value: &Value) -> Option<(f64, f64, f64, f64)> {
+    let points = value.as_array()?;
+    let mut xs = Vec::new();
+    let mut ys = Vec::new();
+    for point in points {
+        let coordinates = point.as_array()?;
+        let x = coordinates.first()?.as_f64()?;
+        let y = coordinates.get(1)?.as_f64()?;
+        if x.is_finite() && y.is_finite() {
+            xs.push(x);
+            ys.push(y);
+        }
+    }
+    if xs.is_empty() || ys.is_empty() {
+        return None;
+    }
+    Some((
+        xs.iter().copied().fold(f64::INFINITY, f64::min),
+        ys.iter().copied().fold(f64::INFINITY, f64::min),
+        xs.iter().copied().fold(f64::NEG_INFINITY, f64::max),
+        ys.iter().copied().fold(f64::NEG_INFINITY, f64::max),
+    ))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn observation_from_rect(
+    x1: f64,
+    y1: f64,
+    x2: f64,
+    y2: f64,
+    image_width: u32,
+    image_height: u32,
+    text: &str,
+    confidence: f64,
+) -> OcrObservation {
+    let max_x = if image_width == 0 {
+        f64::MAX
+    } else {
+        image_width as f64
+    };
+    let max_y = if image_height == 0 {
+        f64::MAX
+    } else {
+        image_height as f64
+    };
+    let x1 = x1.clamp(0.0, max_x);
+    let y1 = y1.clamp(0.0, max_y);
+    let x2 = x2.clamp(x1, max_x);
+    let y2 = y2.clamp(y1, max_y);
+    let pixel_x = x1.floor() as u32;
+    let pixel_y = y1.floor() as u32;
+    let pixel_width = x2.ceil().saturating_sub_f64(x1.floor());
+    let pixel_height = y2.ceil().saturating_sub_f64(y1.floor());
+    let text = text.to_string();
+
+    OcrObservation {
+        bounding_box: NormalizedBoundingBox {
+            x: if image_width == 0 {
+                0.0
+            } else {
+                x1 / image_width as f64
+            },
+            y: if image_height == 0 {
+                0.0
+            } else {
+                1.0 - (y2 / image_height as f64)
+            },
+            width: if image_width == 0 {
+                0.0
+            } else {
+                (x2 - x1) / image_width as f64
+            },
+            height: if image_height == 0 {
+                0.0
+            } else {
+                (y2 - y1) / image_height as f64
+            },
+            coordinate_space: "vision-normalized-bottom-left",
+        },
+        pixel_bounding_box: PixelBoundingBox {
+            x: pixel_x,
+            y: pixel_y,
+            width: pixel_width,
+            height: pixel_height,
+            coordinate_space: "pixel-top-left",
+        },
+        top_candidates: vec![OcrCandidate {
+            text: text.clone(),
+            confidence,
+        }],
+        normalized_text: text,
+    }
+}
+
 fn env_value(key: &str) -> Option<String> {
     std::env::var(key)
         .ok()
@@ -687,8 +1122,20 @@ fn env_value(key: &str) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
-fn dependency_hint(language: &str) -> String {
+fn rapidocr_dependency_hint() -> String {
+    "Install Python packages `rapidocr` and `onnxruntime` plus the OpenCV runtime dependency `libGL.so.1`, or set CODEX_SKYSIGHT_OCR_BACKEND=tesseract".to_string()
+}
+
+fn tesseract_dependency_hint(language: &str) -> String {
     format!("Install tesseract and traineddata for language `{language}`")
+}
+
+fn auto_dependency_hint(language: &str) -> String {
+    format!(
+        "{}; fallback: {}",
+        rapidocr_dependency_hint(),
+        tesseract_dependency_hint(language)
+    )
 }
 
 fn contains_case_insensitive(haystack: &str, needle: &str) -> bool {
@@ -707,6 +1154,51 @@ fn truncate_string_to_bytes(value: &mut String, max_bytes: usize) -> bool {
     }
     value.truncate(end);
     true
+}
+
+trait SaturatingSubF64 {
+    fn saturating_sub_f64(self, rhs: f64) -> u32;
+}
+
+impl SaturatingSubF64 for f64 {
+    fn saturating_sub_f64(self, rhs: f64) -> u32 {
+        if !self.is_finite() || !rhs.is_finite() || self <= rhs {
+            return 0;
+        }
+        (self - rhs).min(u32::MAX as f64) as u32
+    }
+}
+
+fn wait_with_output_timeout(mut child: Child, timeout: Duration) -> Result<Output> {
+    let started = Instant::now();
+    loop {
+        if child.try_wait()?.is_some() {
+            return child
+                .wait_with_output()
+                .context("failed to collect OCR output");
+        }
+        if started.elapsed() >= timeout {
+            let _ = child.kill();
+            let _ = child.wait();
+            anyhow::bail!("OCR process timed out after {} ms", timeout.as_millis());
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn parse_rapidocr_versions(output: &Output) -> Result<RapidOcrVersions> {
+    let payload = parse_rapidocr_json_line(output)?;
+    serde_json::from_value(payload).context("failed to parse RapidOCR version payload")
+}
+
+fn parse_rapidocr_json_line(output: &Output) -> Result<Value> {
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let line = stdout
+        .lines()
+        .rev()
+        .find_map(|line| line.strip_prefix(RAPIDOCR_JSON_PREFIX))
+        .context("RapidOCR JSON payload was not found on stdout")?;
+    serde_json::from_str(line).context("failed to parse RapidOCR JSON payload")
 }
 
 fn parse_u32(value: &str) -> u32 {
@@ -739,15 +1231,17 @@ mod tests {
     use std::{fs, os::unix::fs::PermissionsExt};
 
     #[test]
-    fn policy_defaults_to_local_tesseract_auto() {
+    fn policy_defaults_to_auto_backend_preference() {
         let _guard = env_lock();
         clear_ocr_env();
 
         let policy = OcrPolicy::from_env();
 
         assert_eq!(policy.mode, OcrMode::Auto);
-        assert_eq!(policy.backend_name(), "tesseract-cli");
+        assert_eq!(policy.backend_preference, OcrBackendPreference::Auto);
+        assert_eq!(policy.backend_name(), "auto");
         assert_eq!(policy.language, "eng");
+        assert_eq!(policy.rapidocr_language, "ch");
         assert_eq!(policy.page_segmentation_mode, "11");
         assert_eq!(policy.timeout.as_secs(), 10);
     }
@@ -757,6 +1251,7 @@ mod tests {
         let _guard = env_lock();
         clear_ocr_env();
         std::env::set_var("CODEX_SKYSIGHT_OCR", "enabled");
+        std::env::set_var("CODEX_SKYSIGHT_OCR_BACKEND", "tesseract");
         std::env::set_var(
             "CODEX_SKYSIGHT_TESSERACT_PATH",
             "/definitely/missing/tesseract",
@@ -776,6 +1271,7 @@ mod tests {
         let _guard = env_lock();
         clear_ocr_env();
         std::env::set_var("CODEX_SKYSIGHT_OCR", "required");
+        std::env::set_var("CODEX_SKYSIGHT_OCR_BACKEND", "tesseract");
         std::env::set_var(
             "CODEX_SKYSIGHT_TESSERACT_PATH",
             "/definitely/missing/tesseract",
@@ -788,6 +1284,87 @@ mod tests {
         assert_eq!(result.status, "required_backend_unavailable");
         assert!(result.error.is_some());
         assert!(result.dependency_hint.is_some());
+    }
+
+    #[test]
+    fn fake_rapidocr_backend_parses_json_observations() {
+        let _guard = env_lock();
+        clear_ocr_env();
+        let temp = tempfile::tempdir().unwrap();
+        let fake_python = temp.path().join("fake-python");
+        fs::write(
+            &fake_python,
+            r#"#!/usr/bin/env bash
+set -euo pipefail
+if [[ $# -eq 3 ]]; then
+  echo '__CODEX_RAPIDOCR_JSON__{"rapidocr":"3.9.1","onnxruntime":"1.22.0","lang_type":"en"}'
+  exit 0
+fi
+echo '__CODEX_RAPIDOCR_JSON__{"boxes":[[[10,20],[90,20],[90,40],[10,40]],[[10,60],[55,60],[55,74],[10,74]]],"txts":["Codex Rapid","OCR"],"scores":[0.97,0.91],"elapse":0.123,"lang_type":"en"}'
+"#,
+        )
+        .unwrap();
+        let mut permissions = fs::metadata(&fake_python).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&fake_python, permissions).unwrap();
+        let image = temp.path().join("frame.jpg");
+        fs::write(&image, b"not-a-real-image-but-fake-backend-does-not-care").unwrap();
+        std::env::set_var("CODEX_SKYSIGHT_OCR", "enabled");
+        std::env::set_var("CODEX_SKYSIGHT_OCR_BACKEND", "rapidocr");
+        std::env::set_var("CODEX_SKYSIGHT_RAPIDOCR_PYTHON", &fake_python);
+        std::env::set_var("CODEX_SKYSIGHT_RAPIDOCR_LANG", "en");
+
+        let policy = OcrPolicy::from_env();
+        let readiness = policy.readiness();
+        assert!(readiness.available);
+        assert_eq!(readiness.backend, "rapidocr-python");
+        assert_eq!(readiness.language, "en");
+        assert!(readiness
+            .version
+            .as_deref()
+            .is_some_and(|version| version.contains("rapidocr 3.9.1")));
+
+        let result = recognize_frame(&policy, &image, 200, 100, &[]);
+
+        assert_eq!(result.status, "completed");
+        assert!(result.runs_ocr);
+        assert_eq!(result.backend, "rapidocr-python");
+        assert_eq!(result.language, "en");
+        assert_eq!(result.normalized_text, "Codex Rapid\nOCR");
+        assert_eq!(result.observations.len(), 2);
+        assert_eq!(result.observations[0].pixel_bounding_box.x, 10);
+        assert_eq!(result.observations[0].pixel_bounding_box.y, 20);
+        assert_eq!(result.observations[0].pixel_bounding_box.width, 80);
+        assert_eq!(result.observations[0].pixel_bounding_box.height, 20);
+        assert!(result.observations[0].top_candidates[0].confidence > 0.9);
+    }
+
+    #[test]
+    fn auto_backend_prefers_rapidocr_when_available() {
+        let _guard = env_lock();
+        clear_ocr_env();
+        let temp = tempfile::tempdir().unwrap();
+        let fake_python = temp.path().join("fake-python");
+        fs::write(
+            &fake_python,
+            r#"#!/usr/bin/env bash
+set -euo pipefail
+echo '__CODEX_RAPIDOCR_JSON__{"rapidocr":"3.9.1","onnxruntime":"1.22.0"}'
+"#,
+        )
+        .unwrap();
+        let mut permissions = fs::metadata(&fake_python).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&fake_python, permissions).unwrap();
+        std::env::set_var("CODEX_SKYSIGHT_OCR", "enabled");
+        std::env::set_var("CODEX_SKYSIGHT_RAPIDOCR_PYTHON", &fake_python);
+
+        let policy = OcrPolicy::from_env();
+        let readiness = policy.readiness();
+
+        assert_eq!(policy.backend_preference, OcrBackendPreference::Auto);
+        assert!(readiness.available);
+        assert_eq!(readiness.backend, "rapidocr-python");
     }
 
     #[test]
@@ -820,6 +1397,7 @@ TSV
         let image = temp.path().join("frame.jpg");
         fs::write(&image, b"not-a-real-image-but-fake-backend-does-not-care").unwrap();
         std::env::set_var("CODEX_SKYSIGHT_OCR", "enabled");
+        std::env::set_var("CODEX_SKYSIGHT_OCR_BACKEND", "tesseract");
         std::env::set_var("CODEX_SKYSIGHT_TESSERACT_PATH", &fake_tesseract);
 
         let policy = OcrPolicy::from_env();
@@ -912,8 +1490,14 @@ TSV
         for key in [
             "CODEX_SKYSIGHT_OCR",
             "CODEX_CHRONICLE_OCR",
+            "CODEX_SKYSIGHT_OCR_BACKEND",
+            "CODEX_CHRONICLE_OCR_BACKEND",
             "CODEX_SKYSIGHT_TESSERACT_PATH",
             "CODEX_CHRONICLE_TESSERACT_PATH",
+            "CODEX_SKYSIGHT_RAPIDOCR_PYTHON",
+            "CODEX_CHRONICLE_RAPIDOCR_PYTHON",
+            "CODEX_SKYSIGHT_RAPIDOCR_LANG",
+            "CODEX_CHRONICLE_RAPIDOCR_LANG",
             "CODEX_SKYSIGHT_OCR_LANG",
             "CODEX_SKYSIGHT_OCR_PSM",
             "CODEX_SKYSIGHT_OCR_TIMEOUT_MS",

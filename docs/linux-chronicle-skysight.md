@@ -35,10 +35,11 @@ copying excluded content into resources.
 
 ## Local OCR
 
-Linux Chronicle OCR is local-only and optional. When `tesseract` and the
-requested traineddata are available, Skysight runs the Tesseract CLI after the
-screenshot privacy gate passes, parses TSV word boxes into line observations,
-and appends recognized text plus bounding boxes to `*.ocr.jsonl`.
+Linux Chronicle OCR is local-only and optional. In `auto` backend mode,
+Skysight prefers RapidOCR through Python + ONNXRuntime when those packages are
+available, then falls back to the Tesseract CLI. Both backends run after the
+screenshot privacy gate passes and append recognized text plus bounding boxes
+to `*.ocr.jsonl`.
 
 When OCR is disabled or unavailable, Skysight still writes the Chronicle OCR
 history contract with `runs_ocr=false`, empty `normalized_text`, and an
@@ -53,23 +54,21 @@ observations are stripped and `ocr_status` becomes
 `suppressed_by_exclusion_text`. Rolling markdown resources summarize OCR
 status, paths, and byte counts; they do not dump raw OCR text by default.
 
-Tesseract is the first shippable local backend because it is broadly packaged,
-offline, and emits word boxes through TSV. The OCR provider surface should stay
-pluggable: a follow-up backend can add RapidOCR/ONNXRuntime or PaddleOCR model
-packs for higher screenshot accuracy without making the default package heavy
-or network-dependent.
+RapidOCR/ONNXRuntime is the preferred advanced backend for screen OCR because
+it is local, fast on CPU, and generally stronger than classic OCR on rendered
+UI screenshots. Tesseract remains the fallback baseline because it is broadly
+packaged, offline, and emits word boxes through TSV without Python packages.
 
 ### OCR Backend Direction
 
-Tesseract remains the default Linux Chronicle OCR backend because it is local,
-small enough for host installation, distro/Homebrew packaged, offline, and
-produces word-level TSV boxes without pulling model weights at runtime. That
-makes it a good privacy-preserving baseline for continuous screen memory.
+`auto` is the default Linux Chronicle OCR backend selection. It chooses
+RapidOCR/ONNXRuntime first when available and falls back to Tesseract. That
+keeps continuous screen memory privacy-preserving and useful without making
+model packages mandatory for every Linux install.
 
-The backend boundary should stay pluggable. Stronger deep-learning OCR stacks
-are better candidates for an opt-in follow-up than for the default package:
+The backend boundary should stay pluggable. Current and future OCR stacks:
 
-- RapidOCR/ONNXRuntime is the preferred optional advanced provider target. It
+- RapidOCR/ONNXRuntime is the preferred optional advanced provider. It
   packages PaddleOCR-style models for fast offline deployment, supports local
   CPU inference, and keeps the default feature from depending on the larger
   PaddlePaddle/PyTorch runtime stack.
@@ -85,8 +84,8 @@ are better candidates for an opt-in follow-up than for the default package:
 - docTR is a clean deep-learning document OCR library, but it is less focused
   on lightweight desktop screenshot memory than the options above.
 
-The practical target is therefore: keep `tesseract-cli` as the default, add a
-future `rapidocr`/ONNXRuntime provider behind the same OCR result contract, and
+The practical target is therefore: keep `auto` as the default, prefer
+`rapidocr-python` when available, preserve `tesseract-cli` as fallback, and
 never make model downloads or GPU frameworks mandatory for the base Chronicle
 feature.
 
@@ -95,12 +94,22 @@ Runtime controls:
 ```bash
 CODEX_SKYSIGHT_OCR=auto|enabled|required|disabled
 CODEX_CHRONICLE_OCR=auto|enabled|required|disabled
+CODEX_SKYSIGHT_OCR_BACKEND=auto|rapidocr|tesseract
+CODEX_CHRONICLE_OCR_BACKEND=auto|rapidocr|tesseract
+CODEX_SKYSIGHT_RAPIDOCR_PYTHON=/path/to/python3
+CODEX_CHRONICLE_RAPIDOCR_PYTHON=/path/to/python3
+CODEX_SKYSIGHT_RAPIDOCR_LANG=ch
+CODEX_CHRONICLE_RAPIDOCR_LANG=ch
 CODEX_SKYSIGHT_TESSERACT_PATH=/path/to/tesseract
 CODEX_CHRONICLE_TESSERACT_PATH=/path/to/tesseract
 CODEX_SKYSIGHT_OCR_LANG=eng
 CODEX_SKYSIGHT_OCR_PSM=11
 CODEX_SKYSIGHT_OCR_TIMEOUT_MS=10000
 ```
+
+For RapidOCR, the selected Python environment must be able to import
+`rapidocr`, `onnxruntime`, and OpenCV. On minimal Debian/Ubuntu containers this
+may also require the system package that provides `libGL.so.1`.
 
 ## Verification After Rebuild
 
