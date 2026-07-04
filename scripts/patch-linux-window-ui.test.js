@@ -5927,7 +5927,7 @@ test("shows current Computer Use settings Any App row when plugin list omits des
   const patched = applyPatchTwice(
     applyLinuxComputerUseRendererAvailabilityPatch,
     source,
-    /r===`linux`&&!y\.availablePlugins\.some\(e=>e\.plugin\?\.name===an\|\|e\.plugin\?\.id\?\.split\(`@`\)\[0\]===an\)&&\(y=\{\.\.\.y,availablePlugins:\[\.\.\.y\.availablePlugins,\{marketplaceName:`openai-curated`,marketplacePath:`openai-bundled\/plugins\/computer-use`,plugin:\{id:an,name:an,installed:!0,enabled:!0\}\}\]\}\);let S;/,
+    /r===`linux`&&!y\.availablePlugins\.some\(e=>e\.plugin\?\.name===an\|\|e\.plugin\?\.id\?\.split\(`@`\)\[0\]===an\)&&\(y=\{\.\.\.y,availablePlugins:\[\.\.\.y\.availablePlugins,\{marketplaceName:`openai-curated`,marketplacePath:`openai-bundled\/plugins\/computer-use`,logoPath:new URL\(`computer-use-plugin-icon-linux\.png`,import\.meta\.url\)\.href,logoDarkPath:new URL\(`computer-use-plugin-icon-linux\.png`,import\.meta\.url\)\.href,plugin:\{id:an,name:an,installed:!0,enabled:!0\}\}\]\}\);let S;/,
   );
 
   assert.match(patched, /let y=Me\(o,v\),b=ut\(o\),x=j\(Ne\);/);

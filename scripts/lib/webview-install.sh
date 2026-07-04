@@ -33,6 +33,18 @@ replace_linux_webview_icon_assets() {
     info "Linux app icon applied to ${#icon_assets[@]} webview asset(s)"
 }
 
+stage_linux_webview_plugin_icon_aliases() {
+    local assets_dir="$INSTALL_DIR/content/webview/assets"
+    local computer_use_icon
+
+    [ -d "$assets_dir" ] || return 0
+
+    computer_use_icon="$(find "$assets_dir" -maxdepth 1 -type f -name 'computer-use-plugin-icon-*.png' | sort | head -n 1)"
+    if [ -n "$computer_use_icon" ] && [ -f "$computer_use_icon" ]; then
+        cp "$computer_use_icon" "$assets_dir/computer-use-plugin-icon-linux.png"
+    fi
+}
+
 # ---- Extract webview files ----
 extract_webview() {
     local app_dir="$1"
@@ -50,6 +62,7 @@ extract_webview() {
             sed -i 's/--startup-background: transparent/--startup-background: #1e1e1e/' "$webview_index"
         fi
         replace_linux_webview_icon_assets
+        stage_linux_webview_plugin_icon_aliases
         info "Webview files copied"
     else
         warn "Webview directory not found in asar — app may not work"

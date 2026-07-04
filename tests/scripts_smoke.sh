@@ -148,6 +148,7 @@ test_extract_webview_replaces_linux_icon_assets() {
     local install_dir="$workspace/install"
     local work_dir="$workspace/work"
     local icon_source="$workspace/codex-linux.png"
+    local plugin_icon_source="$work_dir/app-extracted/webview/assets/computer-use-plugin-icon-9f7ab1d4.png"
     local assets_dir="$install_dir/content/webview/assets"
     local output_log="$workspace/output.log"
 
@@ -155,6 +156,7 @@ test_extract_webview_replaces_linux_icon_assets() {
     printf '%s\n' 'linux-icon' > "$icon_source"
     printf '%s\n' 'upstream-main' > "$work_dir/app-extracted/webview/assets/app-main.png"
     printf '%s\n' 'upstream-alt' > "$work_dir/app-extracted/webview/assets/app-alt.png"
+    printf '%s\n' 'plugin-icon' > "$plugin_icon_source"
     printf '%s\n' '<style>--startup-background: transparent</style>' > "$work_dir/app-extracted/webview/index.html"
 
     (
@@ -174,6 +176,9 @@ test_extract_webview_replaces_linux_icon_assets() {
         || fail "Expected extracted app-main.png to be replaced with the Linux icon"
     cmp -s "$icon_source" "$assets_dir/app-alt.png" \
         || fail "Expected extracted app-alt.png to be replaced with the Linux icon"
+    assert_file_exists "$assets_dir/computer-use-plugin-icon-linux.png"
+    cmp -s "$plugin_icon_source" "$assets_dir/computer-use-plugin-icon-linux.png" \
+        || fail "Expected extracted computer-use-plugin-icon-linux.png to match hashed plugin icon source"
     assert_contains "$install_dir/content/webview/index.html" "--startup-background: #1e1e1e"
     assert_contains "$output_log" "Linux app icon applied to 2 webview asset(s)"
 }
