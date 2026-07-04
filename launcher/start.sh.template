@@ -300,7 +300,7 @@ launcher_notice() {
 
     echo "$message"
     if [ -n "${LAUNCHER_EARLY_STDERR_FD:-}" ]; then
-        printf '%s\n' "$message" >&"$LAUNCHER_EARLY_STDERR_FD" 2>/dev/null || true
+        printf '%s\n' "$message" 2>/dev/null 1>&"$LAUNCHER_EARLY_STDERR_FD" || true
     fi
 }
 

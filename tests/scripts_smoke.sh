@@ -3432,6 +3432,8 @@ test_launcher_template_sanity() {
     assert_contains "$REPO_DIR/launcher/start.sh.template" "ADOPTED_WEBVIEW_PID"
     assert_contains "$REPO_DIR/launcher/start.sh.template" "Reusing webview server pid="
     assert_contains "$REPO_DIR/launcher/start.sh.template" "run_cold_start_hooks"
+    assert_contains "$REPO_DIR/launcher/start.sh.template" '2>/dev/null 1>&"\$LAUNCHER_EARLY_STDERR_FD" || true'
+    assert_not_contains "$REPO_DIR/launcher/start.sh.template" '>&"\$LAUNCHER_EARLY_STDERR_FD" 2>/dev/null || true'
     assert_contains "$REPO_DIR/linux-features/remote-mobile-control/feature.json" '"stageHook": "./stage.sh"'
     assert_contains "$REPO_DIR/linux-features/remote-mobile-control/stage.sh" "cold-start.d"
     assert_contains "$REPO_DIR/linux-features/remote-mobile-control/stage.sh" "remote-mobile-control"
