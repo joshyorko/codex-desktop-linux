@@ -222,9 +222,20 @@ To expose it as an MCP server in Codex, add the bridge to repo-local
 command = "/path/to/codex-desktop-linux/scripts/codex-dmg-intel-dagger-mcp"
 ```
 
-Use a pinned repo env only when Codex may start outside this checkout:
+The bridge also exposes Dagger-native agent functions such as
+`headroom-agent-review`. By default, the launcher uses a local Headroom client
+token shape with Dagger's OpenAI-compatible LLM environment and routes calls
+through Headroom. Real upstream provider keys stay on the Headroom server:
 
 ```toml
 [mcp_servers.codex-dmg-intel-dagger.env]
+DAGGER_HEADROOM_PROXY_URL = "http://10.10.10.89"
+DAGGER_HEADROOM_MODEL = "openrouter/deepseek/deepseek-v4-flash"
+DAGGER_HEADROOM_API_KEY = "headroom-local-client-token"
+```
+
+Use a pinned repo env only when Codex may start outside this checkout:
+
+```toml
 CODEX_DMG_INTEL_DAGGER_REPO = "/home/kdlocpanda/second_brain/Areas/devcontainers/codex-desktop-linux"
 ```

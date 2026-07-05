@@ -1,3 +1,4 @@
+import re
 from typing import Annotated
 
 import dagger
@@ -22,11 +23,22 @@ SOURCE_IGNORE = [
     "target",
 ]
 DEFAULT_DMG_URL = "https://persistent.oaistatic.com/codex-app-prod/Codex.dmg"
+SECRET_PATTERNS = [
+    re.compile(r"(?i)(api[_-]?key|token|secret|password|authorization)\s*[:=]\s*\S+"),
+    re.compile(r"\b(sk-[A-Za-z0-9][A-Za-z0-9_-]{12,})\b"),
+    re.compile(r"\b([A-Za-z0-9_]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,})\b"),
+]
 
 
 @object_type
 class CodexDesktopLinuxTools:
     """Containerized tools for codex-desktop-linux maintenance."""
+
+    def _redact_secret_shapes(self, value: str) -> str:
+        redacted = value
+        for pattern in SECRET_PATTERNS:
+            redacted = pattern.sub("[REDACTED]", redacted)
+        return redacted
 
     def _devcontainer(self, source: dagger.Directory) -> dagger.Container:
         return (
@@ -36,6 +48,72 @@ class CodexDesktopLinuxTools:
             .with_env_variable("HOME", "/tmp/codex-dmg-intel-home")
             .with_env_variable("TMPDIR", "/tmp")
         )
+
+    @function
+    async def headroom_agent_review(
+        self,
+        prompt: str,
+        source: Annotated[
+            dagger.Directory,
+            DefaultPath("."),
+            Ignore(SOURCE_IGNORE),
+        ],
+        cwd: str = ".",
+        context: str = "",
+    ) -> str:
+        """Ask a Dagger-native Headroom-routed agent to review this repository."""
+        if not prompt.strip():
+            raise ValueError("prompt is required")
+
+        workspace_cwd = "/workspace" if cwd in ("", ".") else f"/workspace/{cwd.strip('/')}"
+        environment = (
+            dag.env()
+            .with_string_input("prompt", prompt, "the review assignment")
+            .with_string_input(
+                "cwd",
+                workspace_cwd,
+                "the repository subdirectory to treat as the working directory",
+            )
+            .with_string_input(
+                "context",
+                self._redact_secret_shapes(context),
+                "caller-supplied context and constraints",
+            )
+            .with_directory_input(
+                "workspace",
+                source,
+                "read-only repository workspace; inspect only files needed for the assignment",
+            )
+            .with_string_output(
+                "report",
+                "concise review report with findings first, then evidence and gaps",
+            )
+        )
+
+        work = (
+            dag.llm()
+            .with_env(environment)
+            .with_prompt(
+                """
+You are a Dagger-native code review agent called by Codex.
+
+Use the $workspace directory as read-only source context. Treat $cwd as the
+intended working directory inside that workspace. Do not request or reveal
+secrets. Do not invent evidence. Inspect only what is needed to answer $prompt.
+
+Return findings first, ordered by severity, with exact file paths when relevant.
+If no issue is found, say that clearly and list any residual verification gaps.
+
+Caller context:
+$context
+
+Assignment:
+$prompt
+"""
+            )
+        )
+
+        return await work.env().output("report").as_string()
 
     @function
     async def verify_dmg_intel(
