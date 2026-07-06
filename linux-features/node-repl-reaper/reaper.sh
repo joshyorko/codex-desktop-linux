@@ -16,6 +16,7 @@ set -u
 APP_DIR="${1:?usage: node-repl-reaper.sh <app-dir> [once|watch]}"
 MODE="${2:-once}"
 NODE_REPL_BIN="$APP_DIR/resources/node_repl"
+NODE_REPL_ORIGINAL_BIN="$APP_DIR/resources/node_repl.codex-linux-original"
 WATCH_INTERVAL_SECONDS="${CODEX_NODE_REPL_REAPER_INTERVAL:-300}"
 STARTUP_GRACE_SECONDS="${CODEX_NODE_REPL_REAPER_STARTUP_GRACE:-120}"
 KILL_GRACE_SECONDS="${CODEX_NODE_REPL_REAPER_KILL_GRACE:-5}"
@@ -30,6 +31,13 @@ proc_cmdline_starts_with() {
     case "$cmdline" in
         "$bin"|"$bin "*) return 0 ;;
     esac
+    return 1
+}
+
+proc_is_install_node_repl() {
+    local pid="$1"
+    proc_cmdline_starts_with "$pid" "$NODE_REPL_BIN" && return 0
+    proc_cmdline_starts_with "$pid" "$NODE_REPL_ORIGINAL_BIN" && return 0
     return 1
 }
 
@@ -78,7 +86,7 @@ leaked_node_repl_pids() {
         [ -e "$proc" ] || continue
         pid="${proc#/proc/}"
         pid="${pid%/cmdline}"
-        proc_cmdline_starts_with "$pid" "$NODE_REPL_BIN" || continue
+        proc_is_install_node_repl "$pid" || continue
         ppid="$(proc_ppid "$pid")" || continue
         parent_is_live_codex_owner "$ppid" && continue
         printf '%s\n' "$pid"
@@ -98,7 +106,7 @@ reap_leaked_node_repls() {
     sleep "$KILL_GRACE_SECONDS"
     for pid in $termed; do
         # Re-check identity before SIGKILL in case the pid was recycled.
-        proc_cmdline_starts_with "$pid" "$NODE_REPL_BIN" || continue
+        proc_is_install_node_repl "$pid" || continue
         echo "node-repl-reaper: escalating to SIGKILL for node_repl pid=$pid"
         kill -9 "$pid" 2>/dev/null || true
     done

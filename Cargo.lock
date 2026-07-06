@@ -505,19 +505,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "codex-mcp-helper-reaper"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "libc",
- "serde",
- "serde_json",
- "tempfile",
- "toml",
-]
-
-[[package]]
 name = "codex-read-aloud-linux"
 version = "0.1.0-linux-alpha1"
 dependencies = [

@@ -13,6 +13,7 @@ pub struct ProcInfo {
     pub comm: String,
     pub argv: Vec<String>,
     pub cwd: PathBuf,
+    pub env_keys: BTreeSet<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -364,6 +365,8 @@ pub fn read_proc(pid: i32) -> Option<ProcInfo> {
         .collect();
     let cwd = std::fs::read_link(proc_dir.join("cwd")).unwrap_or_default();
 
+    let env_keys = read_environ(pid).into_keys().collect();
+
     Some(ProcInfo {
         pid,
         ppid,
@@ -371,6 +374,7 @@ pub fn read_proc(pid: i32) -> Option<ProcInfo> {
         comm,
         argv,
         cwd,
+        env_keys,
     })
 }
 
@@ -397,20 +401,28 @@ pub fn is_codex_process(process: &ProcInfo) -> bool {
     if is_self(process) {
         return false;
     }
+    // codex-linux-sandbox wraps ordinary tool commands and codex-mcp-helper-reaper
+    // is this reaper; neither owns MCP helpers, so exclude them from parent
+    // discovery like the sibling node_repl reaper does.
+    if is_codex_non_owner_process(process) {
+        return false;
+    }
     let argv0 = process.argv.first().map(String::as_str).unwrap_or_default();
     let name = Path::new(argv0)
         .file_name()
         .and_then(OsStr::to_str)
         .unwrap_or(argv0);
-    // codex-linux-sandbox wraps ordinary tool commands and codex-mcp-helper-reaper
-    // is this reaper; neither owns MCP helpers, so exclude them from parent
-    // discovery like the sibling node_repl reaper does.
-    if matches!(name, "codex-linux-sandbox" | "codex-mcp-helper-reaper")
-        || matches!(process.comm.as_str(), "codex-linux-san" | "codex-mcp-helpe")
-    {
-        return false;
-    }
     process.comm == "codex" || name == "codex" || name.starts_with("codex-")
+}
+
+fn is_codex_non_owner_process(process: &ProcInfo) -> bool {
+    let argv0 = process.argv.first().map(String::as_str).unwrap_or_default();
+    let name = Path::new(argv0)
+        .file_name()
+        .and_then(OsStr::to_str)
+        .unwrap_or(argv0);
+    matches!(name, "codex-linux-sandbox" | "codex-mcp-helper-reaper")
+        || matches!(process.comm.as_str(), "codex-linux-san" | "codex-mcp-helpe")
 }
 
 pub fn same_process(expected: &ProcInfo) -> bool {
@@ -622,13 +634,38 @@ fn collect_plugin_specs(dir: &Path, depth: usize, specs: &mut Vec<ServerSpec>) {
 }
 
 fn signal_tree(root_pid: i32, signal: i32, processes: &BTreeMap<i32, ProcInfo>) {
+    signal_tree_with(
+        root_pid,
+        signal,
+        processes,
+        same_process,
+        |pid, signal| unsafe {
+            libc::kill(pid, signal);
+        },
+    );
+}
+
+fn signal_tree_with<IdentityMatches, SendSignal>(
+    root_pid: i32,
+    signal: i32,
+    processes: &BTreeMap<i32, ProcInfo>,
+    mut identity_matches: IdentityMatches,
+    mut send_signal: SendSignal,
+) where
+    IdentityMatches: FnMut(&ProcInfo) -> bool,
+    SendSignal: FnMut(i32, i32),
+{
     let mut pids = descendant_pids(root_pid, processes);
     pids.reverse();
     pids.push(root_pid);
     for pid in pids {
-        unsafe {
-            libc::kill(pid, signal);
+        let Some(expected) = processes.get(&pid) else {
+            continue;
+        };
+        if !identity_matches(expected) {
+            continue;
         }
+        send_signal(pid, signal);
     }
 }
 
@@ -673,7 +710,11 @@ fn helper_signature_with_options(
     allow_mcp_convention: bool,
     app_helper_requires_mcp_convention: bool,
 ) -> Option<String> {
-    if process.argv.is_empty() || is_shell_command(process) || is_self(process) {
+    if process.argv.is_empty()
+        || is_shell_command(process)
+        || is_self(process)
+        || is_codex_non_owner_process(process)
+    {
         return None;
     }
     let matching_specs = server_specs
@@ -845,7 +886,27 @@ fn is_orphan_helper_root(
     if has_helper_ancestor(process, processes, server_specs, app_dir) {
         return false;
     }
+    if !has_codex_origin_marker(process) {
+        return false;
+    }
     helper_signature_for_orphan(process, server_specs, app_dir).is_some()
+}
+
+fn has_codex_origin_marker(process: &ProcInfo) -> bool {
+    const CODEX_ORIGIN_KEYS: &[&str] = &[
+        "CODEX_HOME",
+        "CODEX_SESSION_ID",
+        "CODEX_THREAD_ID",
+        "CODEX_SANDBOX",
+        "CODEX_SANDBOX_NETWORK_DISABLED",
+        "CODEX_CLI_PATH",
+        "CODEX_MANAGED_NODE_PATH",
+        "CODEX_INTERNAL_ORIGINATOR_OVERRIDE",
+    ];
+    process
+        .env_keys
+        .iter()
+        .any(|key| CODEX_ORIGIN_KEYS.contains(&key.as_str()))
 }
 
 fn has_init_or_user_systemd_parent(
@@ -942,7 +1003,10 @@ fn looks_like_app_helper(process: &ProcInfo, app_dir: Option<&Path>) -> bool {
 }
 
 fn is_helper_candidate(process: &ProcInfo) -> bool {
-    !process.argv.is_empty() && !is_shell_command(process) && !is_self(process)
+    !process.argv.is_empty()
+        && !is_shell_command(process)
+        && !is_self(process)
+        && !is_codex_non_owner_process(process)
 }
 
 fn app_generation_signature(process: &ProcInfo, app_dir: &Path) -> Option<String> {
@@ -1072,7 +1136,13 @@ mod tests {
                 .unwrap_or_else(|| "unknown".to_string()),
             argv: argv.iter().map(|arg| (*arg).to_string()).collect(),
             cwd: PathBuf::from(cwd),
+            env_keys: BTreeSet::new(),
         }
+    }
+
+    fn with_codex_origin(mut process: ProcInfo) -> ProcInfo {
+        process.env_keys.insert("CODEX_HOME".to_string());
+        process
     }
 
     #[test]
@@ -1081,15 +1151,15 @@ mod tests {
         processes.insert(100, proc(100, 1, 10, &["codex", "resume"], "/repo"));
         processes.insert(
             101,
-            proc(101, 100, 20, &["/tmp/tokensave", "serve"], "/repo"),
+            proc(101, 100, 20, &["/tmp/example-helper", "serve"], "/repo"),
         );
         processes.insert(
             102,
-            proc(102, 100, 30, &["/tmp/tokensave", "serve"], "/repo"),
+            proc(102, 100, 30, &["/tmp/example-helper", "serve"], "/repo"),
         );
         let specs = vec![ServerSpec {
             name: "code-index".to_string(),
-            command: "/tmp/tokensave".to_string(),
+            command: "/tmp/example-helper".to_string(),
             args: vec!["serve".to_string()],
             cwd: None,
         }];
@@ -1101,7 +1171,8 @@ mod tests {
             vec![ReapCandidate {
                 stale_pid: 101,
                 keep_pid: 102,
-                signature: "config:code-index\u{0}/tmp/tokensave\u{0}serve\u{0}/repo".to_string(),
+                signature: "config:code-index\u{0}/tmp/example-helper\u{0}serve\u{0}/repo"
+                    .to_string(),
             }]
         );
     }
@@ -1179,15 +1250,15 @@ mod tests {
         processes.insert(200, proc(200, 1, 10, &["codex", "resume"], "/repo-b"));
         processes.insert(
             101,
-            proc(101, 100, 20, &["/tmp/tokensave", "serve"], "/repo-a"),
+            proc(101, 100, 20, &["/tmp/example-helper", "serve"], "/repo-a"),
         );
         processes.insert(
             201,
-            proc(201, 200, 21, &["/tmp/tokensave", "serve"], "/repo-b"),
+            proc(201, 200, 21, &["/tmp/example-helper", "serve"], "/repo-b"),
         );
         let specs = vec![ServerSpec {
             name: "code-index".to_string(),
-            command: "/tmp/tokensave".to_string(),
+            command: "/tmp/example-helper".to_string(),
             args: vec!["serve".to_string()],
             cwd: None,
         }];
@@ -1444,6 +1515,44 @@ mod tests {
     }
 
     #[test]
+    fn does_not_treat_the_tool_sandbox_as_a_helper_candidate() {
+        let mut processes = BTreeMap::new();
+        processes.insert(100, proc(100, 1, 10, &["codex", "resume"], "/repo"));
+        processes.insert(
+            101,
+            proc(
+                101,
+                100,
+                20,
+                &[
+                    "/usr/bin/codex-linux-sandbox",
+                    "--",
+                    "run-mcp-server",
+                    "--stdio",
+                ],
+                "/repo",
+            ),
+        );
+        processes.insert(
+            102,
+            proc(
+                102,
+                100,
+                30,
+                &[
+                    "/usr/bin/codex-linux-sandbox",
+                    "--",
+                    "run-mcp-server",
+                    "--stdio",
+                ],
+                "/repo",
+            ),
+        );
+
+        assert!(plan_reap(100, &processes, &[], None).is_empty());
+    }
+
+    #[test]
     fn loads_codex_toml_mcp_servers() {
         let dir = tempdir().unwrap();
         let config = dir.path().join("config.toml");
@@ -1517,6 +1626,27 @@ args = ["serve", "--stdio"]
     }
 
     #[test]
+    fn signal_tree_revalidates_each_descendant_identity() {
+        let mut processes = BTreeMap::new();
+        processes.insert(101, proc(101, 100, 20, &["helper", "--stdio"], "/repo"));
+        processes.insert(102, proc(102, 101, 21, &["child-a"], "/repo"));
+        processes.insert(103, proc(103, 102, 22, &["grandchild"], "/repo"));
+        processes.insert(104, proc(104, 101, 23, &["child-b"], "/repo"));
+
+        let live_pids = BTreeSet::from([101, 103]);
+        let mut signaled = Vec::new();
+        signal_tree_with(
+            101,
+            libc::SIGTERM,
+            &processes,
+            |expected| live_pids.contains(&expected.pid),
+            |pid, signal| signaled.push((pid, signal)),
+        );
+
+        assert_eq!(signaled, vec![(103, libc::SIGTERM), (101, libc::SIGTERM)]);
+    }
+
+    #[test]
     fn reaps_configured_orphan_root_adopted_by_user_systemd() {
         let mut processes = BTreeMap::new();
         processes.insert(1, proc(1, 0, 1, &["/usr/lib/systemd/systemd"], "/"));
@@ -1526,13 +1656,13 @@ args = ["serve", "--stdio"]
         );
         processes.insert(
             101,
-            proc(
+            with_codex_origin(proc(
                 101,
                 10,
                 20,
                 &["python3", "/repo/bin/server-filter.py", "--stdio"],
                 "/repo",
-            ),
+            )),
         );
         processes.insert(
             102,
@@ -1552,6 +1682,34 @@ args = ["serve", "--stdio"]
                 signature: "config:wrapped-server\u{0}/repo/bin/server\u{0}\u{0}/repo".to_string(),
             }]
         );
+    }
+
+    #[test]
+    fn ignores_configured_orphan_without_codex_origin_marker() {
+        let mut processes = BTreeMap::new();
+        processes.insert(1, proc(1, 0, 1, &["/usr/lib/systemd/systemd"], "/"));
+        processes.insert(
+            10,
+            proc(10, 1, 2, &["/usr/lib/systemd/systemd", "--user"], "/"),
+        );
+        processes.insert(
+            101,
+            proc(
+                101,
+                10,
+                20,
+                &["python3", "/repo/bin/server-filter.py", "--stdio"],
+                "/repo",
+            ),
+        );
+        let specs = vec![ServerSpec {
+            name: "wrapped-server".to_string(),
+            command: "/repo/bin/server".to_string(),
+            args: Vec::new(),
+            cwd: None,
+        }];
+
+        assert!(plan_orphan_reap(&processes, &specs, None).is_empty());
     }
 
     #[test]

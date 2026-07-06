@@ -2,6 +2,7 @@
 set -euo pipefail
 
 feature_dir="$SCRIPT_DIR/linux-features/mcp-helper-reaper"
+reaper_crate_dir="$feature_dir/reaper"
 codex_linux_dir="$INSTALL_DIR/.codex-linux"
 mcp_reaper_dir="$codex_linux_dir/mcp-helper-reaper"
 resources_dir="$INSTALL_DIR/resources"
@@ -33,7 +34,7 @@ find_cargo_for_mcp_helper_reaper() {
 
 resolve_reaper_source() {
     local cargo_cmd=""
-    local source_binary="$SCRIPT_DIR/target/release/codex-mcp-helper-reaper"
+    local source_binary="$reaper_crate_dir/target/release/codex-mcp-helper-reaper"
 
     if [ -n "${CODEX_MCP_HELPER_REAPER_SOURCE:-}" ]; then
         [ -x "$CODEX_MCP_HELPER_REAPER_SOURCE" ] || {
@@ -50,7 +51,7 @@ resolve_reaper_source() {
     fi
 
     echo "Building MCP helper reaper..." >&2
-    if ! (cd "$SCRIPT_DIR" && "$cargo_cmd" build --release -p codex-mcp-helper-reaper >&2); then
+    if ! (cd "$reaper_crate_dir" && "$cargo_cmd" build --release >&2); then
         echo "Failed to build MCP helper reaper" >&2
         return 1
     fi

@@ -42,6 +42,13 @@ Bare MCP/stdio-style convention matching is used only for live Codex-parent
 deduplication, not for orphan cleanup. The feature does not hardcode local tools
 or providers.
 
+## Compatibility
+
+This feature can be enabled together with `node-repl-reaper`. When enabled, this
+feature wraps `resources/node_repl` and keeps the original entrypoint at
+`resources/node_repl.codex-linux-original`; `node-repl-reaper` recognizes both
+paths so leaked Browser Use helpers remain in scope.
+
 ## Enable
 
 Add to `linux-features/features.json`:
@@ -74,6 +81,6 @@ and binaries, and removes this feature's `SessionStart` command marker from
 ## Test
 
 ```bash
-rtk cargo test -p codex-mcp-helper-reaper
+rtk cargo test --manifest-path linux-features/mcp-helper-reaper/reaper/Cargo.toml
 node --test linux-features/mcp-helper-reaper/test.js
 ```

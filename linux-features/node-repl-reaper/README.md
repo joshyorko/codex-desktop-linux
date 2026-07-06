@@ -26,6 +26,12 @@ Browser Use sessions are unaffected. Matching is scoped to this install's
   (`CODEX_NODE_REPL_REAPER_KILL_GRACE` seconds, default 5), re-checking
   process identity before escalating to guard against pid reuse.
 
+## Compatibility
+
+This feature can be enabled together with `mcp-helper-reaper`. If that feature
+wraps `resources/node_repl`, this reaper also matches
+`resources/node_repl.codex-linux-original` so leaked helpers remain in scope.
+
 ## Enable
 
 Add to `linux-features/features.json`:

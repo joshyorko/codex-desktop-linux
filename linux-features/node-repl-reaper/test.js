@@ -72,6 +72,22 @@ test("reaps a node_repl whose parent is not a live codex app-server", async () =
   }
 });
 
+test("reaps a wrapped node_repl running from the original backup path", async () => {
+  const { appDir } = makeFakeApp();
+  const originalNodeReplBin = path.join(appDir, "resources", "node_repl.codex-linux-original");
+  fs.symlinkSync(process.execPath, originalNodeReplBin);
+  const leaked = spawn(originalNodeReplBin, LONG_RUNNING_NODE_ARGS, { stdio: "ignore" });
+  try {
+    await new Promise((resolve) => leaked.once("spawn", resolve));
+    const output = runReaperOnce(appDir);
+    assert.match(output, new RegExp(`reaping leaked node_repl pid=${leaked.pid}\\b`));
+    await waitForExit(leaked.pid);
+  } finally {
+    try { leaked.kill("SIGKILL"); } catch {}
+    fs.rmSync(appDir, { recursive: true, force: true });
+  }
+});
+
 test("leaves a node_repl with a live codex app-server parent alone", async () => {
   const { appDir, nodeReplBin } = makeFakeApp();
   // Fake app-server: an executable named codex run with an app-server arg,

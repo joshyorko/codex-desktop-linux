@@ -101,10 +101,11 @@ test("stage hook finds cargo in HOME cargo bin when PATH omits it", () => {
   const homeDir = path.join(tempDir, "home");
   const fakeBin = path.join(tempDir, "bin");
   const featureDir = path.join(scriptRoot, "linux-features", "mcp-helper-reaper");
+  const reaperCrateDir = path.join(featureDir, "reaper");
   const cargoLog = path.join(tempDir, "cargo.log");
   const nodeRepl = path.join(appDir, "resources", "node_repl");
 
-  fs.mkdirSync(featureDir, { recursive: true });
+  fs.mkdirSync(reaperCrateDir, { recursive: true });
   fs.mkdirSync(workDir, { recursive: true });
   fs.mkdirSync(path.dirname(nodeRepl), { recursive: true });
   symlinkHostTools(fakeBin, ["bash", "cat", "chmod", "grep", "install", "mkdir", "mv"]);
@@ -144,7 +145,10 @@ chmod 0755 target/release/codex-mcp-helper-reaper
     },
   });
 
-  assert.match(fs.readFileSync(cargoLog, "utf8").trim(), / build --release -p codex-mcp-helper-reaper$/);
+  assert.match(
+    fs.readFileSync(cargoLog, "utf8").trim(),
+    new RegExp(`${reaperCrateDir.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} build --release$`),
+  );
   assert.equal(
     fs.existsSync(path.join(appDir, ".codex-linux", "mcp-helper-reaper", "codex-mcp-helper-reaper")),
     true,
@@ -174,7 +178,7 @@ test("cleanup hook restores node_repl and removes staged hooks", () => {
           {
             matcher: "startup|resume",
             hooks: [
-              { type: "command", command: "headroom mcp report # headroom-init-codex-rtk-report", timeout: 15 },
+              { type: "command", command: "existing mcp report # existing-session-hook", timeout: 15 },
               { type: "command", command: "true # codex-mcp-helper-reaper-session", timeout: 1 },
             ],
           },
@@ -203,12 +207,12 @@ test("cleanup hook restores node_repl and removes staged hooks", () => {
   assert.equal(fs.existsSync(path.join(appDir, ".codex-linux", "after-exit.d", "mcp-helper-reaper")), false);
   const hooks = JSON.parse(fs.readFileSync(path.join(codexHome, "hooks.json"), "utf8"));
   const commands = hooks.hooks.SessionStart.flatMap((entry) => entry.hooks ?? []).map((hook) => hook.command);
-  assert.deepEqual(commands, ["headroom mcp report # headroom-init-codex-rtk-report"]);
+  assert.deepEqual(commands, ["existing mcp report # existing-session-hook"]);
 
   fs.rmSync(tempDir, { recursive: true, force: true });
 });
 
-test("session hook merge preserves existing Headroom hook and deduplicates reaper hook", () => {
+test("session hook merge preserves existing SessionStart hook and deduplicates reaper hook", () => {
   const tempDir = makeTempDir("codex-mcp-helper-reaper-hooks-");
   const appDir = path.join(tempDir, "app");
   const stateDir = path.join(tempDir, "state");
@@ -230,7 +234,7 @@ test("session hook merge preserves existing Headroom hook and deduplicates reape
               hooks: [
                 {
                   type: "command",
-                  command: "headroom mcp report-rtk --proxy-url http://10.10.10.89 --scope project >/dev/null 2>&1 || true # headroom-init-codex-rtk-report",
+                  command: "existing mcp report --scope project >/dev/null 2>&1 || true # existing-session-hook",
                   timeout: 15,
                 },
               ],
@@ -249,7 +253,7 @@ test("session hook merge preserves existing Headroom hook and deduplicates reape
 
   const merged = JSON.parse(fs.readFileSync(path.join(codexHome, "hooks.json"), "utf8"));
   const commands = merged.hooks.SessionStart.flatMap((entry) => entry.hooks ?? []).map((hook) => hook.command);
-  assert.equal(commands.filter((command) => command.includes("headroom-init-codex-rtk-report")).length, 1);
+  assert.equal(commands.filter((command) => command.includes("existing-session-hook")).length, 1);
   const reaperCommands = commands.filter((command) => command.includes("codex-mcp-helper-reaper-session"));
   assert.equal(reaperCommands.length, 1);
   assert.match(reaperCommands[0], /--codex-parent "\$PPID"/);
