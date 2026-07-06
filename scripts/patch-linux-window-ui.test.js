@@ -633,10 +633,12 @@ test("package profile distinguishes Fedora package managers by major version", (
   const fedora40 = detectLinuxTargetContext({
     osReleaseFields: { ID: "fedora", VERSION_ID: "40", PRETTY_NAME: "Fedora Linux 40" },
     env: { PATH: "" },
+    atomic: false,
   });
   const fedora41 = detectLinuxTargetContext({
     osReleaseFields: { ID: "fedora", VERSION_ID: "41", PRETTY_NAME: "Fedora Linux 41" },
     env: { PATH: "" },
+    atomic: false,
   });
 
   assert.equal(packageProfile(fedora40).packageManager, "dnf");
@@ -1957,7 +1959,7 @@ test("bypasses the upstream before-quit confirmation after a Linux explicit quit
 
   assert.match(
     patched,
-    /if\(\(typeof codexLinuxShouldBypassQuitPrompt===`function`&&codexLinuxShouldBypassQuitPrompt\(\)\)\|\|e\|\|i\.canQuitWithoutPrompt\(\)\|\|r\|\|!s&&!c\)\{process\.platform===`linux`&&typeof codexLinuxMarkQuitInProgress===`function`&&codexLinuxMarkQuitInProgress\(\),g=!0,a\.markAppQuitting\(\);return\}/,
+    /if\(\(typeof codexLinuxShouldBypassQuitPrompt===`function`&&codexLinuxShouldBypassQuitPrompt\(\)\)\|\|e\|\|\(typeof i\.canQuitWithoutPrompt===`function`&&i\.canQuitWithoutPrompt\(\)\)\|\|r\|\|!s&&!c\)\{process\.platform===`linux`&&typeof codexLinuxMarkQuitInProgress===`function`&&codexLinuxMarkQuitInProgress\(\),g=!0,a\.markAppQuitting\(\);return\}/,
   );
   assert.match(
     patched,
@@ -1993,7 +1995,7 @@ test("patches remaining before-quit and drain guards when another copy is alread
   assert.equal((patchedPromptSource.match(/codexLinuxShouldBypassQuitPrompt\(\)/g) ?? []).length, 2);
   assert.match(
     patchedPromptSource,
-    /function secondPrompt\(\)\{if\(\(typeof codexLinuxShouldBypassQuitPrompt===`function`&&codexLinuxShouldBypassQuitPrompt\(\)\)\|\|e\|\|i\.canQuitWithoutPrompt\(\)\|\|r\|\|!s&&!c\)\{process\.platform===`linux`&&typeof codexLinuxMarkQuitInProgress===`function`&&codexLinuxMarkQuitInProgress\(\),g=!0,a\.markAppQuitting\(\);return\}\}/,
+    /function secondPrompt\(\)\{if\(\(typeof codexLinuxShouldBypassQuitPrompt===`function`&&codexLinuxShouldBypassQuitPrompt\(\)\)\|\|e\|\|\(typeof i\.canQuitWithoutPrompt===`function`&&i\.canQuitWithoutPrompt\(\)\)\|\|r\|\|!s&&!c\)\{process\.platform===`linux`&&typeof codexLinuxMarkQuitInProgress===`function`&&codexLinuxMarkQuitInProgress\(\),g=!0,a\.markAppQuitting\(\);return\}\}/,
   );
 
   const unpatchedDrain =
@@ -3702,8 +3704,8 @@ test("adds Linux launch actions through current setSecondInstanceArgsHandler bun
   assert.match(launchPatched, /codexLinuxDefaultLaunchActionSocket=\(\)=>/);
   assert.match(launchPatched, /process\.env\.CODEX_DESKTOP_LAUNCH_ACTION_SOCKET\?\.trim\(\)\|\|codexLinuxDefaultLaunchActionSocket\(\)/);
   assert.match(launchPatched, /process\.env\.CODEX_LINUX_INSTANCE_ID\?\.trim\(\)/);
-  assert.match(launchPatched, /let n=require\(`node:path`\),r=require\(`node:fs`\),i=require\(`node:net`\);r\.mkdirSync\(n\.dirname\(e\)/);
-  assert.match(launchPatched, /let a=i\.createServer/);
+  assert.match(launchPatched, /let codexLinuxPathModule=require\(`node:path`\),codexLinuxFsModule=require\(`node:fs`\),codexLinuxNetModule=require\(`node:net`\);codexLinuxFsModule\.mkdirSync\(codexLinuxPathModule\.dirname\(e\)/);
+  assert.match(launchPatched, /let a=codexLinuxNetModule\.createServer/);
   assert.doesNotMatch(launchPatched, /f\.default\.createServer/);
   assert.doesNotMatch(launchPatched, /o\.mkdirSync\(i\.default\.dirname\(e\)/);
   assert.match(launchPatched, /R\.desktopNotificationManager\.dismissByNavigationPath\(e\)/);
@@ -3728,8 +3730,8 @@ test("uses collision-safe modules for launch-action socket in shadowed startup s
   const patched = applyPatchTwice(applyLinuxLaunchActionArgsPatch, source);
 
   assert.match(patched, /codexLinuxStartLaunchActionSocket=\(\)=>\{if\(process\.platform!==`linux`\)return;try\{/);
-  assert.match(patched, /let n=require\(`node:path`\),r=require\(`node:fs`\),i=require\(`node:net`\);r\.mkdirSync\(n\.dirname\(e\)/);
-  assert.match(patched, /let a=i\.createServer/);
+  assert.match(patched, /let codexLinuxPathModule=require\(`node:path`\),codexLinuxFsModule=require\(`node:fs`\),codexLinuxNetModule=require\(`node:net`\);codexLinuxFsModule\.mkdirSync\(codexLinuxPathModule\.dirname\(e\)/);
+  assert.match(patched, /let a=codexLinuxNetModule\.createServer/);
   assert.match(patched, /t\.on\(`error`,e=>\{g\.reportNonFatal\(e instanceof Error\?e:`Failed Linux launch action socket client`,\{kind:`linux-launch-action-socket-client-error`\}\)\}\)/);
   assert.doesNotMatch(patched, /o\.mkdirSync/);
   assert.doesNotMatch(patched, /f\.default\.createServer/);

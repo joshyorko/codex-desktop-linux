@@ -131,7 +131,9 @@ function applyLinuxChromeNativeHostRuntimePatch(currentSource) {
     helper,
   );
   if (modernRuntimeResolverPatch != null) {
-    return modernRuntimeResolverPatch;
+    const appServerRuntimePatch = applyChromePluginAppServerRuntimePatch(modernRuntimeResolverPatch, "") ??
+      modernRuntimeResolverPatch;
+    return applyChromePluginAppServerCodexRuntimePatch(appServerRuntimePatch, "") ?? appServerRuntimePatch;
   }
 
   const missingRuntimeMessage =
