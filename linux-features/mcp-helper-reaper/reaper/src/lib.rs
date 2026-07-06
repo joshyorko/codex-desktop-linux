@@ -9,6 +9,7 @@ use std::time::Duration;
 pub struct ProcInfo {
     pub pid: i32,
     pub ppid: i32,
+    pub pgid: i32,
     pub start_time: u64,
     pub comm: String,
     pub argv: Vec<String>,
@@ -378,6 +379,23 @@ pub fn descendant_pids(root_pid: i32, processes: &BTreeMap<i32, ProcInfo>) -> Ve
     result
 }
 
+pub fn tree_or_process_group_pids(root_pid: i32, processes: &BTreeMap<i32, ProcInfo>) -> Vec<i32> {
+    let mut pids = descendant_pids(root_pid, processes)
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+    if let Some(root) = processes.get(&root_pid) {
+        if root.pgid == root.pid {
+            pids.extend(
+                processes
+                    .values()
+                    .filter(|process| process.pid != root_pid && process.pgid == root.pgid)
+                    .map(|process| process.pid),
+            );
+        }
+    }
+    pids.into_iter().collect()
+}
+
 pub fn read_proc(pid: i32) -> Option<ProcInfo> {
     let proc_dir = PathBuf::from("/proc").join(pid.to_string());
     let stat = std::fs::read_to_string(proc_dir.join("stat")).ok()?;
@@ -389,6 +407,7 @@ pub fn read_proc(pid: i32) -> Option<ProcInfo> {
     let end = stat.rfind(')')?;
     let fields: Vec<&str> = stat.get(end + 2..)?.split_whitespace().collect();
     let ppid = fields.get(1)?.parse().ok()?;
+    let pgid = fields.get(2)?.parse().ok()?;
     let start_time = fields.get(19)?.parse().ok()?;
     let argv = cmdline
         .split(|byte| *byte == b'\0')
@@ -402,6 +421,7 @@ pub fn read_proc(pid: i32) -> Option<ProcInfo> {
     Some(ProcInfo {
         pid,
         ppid,
+        pgid,
         start_time,
         comm,
         argv,
@@ -459,7 +479,21 @@ fn is_codex_non_owner_process(process: &ProcInfo) -> bool {
 
 pub fn same_process(expected: &ProcInfo) -> bool {
     read_proc(expected.pid)
-        .map(|current| current.ppid == expected.ppid && current.start_time == expected.start_time)
+        .map(|current| {
+            current.ppid == expected.ppid
+                && current.pgid == expected.pgid
+                && current.start_time == expected.start_time
+        })
+        .unwrap_or(false)
+}
+
+pub fn same_process_or_reparented_group_member(expected: &ProcInfo) -> bool {
+    read_proc(expected.pid)
+        .map(|current| {
+            current.start_time == expected.start_time
+                && current.pgid == expected.pgid
+                && (current.ppid == expected.ppid || expected.pgid == expected.pid)
+        })
         .unwrap_or(false)
 }
 
@@ -622,17 +656,11 @@ pub fn terminate_orphan_helpers(
 pub fn escalate_stale_helpers(
     candidates: &[ReapCandidate],
     original_processes: &BTreeMap<i32, ProcInfo>,
-    current_processes: &BTreeMap<i32, ProcInfo>,
+    _current_processes: &BTreeMap<i32, ProcInfo>,
     quiet: bool,
 ) {
     for candidate in candidates {
-        let Some(original) = original_processes.get(&candidate.stale_pid) else {
-            continue;
-        };
-        let Some(current) = current_processes.get(&candidate.stale_pid) else {
-            continue;
-        };
-        if current.ppid != original.ppid || current.start_time != original.start_time {
+        if !has_live_stale_tree_member(candidate.stale_pid, original_processes) {
             continue;
         }
         log(
@@ -642,24 +670,26 @@ pub fn escalate_stale_helpers(
                 candidate.stale_pid, candidate.signature
             ),
         );
-        signal_tree(candidate.stale_pid, libc::SIGKILL, current_processes);
+        signal_tree_or_process_group_with(
+            candidate.stale_pid,
+            libc::SIGKILL,
+            original_processes,
+            same_process_or_reparented_group_member,
+            |pid, signal| unsafe {
+                libc::kill(pid, signal);
+            },
+        );
     }
 }
 
 pub fn escalate_orphan_helpers(
     candidates: &[OrphanReapCandidate],
     original_processes: &BTreeMap<i32, ProcInfo>,
-    current_processes: &BTreeMap<i32, ProcInfo>,
+    _current_processes: &BTreeMap<i32, ProcInfo>,
     quiet: bool,
 ) {
     for candidate in candidates {
-        let Some(original) = original_processes.get(&candidate.stale_pid) else {
-            continue;
-        };
-        let Some(current) = current_processes.get(&candidate.stale_pid) else {
-            continue;
-        };
-        if current.ppid != original.ppid || current.start_time != original.start_time {
+        if !has_live_stale_tree_member(candidate.stale_pid, original_processes) {
             continue;
         }
         log(
@@ -669,7 +699,15 @@ pub fn escalate_orphan_helpers(
                 candidate.stale_pid, candidate.signature
             ),
         );
-        signal_tree(candidate.stale_pid, libc::SIGKILL, current_processes);
+        signal_tree_or_process_group_with(
+            candidate.stale_pid,
+            libc::SIGKILL,
+            original_processes,
+            same_process_or_reparented_group_member,
+            |pid, signal| unsafe {
+                libc::kill(pid, signal);
+            },
+        );
     }
 }
 
@@ -706,7 +744,7 @@ fn collect_plugin_specs(dir: &Path, depth: usize, specs: &mut Vec<ServerSpec>) {
 }
 
 fn signal_tree(root_pid: i32, signal: i32, processes: &BTreeMap<i32, ProcInfo>) {
-    signal_tree_with(
+    signal_tree_or_process_group_with(
         root_pid,
         signal,
         processes,
@@ -717,7 +755,7 @@ fn signal_tree(root_pid: i32, signal: i32, processes: &BTreeMap<i32, ProcInfo>) 
     );
 }
 
-fn signal_tree_with<IdentityMatches, SendSignal>(
+fn signal_tree_or_process_group_with<IdentityMatches, SendSignal>(
     root_pid: i32,
     signal: i32,
     processes: &BTreeMap<i32, ProcInfo>,
@@ -727,7 +765,7 @@ fn signal_tree_with<IdentityMatches, SendSignal>(
     IdentityMatches: FnMut(&ProcInfo) -> bool,
     SendSignal: FnMut(i32, i32),
 {
-    let mut pids = descendant_pids(root_pid, processes);
+    let mut pids = tree_or_process_group_pids(root_pid, processes);
     pids.reverse();
     pids.push(root_pid);
     for pid in pids {
@@ -739,6 +777,18 @@ fn signal_tree_with<IdentityMatches, SendSignal>(
         }
         send_signal(pid, signal);
     }
+}
+
+fn has_live_stale_tree_member(root_pid: i32, original_processes: &BTreeMap<i32, ProcInfo>) -> bool {
+    if let Some(root) = original_processes.get(&root_pid) {
+        if same_process_or_reparented_group_member(root) {
+            return true;
+        }
+    }
+    tree_or_process_group_pids(root_pid, original_processes)
+        .into_iter()
+        .filter_map(|pid| original_processes.get(&pid))
+        .any(same_process_or_reparented_group_member)
 }
 
 fn log(quiet: bool, message: &str) {
@@ -1212,9 +1262,21 @@ mod tests {
     use tempfile::tempdir;
 
     fn proc(pid: i32, ppid: i32, start_time: u64, argv: &[&str], cwd: &str) -> ProcInfo {
+        proc_with_pgid(pid, ppid, pid, start_time, argv, cwd)
+    }
+
+    fn proc_with_pgid(
+        pid: i32,
+        ppid: i32,
+        pgid: i32,
+        start_time: u64,
+        argv: &[&str],
+        cwd: &str,
+    ) -> ProcInfo {
         ProcInfo {
             pid,
             ppid,
+            pgid,
             start_time,
             comm: argv
                 .first()
@@ -1813,7 +1875,30 @@ args = ["serve", "--stdio"]
     }
 
     #[test]
-    fn signal_tree_revalidates_each_descendant_identity() {
+    fn tree_or_process_group_pids_includes_reparented_process_group_members() {
+        let mut processes = BTreeMap::new();
+        processes.insert(
+            101,
+            proc_with_pgid(101, 100, 101, 20, &["helper", "--stdio"], "/repo"),
+        );
+        processes.insert(
+            102,
+            proc_with_pgid(102, 101, 101, 21, &["child-a"], "/repo"),
+        );
+        processes.insert(
+            103,
+            proc_with_pgid(103, 1, 101, 22, &["daemonized-grandchild"], "/repo"),
+        );
+        processes.insert(
+            104,
+            proc_with_pgid(104, 1, 104, 23, &["other-helper"], "/repo"),
+        );
+
+        assert_eq!(tree_or_process_group_pids(101, &processes), vec![102, 103]);
+    }
+
+    #[test]
+    fn signal_tree_revalidates_each_tree_or_process_group_member_identity() {
         let mut processes = BTreeMap::new();
         processes.insert(101, proc(101, 100, 20, &["helper", "--stdio"], "/repo"));
         processes.insert(102, proc(102, 101, 21, &["child-a"], "/repo"));
@@ -1822,7 +1907,7 @@ args = ["serve", "--stdio"]
 
         let live_pids = BTreeSet::from([101, 103]);
         let mut signaled = Vec::new();
-        signal_tree_with(
+        signal_tree_or_process_group_with(
             101,
             libc::SIGTERM,
             &processes,
@@ -1831,6 +1916,35 @@ args = ["serve", "--stdio"]
         );
 
         assert_eq!(signaled, vec![(103, libc::SIGTERM), (101, libc::SIGTERM)]);
+    }
+
+    #[test]
+    fn stale_escalation_signals_descendants_when_root_already_exited() {
+        let mut original_processes = BTreeMap::new();
+        original_processes.insert(
+            101,
+            proc_with_pgid(101, 100, 101, 20, &["helper", "--stdio"], "/repo"),
+        );
+        original_processes.insert(
+            102,
+            proc_with_pgid(102, 101, 101, 21, &["daemonized-child"], "/repo"),
+        );
+        let candidates = [ReapCandidate {
+            stale_pid: 101,
+            keep_pid: 201,
+            signature: "argv:helper\0--stdio".to_string(),
+        }];
+
+        let mut signaled = Vec::new();
+        signal_tree_or_process_group_with(
+            candidates[0].stale_pid,
+            libc::SIGKILL,
+            &original_processes,
+            |expected| expected.pid == 102,
+            |pid, signal| signaled.push((pid, signal)),
+        );
+
+        assert_eq!(signaled, vec![(102, libc::SIGKILL)]);
     }
 
     #[test]
