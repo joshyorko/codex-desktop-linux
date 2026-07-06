@@ -33,6 +33,8 @@ Helper detection is generic:
 - configured MCP server commands are read from Codex config, including
   interpreter-launched scripts and same-directory wrapper sidecars;
 - bundled plugin helpers are recognized by staged app plugin/resource paths;
+- replaced app/plugin generations are recognized by app-relative helper paths
+  and deleted `/proc` cwd markers under the same live Codex parent;
 - command lines with MCP/stdio-style conventions are recognized;
 - shell `-c` children are ignored so normal tool executions are not reaped.
 

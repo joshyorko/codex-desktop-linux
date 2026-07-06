@@ -43,16 +43,18 @@ pub fn plan_reap(
     app_dir: Option<&Path>,
 ) -> Vec<ReapCandidate> {
     let mut groups: BTreeMap<String, Vec<&ProcInfo>> = BTreeMap::new();
-    for process in processes
+    let direct_children = processes
         .values()
         .filter(|process| process.ppid == parent_pid)
-    {
+        .collect::<Vec<_>>();
+    for process in &direct_children {
         if let Some(signature) = helper_signature(process, server_specs, app_dir) {
-            groups.entry(signature).or_default().push(process);
+            groups.entry(signature).or_default().push(*process);
         }
     }
 
     let mut candidates = Vec::new();
+    let mut seen_stale_pids = BTreeSet::new();
     for (signature, members) in groups {
         if members.len() <= 1 {
             continue;
@@ -66,19 +68,140 @@ pub fn plan_reap(
             if process.pid == newest_pid {
                 continue;
             }
-            candidates.push(ReapCandidate {
-                stale_pid: process.pid,
-                keep_pid: newest_pid,
-                signature: signature.clone(),
-            });
+            push_reap_candidate(
+                &mut candidates,
+                &mut seen_stale_pids,
+                process.pid,
+                newest_pid,
+                signature.clone(),
+            );
         }
     }
+
+    append_generation_reap_candidates(
+        &mut candidates,
+        &mut seen_stale_pids,
+        &direct_children,
+        app_dir,
+    );
     candidates.sort_by(|left, right| {
         left.signature
             .cmp(&right.signature)
             .then(left.stale_pid.cmp(&right.stale_pid))
     });
     candidates
+}
+
+fn push_reap_candidate(
+    candidates: &mut Vec<ReapCandidate>,
+    seen_stale_pids: &mut BTreeSet<i32>,
+    stale_pid: i32,
+    keep_pid: i32,
+    signature: String,
+) {
+    if !seen_stale_pids.insert(stale_pid) {
+        return;
+    }
+    candidates.push(ReapCandidate {
+        stale_pid,
+        keep_pid,
+        signature,
+    });
+}
+
+fn append_generation_reap_candidates(
+    candidates: &mut Vec<ReapCandidate>,
+    seen_stale_pids: &mut BTreeSet<i32>,
+    direct_children: &[&ProcInfo],
+    app_dir: Option<&Path>,
+) {
+    append_app_generation_reap_candidates(candidates, seen_stale_pids, direct_children, app_dir);
+    append_deleted_mcp_generation_reap_candidates(candidates, seen_stale_pids, direct_children);
+}
+
+fn append_app_generation_reap_candidates(
+    candidates: &mut Vec<ReapCandidate>,
+    seen_stale_pids: &mut BTreeSet<i32>,
+    direct_children: &[&ProcInfo],
+    app_dir: Option<&Path>,
+) {
+    let Some(app_dir) = app_dir else {
+        return;
+    };
+    let mut groups: BTreeMap<String, Vec<&ProcInfo>> = BTreeMap::new();
+    for process in direct_children {
+        if !is_helper_candidate(process) {
+            continue;
+        }
+        if let Some(signature) = app_generation_signature(process, app_dir) {
+            groups.entry(signature).or_default().push(*process);
+        }
+    }
+
+    for (signature, members) in groups {
+        if members.len() <= 1
+            || !members
+                .iter()
+                .any(|process| looks_like_app_helper(process, Some(app_dir)))
+        {
+            continue;
+        }
+        let newest_pid = members
+            .iter()
+            .max_by_key(|process| (process.start_time, process.pid))
+            .expect("non-empty app generation group")
+            .pid;
+        for process in members {
+            if process.pid == newest_pid {
+                continue;
+            }
+            push_reap_candidate(
+                candidates,
+                seen_stale_pids,
+                process.pid,
+                newest_pid,
+                signature.clone(),
+            );
+        }
+    }
+}
+
+fn append_deleted_mcp_generation_reap_candidates(
+    candidates: &mut Vec<ReapCandidate>,
+    seen_stale_pids: &mut BTreeSet<i32>,
+    direct_children: &[&ProcInfo],
+) {
+    let mut groups: BTreeMap<String, Vec<&ProcInfo>> = BTreeMap::new();
+    for process in direct_children {
+        if !is_helper_candidate(process) || !looks_like_mcp_convention(process) {
+            continue;
+        }
+        let signature = format!("deleted-generation:argv:{}", process.argv.join("\0"));
+        groups.entry(signature).or_default().push(*process);
+    }
+
+    for (signature, members) in groups {
+        if members.len() <= 1 || !members.iter().any(|process| has_deleted_path(process)) {
+            continue;
+        }
+        let newest_pid = members
+            .iter()
+            .max_by_key(|process| (process.start_time, process.pid))
+            .expect("non-empty deleted generation group")
+            .pid;
+        for process in members {
+            if process.pid == newest_pid || !has_deleted_path(process) {
+                continue;
+            }
+            push_reap_candidate(
+                candidates,
+                seen_stale_pids,
+                process.pid,
+                newest_pid,
+                signature.clone(),
+            );
+        }
+    }
 }
 
 pub fn plan_orphan_reap(
@@ -818,6 +941,104 @@ fn looks_like_app_helper(process: &ProcInfo, app_dir: Option<&Path>) -> bool {
         })
 }
 
+fn is_helper_candidate(process: &ProcInfo) -> bool {
+    !process.argv.is_empty() && !is_shell_command(process) && !is_self(process)
+}
+
+fn app_generation_signature(process: &ProcInfo, app_dir: &Path) -> Option<String> {
+    process
+        .argv
+        .iter()
+        .take(4)
+        .enumerate()
+        .find_map(|(index, arg)| {
+            let relative = app_relative_path_for_arg(process, arg, app_dir)?;
+            let mut parts = vec![relative.display().to_string()];
+            parts.extend(process.argv.iter().skip(index + 1).cloned());
+            Some(format!("app-generation:{}", parts.join("\0")))
+        })
+}
+
+fn app_relative_path_for_arg(process: &ProcInfo, arg: &str, app_dir: &Path) -> Option<PathBuf> {
+    let arg_path = Path::new(arg);
+    let path = if arg_path.is_absolute() {
+        arg_path.to_path_buf()
+    } else {
+        process.cwd.join(arg_path)
+    };
+    app_relative_path(&strip_deleted_path_suffix(&path), app_dir)
+}
+
+fn app_relative_path(path: &Path, app_dir: &Path) -> Option<PathBuf> {
+    let app_dir = normalize_path(app_dir);
+    let path = normalize_path(path);
+    if let Ok(relative) = path.strip_prefix(&app_dir) {
+        if !relative.as_os_str().is_empty() {
+            return Some(relative.to_path_buf());
+        }
+    }
+
+    let marker = app_dir_stable_marker(&app_dir)?;
+    relative_after_marker(&path, &marker)
+}
+
+fn app_dir_stable_marker(app_dir: &Path) -> Option<Vec<String>> {
+    let marker = Path::new("share").join("codex-desktop").join("app");
+    if app_dir.ends_with(&marker) {
+        return Some(vec![
+            "share".to_string(),
+            "codex-desktop".to_string(),
+            "app".to_string(),
+        ]);
+    }
+    None
+}
+
+fn relative_after_marker(path: &Path, marker: &[String]) -> Option<PathBuf> {
+    let components = normal_components(path);
+    let marker_start = components
+        .windows(marker.len())
+        .position(|item| item == marker)?;
+    let relative_components = &components[marker_start + marker.len()..];
+    if relative_components.is_empty() {
+        return None;
+    }
+    let mut relative = PathBuf::new();
+    for component in relative_components {
+        relative.push(component);
+    }
+    Some(relative)
+}
+
+fn normal_components(path: &Path) -> Vec<String> {
+    path.components()
+        .filter_map(|component| match component {
+            Component::Normal(part) => Some(part.to_string_lossy().into_owned()),
+            _ => None,
+        })
+        .collect()
+}
+
+fn has_deleted_path(process: &ProcInfo) -> bool {
+    path_has_deleted_suffix(&process.cwd)
+        || process
+            .argv
+            .iter()
+            .take(4)
+            .any(|arg| path_has_deleted_suffix(Path::new(arg)))
+}
+
+fn path_has_deleted_suffix(path: &Path) -> bool {
+    path.to_string_lossy().ends_with(" (deleted)")
+}
+
+fn strip_deleted_path_suffix(path: &Path) -> PathBuf {
+    let path = path.to_string_lossy();
+    path.strip_suffix(" (deleted)")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(path.as_ref()))
+}
+
 fn normalize_path(path: &Path) -> PathBuf {
     let mut normalized = PathBuf::new();
     for component in path.components() {
@@ -881,6 +1102,72 @@ mod tests {
                 stale_pid: 101,
                 keep_pid: 102,
                 signature: "config:code-index\u{0}/tmp/tokensave\u{0}serve\u{0}/repo".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn reaps_deleted_mcp_generation_when_current_helper_matches_config() {
+        let mut processes = BTreeMap::new();
+        let plugin_dir = "/home/me/.codex/plugins/cache/example/record-and-replay/1.0.0";
+        processes.insert(100, proc(100, 1, 10, &["codex", "resume"], "/repo"));
+        processes.insert(
+            101,
+            proc(
+                101,
+                100,
+                20,
+                &["./bin/helper", "event-stream", "mcp"],
+                &format!("{plugin_dir} (deleted)"),
+            ),
+        );
+        processes.insert(
+            102,
+            proc(
+                102,
+                100,
+                30,
+                &["./bin/helper", "event-stream", "mcp"],
+                plugin_dir,
+            ),
+        );
+        let specs = vec![ServerSpec {
+            name: "event-stream".to_string(),
+            command: "./bin/helper".to_string(),
+            args: vec!["event-stream".to_string(), "mcp".to_string()],
+            cwd: Some(PathBuf::from(plugin_dir)),
+        }];
+
+        assert_eq!(
+            plan_reap(100, &processes, &specs, None),
+            vec![ReapCandidate {
+                stale_pid: 101,
+                keep_pid: 102,
+                signature: "deleted-generation:argv:./bin/helper\u{0}event-stream\u{0}mcp"
+                    .to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn reaps_replaced_app_generation_helper_under_same_codex_parent() {
+        let mut processes = BTreeMap::new();
+        let old_app =
+            "/home/linuxbrew/.linuxbrew/Caskroom/codex-desktop/old/share/codex-desktop/app";
+        let new_app =
+            "/home/linuxbrew/.linuxbrew/Caskroom/codex-desktop/new/share/codex-desktop/app";
+        let old_node_repl = format!("{old_app}/resources/node_repl.codex-linux-original");
+        let new_node_repl = format!("{new_app}/resources/node_repl.codex-linux-original");
+        processes.insert(100, proc(100, 1, 10, &["codex", "resume"], "/repo"));
+        processes.insert(101, proc(101, 100, 20, &[old_node_repl.as_str()], "/repo"));
+        processes.insert(102, proc(102, 100, 30, &[new_node_repl.as_str()], "/repo"));
+
+        assert_eq!(
+            plan_reap(100, &processes, &[], Some(Path::new(new_app))),
+            vec![ReapCandidate {
+                stale_pid: 101,
+                keep_pid: 102,
+                signature: "app-generation:resources/node_repl.codex-linux-original".to_string(),
             }]
         );
     }
