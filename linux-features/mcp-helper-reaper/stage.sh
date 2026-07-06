@@ -80,8 +80,8 @@ fi
 if [ ! -e "$original_node_repl" ]; then
     mv "$node_repl" "$original_node_repl"
 elif ! grep -q "mcp-helper-reaper-node-repl-wrapper" "$node_repl" 2>/dev/null; then
-    echo "mcp-helper-reaper: refusing to overwrite resources/node_repl because original backup already exists and current entrypoint is not this feature's wrapper" >&2
-    exit 1
+    rm -f "$original_node_repl"
+    mv "$node_repl" "$original_node_repl"
 fi
 
 install -m 0755 "$feature_dir/node-repl-wrapper.sh" "$node_repl"

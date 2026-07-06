@@ -93,6 +93,37 @@ test("stage hook installs Rust reaper, launcher hooks, and idempotent node_repl 
   fs.rmSync(tempDir, { recursive: true, force: true });
 });
 
+test("stage hook refreshes stale node_repl backup after non-fresh rebuild", () => {
+  const tempDir = makeTempDir("codex-mcp-helper-reaper-refresh-");
+  const appDir = path.join(tempDir, "app");
+  const workDir = path.join(tempDir, "work");
+  const source = path.join(tempDir, "source", "codex-mcp-helper-reaper");
+  const nodeRepl = path.join(appDir, "resources", "node_repl");
+  const originalNodeRepl = path.join(appDir, "resources", "node_repl.codex-linux-original");
+  fs.mkdirSync(path.dirname(nodeRepl), { recursive: true });
+  fs.mkdirSync(workDir, { recursive: true });
+  writeExecutable(source, "#!/usr/bin/env bash\nexit 0\n");
+  writeExecutable(nodeRepl, "#!/usr/bin/env bash\necho first node_repl\n");
+
+  const env = {
+    SCRIPT_DIR: REPO_ROOT,
+    INSTALL_DIR: appDir,
+    WORK_DIR: workDir,
+    ARCH: process.arch,
+    CODEX_MCP_HELPER_REAPER_SOURCE: source,
+  };
+
+  run("bash", [STAGE], { env });
+  writeExecutable(nodeRepl, "#!/usr/bin/env bash\necho refreshed node_repl\n");
+  run("bash", [STAGE], { env });
+
+  assert.match(fs.readFileSync(nodeRepl, "utf8"), /mcp-helper-reaper-node-repl-wrapper/);
+  assert.match(fs.readFileSync(originalNodeRepl, "utf8"), /refreshed node_repl/);
+  assert.doesNotMatch(fs.readFileSync(originalNodeRepl, "utf8"), /first node_repl/);
+
+  fs.rmSync(tempDir, { recursive: true, force: true });
+});
+
 test("stage hook finds cargo in HOME cargo bin when PATH omits it", () => {
   const tempDir = makeTempDir("codex-mcp-helper-reaper-cargo-");
   const scriptRoot = path.join(tempDir, "repo");
