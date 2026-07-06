@@ -1,0 +1,934 @@
+use anyhow::{Context, Result};
+use serde_json::Value as JsonValue;
+use std::collections::{BTreeMap, BTreeSet};
+use std::ffi::OsStr;
+use std::path::{Component, Path, PathBuf};
+use std::time::Duration;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProcInfo {
+    pub pid: i32,
+    pub ppid: i32,
+    pub start_time: u64,
+    pub comm: String,
+    pub argv: Vec<String>,
+    pub cwd: PathBuf,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ServerSpec {
+    pub name: String,
+    pub command: String,
+    pub args: Vec<String>,
+    pub cwd: Option<PathBuf>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReapCandidate {
+    pub stale_pid: i32,
+    pub keep_pid: i32,
+    pub signature: String,
+}
+
+pub fn plan_reap(
+    parent_pid: i32,
+    processes: &BTreeMap<i32, ProcInfo>,
+    server_specs: &[ServerSpec],
+    app_dir: Option<&Path>,
+) -> Vec<ReapCandidate> {
+    let mut groups: BTreeMap<String, Vec<&ProcInfo>> = BTreeMap::new();
+    for process in processes
+        .values()
+        .filter(|process| process.ppid == parent_pid)
+    {
+        if let Some(signature) = helper_signature(process, server_specs, app_dir) {
+            groups.entry(signature).or_default().push(process);
+        }
+    }
+
+    let mut candidates = Vec::new();
+    for (signature, members) in groups {
+        if members.len() <= 1 {
+            continue;
+        }
+        let newest_pid = members
+            .iter()
+            .max_by_key(|process| (process.start_time, process.pid))
+            .expect("non-empty duplicate group")
+            .pid;
+        for process in members {
+            if process.pid == newest_pid {
+                continue;
+            }
+            candidates.push(ReapCandidate {
+                stale_pid: process.pid,
+                keep_pid: newest_pid,
+                signature: signature.clone(),
+            });
+        }
+    }
+    candidates.sort_by(|left, right| {
+        left.signature
+            .cmp(&right.signature)
+            .then(left.stale_pid.cmp(&right.stale_pid))
+    });
+    candidates
+}
+
+pub fn load_config_server_specs(path: &Path) -> Result<Vec<ServerSpec>> {
+    let source = std::fs::read_to_string(path)
+        .with_context(|| format!("read Codex config {}", path.display()))?;
+    let value: toml::Value = toml::from_str(&source)
+        .with_context(|| format!("parse Codex config {}", path.display()))?;
+    let Some(servers) = value.get("mcp_servers").and_then(toml::Value::as_table) else {
+        return Ok(Vec::new());
+    };
+
+    let mut specs = Vec::new();
+    for (name, server) in servers {
+        let Some(table) = server.as_table() else {
+            continue;
+        };
+        let Some(command) = table.get("command").and_then(toml::Value::as_str) else {
+            continue;
+        };
+        let args = table
+            .get("args")
+            .and_then(toml::Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(toml::Value::as_str)
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default();
+        let cwd = table
+            .get("cwd")
+            .and_then(toml::Value::as_str)
+            .map(|cwd| normalize_path(Path::new(cwd)));
+        specs.push(ServerSpec {
+            name: name.to_string(),
+            command: command.to_string(),
+            args,
+            cwd,
+        });
+    }
+    specs.sort_by(|left, right| left.name.cmp(&right.name));
+    Ok(specs)
+}
+
+pub fn load_plugin_server_specs(plugin_dir: &Path) -> Result<Vec<ServerSpec>> {
+    let manifest = plugin_dir.join(".mcp.json");
+    let source = std::fs::read_to_string(&manifest)
+        .with_context(|| format!("read plugin MCP manifest {}", manifest.display()))?;
+    let value: JsonValue = serde_json::from_str(&source)
+        .with_context(|| format!("parse plugin MCP manifest {}", manifest.display()))?;
+    let Some(servers) = value.get("mcpServers").and_then(JsonValue::as_object) else {
+        return Ok(Vec::new());
+    };
+
+    let mut specs = Vec::new();
+    for (name, server) in servers {
+        let Some(command) = server.get("command").and_then(JsonValue::as_str) else {
+            continue;
+        };
+        let args = server
+            .get("args")
+            .and_then(JsonValue::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(JsonValue::as_str)
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default();
+        let cwd = server
+            .get("cwd")
+            .and_then(JsonValue::as_str)
+            .map(|cwd| {
+                let path = Path::new(cwd);
+                if path.is_absolute() {
+                    normalize_path(path)
+                } else {
+                    normalize_path(&plugin_dir.join(path))
+                }
+            })
+            .or_else(|| Some(normalize_path(plugin_dir)));
+        specs.push(ServerSpec {
+            name: name.to_string(),
+            command: command.to_string(),
+            args,
+            cwd,
+        });
+    }
+    specs.sort_by(|left, right| left.name.cmp(&right.name));
+    Ok(specs)
+}
+
+pub fn descendant_pids(root_pid: i32, processes: &BTreeMap<i32, ProcInfo>) -> Vec<i32> {
+    let mut children: BTreeMap<i32, Vec<i32>> = BTreeMap::new();
+    for process in processes.values() {
+        children.entry(process.ppid).or_default().push(process.pid);
+    }
+    for child_list in children.values_mut() {
+        child_list.sort_unstable();
+    }
+
+    let mut result = Vec::new();
+    let mut stack = children.get(&root_pid).cloned().unwrap_or_default();
+    stack.reverse();
+    while let Some(pid) = stack.pop() {
+        result.push(pid);
+        if let Some(grandchildren) = children.get(&pid) {
+            for child in grandchildren.iter().rev() {
+                stack.push(*child);
+            }
+        }
+    }
+    result
+}
+
+pub fn read_proc(pid: i32) -> Option<ProcInfo> {
+    let proc_dir = PathBuf::from("/proc").join(pid.to_string());
+    let stat = std::fs::read_to_string(proc_dir.join("stat")).ok()?;
+    let cmdline = std::fs::read(proc_dir.join("cmdline")).ok()?;
+    let comm = std::fs::read_to_string(proc_dir.join("comm"))
+        .map(|value| value.trim().to_string())
+        .unwrap_or_default();
+
+    let end = stat.rfind(')')?;
+    let fields: Vec<&str> = stat.get(end + 2..)?.split_whitespace().collect();
+    let ppid = fields.get(1)?.parse().ok()?;
+    let start_time = fields.get(19)?.parse().ok()?;
+    let argv = cmdline
+        .split(|byte| *byte == b'\0')
+        .filter(|part| !part.is_empty())
+        .map(|part| String::from_utf8_lossy(part).into_owned())
+        .collect();
+    let cwd = std::fs::read_link(proc_dir.join("cwd")).unwrap_or_default();
+
+    Some(ProcInfo {
+        pid,
+        ppid,
+        start_time,
+        comm,
+        argv,
+        cwd,
+    })
+}
+
+pub fn all_processes() -> BTreeMap<i32, ProcInfo> {
+    let mut processes = BTreeMap::new();
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return processes;
+    };
+    for entry in entries.flatten() {
+        let Some(name) = entry.file_name().to_str().map(str::to_string) else {
+            continue;
+        };
+        let Ok(pid) = name.parse::<i32>() else {
+            continue;
+        };
+        if let Some(process) = read_proc(pid) {
+            processes.insert(pid, process);
+        }
+    }
+    processes
+}
+
+pub fn is_codex_process(process: &ProcInfo) -> bool {
+    if is_self(process) {
+        return false;
+    }
+    let argv0 = process.argv.first().map(String::as_str).unwrap_or_default();
+    let name = Path::new(argv0)
+        .file_name()
+        .and_then(OsStr::to_str)
+        .unwrap_or(argv0);
+    // codex-linux-sandbox wraps ordinary tool commands and codex-mcp-helper-reaper
+    // is this reaper; neither owns MCP helpers, so exclude them from parent
+    // discovery like the sibling node_repl reaper does.
+    if matches!(name, "codex-linux-sandbox" | "codex-mcp-helper-reaper")
+        || matches!(process.comm.as_str(), "codex-linux-san" | "codex-mcp-helpe")
+    {
+        return false;
+    }
+    process.comm == "codex" || name == "codex" || name.starts_with("codex-")
+}
+
+pub fn same_process(expected: &ProcInfo) -> bool {
+    read_proc(expected.pid)
+        .map(|current| current.ppid == expected.ppid && current.start_time == expected.start_time)
+        .unwrap_or(false)
+}
+
+pub fn read_environ(pid: i32) -> BTreeMap<String, String> {
+    let mut env = BTreeMap::new();
+    let Ok(raw) = std::fs::read(PathBuf::from("/proc").join(pid.to_string()).join("environ"))
+    else {
+        return env;
+    };
+    for item in raw.split(|byte| *byte == b'\0') {
+        if item.is_empty() {
+            continue;
+        }
+        let Some(eq) = item.iter().position(|byte| *byte == b'=') else {
+            continue;
+        };
+        let key = String::from_utf8_lossy(&item[..eq]).into_owned();
+        let value = String::from_utf8_lossy(&item[eq + 1..]).into_owned();
+        env.insert(key, value);
+    }
+    env
+}
+
+pub fn codex_home_for_parent(parent: &ProcInfo, codex_home: Option<&Path>) -> PathBuf {
+    let env = read_environ(parent.pid);
+    let home = env.get("HOME").map(PathBuf::from).unwrap_or_else(|| {
+        std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_default()
+    });
+    codex_home
+        .map(PathBuf::from)
+        .or_else(|| env.get("CODEX_HOME").map(PathBuf::from))
+        .unwrap_or_else(|| home.join(".codex"))
+}
+
+pub fn discover_config_paths(
+    parent: &ProcInfo,
+    codex_home: Option<&Path>,
+    extra: &[PathBuf],
+) -> Vec<PathBuf> {
+    let env = read_environ(parent.pid);
+    let home = env.get("HOME").map(PathBuf::from).unwrap_or_else(|| {
+        std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_default()
+    });
+    let codex_home = codex_home_for_parent(parent, codex_home);
+
+    let mut paths = Vec::new();
+    paths.extend(extra.iter().cloned());
+    paths.push(codex_home.join("config.toml"));
+
+    let mut cwd = parent.cwd.as_path();
+    loop {
+        paths.push(cwd.join(".codex/config.toml"));
+        if cwd == home || cwd.parent().is_none() {
+            break;
+        }
+        cwd = cwd.parent().expect("checked parent exists");
+    }
+
+    dedupe_paths(paths)
+}
+
+pub fn load_plugin_cache_server_specs(codex_home: &Path) -> Vec<ServerSpec> {
+    let root = codex_home.join("plugins/cache");
+    let mut specs = Vec::new();
+    collect_plugin_specs(&root, 0, &mut specs);
+    specs
+}
+
+pub fn terminate_stale_helpers(
+    candidates: &[ReapCandidate],
+    processes: &BTreeMap<i32, ProcInfo>,
+    dry_run: bool,
+    quiet: bool,
+) {
+    for candidate in candidates {
+        log(
+            quiet,
+            &format!(
+                "{} stale MCP helper pid={} keeping pid={} signature={}",
+                if dry_run { "would reap" } else { "reaping" },
+                candidate.stale_pid,
+                candidate.keep_pid,
+                candidate.signature
+            ),
+        );
+        if dry_run {
+            continue;
+        }
+        signal_tree(candidate.stale_pid, libc::SIGTERM, processes);
+    }
+}
+
+pub fn escalate_stale_helpers(
+    candidates: &[ReapCandidate],
+    original_processes: &BTreeMap<i32, ProcInfo>,
+    current_processes: &BTreeMap<i32, ProcInfo>,
+    quiet: bool,
+) {
+    for candidate in candidates {
+        let Some(original) = original_processes.get(&candidate.stale_pid) else {
+            continue;
+        };
+        let Some(current) = current_processes.get(&candidate.stale_pid) else {
+            continue;
+        };
+        if current.ppid != original.ppid || current.start_time != original.start_time {
+            continue;
+        }
+        log(
+            quiet,
+            &format!(
+                "SIGKILL stale MCP helper pid={} signature={}",
+                candidate.stale_pid, candidate.signature
+            ),
+        );
+        signal_tree(candidate.stale_pid, libc::SIGKILL, current_processes);
+    }
+}
+
+pub fn sleep_duration(duration: Duration) {
+    std::thread::sleep(duration);
+}
+
+fn collect_plugin_specs(dir: &Path, depth: usize, specs: &mut Vec<ServerSpec>) {
+    if depth > 6 {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.file_name() == Some(OsStr::new(".mcp.json")) {
+            if let Some(plugin_dir) = path.parent() {
+                match load_plugin_server_specs(plugin_dir) {
+                    Ok(mut loaded) => specs.append(&mut loaded),
+                    Err(error) => eprintln!("codex-mcp-helper-reaper: {error:#}"),
+                }
+            }
+            continue;
+        }
+        if entry
+            .file_type()
+            .map(|file_type| file_type.is_dir())
+            .unwrap_or(false)
+        {
+            collect_plugin_specs(&path, depth + 1, specs);
+        }
+    }
+}
+
+fn signal_tree(root_pid: i32, signal: i32, processes: &BTreeMap<i32, ProcInfo>) {
+    let mut pids = descendant_pids(root_pid, processes);
+    pids.reverse();
+    pids.push(root_pid);
+    for pid in pids {
+        unsafe {
+            libc::kill(pid, signal);
+        }
+    }
+}
+
+fn log(quiet: bool, message: &str) {
+    if !quiet {
+        println!("codex-mcp-helper-reaper: {message}");
+    }
+}
+
+fn dedupe_paths(paths: Vec<PathBuf>) -> Vec<PathBuf> {
+    let mut seen = BTreeSet::new();
+    let mut result = Vec::new();
+    for path in paths {
+        let path = normalize_path(&path);
+        if seen.insert(path.clone()) {
+            result.push(path);
+        }
+    }
+    result
+}
+
+fn helper_signature(
+    process: &ProcInfo,
+    server_specs: &[ServerSpec],
+    app_dir: Option<&Path>,
+) -> Option<String> {
+    if process.argv.is_empty() || is_shell_command(process) || is_self(process) {
+        return None;
+    }
+    let matching_specs = server_specs
+        .iter()
+        .filter(|spec| configured_server_matches(process, spec))
+        .take(2)
+        .collect::<Vec<_>>();
+    if matching_specs.len() == 1 {
+        let spec = matching_specs[0];
+        return Some(format!(
+            "config:{}\0{}\0{}\0{}",
+            spec.name,
+            spec.command,
+            spec.args.join("\0"),
+            normalize_path(&process.cwd).display()
+        ));
+    }
+    if matching_specs.len() > 1 {
+        return None;
+    }
+    if looks_like_app_helper(process, app_dir) || looks_like_mcp_convention(process) {
+        return Some(format!("argv:{}", process.argv.join("\0")));
+    }
+    None
+}
+
+fn configured_server_matches(process: &ProcInfo, spec: &ServerSpec) -> bool {
+    if let Some(cwd) = &spec.cwd {
+        if normalize_path(&process.cwd) != normalize_path(cwd) {
+            return false;
+        }
+    }
+
+    let command_name = Path::new(&spec.command)
+        .file_name()
+        .and_then(OsStr::to_str)
+        .unwrap_or(&spec.command);
+    let argv0 = process.argv.first().map(String::as_str).unwrap_or_default();
+    let argv0_name = Path::new(argv0)
+        .file_name()
+        .and_then(OsStr::to_str)
+        .unwrap_or(argv0);
+
+    let direct_command_match =
+        if spec.command.contains('/') {
+            let expected = command_path_for_spec(spec);
+            let actual = command_path_for_process(process);
+            expected == actual
+        } else {
+            argv0 == spec.command
+                || argv0_name == command_name
+                || process.argv.iter().take(5).any(|arg| {
+                    Path::new(arg).file_name().and_then(OsStr::to_str) == Some(command_name)
+                })
+        };
+
+    direct_command_match && args_contain_subsequence(&process.argv, &spec.args)
+}
+
+fn command_path_for_spec(spec: &ServerSpec) -> PathBuf {
+    let command = Path::new(&spec.command);
+    if command.is_absolute() {
+        normalize_path(command)
+    } else if let Some(cwd) = &spec.cwd {
+        normalize_path(&cwd.join(command))
+    } else {
+        normalize_path(command)
+    }
+}
+
+fn command_path_for_process(process: &ProcInfo) -> PathBuf {
+    let argv0 = Path::new(process.argv.first().map(String::as_str).unwrap_or_default());
+    if argv0.is_absolute() {
+        normalize_path(argv0)
+    } else {
+        normalize_path(&process.cwd.join(argv0))
+    }
+}
+
+fn args_contain_subsequence(argv: &[String], needle: &[String]) -> bool {
+    if needle.is_empty() {
+        return true;
+    }
+    if needle.len() > argv.len() {
+        return false;
+    }
+    argv.windows(needle.len()).any(|window| window == needle)
+}
+
+fn is_shell_command(process: &ProcInfo) -> bool {
+    let argv0 = process.argv.first().map(String::as_str).unwrap_or_default();
+    // Login shells rewrite argv0 to "-bash"; strip the leading dash before
+    // resolving the shell name so `-bash -c ...` is still recognized.
+    let name = Path::new(argv0.strip_prefix('-').unwrap_or(argv0))
+        .file_name()
+        .and_then(OsStr::to_str)
+        .unwrap_or(argv0);
+    matches!(name, "bash" | "dash" | "fish" | "sh" | "zsh")
+        && process
+            .argv
+            .iter()
+            .skip(1)
+            .any(|arg| is_shell_command_flag(arg))
+}
+
+/// True for the `-c` command flag in any form Codex's shell tool emits: a bare
+/// `-c` or a combined short-option cluster like `-lc` / `-ic` (but never a
+/// long option such as `--config`).
+fn is_shell_command_flag(arg: &str) -> bool {
+    let Some(flags) = arg.strip_prefix('-') else {
+        return false;
+    };
+    !flags.is_empty() && !flags.starts_with('-') && flags.contains('c')
+}
+
+fn is_self(process: &ProcInfo) -> bool {
+    process
+        .argv
+        .iter()
+        .any(|arg| arg.contains("codex-mcp-helper-reaper") || arg.contains("mcp-helper-reaper"))
+}
+
+fn looks_like_mcp_convention(process: &ProcInfo) -> bool {
+    process.argv.iter().any(|arg| {
+        let lower = arg.to_ascii_lowercase();
+        lower == "mcp"
+            || lower == "--stdio"
+            || lower == "stdio"
+            || lower.contains("mcp-server")
+            || lower.contains("json-rpc")
+            || lower.contains("jsonrpc")
+    })
+}
+
+fn looks_like_app_helper(process: &ProcInfo, app_dir: Option<&Path>) -> bool {
+    let Some(app_dir) = app_dir else {
+        return false;
+    };
+    let app_dir = normalize_path(app_dir);
+    normalize_path(&process.cwd).starts_with(&app_dir)
+        || process.argv.iter().take(2).map(Path::new).any(|path| {
+            let path = if path.is_absolute() {
+                normalize_path(path)
+            } else {
+                normalize_path(&process.cwd.join(path))
+            };
+            path.starts_with(&app_dir)
+        })
+}
+
+fn normalize_path(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                normalized.pop();
+            }
+            Component::Normal(part) => normalized.push(part),
+            Component::RootDir | Component::Prefix(_) => normalized.push(component.as_os_str()),
+        }
+    }
+    normalized
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::tempdir;
+
+    fn proc(pid: i32, ppid: i32, start_time: u64, argv: &[&str], cwd: &str) -> ProcInfo {
+        ProcInfo {
+            pid,
+            ppid,
+            start_time,
+            comm: argv
+                .first()
+                .and_then(|arg| std::path::Path::new(arg).file_name())
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "unknown".to_string()),
+            argv: argv.iter().map(|arg| (*arg).to_string()).collect(),
+            cwd: PathBuf::from(cwd),
+        }
+    }
+
+    #[test]
+    fn keeps_newest_duplicate_under_same_codex_parent() {
+        let mut processes = BTreeMap::new();
+        processes.insert(100, proc(100, 1, 10, &["codex", "resume"], "/repo"));
+        processes.insert(
+            101,
+            proc(101, 100, 20, &["/tmp/tokensave", "serve"], "/repo"),
+        );
+        processes.insert(
+            102,
+            proc(102, 100, 30, &["/tmp/tokensave", "serve"], "/repo"),
+        );
+        let specs = vec![ServerSpec {
+            name: "code-index".to_string(),
+            command: "/tmp/tokensave".to_string(),
+            args: vec!["serve".to_string()],
+            cwd: None,
+        }];
+
+        let candidates = plan_reap(100, &processes, &specs, None);
+
+        assert_eq!(
+            candidates,
+            vec![ReapCandidate {
+                stale_pid: 101,
+                keep_pid: 102,
+                signature: "config:code-index\u{0}/tmp/tokensave\u{0}serve\u{0}/repo".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn keeps_independent_codex_sessions_independent() {
+        let mut processes = BTreeMap::new();
+        processes.insert(100, proc(100, 1, 10, &["codex", "resume"], "/repo-a"));
+        processes.insert(200, proc(200, 1, 10, &["codex", "resume"], "/repo-b"));
+        processes.insert(
+            101,
+            proc(101, 100, 20, &["/tmp/tokensave", "serve"], "/repo-a"),
+        );
+        processes.insert(
+            201,
+            proc(201, 200, 21, &["/tmp/tokensave", "serve"], "/repo-b"),
+        );
+        let specs = vec![ServerSpec {
+            name: "code-index".to_string(),
+            command: "/tmp/tokensave".to_string(),
+            args: vec!["serve".to_string()],
+            cwd: None,
+        }];
+
+        assert!(plan_reap(100, &processes, &specs, None).is_empty());
+        assert!(plan_reap(200, &processes, &specs, None).is_empty());
+    }
+
+    #[test]
+    fn ignores_shell_tool_commands_even_when_they_contain_mcp_words() {
+        let mut processes = BTreeMap::new();
+        processes.insert(100, proc(100, 1, 10, &["codex", "resume"], "/repo"));
+        processes.insert(
+            101,
+            proc(101, 100, 20, &["bash", "-c", "echo mcp"], "/repo"),
+        );
+        processes.insert(
+            102,
+            proc(102, 100, 30, &["bash", "-c", "echo mcp"], "/repo"),
+        );
+
+        assert!(plan_reap(100, &processes, &[], None).is_empty());
+    }
+
+    #[test]
+    fn ignores_shell_tool_commands_with_combined_flags() {
+        // Codex's shell tool runs commands via `bash -lc "<cmd>"`, a combined
+        // short-flag cluster rather than a bare `-c`. Such executions must not
+        // be treated as MCP helpers even when the command text contains an
+        // MCP-style token like "mcp-server".
+        let mut processes = BTreeMap::new();
+        processes.insert(100, proc(100, 1, 10, &["codex", "resume"], "/repo"));
+        processes.insert(
+            101,
+            proc(
+                101,
+                100,
+                20,
+                &["bash", "-lc", "run-mcp-server --stdio"],
+                "/repo",
+            ),
+        );
+        processes.insert(
+            102,
+            proc(
+                102,
+                100,
+                30,
+                &["bash", "-lc", "run-mcp-server --stdio"],
+                "/repo",
+            ),
+        );
+
+        assert!(plan_reap(100, &processes, &[], None).is_empty());
+    }
+
+    #[test]
+    fn matches_uvx_style_configured_server_when_launcher_rewrites_argv0() {
+        let mut processes = BTreeMap::new();
+        processes.insert(100, proc(100, 1, 10, &["codex", "resume"], "/repo"));
+        processes.insert(
+            101,
+            proc(
+                101,
+                100,
+                20,
+                &[
+                    "/brew/bin/uv",
+                    "tool",
+                    "uvx",
+                    "--from",
+                    "repo",
+                    "server",
+                    "mcp",
+                ],
+                "/repo",
+            ),
+        );
+        processes.insert(
+            102,
+            proc(
+                102,
+                100,
+                30,
+                &[
+                    "/brew/bin/uv",
+                    "tool",
+                    "uvx",
+                    "--from",
+                    "repo",
+                    "server",
+                    "mcp",
+                ],
+                "/repo",
+            ),
+        );
+        let specs = vec![ServerSpec {
+            name: "language-tools".to_string(),
+            command: "uvx".to_string(),
+            args: vec![
+                "--from".to_string(),
+                "repo".to_string(),
+                "server".to_string(),
+                "mcp".to_string(),
+            ],
+            cwd: None,
+        }];
+
+        assert_eq!(plan_reap(100, &processes, &specs, None)[0].stale_pid, 101);
+    }
+
+    #[test]
+    fn keeps_same_command_servers_with_different_cwd_independent() {
+        let mut processes = BTreeMap::new();
+        processes.insert(100, proc(100, 1, 10, &["codex", "resume"], "/repo"));
+        processes.insert(101, proc(101, 100, 20, &["uvx", "tool", "mcp"], "/repo-a"));
+        processes.insert(102, proc(102, 100, 30, &["uvx", "tool", "mcp"], "/repo-b"));
+        let specs = vec![
+            ServerSpec {
+                name: "repo-a".to_string(),
+                command: "uvx".to_string(),
+                args: vec!["tool".to_string(), "mcp".to_string()],
+                cwd: Some(PathBuf::from("/repo-a")),
+            },
+            ServerSpec {
+                name: "repo-b".to_string(),
+                command: "uvx".to_string(),
+                args: vec!["tool".to_string(), "mcp".to_string()],
+                cwd: Some(PathBuf::from("/repo-b")),
+            },
+        ];
+
+        assert!(plan_reap(100, &processes, &specs, None).is_empty());
+    }
+
+    #[test]
+    fn does_not_treat_the_reaper_as_a_codex_parent() {
+        let reaper = proc(
+            100,
+            1,
+            10,
+            &["/app/.codex-linux/mcp-helper-reaper/codex-mcp-helper-reaper"],
+            "/app",
+        );
+
+        assert!(!is_codex_process(&reaper));
+    }
+
+    #[test]
+    fn does_not_treat_the_tool_sandbox_as_a_codex_parent() {
+        // codex-linux-sandbox wraps ordinary tool commands, not MCP helpers.
+        // Treating it as a scan parent would expose normal tool children to
+        // reaping, so it must be excluded like the sibling node_repl reaper.
+        let sandbox = proc(
+            100,
+            1,
+            10,
+            &["/usr/bin/codex-linux-sandbox", "--", "grep", "-rn", "mcp"],
+            "/repo",
+        );
+
+        assert!(!is_codex_process(&sandbox));
+    }
+
+    #[test]
+    fn excludes_tool_sandbox_by_truncated_comm() {
+        // /proc/<pid>/comm is capped at 15 bytes, so "codex-linux-sandbox"
+        // appears as "codex-linux-san". Exclusion must survive that
+        // truncation even if argv0 is unreadable.
+        let mut sandbox = proc(100, 1, 10, &[], "/repo");
+        sandbox.comm = "codex-linux-san".to_string();
+
+        assert!(!is_codex_process(&sandbox));
+    }
+
+    #[test]
+    fn loads_codex_toml_mcp_servers() {
+        let dir = tempdir().unwrap();
+        let config = dir.path().join("config.toml");
+        fs::write(
+            &config,
+            r#"
+[mcp_servers.example]
+command = "tool"
+args = ["serve", "--stdio"]
+"#,
+        )
+        .unwrap();
+
+        let specs = load_config_server_specs(&config).unwrap();
+
+        assert_eq!(
+            specs,
+            vec![ServerSpec {
+                name: "example".to_string(),
+                command: "tool".to_string(),
+                args: vec!["serve".to_string(), "--stdio".to_string()],
+                cwd: None,
+            }]
+        );
+    }
+
+    #[test]
+    fn loads_plugin_json_mcp_servers_with_relative_cwd() {
+        let dir = tempdir().unwrap();
+        let plugin_dir = dir.path().join("plugin");
+        fs::create_dir_all(&plugin_dir).unwrap();
+        fs::write(
+            plugin_dir.join(".mcp.json"),
+            r#"
+{
+  "mcpServers": {
+    "event-stream": {
+      "command": "./bin/SkyLinuxComputerUseClient",
+      "args": ["event-stream", "mcp"],
+      "cwd": "."
+    }
+  }
+}
+"#,
+        )
+        .unwrap();
+
+        let specs = load_plugin_server_specs(&plugin_dir).unwrap();
+
+        assert_eq!(
+            specs,
+            vec![ServerSpec {
+                name: "event-stream".to_string(),
+                command: "./bin/SkyLinuxComputerUseClient".to_string(),
+                args: vec!["event-stream".to_string(), "mcp".to_string()],
+                cwd: Some(plugin_dir),
+            }]
+        );
+    }
+
+    #[test]
+    fn descendant_pids_returns_entire_stale_helper_tree() {
+        let mut processes = BTreeMap::new();
+        processes.insert(100, proc(100, 1, 10, &["codex", "resume"], "/repo"));
+        processes.insert(101, proc(101, 100, 20, &["uvx", "server", "mcp"], "/repo"));
+        processes.insert(102, proc(102, 101, 21, &["python", "server.py"], "/repo"));
+        processes.insert(103, proc(103, 102, 22, &["rust-analyzer"], "/repo"));
+        processes.insert(104, proc(104, 100, 23, &["other", "mcp"], "/repo"));
+
+        assert_eq!(descendant_pids(101, &processes), vec![102, 103]);
+    }
+}

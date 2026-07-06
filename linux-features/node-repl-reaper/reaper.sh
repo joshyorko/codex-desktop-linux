@@ -1,8 +1,8 @@
 #!/bin/bash
-# Reap Browser Use node_repl helper processes leaked by the upstream codex
-# app-server. A helper counts as leaked when its parent is no longer a live
-# codex app-server process — its owner exited without cleaning it up. Helpers
-# whose app-server parent is alive are never touched, so active Browser Use
+# Reap Browser Use node_repl helper processes leaked by Codex owners. A helper
+# counts as leaked when its parent is no longer a live Codex process — its
+# owner exited without cleaning it up. Helpers whose Codex parent is alive are
+# never touched, so active Browser Use sessions in Desktop and CLI Codex
 # sessions are unaffected. Matching is scoped to this install's node_repl
 # binary path, so side-by-side installs reap independently.
 #
@@ -45,13 +45,29 @@ proc_ppid() {
     printf '%s' "$2"
 }
 
-parent_is_live_app_server() {
+parent_is_live_codex_owner() {
     local ppid="$1"
     [ -n "$ppid" ] && [ -d "/proc/$ppid" ] || return 1
-    local args
+    local args argv0 argv1 name script_name
     args="$(tr '\0' ' ' < "/proc/$ppid/cmdline" 2>/dev/null)" || return 1
-    case "$args" in
-        *codex*app-server*) return 0 ;;
+    argv0="$(tr '\0' '\n' < "/proc/$ppid/cmdline" 2>/dev/null | sed -n '1p')" || argv0=""
+    argv1="$(tr '\0' '\n' < "/proc/$ppid/cmdline" 2>/dev/null | sed -n '2p')" || argv1=""
+    name="${argv0##*/}"
+    script_name="${argv1##*/}"
+    case "$name" in
+        codex|codex-*)
+            case "$name" in
+                codex-mcp-helper-reaper|codex-linux-sandbox) return 1 ;;
+            esac
+            return 0
+            ;;
+    esac
+    case "$script_name" in
+        codex|codex-*)
+            case "$args" in
+                *" app-server"*|*" resume"*|*" exec"*|*" mcp"*) return 0 ;;
+            esac
+            ;;
     esac
     return 1
 }
@@ -64,7 +80,7 @@ leaked_node_repl_pids() {
         pid="${pid%/cmdline}"
         proc_cmdline_starts_with "$pid" "$NODE_REPL_BIN" || continue
         ppid="$(proc_ppid "$pid")" || continue
-        parent_is_live_app_server "$ppid" && continue
+        parent_is_live_codex_owner "$ppid" && continue
         printf '%s\n' "$pid"
     done
 }

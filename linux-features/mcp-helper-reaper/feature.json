@@ -1,0 +1,10 @@
+{
+  "id": "mcp-helper-reaper",
+  "title": "MCP Helper Reaper",
+  "description": "Reaps stale duplicate MCP helper generations under a single live Codex backend process while preserving separate Codex sessions.",
+  "defaultEnabled": false,
+  "entrypoints": {
+    "stageHook": "./stage.sh",
+    "cleanupHook": "./cleanup.sh"
+  }
+}
