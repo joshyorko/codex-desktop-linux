@@ -23,6 +23,7 @@ term_timeout="${CODEX_MCP_HELPER_REAPER_TERM_TIMEOUT:-2}"
 
 "$reaper" \
     --all-codex-parents \
+    --include-orphans \
     --app-dir "$app_dir" \
     --delay "$delay" \
     --passes "$passes" \

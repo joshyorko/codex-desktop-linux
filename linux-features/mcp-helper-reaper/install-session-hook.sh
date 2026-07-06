@@ -34,6 +34,7 @@ command = (
     f'&& [ -x {shlex.quote(str(reaper))} ]; then '
     f'{shlex.quote(str(reaper))} '
     f'--codex-parent "$PPID" '
+    f'--include-orphans '
     f'--app-dir {shlex.quote(str(app_dir))} '
     f'--delay "${{CODEX_MCP_HELPER_REAPER_DELAY:-3}}" '
     f'--passes "${{CODEX_MCP_HELPER_REAPER_PASSES:-3}}" '

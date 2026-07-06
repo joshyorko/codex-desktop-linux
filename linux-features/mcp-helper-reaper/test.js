@@ -253,6 +253,7 @@ test("session hook merge preserves existing Headroom hook and deduplicates reape
   const reaperCommands = commands.filter((command) => command.includes("codex-mcp-helper-reaper-session"));
   assert.equal(reaperCommands.length, 1);
   assert.match(reaperCommands[0], /--codex-parent "\$PPID"/);
+  assert.match(reaperCommands[0], /--include-orphans/);
   assert.match(reaperCommands[0], /--app-dir /);
 
   fs.rmSync(tempDir, { recursive: true, force: true });
@@ -284,6 +285,7 @@ test("cold-start hook launches a short all-parent scan", async () => {
   await new Promise((resolve) => setTimeout(resolve, 300));
   const calls = fs.readFileSync(callLog, "utf8");
   assert.match(calls, /--all-codex-parents/);
+  assert.match(calls, /--include-orphans/);
   assert.match(calls, /--app-dir /);
 
   fs.rmSync(tempDir, { recursive: true, force: true });

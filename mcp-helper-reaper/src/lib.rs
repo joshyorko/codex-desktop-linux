@@ -30,6 +30,12 @@ pub struct ReapCandidate {
     pub signature: String,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OrphanReapCandidate {
+    pub stale_pid: i32,
+    pub signature: String,
+}
+
 pub fn plan_reap(
     parent_pid: i32,
     processes: &BTreeMap<i32, ProcInfo>,
@@ -66,6 +72,32 @@ pub fn plan_reap(
                 signature: signature.clone(),
             });
         }
+    }
+    candidates.sort_by(|left, right| {
+        left.signature
+            .cmp(&right.signature)
+            .then(left.stale_pid.cmp(&right.stale_pid))
+    });
+    candidates
+}
+
+pub fn plan_orphan_reap(
+    processes: &BTreeMap<i32, ProcInfo>,
+    server_specs: &[ServerSpec],
+    app_dir: Option<&Path>,
+) -> Vec<OrphanReapCandidate> {
+    let mut candidates = Vec::new();
+    for process in processes.values() {
+        if !is_orphan_helper_root(process, processes, server_specs, app_dir) {
+            continue;
+        }
+        let Some(signature) = helper_signature_for_orphan(process, server_specs, app_dir) else {
+            continue;
+        };
+        candidates.push(OrphanReapCandidate {
+            stale_pid: process.pid,
+            signature,
+        });
     }
     candidates.sort_by(|left, right| {
         left.signature
@@ -357,6 +389,29 @@ pub fn terminate_stale_helpers(
     }
 }
 
+pub fn terminate_orphan_helpers(
+    candidates: &[OrphanReapCandidate],
+    processes: &BTreeMap<i32, ProcInfo>,
+    dry_run: bool,
+    quiet: bool,
+) {
+    for candidate in candidates {
+        log(
+            quiet,
+            &format!(
+                "{} orphaned MCP helper pid={} signature={}",
+                if dry_run { "would reap" } else { "reaping" },
+                candidate.stale_pid,
+                candidate.signature
+            ),
+        );
+        if dry_run {
+            continue;
+        }
+        signal_tree(candidate.stale_pid, libc::SIGTERM, processes);
+    }
+}
+
 pub fn escalate_stale_helpers(
     candidates: &[ReapCandidate],
     original_processes: &BTreeMap<i32, ProcInfo>,
@@ -377,6 +432,33 @@ pub fn escalate_stale_helpers(
             quiet,
             &format!(
                 "SIGKILL stale MCP helper pid={} signature={}",
+                candidate.stale_pid, candidate.signature
+            ),
+        );
+        signal_tree(candidate.stale_pid, libc::SIGKILL, current_processes);
+    }
+}
+
+pub fn escalate_orphan_helpers(
+    candidates: &[OrphanReapCandidate],
+    original_processes: &BTreeMap<i32, ProcInfo>,
+    current_processes: &BTreeMap<i32, ProcInfo>,
+    quiet: bool,
+) {
+    for candidate in candidates {
+        let Some(original) = original_processes.get(&candidate.stale_pid) else {
+            continue;
+        };
+        let Some(current) = current_processes.get(&candidate.stale_pid) else {
+            continue;
+        };
+        if current.ppid != original.ppid || current.start_time != original.start_time {
+            continue;
+        }
+        log(
+            quiet,
+            &format!(
+                "SIGKILL orphaned MCP helper pid={} signature={}",
                 candidate.stale_pid, candidate.signature
             ),
         );
@@ -450,6 +532,24 @@ fn helper_signature(
     server_specs: &[ServerSpec],
     app_dir: Option<&Path>,
 ) -> Option<String> {
+    helper_signature_with_options(process, server_specs, app_dir, true, false)
+}
+
+fn helper_signature_for_orphan(
+    process: &ProcInfo,
+    server_specs: &[ServerSpec],
+    app_dir: Option<&Path>,
+) -> Option<String> {
+    helper_signature_with_options(process, server_specs, app_dir, false, true)
+}
+
+fn helper_signature_with_options(
+    process: &ProcInfo,
+    server_specs: &[ServerSpec],
+    app_dir: Option<&Path>,
+    allow_mcp_convention: bool,
+    app_helper_requires_mcp_convention: bool,
+) -> Option<String> {
     if process.argv.is_empty() || is_shell_command(process) || is_self(process) {
         return None;
     }
@@ -471,7 +571,11 @@ fn helper_signature(
     if matching_specs.len() > 1 {
         return None;
     }
-    if looks_like_app_helper(process, app_dir) || looks_like_mcp_convention(process) {
+    let mcp_convention = looks_like_mcp_convention(process);
+    if (looks_like_app_helper(process, app_dir)
+        && (!app_helper_requires_mcp_convention || mcp_convention))
+        || (allow_mcp_convention && mcp_convention)
+    {
         return Some(format!("argv:{}", process.argv.join("\0")));
     }
     None
@@ -497,8 +601,11 @@ fn configured_server_matches(process: &ProcInfo, spec: &ServerSpec) -> bool {
     let direct_command_match =
         if spec.command.contains('/') {
             let expected = command_path_for_spec(spec);
-            let actual = command_path_for_process(process);
-            expected == actual
+            process
+                .argv
+                .iter()
+                .take(4)
+                .any(|arg| command_arg_matches_expected(process, arg, &expected))
         } else {
             argv0 == spec.command
                 || argv0_name == command_name
@@ -521,12 +628,39 @@ fn command_path_for_spec(spec: &ServerSpec) -> PathBuf {
     }
 }
 
-fn command_path_for_process(process: &ProcInfo) -> PathBuf {
-    let argv0 = Path::new(process.argv.first().map(String::as_str).unwrap_or_default());
-    if argv0.is_absolute() {
-        normalize_path(argv0)
+fn command_path_for_arg(process: &ProcInfo, arg: &str) -> PathBuf {
+    command_path_for_arg_path(&process.cwd, Path::new(arg))
+}
+
+fn command_arg_matches_expected(process: &ProcInfo, arg: &str, expected: &Path) -> bool {
+    let actual = command_path_for_arg(process, arg);
+    actual == expected || same_directory_sidecar_command(expected, &actual)
+}
+
+fn same_directory_sidecar_command(expected: &Path, actual: &Path) -> bool {
+    if expected.parent() != actual.parent() {
+        return false;
+    }
+    let Some(expected_name) = expected.file_name().and_then(OsStr::to_str) else {
+        return false;
+    };
+    let Some(actual_name) = actual.file_name().and_then(OsStr::to_str) else {
+        return false;
+    };
+    let Some(suffix) = actual_name.strip_prefix(expected_name) else {
+        return false;
+    };
+    matches!(
+        suffix.as_bytes().first(),
+        Some(b'-') | Some(b'_') | Some(b'.')
+    )
+}
+
+fn command_path_for_arg_path(cwd: &Path, path: &Path) -> PathBuf {
+    if path.is_absolute() {
+        normalize_path(path)
     } else {
-        normalize_path(&process.cwd.join(argv0))
+        normalize_path(&cwd.join(path))
     }
 }
 
@@ -571,6 +705,89 @@ fn is_self(process: &ProcInfo) -> bool {
         .argv
         .iter()
         .any(|arg| arg.contains("codex-mcp-helper-reaper") || arg.contains("mcp-helper-reaper"))
+}
+
+fn is_orphan_helper_root(
+    process: &ProcInfo,
+    processes: &BTreeMap<i32, ProcInfo>,
+    server_specs: &[ServerSpec],
+    app_dir: Option<&Path>,
+) -> bool {
+    if !has_init_or_user_systemd_parent(process, processes) {
+        return false;
+    }
+    if has_live_codex_ancestor(process, processes) {
+        return false;
+    }
+    if has_helper_ancestor(process, processes, server_specs, app_dir) {
+        return false;
+    }
+    helper_signature_for_orphan(process, server_specs, app_dir).is_some()
+}
+
+fn has_init_or_user_systemd_parent(
+    process: &ProcInfo,
+    processes: &BTreeMap<i32, ProcInfo>,
+) -> bool {
+    let Some(parent) = processes.get(&process.ppid) else {
+        return false;
+    };
+    if parent.pid == 1 {
+        return true;
+    }
+    parent.ppid == 1 && process_name(parent) == "systemd"
+}
+
+fn has_live_codex_ancestor(process: &ProcInfo, processes: &BTreeMap<i32, ProcInfo>) -> bool {
+    let mut seen = BTreeSet::new();
+    let mut next_pid = process.ppid;
+    while next_pid > 0 && seen.insert(next_pid) {
+        let Some(parent) = processes.get(&next_pid) else {
+            return false;
+        };
+        if is_codex_process(parent) {
+            return true;
+        }
+        if parent.pid == parent.ppid {
+            return false;
+        }
+        next_pid = parent.ppid;
+    }
+    false
+}
+
+fn has_helper_ancestor(
+    process: &ProcInfo,
+    processes: &BTreeMap<i32, ProcInfo>,
+    server_specs: &[ServerSpec],
+    app_dir: Option<&Path>,
+) -> bool {
+    let mut seen = BTreeSet::new();
+    let mut next_pid = process.ppid;
+    while next_pid > 0 && seen.insert(next_pid) {
+        let Some(parent) = processes.get(&next_pid) else {
+            return false;
+        };
+        if is_codex_process(parent) || has_init_or_user_systemd_parent(parent, processes) {
+            return false;
+        }
+        if helper_signature_for_orphan(parent, server_specs, app_dir).is_some() {
+            return true;
+        }
+        if parent.pid == parent.ppid {
+            return false;
+        }
+        next_pid = parent.ppid;
+    }
+    false
+}
+
+fn process_name(process: &ProcInfo) -> &str {
+    let argv0 = process.argv.first().map(String::as_str).unwrap_or_default();
+    Path::new(argv0)
+        .file_name()
+        .and_then(OsStr::to_str)
+        .unwrap_or(process.comm.as_str())
 }
 
 fn looks_like_mcp_convention(process: &ProcInfo) -> bool {
@@ -792,7 +1009,87 @@ mod tests {
             cwd: None,
         }];
 
-        assert_eq!(plan_reap(100, &processes, &specs, None)[0].stale_pid, 101);
+        assert_eq!(
+            plan_reap(100, &processes, &specs, None),
+            vec![ReapCandidate {
+                stale_pid: 101,
+                keep_pid: 102,
+                signature:
+                    "config:language-tools\u{0}uvx\u{0}--from\u{0}repo\u{0}server\u{0}mcp\u{0}/repo"
+                        .to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn matches_configured_absolute_script_launched_by_interpreter() {
+        let mut processes = BTreeMap::new();
+        processes.insert(100, proc(100, 1, 10, &["codex", "resume"], "/repo"));
+        processes.insert(
+            101,
+            proc(101, 100, 20, &["python3", "/repo/bin/server.py"], "/repo"),
+        );
+        processes.insert(
+            102,
+            proc(102, 100, 30, &["python3", "/repo/bin/server.py"], "/repo"),
+        );
+        let specs = vec![ServerSpec {
+            name: "script-server".to_string(),
+            command: "/repo/bin/server.py".to_string(),
+            args: Vec::new(),
+            cwd: None,
+        }];
+
+        assert_eq!(
+            plan_reap(100, &processes, &specs, None),
+            vec![ReapCandidate {
+                stale_pid: 101,
+                keep_pid: 102,
+                signature: "config:script-server\u{0}/repo/bin/server.py\u{0}\u{0}/repo"
+                    .to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn matches_configured_absolute_wrapper_sidecar_launched_by_interpreter() {
+        let mut processes = BTreeMap::new();
+        processes.insert(100, proc(100, 1, 10, &["codex", "resume"], "/repo"));
+        processes.insert(
+            101,
+            proc(
+                101,
+                100,
+                20,
+                &["python3", "/repo/bin/server-filter.py", "--stdio"],
+                "/repo",
+            ),
+        );
+        processes.insert(
+            102,
+            proc(
+                102,
+                100,
+                30,
+                &["python3", "/repo/bin/server-filter.py", "--stdio"],
+                "/repo",
+            ),
+        );
+        let specs = vec![ServerSpec {
+            name: "wrapped-server".to_string(),
+            command: "/repo/bin/server".to_string(),
+            args: Vec::new(),
+            cwd: None,
+        }];
+
+        assert_eq!(
+            plan_reap(100, &processes, &specs, None),
+            vec![ReapCandidate {
+                stale_pid: 101,
+                keep_pid: 102,
+                signature: "config:wrapped-server\u{0}/repo/bin/server\u{0}\u{0}/repo".to_string(),
+            }]
+        );
     }
 
     #[test]
@@ -930,5 +1227,123 @@ args = ["serve", "--stdio"]
         processes.insert(104, proc(104, 100, 23, &["other", "mcp"], "/repo"));
 
         assert_eq!(descendant_pids(101, &processes), vec![102, 103]);
+    }
+
+    #[test]
+    fn reaps_configured_orphan_root_adopted_by_user_systemd() {
+        let mut processes = BTreeMap::new();
+        processes.insert(1, proc(1, 0, 1, &["/usr/lib/systemd/systemd"], "/"));
+        processes.insert(
+            10,
+            proc(10, 1, 2, &["/usr/lib/systemd/systemd", "--user"], "/"),
+        );
+        processes.insert(
+            101,
+            proc(
+                101,
+                10,
+                20,
+                &["python3", "/repo/bin/server-filter.py", "--stdio"],
+                "/repo",
+            ),
+        );
+        processes.insert(
+            102,
+            proc(102, 101, 21, &["helper-child", "--stdio"], "/repo"),
+        );
+        let specs = vec![ServerSpec {
+            name: "wrapped-server".to_string(),
+            command: "/repo/bin/server".to_string(),
+            args: Vec::new(),
+            cwd: None,
+        }];
+
+        assert_eq!(
+            plan_orphan_reap(&processes, &specs, None),
+            vec![OrphanReapCandidate {
+                stale_pid: 101,
+                signature: "config:wrapped-server\u{0}/repo/bin/server\u{0}\u{0}/repo".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn keeps_live_helper_tree_under_codex_ancestor() {
+        let mut processes = BTreeMap::new();
+        processes.insert(1, proc(1, 0, 1, &["/usr/lib/systemd/systemd"], "/"));
+        processes.insert(100, proc(100, 1, 10, &["codex", "resume"], "/repo"));
+        processes.insert(
+            101,
+            proc(
+                101,
+                100,
+                20,
+                &["python3", "/repo/bin/server-filter.py", "--stdio"],
+                "/repo",
+            ),
+        );
+        processes.insert(
+            102,
+            proc(102, 101, 21, &["helper-child", "--stdio"], "/repo"),
+        );
+        let specs = vec![ServerSpec {
+            name: "wrapped-server".to_string(),
+            command: "/repo/bin/server".to_string(),
+            args: Vec::new(),
+            cwd: None,
+        }];
+
+        assert!(plan_orphan_reap(&processes, &specs, None).is_empty());
+    }
+
+    #[test]
+    fn ignores_configured_helper_under_manual_shell_parent() {
+        let mut processes = BTreeMap::new();
+        processes.insert(1, proc(1, 0, 1, &["/usr/lib/systemd/systemd"], "/"));
+        processes.insert(50, proc(50, 1, 5, &["bash"], "/repo"));
+        processes.insert(
+            101,
+            proc(
+                101,
+                50,
+                20,
+                &["python3", "/repo/bin/server-filter.py", "--stdio"],
+                "/repo",
+            ),
+        );
+        let specs = vec![ServerSpec {
+            name: "wrapped-server".to_string(),
+            command: "/repo/bin/server".to_string(),
+            args: Vec::new(),
+            cwd: None,
+        }];
+
+        assert!(plan_orphan_reap(&processes, &specs, None).is_empty());
+    }
+
+    #[test]
+    fn ignores_bare_mcp_convention_orphan_without_config_or_app_scope() {
+        let mut processes = BTreeMap::new();
+        processes.insert(1, proc(1, 0, 1, &["/usr/lib/systemd/systemd"], "/"));
+        processes.insert(
+            10,
+            proc(10, 1, 2, &["/usr/lib/systemd/systemd", "--user"], "/"),
+        );
+        processes.insert(101, proc(101, 10, 20, &["random-tool", "--stdio"], "/repo"));
+
+        assert!(plan_orphan_reap(&processes, &[], None).is_empty());
+    }
+
+    #[test]
+    fn ignores_app_scoped_orphan_without_mcp_convention() {
+        let mut processes = BTreeMap::new();
+        processes.insert(1, proc(1, 0, 1, &["/usr/lib/systemd/systemd"], "/"));
+        processes.insert(
+            10,
+            proc(10, 1, 2, &["/usr/lib/systemd/systemd", "--user"], "/"),
+        );
+        processes.insert(101, proc(101, 10, 20, &["/app/start.sh", "--x11"], "/app"));
+
+        assert!(plan_orphan_reap(&processes, &[], Some(Path::new("/app"))).is_empty());
     }
 }

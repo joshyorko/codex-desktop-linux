@@ -9,6 +9,7 @@ reaper="$app_dir/.codex-linux/mcp-helper-reaper/codex-mcp-helper-reaper"
 
 "$reaper" \
     --all-codex-parents \
+    --include-orphans \
     --app-dir "$app_dir" \
     --passes 1 \
     --term-timeout "${CODEX_MCP_HELPER_REAPER_TERM_TIMEOUT:-2}" \

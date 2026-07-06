@@ -1,17 +1,18 @@
 use anyhow::{bail, Context, Result};
 use clap::{ArgGroup, Parser};
 use codex_mcp_helper_reaper::{
-    all_processes, codex_home_for_parent, discover_config_paths, escalate_stale_helpers,
-    is_codex_process, load_config_server_specs, load_plugin_cache_server_specs, plan_reap,
-    read_proc, same_process, sleep_duration, terminate_stale_helpers, ProcInfo, ServerSpec,
+    all_processes, codex_home_for_parent, discover_config_paths, escalate_orphan_helpers,
+    escalate_stale_helpers, is_codex_process, load_config_server_specs,
+    load_plugin_cache_server_specs, plan_orphan_reap, plan_reap, read_proc, same_process,
+    sleep_duration, terminate_orphan_helpers, terminate_stale_helpers, ProcInfo, ServerSpec,
 };
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::time::Duration;
 
 #[derive(Debug, Parser)]
 #[command(
-    about = "Reap stale duplicate MCP helper generations under live Codex parent processes.",
+    about = "Reap stale duplicate and orphaned MCP helper generations for Codex parent processes.",
     group(
         ArgGroup::new("target")
             .required(true)
@@ -38,6 +39,10 @@ struct Args {
     /// Extra Codex config.toml path to load before discovered configs.
     #[arg(long = "config", value_name = "PATH")]
     configs: Vec<PathBuf>,
+
+    /// Also reap configured or app-scoped helper roots adopted by init/user systemd.
+    #[arg(long)]
+    include_orphans: bool,
 
     /// Seconds to wait before the first cleanup pass.
     #[arg(long, default_value_t = 0)]
@@ -103,8 +108,21 @@ fn run(args: Args) -> Result<()> {
             discover_codex_parents(&processes)
         };
 
+        let mut orphan_specs = Vec::new();
+        let mut seen_specs = BTreeSet::new();
         for parent in targets {
-            reap_for_parent(&args, &parent, &processes)?;
+            let specs = load_server_specs(&parent, &args)?;
+            push_specs_dedup(&mut orphan_specs, &mut seen_specs, specs.clone());
+            reap_for_parent(&args, &parent, &processes, &specs)?;
+        }
+
+        if args.include_orphans {
+            push_specs_dedup(
+                &mut orphan_specs,
+                &mut seen_specs,
+                load_orphan_server_specs(&args, &processes),
+            );
+            reap_orphans(&args, &processes, &orphan_specs)?;
         }
 
         if pass + 1 < args.passes {
@@ -129,9 +147,9 @@ fn reap_for_parent(
     args: &Args,
     parent: &ProcInfo,
     processes: &BTreeMap<i32, ProcInfo>,
+    specs: &[ServerSpec],
 ) -> Result<()> {
-    let specs = load_server_specs(parent, args)?;
-    let candidates = plan_reap(parent.pid, processes, &specs, args.app_dir.as_deref());
+    let candidates = plan_reap(parent.pid, processes, specs, args.app_dir.as_deref());
     if candidates.is_empty() {
         return Ok(());
     }
@@ -144,6 +162,27 @@ fn reap_for_parent(
     sleep_duration(Duration::from_secs(args.term_timeout));
     let current_processes = all_processes();
     escalate_stale_helpers(&candidates, processes, &current_processes, args.quiet);
+    Ok(())
+}
+
+fn reap_orphans(
+    args: &Args,
+    processes: &BTreeMap<i32, ProcInfo>,
+    specs: &[ServerSpec],
+) -> Result<()> {
+    let candidates = plan_orphan_reap(processes, specs, args.app_dir.as_deref());
+    if candidates.is_empty() {
+        return Ok(());
+    }
+
+    terminate_orphan_helpers(&candidates, processes, args.dry_run, args.quiet);
+    if args.dry_run {
+        return Ok(());
+    }
+
+    sleep_duration(Duration::from_secs(args.term_timeout));
+    let current_processes = all_processes();
+    escalate_orphan_helpers(&candidates, processes, &current_processes, args.quiet);
     Ok(())
 }
 
@@ -162,4 +201,71 @@ fn load_server_specs(parent: &ProcInfo, args: &Args) -> Result<Vec<ServerSpec>> 
     let codex_home = codex_home_for_parent(parent, args.codex_home.as_deref());
     specs.extend(load_plugin_cache_server_specs(&codex_home));
     Ok(specs)
+}
+
+fn load_orphan_server_specs(args: &Args, processes: &BTreeMap<i32, ProcInfo>) -> Vec<ServerSpec> {
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_default();
+    let codex_home = args
+        .codex_home
+        .clone()
+        .or_else(|| std::env::var_os("CODEX_HOME").map(PathBuf::from))
+        .unwrap_or_else(|| home.join(".codex"));
+
+    let mut paths = Vec::new();
+    paths.extend(args.configs.iter().cloned());
+    paths.push(codex_home.join("config.toml"));
+    for process in processes.values() {
+        if process.cwd.as_os_str().is_empty()
+            || !process.cwd.is_absolute()
+            || is_codex_process(process)
+        {
+            continue;
+        }
+        let mut cwd = process.cwd.as_path();
+        loop {
+            paths.push(cwd.join(".codex/config.toml"));
+            if cwd == home || cwd.parent().is_none() {
+                break;
+            }
+            cwd = cwd.parent().expect("checked parent exists");
+        }
+    }
+
+    let mut specs = Vec::new();
+    let mut seen_paths = BTreeSet::new();
+    for path in paths {
+        if !seen_paths.insert(path.clone()) || !path.is_file() {
+            continue;
+        }
+        match load_config_server_specs(&path) {
+            Ok(mut loaded) => specs.append(&mut loaded),
+            Err(error) => eprintln!("codex-mcp-helper-reaper: {error:#}"),
+        }
+    }
+    specs.extend(load_plugin_cache_server_specs(&codex_home));
+    specs
+}
+
+fn push_specs_dedup(
+    target: &mut Vec<ServerSpec>,
+    seen: &mut BTreeSet<String>,
+    specs: Vec<ServerSpec>,
+) {
+    for spec in specs {
+        let key = format!(
+            "{}\0{}\0{}\0{}",
+            spec.name,
+            spec.command,
+            spec.args.join("\0"),
+            spec.cwd
+                .as_ref()
+                .map(|path| path.display().to_string())
+                .unwrap_or_default()
+        );
+        if seen.insert(key) {
+            target.push(spec);
+        }
+    }
 }
