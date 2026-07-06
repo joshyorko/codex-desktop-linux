@@ -6,7 +6,7 @@ const path = require("node:path");
 const {
   findCallBlock,
   requireName,
-} = require("../shared.js");
+} = require("../../lib/minified-js.js");
 
 function applyLinuxFileManagerPatch(currentSource) {
   const block = findCallBlock(currentSource, "id:`fileManager`");

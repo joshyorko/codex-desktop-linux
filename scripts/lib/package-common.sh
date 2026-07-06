@@ -894,7 +894,7 @@ write_launcher_stub() {
     local root="$1"
 
     cat > "$root/usr/bin/$PACKAGE_NAME" <<SCRIPT
-#!/bin/bash
+#!/usr/bin/env bash
 exec /opt/$PACKAGE_NAME/start.sh "\$@"
 SCRIPT
     chmod 0755 "$root/usr/bin/$PACKAGE_NAME"

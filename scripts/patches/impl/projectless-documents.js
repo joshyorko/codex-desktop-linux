@@ -5,7 +5,7 @@ const path = require("node:path");
 
 const {
   readDirectoryNames,
-} = require("./shared.js");
+} = require("../lib/assets.js");
 
 const PROJECTLESS_DOCUMENTS_MARKER = "function codexLinuxProjectlessDocumentsDir(";
 

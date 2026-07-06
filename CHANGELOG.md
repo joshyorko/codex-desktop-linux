@@ -5,6 +5,37 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Changed
+
+- The launcher now passes `--disable-dev-shm-usage` to Electron only when
+  `/dev/shm` is missing, not writable, or smaller than 1 GiB (the container
+  case the flag exists for). On regular desktops Chromium's renderer/GPU
+  shared-memory buffers stay in RAM-backed `/dev/shm` instead of disk-backed
+  temp storage, which improves rendering performance. Override with
+  `CODEX_ELECTRON_DISABLE_DEV_SHM_USAGE=auto|0|1`.
+- The launcher now adds `--force-renderer-accessibility` only when an
+  assistive technology is detected (Orca or brltty running, the GNOME
+  screen-reader setting, the AT-SPI accessibility state that
+  `codex-computer-use-linux setup` enables — `org.a11y.Status IsEnabled` or
+  `toolkit-accessibility` — or the `GNOME_ACCESSIBILITY` /
+  `QT_LINUX_ACCESSIBILITY_ALWAYS_ON` / `ACCESSIBILITY_ENABLED` env markers).
+  Keeping the Chromium accessibility engine on in every renderer measurably
+  slows the webview UI, and the WSLg and wayland-gpu profiles already
+  skipped it for that reason. Session-bus probes are watchdog-capped at
+  0.5 s so a broken bus cannot delay launch.
+  `CODEX_FORCE_RENDERER_ACCESSIBILITY=1|0` still overrides the detection in
+  both directions.
+- Refactored ASAR patching internals so `scripts/patch-linux-window-ui.js` is a
+  CLI-only entrypoint and patch descriptors/implementations live under
+  `scripts/patches/`.
+
+### Removed
+
+- Removed legacy external Linux feature patch contracts:
+  `entrypoints.patches`, `entrypoints.mainBundlePatch`, `.patches`/`.default`
+  descriptor exports, the unsuffixed `extracted-app` phase, and
+  `patch-linux-window-ui.js` module exports.
+
 ## [0.8.4] - 2026-06-20
 
 ### Added

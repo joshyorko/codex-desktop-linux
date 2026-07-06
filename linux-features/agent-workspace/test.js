@@ -17,8 +17,10 @@ const {
 } = require("../../scripts/lib/linux-features.js");
 const {
   createPatchReport,
+} = require("../../scripts/lib/patch-report.js");
+const {
   patchExtractedApp,
-} = require("../../scripts/patch-linux-window-ui.js");
+} = require("../../scripts/patches/runner.js");
 const {
   SETTINGS_ASSET,
   SETTINGS_COMMAND_KEY,
@@ -31,7 +33,7 @@ const {
   applyAgentWorkspaceSettingsSharedPatch,
   buildAgentWorkspaceSettingsSource,
   patchAgentWorkspaceSettingsAssets,
-  patches: featurePatches,
+  descriptors: featurePatches,
 } = require("./patch.js");
 
 function withTempFeatureConfig(enabled, fn) {
@@ -244,14 +246,16 @@ function writeSyntheticExtractedApp(root) {
   fs.writeFileSync(path.join(assetsDir, "chunk-test.js"), "export function s(e){return e}");
   fs.writeFileSync(path.join(assetsDir, "react-test.js"), 'import{s}from"./chunk-test.js";/* react.transitional.element */export{ReactFactory as t};function ReactFactory(){return{createElement(){return{}},useState(){return[null,()=>{}]},useCallback(e){return e},useEffect(){}}}');
   fs.writeFileSync(path.join(assetsDir, "jsx-runtime-test.js"), "/* react.transitional.element */export{j as t};function j(){return{jsx(){},jsxs(){}}}");
-  fs.writeFileSync(path.join(assetsDir, "vscode-api-test.js"), "/* vscode://codex */export async function n(){return{}}");
+  fs.writeFileSync(
+    path.join(assetsDir, "setting-storage-test.js"),
+    "async function send(e,t,n,r,i){return fetch(`vscode://codex/${e}`)}async function request(...e){let[t,n]=e,{params:r,select:i,signal:a,source:o}=n??{};return send(t,r,i,a,o)}export{request as l};",
+  );
   fs.writeFileSync(path.join(assetsDir, "settings-content-layout-test.js"), "export function t(){}");
   fs.writeFileSync(path.join(assetsDir, "app-test.png"), "");
   return { buildDir, assetsDir };
 }
 
 function writeModernCodexRequestAsset(assetsDir) {
-  fs.rmSync(path.join(assetsDir, "vscode-api-test.js"), { force: true });
   fs.writeFileSync(
     path.join(assetsDir, "setting-storage-test.js"),
     "async function send(e,t,n,r,i){return fetch(`vscode://codex/${e}`)}async function request(...e){let[t,n]=e,{params:r,select:i,signal:a,source:o}=n??{};return send(t,r,i,a,o)}export{request as l};",
@@ -269,11 +273,12 @@ function buildSettingsVmSource() {
     reactExportName: "t",
     settingsPageAsset: "settings-content-layout-test.js",
     settingsPageExportName: "t",
-    vscodeApiAsset: "vscode-api-test.js",
+    codexRequestAsset: "setting-storage-test.js",
+    codexRequestExportName: "l",
   })
     .replace('import{s as __toESM}from"./chunk-test.js";\n', "")
     .replace('import{t as __reactFactory}from"./react-test.js";\n', "")
-    .replace('import{n as __post}from"./vscode-api-test.js";\n', "")
+    .replace('import{l as __post}from"./setting-storage-test.js";\n', "")
     .replace('import{t as SettingsPage}from"./settings-content-layout-test.js";\n', "")
     .replace(
       "export{AgentWorkspacesSettings,AgentWorkspacesSettings as default};",
@@ -374,7 +379,7 @@ test("agent-workspace feature exposes optional bridge, settings, resources, and 
       loadLinuxFeaturePatchDescriptors({ featuresRoot: root }).map((patch) => [patch.name, patch.phase, patch.ciPolicy]),
       [
         ["feature:agent-workspace:main-bridge", "main-bundle", "optional"],
-        ["feature:agent-workspace:settings-page", "extracted-app", "optional"],
+        ["feature:agent-workspace:settings-page", "extracted-app:post-webview", "optional"],
       ],
     );
 
@@ -1020,7 +1025,8 @@ test("generated agent workspace settings module is valid ESM syntax", () => {
     reactExportName: "t",
     settingsPageAsset: "settings-content-layout-test.js",
     settingsPageExportName: "t",
-    vscodeApiAsset: "vscode-api-test.js",
+    codexRequestAsset: "setting-storage-test.js",
+    codexRequestExportName: "l",
   });
   const check = spawnSync(process.execPath, ["--input-type=module", "--check"], {
     encoding: "utf8",
@@ -1728,7 +1734,7 @@ test("feature patch list is intentionally small", () => {
     featurePatches.map((patch) => [patch.id, patch.phase]),
     [
       ["main-bridge", "main-bundle"],
-      ["settings-page", "extracted-app"],
+      ["settings-page", "extracted-app:post-webview"],
     ],
   );
 });

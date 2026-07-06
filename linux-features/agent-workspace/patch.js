@@ -6,8 +6,10 @@ const {
   findCodexRequestWebviewAsset,
   findImportedAsset,
   findRequiredWebviewAsset,
+} = require("../../scripts/patches/lib/assets.js");
+const {
   requireName,
-} = require("../../scripts/patches/shared.js");
+} = require("../../scripts/patches/lib/minified-js.js");
 
 const SETTINGS_ASSET = "agent-workspaces-linux.js";
 const SETTINGS_SLUG = "agent-workspaces";
@@ -2102,7 +2104,7 @@ function patchAgentWorkspaceSettingsAssets(extractedDir) {
 }
 
 module.exports = {
-  patches: [
+  descriptors: [
     {
       id: "main-bridge",
       phase: "main-bundle",
@@ -2112,7 +2114,7 @@ module.exports = {
     },
     {
       id: "settings-page",
-      phase: "extracted-app",
+      phase: "extracted-app:post-webview",
       order: 20_810,
       ciPolicy: "optional",
       apply: (extractedDir) => patchAgentWorkspaceSettingsAssets(extractedDir),

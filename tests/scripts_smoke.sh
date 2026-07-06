@@ -148,7 +148,6 @@ test_extract_webview_replaces_linux_icon_assets() {
     local install_dir="$workspace/install"
     local work_dir="$workspace/work"
     local icon_source="$workspace/codex-linux.png"
-    local plugin_icon_source="$work_dir/app-extracted/webview/assets/computer-use-plugin-icon-9f7ab1d4.png"
     local assets_dir="$install_dir/content/webview/assets"
     local output_log="$workspace/output.log"
 
@@ -156,7 +155,6 @@ test_extract_webview_replaces_linux_icon_assets() {
     printf '%s\n' 'linux-icon' > "$icon_source"
     printf '%s\n' 'upstream-main' > "$work_dir/app-extracted/webview/assets/app-main.png"
     printf '%s\n' 'upstream-alt' > "$work_dir/app-extracted/webview/assets/app-alt.png"
-    printf '%s\n' 'plugin-icon' > "$plugin_icon_source"
     printf '%s\n' '<style>--startup-background: transparent</style>' > "$work_dir/app-extracted/webview/index.html"
 
     (
@@ -176,9 +174,6 @@ test_extract_webview_replaces_linux_icon_assets() {
         || fail "Expected extracted app-main.png to be replaced with the Linux icon"
     cmp -s "$icon_source" "$assets_dir/app-alt.png" \
         || fail "Expected extracted app-alt.png to be replaced with the Linux icon"
-    assert_file_exists "$assets_dir/computer-use-plugin-icon-linux.png"
-    cmp -s "$plugin_icon_source" "$assets_dir/computer-use-plugin-icon-linux.png" \
-        || fail "Expected extracted computer-use-plugin-icon-linux.png to match hashed plugin icon source"
     assert_contains "$install_dir/content/webview/index.html" "--startup-background: #1e1e1e"
     assert_contains "$output_log" "Linux app icon applied to 2 webview asset(s)"
 }
@@ -385,9 +380,13 @@ SCRIPT
     assert_file_exists "$pkg_root/opt/codex-desktop/update-builder/scripts/lib/linux-features.js"
     assert_file_exists "$pkg_root/opt/codex-desktop/update-builder/scripts/lib/linux-features.sh"
     assert_file_exists "$pkg_root/opt/codex-desktop/update-builder/scripts/lib/linux-target-context.js"
+    assert_file_exists "$pkg_root/opt/codex-desktop/update-builder/scripts/patches/descriptor.js"
     assert_file_exists "$pkg_root/opt/codex-desktop/update-builder/scripts/patches/engine.js"
-    assert_file_exists "$pkg_root/opt/codex-desktop/update-builder/scripts/patches/registry.js"
-    assert_file_exists "$pkg_root/opt/codex-desktop/update-builder/scripts/patches/shared.js"
+    assert_file_exists "$pkg_root/opt/codex-desktop/update-builder/scripts/patches/runner.js"
+    assert_file_exists "$pkg_root/opt/codex-desktop/update-builder/scripts/patches/lib/assets.js"
+    assert_file_exists "$pkg_root/opt/codex-desktop/update-builder/scripts/patches/lib/minified-js.js"
+    assert_file_exists "$pkg_root/opt/codex-desktop/update-builder/scripts/patches/lib/settings-keys.js"
+    assert_file_exists "$pkg_root/opt/codex-desktop/update-builder/scripts/patches/impl/webview/index.js"
     assert_file_exists "$pkg_root/opt/codex-desktop/update-builder/scripts/patches/core/all-linux/main-process/lifecycle/patch.js"
     assert_file_exists "$pkg_root/opt/codex-desktop/update-builder/scripts/patches/core/all-linux/webview/theme-and-sunset/patch.js"
     assert_file_exists "$pkg_root/opt/codex-desktop/update-builder/scripts/patches/core/distro/nixos/README.md"
@@ -1945,6 +1944,153 @@ test_fedora_dependency_bootstrap_installs_rpmbuild() {
     assert_contains "$readme" "sudo dnf install python3 p7zip p7zip-plugins curl unzip rpm-build make gcc-c++"
 }
 
+test_fedora_atomic_rpm_ostree_target_detection() {
+    info "Checking Fedora Atomic rpm-ostree target detection"
+    local workspace="$TMP_DIR/fedora-atomic-target"
+    local fake_bin="$workspace/bin"
+    local os_release="$workspace/os-release"
+    local ostree_booted="$workspace/ostree-booted"
+    local install_log="$workspace/install-deps.log"
+    local wizard_log="$workspace/bootstrap-wizard.log"
+    local helper_output="$workspace/helper-output.log"
+
+    mkdir -p "$fake_bin"
+    printf '%s\n' '#!/bin/sh' 'exit 0' > "$fake_bin/rpm-ostree"
+    printf '%s\n' '#!/bin/sh' 'exit 0' > "$fake_bin/rpmbuild"
+    chmod +x "$fake_bin/rpm-ostree" "$fake_bin/rpmbuild"
+    cat > "$os_release" <<'EOF'
+ID=fedora
+ID_LIKE=
+VERSION_ID="44"
+PRETTY_NAME="Fedora Linux 44 (KDE Plasma Desktop Edition)"
+VARIANT_ID=kde
+EOF
+    : > "$ostree_booted"
+
+    PATH="$fake_bin:/usr/bin:/bin" \
+    OS_RELEASE_FILE="$os_release" \
+    OSTREE_BOOTED_FILE="$ostree_booted" \
+    DETECT_ONLY=1 \
+        bash "$REPO_DIR/scripts/install-deps.sh" >"$install_log"
+    assert_contains "$install_log" "Detected dependency profile: rpm-ostree"
+    assert_contains "$install_log" "ID=fedora"
+    assert_not_contains "$install_log" "ID_LIKE=ubuntu"
+
+    local missing_bin="$workspace/missing-bin"
+    local missing_log="$workspace/install-deps-missing.log"
+    mkdir -p "$missing_bin"
+    for command in dirname pwd uname; do
+        ln -s "$(command -v "$command")" "$missing_bin/$command"
+    done
+    printf '%s\n' '#!/bin/sh' 'exit 0' > "$missing_bin/rpm-ostree"
+    chmod +x "$missing_bin/rpm-ostree"
+
+    local status=0
+    PATH="$missing_bin" \
+    OS_RELEASE_FILE="$os_release" \
+    OSTREE_BOOTED_FILE="$ostree_booted" \
+    HOME="$workspace/home-missing" \
+        /bin/bash "$REPO_DIR/scripts/install-deps.sh" >"$missing_log" 2>&1 || status=$?
+    [ "$status" -ne 0 ] || fail "Expected rpm-ostree install-deps to stop before packages are layered"
+    assert_contains "$missing_log" "sudo rpm-ostree install python3 7zip curl unzip rpm-build make gcc-c++"
+    assert_contains "$missing_log" "Still missing:"
+    assert_not_contains "$missing_log" "nodejs npm"
+
+    local layered_bin="$workspace/layered-bin"
+    local layered_log="$workspace/install-deps-layered.log"
+    mkdir -p "$layered_bin"
+    for command in dirname pwd uname grep; do
+        ln -s "$(command -v "$command")" "$layered_bin/$command"
+    done
+    for command in rpm-ostree python3 7zz curl unzip rpmbuild make g++ cargo; do
+        cat > "$layered_bin/$command" <<'SCRIPT'
+#!/bin/sh
+command_name="${0##*/}"
+case "$command_name" in
+    7zz) echo "7-Zip 26.00" ;;
+    cargo) echo "cargo 1.96.0" ;;
+    *) exit 0 ;;
+esac
+SCRIPT
+        chmod +x "$layered_bin/$command"
+    done
+
+    PATH="$layered_bin" \
+    OS_RELEASE_FILE="$os_release" \
+    OSTREE_BOOTED_FILE="$ostree_booted" \
+    HOME="$workspace/home-layered" \
+        /bin/bash "$REPO_DIR/scripts/install-deps.sh" >"$layered_log" 2>&1
+    assert_contains "$layered_log" "rpm-ostree layered build dependencies are already available"
+    assert_contains "$layered_log" "Skipping system Node.js check; install.sh provides the managed Node.js runtime"
+    assert_contains "$layered_log" "All dependencies installed"
+    assert_not_contains "$layered_log" "Node.js 20+ with npm and npx is required"
+
+    PATH="$fake_bin:/usr/bin:/bin" \
+    OS_RELEASE_FILE="$os_release" \
+    OSTREE_BOOTED_FILE="$ostree_booted" \
+    CODEX_BOOTSTRAP_DRY_RUN=1 \
+    CODEX_BOOTSTRAP_NONINTERACTIVE=1 \
+    CODEX_LINUX_FEATURES_ROOT="$REPO_DIR/linux-features" \
+    CODEX_LINUX_FEATURES_CONFIG="$workspace/features.json" \
+        bash "$REPO_DIR/scripts/bootstrap-wizard.sh" >"$wizard_log"
+    assert_contains "$wizard_log" "Package manager: rpm-ostree"
+    assert_contains "$wizard_log" "Native package format: rpm"
+    assert_contains "$wizard_log" "Atomic host: yes"
+
+    CODEX_LINUX_TARGET_ATOMIC=maybe \
+    PATH="$fake_bin:/usr/bin:/bin" \
+    OS_RELEASE_FILE="$os_release" \
+    OSTREE_BOOTED_FILE="$ostree_booted" \
+    bash -c '
+        # shellcheck disable=SC1091
+        source "$1"
+        OS_RELEASE_ID="$(os_release_field ID)"
+        OS_RELEASE_ID_LIKE="$(os_release_field ID_LIKE 2>/dev/null || true)"
+        OS_RELEASE_VERSION_ID="$(os_release_field VERSION_ID)"
+        printf "manager=%s\natomic=%s\n" \
+            "$(detect_package_manager)" \
+            "$(linux_target_is_atomic && echo yes || echo no)"
+    ' _ "$REPO_DIR/scripts/lib/linux-target-detect.sh" >"$helper_output"
+    assert_contains "$helper_output" "manager=rpm-ostree"
+    assert_contains "$helper_output" "atomic=yes"
+
+    CODEX_LINUX_TARGET_ATOMIC=0 \
+    PATH="$fake_bin:/usr/bin:/bin" \
+    OS_RELEASE_FILE="$os_release" \
+    OSTREE_BOOTED_FILE="$ostree_booted" \
+    bash -c '
+        # shellcheck disable=SC1091
+        source "$1"
+        OS_RELEASE_ID="$(os_release_field ID)"
+        OS_RELEASE_ID_LIKE="$(os_release_field ID_LIKE 2>/dev/null || true)"
+        OS_RELEASE_VERSION_ID="$(os_release_field VERSION_ID)"
+        printf "manager=%s\natomic=%s\n" \
+            "$(detect_package_manager)" \
+            "$(linux_target_is_atomic && echo yes || echo no)"
+    ' _ "$REPO_DIR/scripts/lib/linux-target-detect.sh" >"$helper_output"
+    assert_contains "$helper_output" "manager=unknown"
+    assert_contains "$helper_output" "atomic=no"
+
+    rm -f "$ostree_booted"
+    PATH="$fake_bin:/usr/bin:/bin" \
+    OS_RELEASE_FILE="$os_release" \
+    OSTREE_BOOTED_FILE="$ostree_booted" \
+    bash -c '
+        # shellcheck disable=SC1091
+        source "$1"
+        OS_RELEASE_ID="$(os_release_field ID)"
+        OS_RELEASE_ID_LIKE="$(os_release_field ID_LIKE 2>/dev/null || true)"
+        OS_RELEASE_VERSION_ID="$(os_release_field VERSION_ID)"
+        printf "manager=%s\nformat=%s\natomic=%s\n" \
+            "$(detect_package_manager)" \
+            "$(detect_package_format)" \
+            "$(linux_target_is_atomic && echo yes || echo no)"
+    ' _ "$REPO_DIR/scripts/lib/linux-target-detect.sh" >"$helper_output"
+    assert_contains "$helper_output" "manager=unknown"
+    assert_contains "$helper_output" "format=rpm"
+    assert_contains "$helper_output" "atomic=no"
+}
+
 test_setup_native_wizard_noninteractive_feature_writer() {
     info "Checking setup-native wizard non-interactive feature writer"
     local workspace="$TMP_DIR/setup-native-writer"
@@ -2636,1663 +2782,200 @@ test_setup_native_wizard_cleanup_deletes_only_confirmed_paths() {
     assert_contains "$output_log" "Skipped $plugin_cache"
 }
 
-test_codex_desktop_publish_workflows_stay_disabled() {
-    info "Checking Codex Desktop publish workflows stay disabled"
-
-    assert_file_not_exists "$REPO_DIR/.github/workflows/upstream-build-app.yml"
-    assert_file_not_exists "$REPO_DIR/.github/workflows/update-codex-hash.yml"
-    assert_file_not_exists "$REPO_DIR/.github/workflows/cachix.yml"
-}
-
-test_main_to_self_hosted_workflow_opens_update_pr() {
-    info "Checking main to self-hosted integration PR workflow"
-    local workflow="$REPO_DIR/.github/workflows/open-main-to-self-hosted-pr.yml"
+test_upstream_build_app_workflow_tracks_dmg_metadata() {
+    info "Checking upstream build-app workflow metadata and cache behavior"
+    local workflow="$REPO_DIR/.github/workflows/upstream-build-app.yml"
 
     assert_file_exists "$workflow"
-    assert_contains "$workflow" 'name: Open main to self-hosted PR'
-    assert_contains "$workflow" 'branches:'
-    assert_contains "$workflow" '- main'
-    assert_contains "$workflow" 'contents: write'
-    assert_contains "$workflow" 'pull-requests: write'
-    assert_contains "$workflow" 'MAIN_BRANCH: main'
-    assert_contains "$workflow" 'SELF_HOSTED_BRANCH: self-hosted'
-    assert_contains "$workflow" 'SYNC_BRANCH: codex/main-to-self-hosted'
-    assert_contains "$workflow" 'git merge-base --is-ancestor "$main_sha" "$self_hosted_sha"'
-    assert_contains "$workflow" 'git merge --no-ff "origin/${MAIN_BRANCH}"'
-    assert_contains "$workflow" 'git push --force-with-lease origin "${SYNC_BRANCH}"'
-    assert_contains "$workflow" 'gh pr create'
-    assert_contains "$workflow" '--base "${SELF_HOSTED_BRANCH}"'
-    assert_contains "$workflow" '--head "${SYNC_BRANCH}"'
-    assert_contains "$workflow" 'gh pr edit "$existing_pr"'
+    assert_contains "$workflow" 'name: Upstream Build App'
+    assert_contains "$workflow" 'UPSTREAM_DMG_URL: https://persistent.oaistatic.com/codex-app-prod/Codex.dmg'
+    assert_contains "$workflow" 'actions/cache@v4'
+    assert_contains "$workflow" 'path: /tmp/codex-upstream-ci/Codex.dmg'
+    assert_contains "$workflow" 'Last-Modified'
+    assert_contains "$workflow" 'sha256sum'
+    assert_contains "$workflow" 'CODEX_PATCH_REPORT_JSON="$GITHUB_WORKSPACE/patch-report.json"'
+    assert_contains "$workflow" 'node scripts/ci/validate-patch-report.js patch-report.json --profile upstream-build'
+    assert_contains "$workflow" 'make build-app DMG=/tmp/codex-upstream-ci/Codex.dmg'
+    assert_contains "$workflow" 'DMG Last-Modified'
+    assert_contains "$workflow" 'DMG SHA-256'
 }
 
-test_devcontainer_homebrew_cask_is_local_tap_installable() {
-    info "Checking devcontainer Homebrew cask"
-    local cask="$REPO_DIR/contrib/homebrew/codex-desktop-devcontainer.rb"
+make_update_nix_hash_fixture() {
+    local fixture="$1"
+    local hash_a="sha256-VVQNu/E7Wuyxfsy93Gorknr0t7H7wy9kxMOiBZYOo/o="
 
-    assert_file_exists "$cask"
-    assert_contains "$cask" 'cask "codex-desktop-devcontainer"'
-    assert_contains "$cask" 'url "https://github.com/joshyorko/homebrew-tools/releases/download/codex-desktop-linux-'
-    assert_contains "$cask" 'binary "bin/codex-desktop", target: "codex-desktop"'
-    assert_contains "$cask" 'Exec=#{HOMEBREW_PREFIX}/bin/codex-desktop %U'
-    assert_contains "$cask" 'depends_on formula: "desktop-file-utils"'
-    assert_contains "$cask" 'codex-desktop web --inspect'
-    assert_contains "$cask" 'codex-desktop doctor'
-    assert_contains "$cask" 'codex-desktop serve --workspace /workspace'
-    assert_contains "$cask" "reuses the"
-    assert_contains "$cask" 'Real devcontainer web-mode browser smoke'
-    assert_contains "$cask" 'container-local'
-    assert_not_contains "$cask" 'depends_on cask:'
-}
+    mkdir -p "$fixture/scripts/ci" "$fixture/nix/native-modules" "$fixture/bin"
+    cp "$REPO_DIR/scripts/ci/update-nix-hashes.sh" "$fixture/scripts/ci/update-nix-hashes.sh"
+    chmod +x "$fixture/scripts/ci/update-nix-hashes.sh"
 
-test_devcontainer_homebrew_validation_script_targets_ror_image() {
-    info "Checking devcontainer Homebrew validation script"
-    local script="$REPO_DIR/scripts/devcontainer-homebrew-smoke.sh"
+    cat > "$fixture/flake.nix" <<EOF
+{
+  codexVersion = "26.623.81905";
+  electronVersion = "42.1.0";
 
-    assert_file_exists "$script"
-    assert_contains "$script" 'ghcr.io/joshyorko/ror:latest'
-    assert_contains "$script" 'contrib/homebrew/codex-desktop-devcontainer.rb'
-    assert_contains "$script" 'brew tap codex-devcontainer/local'
-    assert_contains "$script" 'brew install --cask'
-    assert_contains "$script" 'codex-desktop --help'
-    assert_contains "$script" 'codex-desktop web --inspect'
-    assert_contains "$script" 'codex-desktop serve'
-    assert_contains "$script" '--once-health-check'
-    assert_contains "$script" 'non-loopback bind requires --require-token'
-    assert_contains "$script" 'auth'
-    assert_contains "$script" 'token_present'
-    assert_contains "$script" 'blocked_host_env'
-    assert_contains "$script" 'DISPLAY'
-    assert_contains "$script" 'WAYLAND_DISPLAY'
-    assert_contains "$script" 'DBUS_SESSION_BUS_ADDRESS'
-    assert_contains "$script" 'YDOTOOL_SOCKET'
-    assert_contains "$script" 'codex-desktop doctor'
-    assert_contains "$script" 'CODEX_DESKTOP_RUN_COMPUTER_USE_DOCTOR=0'
-    assert_contains "$script" 'mode.*browser-only'
-    assert_contains "$script" 'physical_host_control.*false'
-    assert_contains "$script" 'CODEX_COMPUTER_CONTROL_MODE=browser-only'
-    assert_contains "$script" 'mode.*browser-only'
-    assert_contains "$script" 'physical_host_control.*false'
-    assert_not_contains "$script" 'joshyorko/homebrew-tools'
-}
+  codexDmg = pkgs.fetchurl {
+    url = "https://persistent.oaistatic.com/codex-app-prod/Codex.dmg";
+    hash = "$hash_a";
+  };
 
-test_devcontainer_desktop_host_is_loopback_and_container_scoped() {
-    info "Checking devcontainer desktop host harness"
-    local script="$REPO_DIR/scripts/devcontainer-codex-desktop-host.sh"
-    local smoke="$REPO_DIR/scripts/devcontainer-codex-desktop-browser-smoke.sh"
+  x86_64-linux = {
+    hash = "$hash_a";
+  };
 
-    assert_file_exists "$script"
-    assert_file_exists "$smoke"
-    assert_contains "$script" 'Xvfb "$DISPLAY"'
-    assert_contains "$script" 'start_background x11vnc x11vnc'
-    assert_contains "$script" '-display "$DISPLAY"'
-    assert_contains "$script" 'ensure_apk_package xkeyboard-config'
-    assert_contains "$script" 'websockify'
-    assert_contains "$script" '--web "$novnc_dir"'
-    assert_contains "$script" '-localhost'
-    assert_contains "$script" '-noipv6'
-    assert_contains "$script" 'APP_URL="http://127.0.0.1:$WEB_PORT'
-    assert_contains "$script" 'path=websockify'
-    assert_contains "$script" 'CODEX_DESKTOP_DEVCONTAINER_MODE=1'
-    assert_contains "$script" 'CODEX_CLI_PACKAGE="${CODEX_DESKTOP_DEVCONTAINER_CODEX_CLI_PACKAGE:-@openai/codex@alpha}"'
-    assert_contains "$script" 'CODEX_HOME="${CODEX_HOME:-$PROFILE_CODEX_HOME}"'
-    assert_contains "$script" 'XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$PROFILE_XDG_CONFIG_HOME}"'
-    assert_contains "$script" 'CODEX_ELECTRON_USER_DATA_DIR="$PROFILE_DIR/electron-user-data"'
-    assert_contains "$script" 'CODEX_BROWSER_USE_PREFER_LOCAL_BROWSER=1'
-    assert_contains "$script" 'CODEX_BROWSER_USE_BROWSER_COMMAND="${CODEX_BROWSER_USE_BROWSER_COMMAND:-chromium}"'
-    assert_contains "$script" 'CODEX_COMPUTER_USE_BROWSER_ONLY=1'
-    assert_contains "$script" 'npm install -g --prefix "$NPM_PREFIX" "$CODEX_CLI_PACKAGE"'
-    assert_contains "$script" 'stop_host'
-    assert_contains "$script" 'stop_pid_file "$PID_DIR/novnc.pid"'
-    assert_contains "$script" 'codex-desktop --x11 --no-sandbox'
-    assert_contains "$script" 'status_host()'
-    assert_not_contains "$script" 'codex-desktop desktop --no-sandbox'
-    assert_contains "$smoke" 'ghcr.io/joshyorko/ror:latest'
-    assert_contains "$smoke" 'chromium'
-    assert_contains "$smoke" 'codex-desktop serve'
-    assert_contains "$smoke" 'CONTAINER_WORKSPACE="/tmp/codex-desktop-workspace"'
-    assert_contains "$smoke" '--workspace'
-    assert_contains "$smoke" '--profile "$profile_dir"'
-    assert_contains "$smoke" 'CODEX_BROWSER_USE_BROWSER_COMMAND=chromium'
-    assert_contains "$smoke" 'CODEX_BROWSER_CDP_PORT="'
-    assert_contains "$smoke" 'missing_or_invalid_token'
-    assert_contains "$smoke" 'forbidden_origin'
-    assert_contains "$smoke" 'x-codex-web-token'
-    assert_contains "$smoke" '/__codex/browser/status'
-    assert_contains "$smoke" 'cdp_endpoint'
-    assert_contains "$smoke" 'http://127.0.0.1:'
-    assert_contains "$smoke" '/json/version'
-    assert_contains "$smoke" 'CODEX_COMPUTER_CONTROL_MODE=browser-only'
-    assert_contains "$smoke" 'mode.*browser-only'
-    assert_contains "$smoke" 'physical_host_control.*false'
-    assert_contains "$smoke" 'physical_host_control'
-    assert_contains "$smoke" 'native_pipe'
-    assert_contains "$smoke" 'available_backends'
-    assert_contains "$smoke" 'devcontainer-smoke-marker'
-    assert_contains "$smoke" 'codex-web-forbidden-ui-transport'
-    assert_contains "$smoke" 'Page.captureScreenshot'
-    assert_contains "$smoke" 'Codex web UI did not become ready'
-    assert_not_contains "$smoke" 'imagemagick-7'
-    assert_not_contains "$smoke" 'import -window root'
-    assert_not_contains "$smoke" 'noVNC did not connect'
-}
+  aarch64-linux = {
+    hash = "$hash_a";
+  };
 
-test_web_mode_security_token_env_and_cdp_static_contract() {
-    info "Checking web mode security/token/env/CDP contract"
-    local server="$REPO_DIR/launcher/web-mode-server.mjs"
-    local bootstrap="$REPO_DIR/launcher/web-mode-bootstrap.js"
-    local stripped_env
-
-    assert_file_exists "$server"
-    assert_file_exists "$bootstrap"
-    assert_contains "$server" 'crypto.randomBytes(24).toString("base64url")'
-    assert_contains "$server" 'token_present: Boolean(state.token)'
-    assert_contains "$server" 'server_id: state.serverId'
-    assert_contains "$server" 'healthBody.server_id === state.server_id'
-    assert_contains "$server" 'sameOriginAllowed'
-    assert_contains "$server" 'forbidden_origin'
-    assert_contains "$server" 'missing_or_invalid_token'
-    assert_contains "$server" 'x-codex-web-token'
-    assert_contains "$server" 'codex_web_token'
-    assert_contains "$server" 'non-loopback bind requires --require-token'
-    assert_contains "$server" 'delete env\[key\]'
-    assert_contains "$server" 'computerUseBrowserOnlyRequested()'
-    assert_contains "$server" 'hasDesktopSessionEnv'
-    assert_contains "$server" 'CODEX_COMPUTER_USE_BROWSER_ONLY: computerUseBrowserOnly ? "1" : "0"'
-    assert_contains "$server" 'CODEX_COMPUTER_CONTROL_MODE: computerUseBrowserOnly ? "browser-only" : process.env.CODEX_COMPUTER_CONTROL_MODE || "desktop"'
-    assert_contains "$server" 'permissions-policy'
-    assert_contains "$server" 'microphone=(self)'
-    assert_contains "$server" 'bundledPluginNamesForState'
-    assert_contains "$server" 'CdpNativePipeBackend'
-    assert_contains "$server" 'codex-web-cdp-${process.pid}.sock'
-    assert_contains "$server" 'CODEX_BROWSER_USE_SOCKET_DIR'
-    assert_contains "$server" 'available_backends'
-    assert_contains "$server" 'serveStatePath'
-    assert_contains "$server" 'codex-desktop serve stop'
-    assert_contains "$server" 'mode: "desktop"'
-    assert_contains "$server" 'desktop_control: "enabled"'
-    assert_contains "$server" 'physical_host_control: true'
-    assert_contains "$server" 'mode: "browser-only"'
-    assert_contains "$server" 'desktop_control: "disabled_by_mode"'
-    assert_contains "$server" 'physical_host_control: false'
-    assert_contains "$server" 'app-server", "--listen", "stdio://"'
-    assert_contains "$server" '--remote-debugging-address=127.0.0.1'
-    assert_contains "$server" '--remote-debugging-port='
-    assert_contains "$server" 'configuredCdpPort()'
-    assert_contains "$server" 'chooseFreeLoopbackPort'
-    assert_contains "$server" 'waitForCdpEndpoint'
-    assert_contains "$server" '/json/version'
-    assert_contains "$server" '/__codex/browser/status'
-    assert_contains "$server" 'Codex Desktop Web'
-    assert_contains "$server" 'Press Ctrl-C to stop Codex Desktop Web.'
-    assert_contains "$server" 'serve.jsonl'
-    assert_contains "$server" 'port ${args.port} is already in use'
-    assert_contains "$server" 'container-local Chromium/CDP sidecar ready'
-    assert_contains "$server" 'WEB_MODE_FORCED_FEATURE_GATES'
-    assert_contains "$server" '"4166894088"'
-    assert_contains "$server" '"410065390"'
-    assert_contains "$server" '"410262010"'
-    assert_contains "$server" '"1506311413"'
-    assert_contains "$server" '"4114442250"'
-    assert_contains "$server" '"2380644311"'
-    assert_contains "$server" '"4100906017"'
-    assert_contains "$server" '"1244621283"'
-    assert_contains "$server" 'patchWebModeStatsigGateDefaults'
-    assert_contains "$server" 'shouldServeSpaFallback'
-    assert_contains "$server" 'WEB_MODE_API_PREFIXES'
-    assert_contains "$server" 'requestPath.startsWith(prefix)'
-    assert_contains "$server" '"/wham/"'
-    assert_contains "$server" '"/accounts/"'
-    assert_contains "$server" '"/aip/"'
-    assert_contains "$server" '"/__codex/local-file"'
-    assert_contains "$server" 'handleAipRequest'
-    assert_contains "$server" 'authorizeBridgeRequest(request, response, state, url)'
-    assert_contains "$server" 'listWebModeApps'
-    assert_contains "$server" 'connectorLogoPayload'
-    assert_contains "$server" 'serveLocalAsset'
-    assert_contains "$server" 'LOCAL_ASSET_EXTENSIONS'
-    assert_contains "$server" 'webModeRemoteControlClientsResponse'
-    assert_contains "$server" '"/wham/remote/control/clients"'
-    assert_contains "$server" '"/wham/accounts/check"'
-    assert_contains "$server" '"/wham/tasks/list"'
-    assert_contains "$server" '"/wham/usage"'
-    assert_contains "$server" '"/beacons/home"'
-    assert_contains "$server" '"account/rateLimits/read"'
-    assert_contains "$server" 'account_ordering'
-    assert_contains "$server" 'beacon_ui_response'
-    assert_contains "$server" 'additional_rate_limits'
-    assert_contains "$server" 'primary_window'
-    assert_contains "$server" 'limit_window_seconds'
-    assert_contains "$server" 'browser_use: browser'
-    assert_contains "$server" 'chrome_native_host'
-    assert_contains "$server" 'diagnostics'
-    assert_contains "$server" 'computer_use: state.computer'
-    assert_contains "$server" 'chromeExtension.installed'
-    assert_contains "$server" 'appServer.write'
-    assert_contains "$server" 'fs.metadata'
-    assert_contains "$server" 'thread/turns/list'
-    assert_contains "$server" 'thread/backgroundTerminals/clean'
-    assert_contains "$server" 'normalizedTimeoutMs'
-    assert_contains "$server" 'name="initial-route"'
-    assert_contains "$server" 'escapeHtmlAttribute'
-    assert_contains "$server" 'rewriteIndexAssetUrls'
-    assert_contains "$server" 'src="./assets/'
-    assert_contains "$server" 'src="/assets/'
-    assert_contains "$server" 'serveIndexWithInitialRoute'
-    assert_contains "$server" 'path.extname(requestPath) === ""'
-
-    for stripped_env in \
-        DISPLAY \
-        WAYLAND_DISPLAY \
-        XAUTHORITY \
-        DBUS_SESSION_BUS_ADDRESS \
-        XDG_SESSION_ID \
-        DESKTOP_SESSION \
-        XDG_CURRENT_DESKTOP \
-        GNOME_DESKTOP_SESSION_ID \
-        KDE_FULL_SESSION \
-        SWAYSOCK \
-        HYPRLAND_INSTANCE_SIGNATURE \
-        I3SOCK \
-        YDOTOOL_SOCKET; do
-        assert_contains "$server" "\"$stripped_env\""
-    done
-
-    assert_contains "$bootstrap" 'window.__CODEX_WEB_TOKEN__ || ""'
-    assert_contains "$bootstrap" '"x-codex-web-token": bridgeToken'
-    assert_contains "$bootstrap" 'codex_web_token=${encodeURIComponent(bridgeToken)}'
-    assert_contains "$bootstrap" 'window.postMessage(message, window.location.origin)'
-    assert_contains "$bootstrap" 'electron-worker-bridge-unavailable-in-web-mode'
-    assert_contains "$bootstrap" 'case "list-automations"'
-    assert_contains "$bootstrap" 'return { items: \[\] }'
-    assert_contains "$bootstrap" 'case "get-is-conversation-archiving-for-host"'
-    assert_contains "$bootstrap" 'case "hotkey-window-hotkey-state"'
-    assert_contains "$bootstrap" 'case "global-dictation-history"'
-    assert_contains "$bootstrap" 'case "global-dictation-copy-history-item"'
-    assert_contains "$bootstrap" 'localHttpFetchProxyPrefixes'
-    assert_contains "$bootstrap" 'shouldProxyLocalHttpFetch'
-    assert_contains "$bootstrap" 'proxyLocalHttpFetch'
-    assert_contains "$bootstrap" 'case "read-file"'
-    assert_contains "$bootstrap" 'case "read-file-binary"'
-    assert_contains "$bootstrap" 'method: "fs/readFile"'
-    assert_contains "$bootstrap" 'case "chrome-extension-installed-read"'
-    assert_contains "$bootstrap" 'chromeExtension.installed'
-    assert_contains "$bootstrap" 'hostFetchAppServerRpcMethods'
-    assert_contains "$bootstrap" 'appServerAssetUrlMethods'
-    assert_contains "$bootstrap" 'rewriteLocalAssetUrls'
-    assert_contains "$bootstrap" 'localAssetUrl'
-    assert_contains "$bootstrap" 'case "send-cli-request-for-host"'
-    assert_contains "$bootstrap" 'case "electron-request-microphone-permission"'
-    assert_contains "$bootstrap" 'navigator.mediaDevices.getUserMedia'
-    assert_contains "$bootstrap" 'appServer.write'
-    assert_contains "$bootstrap" 'case "mcp-response"'
-    assert_contains "$bootstrap" 'batch-write-config-value-for-host'
-    assert_contains "$bootstrap" 'add-marketplace'
-    assert_contains "$bootstrap" 'list-apps'
-    assert_contains "$bootstrap" 'list-skills-for-host'
-    assert_contains "$bootstrap" 'read-plugin-skill'
-    assert_contains "$bootstrap" 'write-skill-config'
-    assert_contains "$bootstrap" 'case "set-default-model-config-for-host"'
-    assert_contains "$bootstrap" 'case "set-local-app-server-feature-enablement"'
-    assert_contains "$bootstrap" 'case "browser-use-origin-state-read"'
-    assert_contains "$bootstrap" 'case "computer-use-app-approvals-read"'
-    assert_contains "$bootstrap" 'case "read-file-metadata"'
-    assert_contains "$bootstrap" 'case "thread-follower-interrupt-turn-for-host"'
-    assert_contains "$bootstrap" '"/wham/"'
-    assert_contains "$bootstrap" '"/accounts/"'
-    assert_contains "$bootstrap" '"/aip/"'
-}
-
-test_web_mode_server_desktop_settings_contract() {
-    info "Checking web mode server desktop settings contract"
-    local server="$REPO_DIR/launcher/web-mode-server.mjs"
-
-node - "$server" <<'NODE'
-const fs = require("fs");
-const source = fs.readFileSync(process.argv[2], "utf8");
-
-const required = [
-  "WEB_MODE_FORCED_FEATURE_GATES",
-  "\"4166894088\"",
-  "\"410065390\"",
-  "\"410262010\"",
-  "\"1506311413\"",
-  "\"4114442250\"",
-  "\"2380644311\"",
-  "\"4100906017\"",
-  "\"1244621283\"",
-  "patchWebModeStatsigGateDefaults",
-  "patchWebModeProjectlessOutputDirectory",
-  "computerUseBrowserOnlyRequested",
-  "mode: \"desktop\"",
-  "desktop_control: \"enabled\"",
-  "physical_host_control: true",
-  "mode: \"browser-only\"",
-  "desktop_control: \"disabled_by_mode\"",
-  "physical_host_control: false",
-  "browser_use: browser",
-  "chrome_native_host",
-  "diagnostics",
-  "computer_use: state.computer",
-  "chromeExtension.installed",
-  "appServer.write",
-  "fs.metadata",
-  "workspace.rootMetadata",
-  "workspace.createProject",
-  "workspace.selectDirectory",
-  "localWorkspaceRootMetadata",
-  "createWorkspaceProject",
-  "selectWorkspaceDirectory",
-  "--getexistingdirectory",
-  "--file-selection",
-  "localFileMetadata",
-  "SHUTDOWN_TIMEOUT_MS",
-  "terminateChild",
-  "closeHttpServer",
-  "closeAllConnections",
-  "received SIGHUP",
-  "thread/turns/list",
-  "thread/backgroundTerminals/clean",
-  "normalizedTimeoutMs",
-  "name=\"initial-route\"",
-  "escapeHtmlAttribute",
-  "rewriteIndexAssetUrls",
-  "src=\"./assets/",
-  "src=\"/assets/",
-  "serveIndexWithInitialRoute",
-  "path.extname(basename)",
-  "patchWebModeStatsigGateDefaults(patched)",
-  "WEB_MODE_API_PREFIXES",
-  "\"/wham/\"",
-  "\"/accounts/\"",
-  "\"/aip/\"",
-  "requestPath.startsWith(prefix)",
-  "\"/__codex/local-file\"",
-  "handleAipRequest",
-  "authorizeBridgeRequest(request, response, state, url)",
-  "listWebModeApps",
-  "connectorLogoPayload",
-  "serveLocalAsset",
-  "LOCAL_ASSET_EXTENSIONS",
-  "webModeRemoteControlClientsResponse",
-  "\"/wham/remote/control/clients\"",
-  "\"/wham/accounts/check\"",
-  "\"/wham/tasks/list\"",
-  "\"/wham/usage\"",
-  "\"/beacons/home\"",
-  "\"account/rateLimits/read\"",
-  "webModeWhamAccountsCheckResponse",
-  "webModeWhamUsageResponse",
-  "account_ordering",
-  "beacon_ui_response",
-  "additional_rate_limits",
-  "primary_window",
-  "limit_window_seconds",
-  "shouldServeSpaFallback",
-  "requestPath.startsWith(\"/__codex/\")",
-  "requestPath.startsWith(\"/assets/\")",
-  "path.extname(requestPath) === \"\"",
-];
-
-for (const needle of required) {
-  if (!source.includes(needle)) {
-    throw new Error(`missing web-mode settings server contract marker: ${needle}`);
-  }
-}
-
-const statsigNeedle = "t(!1,{onMount:(t,n)=>{let r=n.get(i);return r!=null&&t(r.checkGate(e)),n.set(a,t=>t.includes(e)?t:[...t,e])";
-const statsigReplacement = "t(${forcedGate},{onMount:(t,n)=>{let r=n.get(i);return r!=null&&t(${forcedGate}||r.checkGate(e)),n.set(a,t=>t.includes(e)?t:[...t,e])";
-if (!source.includes(statsigNeedle) || !source.includes(statsigReplacement)) {
-  throw new Error("web-mode statsig patch must set an initial forced gate value and preserve it after checkGate");
-}
-if (source.includes("basename.startsWith(\"src-\")")) {
-  throw new Error("web-mode statsig patch must not depend on brittle src-* asset names");
-}
-
-const projectlessNeedle = "if(m===`projectless`&&h==null)throw Error(`Projectless conversations require an output directory`);";
-const projectlessReplacement = "if(m===`projectless`&&h==null&&(h=l??t?.[0]??null),m===`projectless`&&h==null)throw Error(`Projectless conversations require an output directory`);";
-if (!source.includes(projectlessNeedle) || !source.includes(projectlessReplacement)) {
-  throw new Error("web-mode projectless composer patch must synthesize an output directory from cwd or workspace roots");
-}
-NODE
-}
-
-test_web_mode_bootstrap_desktop_fallback_contract() {
-    info "Checking web mode bootstrap desktop fallback contract"
-    local bootstrap="$REPO_DIR/launcher/web-mode-bootstrap.js"
-
-node - "$bootstrap" <<'NODE'
-const fs = require("fs");
-const vm = require("vm");
-
-(async () => {
-const source = fs.readFileSync(process.argv[2], "utf8");
-const posted = [];
-const fetches = [];
-const listeners = new Map();
-const storage = new Map();
-const eventSources = [];
-const editable = {
-  value: "",
-  textContent: "",
-  isContentEditable: false,
-  selectionStart: 0,
-  selectionEnd: 0,
-  focus() {
-    document.activeElement = this;
-  },
-  setSelectionRange(start, end) {
-    this.selectionStart = start;
-    this.selectionEnd = end;
-  },
-  dispatchEvent(event) {
-    posted.push({ type: "dom-event", eventType: event.type, value: this.value, textContent: this.textContent });
-    return true;
-  },
-};
-const encodedFile = Buffer.from("hello web mode", "utf8").toString("base64");
-
-for (const needle of [
-  "hostFetchAppServerRpcMethods",
-  "appServerAssetUrlMethods",
-  "rewriteLocalAssetUrls",
-  "localAssetFilePath",
-  "localAssetUrl",
-  "add-marketplace",
-  "list-apps",
-  "app-connect-oauth-callback-url",
-  "realtimeVoice: true",
-  "case \"global-dictation-history\"",
-  "case \"global-dictation-copy-history-item\"",
-  "case \"read-file\"",
-  "case \"read-file-binary\"",
-  "method: \"fs/readFile\"",
-  "case \"chrome-extension-installed-read\"",
-  "chromeExtension.installed",
-  "case \"send-cli-request-for-host\"",
-  "case \"mcp-response\"",
-  "appServer.write",
-  "batch-write-config-value-for-host",
-  "list-skills-for-host",
-  "read-plugin-skill",
-  "write-skill-config",
-  "case \"set-default-model-config-for-host\"",
-  "case \"set-local-app-server-feature-enablement\"",
-  "case \"browser-use-origin-state-read\"",
-  "case \"computer-use-app-approvals-read\"",
-  "case \"read-file-metadata\"",
-  "case \"thread-follower-interrupt-turn-for-host\"",
-  "projectlessOutputDirectory",
-  "startConversation",
-  "case \"thread-follower-start-turn\"",
-  "case \"electron-add-new-workspace-root-option\"",
-  "case \"electron-create-new-workspace-root-option\"",
-  "case \"electron-set-active-workspace-root\"",
-  "case \"electron-clear-active-workspace-root\"",
-  "case \"electron-update-workspace-root-options\"",
-  "workspace.rootMetadata",
-  "workspace.createProject",
-  "workspace.selectDirectory",
-  "electron-saved-workspace-roots",
-  "meta[name=\"initial-route\"]",
-  "currentRoute !== \"/\" && currentRoute !== \"/index.html\"",
-]) {
-  if (!source.includes(needle)) {
-    throw new Error(`missing web-mode bootstrap desktop bridge marker: ${needle}`);
-  }
-}
-
-const window = {
-  __CODEX_WEB_TOKEN__: "test-token",
-  location: { origin: "http://127.0.0.1:3773" },
-  structuredClone: (value) => JSON.parse(JSON.stringify(value)),
-  clearTimeout,
-  setTimeout,
-  console,
-  crypto: { randomUUID: () => "session-id" },
-  sessionStorage: {
-    getItem: (key) => storage.get(key) ?? null,
-    setItem: (key, value) => {
-      storage.set(key, String(value));
-    },
-  },
-  addEventListener(type, callback) {
-    const callbacks = listeners.get(type) ?? [];
-    callbacks.push(callback);
-    listeners.set(type, callbacks);
-  },
-  postMessage(message) {
-    posted.push(message);
-  },
-  prompt() {
-    return "/workspace/from-prompt";
-  },
-  alert(message) {
-    posted.push({ type: "alert", message });
-  },
-  matchMedia() {
-    return {
-      matches: false,
-      addEventListener() {},
-      removeEventListener() {},
-    };
-  },
-};
-
-class EventSource {
-  constructor() {
-    this.onmessage = null;
-    this.onerror = null;
-    this.closed = false;
-    eventSources.push(this);
-  }
-  close() {
-    this.closed = true;
-  }
-}
-
-async function fetch(url, options = {}) {
-  const body = options.body == null ? null : JSON.parse(options.body);
-  fetches.push(
-    body?.method === "appServer.rpc"
-      ? `${body.method}:${body.params?.method}`
-      : body?.method === "desktopHost.request"
-        ? `${body.method}:${body.params?.method}`
-        : body?.method ?? url,
-  );
-  if (body?.method === "webState.read") {
-    return {
-      ok: true,
-      json: async () => ({
-        result: {
-          persistedAtoms: {},
-          globalState: {},
-          sharedObjects: {},
-        },
-      }),
-    };
-  }
-  if (body?.method === "health.read") {
-    return {
-      ok: true,
-      json: async () => ({
-        result: {
-          workspace: "/workspace",
-          profile: "/workspace/.codex-desktop",
-          codex_home: "/home/user/.codex",
-        },
-      }),
-    };
-  }
-  if (body?.method === "chromeExtension.installed") {
-    return {
-      ok: true,
-      json: async () => ({
-        ok: true,
-        result: { installed: true },
-      }),
-    };
-  }
-  if (body?.method === "conversation.interrupt") {
-    return {
-      ok: true,
-      json: async () => ({
-        ok: true,
-        result: { interrupted: true, turnId: "turn-1" },
-      }),
-    };
-  }
-  if (body?.method === "desktopHost.request") {
-    const method = body.params?.method;
-    const params = body.params?.params ?? {};
-    if (method === "refresh-remote-control-connections") {
-      return {
-        ok: true,
-        json: async () => ({
-          ok: true,
-          result: {
-            remoteControlConnections: [],
-            connections: [],
-            state: {
-              available: true,
-              accessRequired: false,
-              authRequired: false,
-              clientAuthorized: false,
-            },
-            sharedObjects: {
-              remote_control_connections: [],
-              remote_control_connections_state: {
-                available: true,
-                accessRequired: false,
-                authRequired: false,
-                clientAuthorized: false,
-              },
-            },
-          },
-        }),
-      };
-    }
-    if (method === "set-remote-control-connections-enabled") {
-      return {
-        ok: true,
-        json: async () => ({
-          ok: true,
-          result: {
-            enabled: Boolean(params.enabled),
-            remoteControlConnections: [],
-            state: {
-              available: Boolean(params.enabled),
-              accessRequired: false,
-              authRequired: false,
-              clientAuthorized: false,
-            },
-            sharedObjects: {
-              local_app_server_feature_enablement: {
-                remote_control: Boolean(params.enabled),
-              },
-              remote_control_connections: [],
-              remote_control_connections_state: {
-                available: Boolean(params.enabled),
-                accessRequired: false,
-                authRequired: false,
-                clientAuthorized: false,
-              },
-            },
-          },
-        }),
-      };
-    }
-    if (method === "refresh-remote-connections") {
-      return {
-        ok: true,
-        json: async () => ({
-          ok: true,
-          result: { remoteConnections: [], connections: [], sharedObjects: { remote_connections: [] } },
-        }),
-      };
-    }
-    if (method === "set-remote-connection-auto-connect") {
-      return {
-        ok: true,
-        json: async () => ({
-          ok: true,
-          result: {
-            hostId: params.hostId,
-            autoConnect: Boolean(params.autoConnect),
-            remoteConnections: [],
-            remoteControlConnections: [],
-            connections: [],
-            state: "disconnected",
-            error: null,
-            sharedObjects: {
-              remote_connections: [],
-              remote_control_connections: [],
-            },
-          },
-        }),
-      };
-    }
-    if (method === "remote-workspace-directory-entries") {
-      return {
-        ok: true,
-        json: async () => ({
-          ok: true,
-          result: {
-            directoryPath: params.directoryPath,
-            entries: [{ type: "directory", name: "project", path: `${params.directoryPath}/project`, isDirectory: true, isFile: false }],
-          },
-        }),
-      };
-    }
-    if (method === "app-server-connection-state") {
-      return {
-        ok: true,
-        json: async () => ({
-          ok: true,
-          result: { state: "connected", status: "connected", error: null },
-        }),
-      };
-    }
-    throw new Error(`unexpected desktop host call for ${method}`);
-  }
-  if (body?.method === "fs.metadata") {
-    if (body.params?.path === "/workspace/missing") {
-      return {
-        ok: false,
-        status: 500,
-        json: async () => ({ error: "not_found" }),
-      };
-    }
-    return {
-      ok: true,
-      json: async () => ({
-        ok: true,
-        result: { path: body.params?.path, isFile: true, isDirectory: body.params?.path?.includes("workspace"), sizeBytes: 14 },
-      }),
-    };
-  }
-  if (body?.method === "workspace.rootMetadata") {
-    return {
-      ok: true,
-      json: async () => ({
-        ok: true,
-        result: { path: body.params?.root, isDirectory: true, sizeBytes: 0 },
-      }),
-    };
-  }
-  if (body?.method === "workspace.createProject") {
-    return {
-      ok: true,
-      json: async () => ({
-        ok: true,
-        result: { path: `/workspace/${body.params?.projectName || "New project"}`, isDirectory: true, sizeBytes: 0 },
-      }),
-    };
-  }
-  if (body?.method === "workspace.selectDirectory") {
-    return {
-      ok: true,
-      json: async () => ({
-        ok: true,
-        result: { cancelled: true },
-      }),
-    };
-  }
-  if (body?.method === "appServer.write") {
-    return {
-      ok: true,
-      json: async () => ({ ok: true }),
-    };
-  }
-  if (url === "/wham/usage") {
-    return {
-      ok: true,
-      status: 200,
-      headers: new Map([["content-type", "application/json"]]),
-      text: async () => JSON.stringify({ plan_type: "prolite", rate_limit: { primary_window: { used_percent: 1 } } }),
-    };
-  }
-  if (body?.method === "appServer.rpc" && body.params?.method === "fs/readFile") {
-    return {
-      ok: true,
-      json: async () => ({
-        ok: true,
-        result: {
-          path: body.params?.params?.path,
-          contentsBase64: encodedFile,
-        },
-      }),
-    };
-  }
-  if (body?.method === "appServer.rpc" && body.params?.method === "plugin/list") {
-    return {
-      ok: true,
-      json: async () => ({
-        ok: true,
-        result: {
-          marketplaces: [
-            {
-              plugins: [
-                {
-                  interface: {
-                    displayName: "Chrome",
-                    logo: "/workspace/chrome.png?cache=1#icon",
-                    composerIcon: "/workspace/chrome-composer.png",
-                  },
-                },
-              ],
-            },
-          ],
-          featuredPluginIds: [],
-          marketplaceLoadErrors: [],
-        },
-      }),
-    };
-  }
-  if (body?.method === "appServer.rpc" && body.params?.method === "app/list") {
-    return {
-      ok: true,
-      json: async () => ({
-        ok: true,
-        result: {
-          data: [{ id: "connector_test", name: "Test App", logoUrl: "connectors://connector_test/logo?theme=light" }],
-          nextCursor: null,
-        },
-      }),
-    };
-  }
-  if (body?.method === "appServer.rpc" && body.params?.method === "modelProvider/capabilities/read") {
-    return {
-      ok: true,
-      json: async () => ({
-        ok: true,
-        result: {
-          namespaceTools: true,
-        },
-      }),
-    };
-  }
-  if (body?.method === "appServer.rpc" && body.params?.method === "config/batchWrite") {
-    return {
-      ok: true,
-      json: async () => ({
-        ok: true,
-        result: { wroteConfig: true, params: body.params?.params },
-      }),
-    };
-  }
-  if (body?.method === "appServer.rpc" && body.params?.method === "experimentalFeature/enablement/set") {
-    return {
-      ok: true,
-      json: async () => ({
-        ok: true,
-        result: { wroteFeature: true, params: body.params?.params },
-      }),
-    };
-  }
-  if (body?.method === "appServer.rpc" && body.params?.method === "thread/start") {
-    return {
-      ok: true,
-      json: async () => ({
-        ok: true,
-        result: {
-          thread: {
-            id: "thread-started",
-            sessionId: "thread-started",
-            cwd: body.params?.params?.cwd,
-          },
-        },
-      }),
-    };
-  }
-  if (body?.method === "appServer.rpc" && body.params?.method === "turn/start") {
-    return {
-      ok: true,
-      json: async () => ({
-        ok: true,
-        result: {
-          turn: {
-            id: "turn-started",
-            threadId: body.params?.params?.threadId,
-            input: body.params?.params?.input,
-          },
-        },
-      }),
-    };
-  }
-  if (body?.method === "appServer.rpc" && body.params?.method === "thread/turns/list") {
-    return {
-      ok: true,
-      json: async () => ({
-        ok: true,
-        result: {
-          turns: [
-            {
-              id: "turn-started",
-              threadId: body.params?.params?.threadId,
-              status: "completed",
-              durationMs: 12,
-              error: null,
-              items: [
-                {
-                  id: "agent-item-1",
-                  type: "agentMessage",
-                  text: "done",
-                },
-              ],
-            },
-          ],
-        },
-      }),
-    };
-  }
-  if (body?.method === "appServer.rpc") {
-    throw new Error(`unexpected app-server call for ${body.params?.method}`);
-  }
-  return {
-    ok: true,
-    status: 200,
-    headers: new Map([["content-type", "application/json"]]),
-    json: async () => ({ ok: true }),
-    text: async () => JSON.stringify({ ok: true }),
+  electronHeaders = pkgs.fetchurl {
+    hash = "$hash_a";
   };
 }
+EOF
+    printf '%s\n' '{"dependencies":{"electron":"42.1.0","better-sqlite3":"12.9.0","node-pty":"1.1.0"}}' \
+        > "$fixture/nix/native-modules/package.json"
+    printf '%s\n' '{"name":"native-modules","lockfileVersion":3,"packages":{}}' \
+        > "$fixture/nix/native-modules/package-lock.json"
 
-const document = {
-  activeElement: editable,
-  querySelector(selector) {
-    if (selector === '[contenteditable="true"]' || selector === "textarea" || selector === '[role="textbox"]') {
-      return editable;
-    }
-    return null;
-  },
-  execCommand(command, _showUi, value) {
-    if (command === "insertText") {
-      editable.value += value;
-      editable.textContent += value;
-      editable.selectionStart = editable.value.length;
-      editable.selectionEnd = editable.value.length;
-      return true;
-    }
-    return false;
-  },
-};
+    cat > "$fixture/scripts/ci/validate-nix-pins.sh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+echo "validate stub invoked"
+if [ "${VALIDATE_PIN_CHANGE:-0}" = "1" ]; then
+    python3 - "$REPO_DIR/flake.nix" <<'PY'
+from pathlib import Path
+import re
+import sys
 
-class InputEvent {
-  constructor(type, init = {}) {
-    this.type = type;
-    this.bubbles = Boolean(init.bubbles);
-    this.inputType = init.inputType;
-    this.data = init.data;
-  }
-}
+path = Path(sys.argv[1])
+text = path.read_text()
+text = re.sub(r'(codexVersion\s*=\s*")[^"]+(";)', r'\g<1>99.0.0\2', text, count=1)
+path.write_text(text)
+PY
+fi
+EOF
+    chmod +x "$fixture/scripts/ci/validate-nix-pins.sh"
 
-class FakeSpeechRecognition {
-  constructor() {
-    this.continuous = false;
-    this.interimResults = false;
-    this.lang = "";
-    FakeSpeechRecognition.instances.push(this);
-  }
-  start() {
-    this.onresult?.({
-      results: [
-        {
-          isFinal: true,
-          0: { transcript: " dictated text" },
-        },
-      ],
-    });
-    this.onend?.();
-  }
-  stop() {
-    this.onend?.();
-  }
-}
-FakeSpeechRecognition.instances = [];
-window.SpeechRecognition = FakeSpeechRecognition;
-window.webkitSpeechRecognition = FakeSpeechRecognition;
+    cat > "$fixture/bin/curl" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+out=""
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        -o)
+            shift
+            out="${1:-}"
+            ;;
+    esac
+    shift || true
+done
+if [ -n "$out" ]; then
+    printf 'fake dmg\n' > "$out"
+    exit 0
+fi
+version="26.623.81905"
+if [ "${VALIDATE_PIN_CHANGE:-0}" = "1" ]; then
+    version="99.0.0"
+fi
+printf '<rss><channel><item><sparkle:shortVersionString>%s</sparkle:shortVersionString></item></channel></rss>\n' "$version"
+EOF
+    chmod +x "$fixture/bin/curl"
 
-const context = vm.createContext({
-  window,
-  document,
-  navigator: { userAgent: "Linux x86_64" },
-  console,
-  setTimeout,
-  clearTimeout,
-  crypto: window.crypto,
-  EventSource,
-  fetch,
-  Symbol,
-  URL,
-  URLSearchParams,
-  InputEvent,
-  atob: (value) => Buffer.from(value, "base64").toString("binary"),
-  TextDecoder,
-});
+    cat > "$fixture/bin/nix" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+case "${1:-}" in
+    hash)
+        printf '%s\n' "${NIX_HASH:-sha256-VVQNu/E7Wuyxfsy93Gorknr0t7H7wy9kxMOiBZYOo/o=}"
+        ;;
+    store)
+        printf '{"hash":"%s"}\n' "${NIX_HASH:-sha256-VVQNu/E7Wuyxfsy93Gorknr0t7H7wy9kxMOiBZYOo/o=}"
+        ;;
+    build)
+        printf 'nix %s\n' "$*" >> "$CALL_LOG"
+        printf 'fake nix build ok\n'
+        ;;
+    *)
+        echo "unexpected nix call: $*" >&2
+        exit 2
+        ;;
+esac
+EOF
+    chmod +x "$fixture/bin/nix"
 
-vm.runInContext(source, context);
-await new Promise((resolve) => setTimeout(resolve, 0));
+    cat > "$fixture/bin/nix-store" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'nix-store %s\n' "$*" >> "$CALL_LOG"
+EOF
+    chmod +x "$fixture/bin/nix-store"
 
-const vscode = window.acquireVsCodeApi();
-vscode.postMessage({
-  type: "mcp-request",
-  hostId: "local",
-  request: { id: 1, method: "list-automations", params: {} },
-});
-vscode.postMessage({
-  type: "mcp-request",
-  hostId: "local",
-  request: { id: 2, method: "get-is-conversation-archiving-for-host", params: {} },
-});
-vscode.postMessage({
-  type: "mcp-request",
-  hostId: "local",
-  request: { id: 3, method: "hotkey-window-hotkey-state", params: {} },
-});
-vscode.postMessage({
-  type: "mcp-request",
-  hostId: "local",
-  request: { id: 4, method: "global-dictation-history", params: {} },
-});
-vscode.postMessage({
-  type: "mcp-request",
-  hostId: "local",
-  request: { id: 5, method: "global-dictation-copy-history-item", params: { id: "dictation-1" } },
-});
-vscode.postMessage({
-  type: "fetch",
-  hostId: "local",
-  requestId: "fetch-1",
-  url: "vscode://codex/list-automations",
-  body: JSON.stringify({ params: {} }),
-});
-vscode.postMessage({
-  type: "fetch",
-  hostId: "local",
-  requestId: "fetch-2",
-  url: "vscode://codex/get-is-conversation-archiving-for-host",
-  body: JSON.stringify({ params: { conversationId: "thread-id" } }),
-});
-vscode.postMessage({
-  type: "fetch",
-  hostId: "local",
-  requestId: "fetch-3",
-  url: "vscode://codex/hotkey-window-hotkey-state",
-  body: JSON.stringify({ params: {} }),
-});
-vscode.postMessage({
-  type: "fetch",
-  hostId: "local",
-  requestId: "fetch-4",
-  method: "GET",
-  url: "/wham/usage",
-});
-vscode.postMessage({
-  type: "fetch",
-  hostId: "local",
-  requestId: "fetch-5",
-  url: "vscode://codex/read-file",
-  body: JSON.stringify({ params: { path: "/workspace/README.md" } }),
-});
-vscode.postMessage({
-  type: "fetch",
-  hostId: "local",
-  requestId: "fetch-6",
-  url: "vscode://codex/read-file-binary",
-  body: JSON.stringify({ params: { path: "/workspace/logo.png" } }),
-});
-vscode.postMessage({
-  type: "fetch",
-  hostId: "local",
-  requestId: "fetch-7",
-  url: "vscode://codex/chrome-extension-installed-read",
-  body: JSON.stringify({ params: { extensionId: "abcdefghijklmnopabcdefghijklmnop" } }),
-});
-vscode.postMessage({
-  type: "fetch",
-  hostId: "local",
-  requestId: "fetch-8",
-  url: "vscode://codex/interrupt-conversation",
-  body: JSON.stringify({ params: { conversationId: "thread-id" } }),
-});
-vscode.postMessage({
-  type: "fetch",
-  hostId: "local",
-  requestId: "fetch-9",
-  url: "vscode://codex/list-plugins",
-  body: JSON.stringify({ params: { hostId: "local" } }),
-});
-vscode.postMessage({
-  type: "fetch",
-  hostId: "local",
-  requestId: "fetch-10",
-  url: "vscode://codex/browser-use-origin-state-read",
-  body: JSON.stringify({ params: {} }),
-});
-vscode.postMessage({
-  type: "fetch",
-  hostId: "local",
-  requestId: "fetch-11",
-  url: "vscode://codex/read-file-metadata",
-  body: JSON.stringify({ params: { path: "/workspace/logo.png" } }),
-});
-vscode.postMessage({
-  type: "fetch",
-  hostId: "local",
-  requestId: "fetch-12",
-  url: "vscode://codex/computer-use-app-approvals-read",
-  body: JSON.stringify({ params: {} }),
-});
-vscode.postMessage({
-  type: "fetch",
-  hostId: "local",
-  requestId: "fetch-13",
-  url: "vscode://codex/set-local-app-server-feature-enablement",
-  body: JSON.stringify({ params: { featureName: "remote_control", enabled: true } }),
-});
-vscode.postMessage({
-  type: "fetch",
-  hostId: "local",
-  requestId: "fetch-14",
-  url: "vscode://codex/set-default-model-config-for-host",
-  body: JSON.stringify({ params: { model: "gpt-5.5", reasoningEffort: "low", profile: null } }),
-});
-vscode.postMessage({
-  type: "fetch",
-  hostId: "local",
-  requestId: "fetch-15",
-  url: "vscode://codex/paths-exist",
-  body: JSON.stringify({ params: { paths: ["/workspace/existing", "/workspace/missing"] } }),
-});
-vscode.postMessage({
-  type: "fetch",
-  hostId: "local",
-  requestId: "fetch-16",
-  url: "vscode://codex/global-dictation-history",
-  body: JSON.stringify({ params: {} }),
-});
-vscode.postMessage({
-  type: "fetch",
-  hostId: "local",
-  requestId: "fetch-17",
-  url: "vscode://codex/global-dictation-copy-history-item",
-  body: JSON.stringify({ params: { id: "dictation-1" } }),
-});
-const workerResult = await window.electronBridge.sendWorkerMessageFromView({ type: "cancel" });
-const cliResult = await window.electronBridge.sendMessageFromView({
-  type: "send-cli-request-for-host",
-  hostId: "local",
-  method: "plugin/list",
-  params: {},
-});
-const appsResult = await window.electronBridge.sendMessageFromView({
-  type: "send-cli-request-for-host",
-  hostId: "local",
-  method: "list-apps",
-  params: {},
-});
-const capabilitiesResult = await window.electronBridge.sendMessageFromView({
-  type: "send-cli-request-for-host",
-  hostId: "local",
-  method: "modelProvider/capabilities/read",
-  params: {},
-});
-const appConnectCallback = await window.electronBridge.sendMessageFromView({
-  type: "send-cli-request-for-host",
-  hostId: "local",
-  method: "app-connect-oauth-callback-url",
-  params: {},
-});
-const remoteControlRefresh = await window.electronBridge.sendMessageFromView({
-  type: "send-cli-request-for-host",
-  hostId: "local",
-  method: "refresh-remote-control-connections",
-  params: {},
-});
-const remoteControlEnable = await window.electronBridge.sendMessageFromView({
-  type: "send-cli-request-for-host",
-  hostId: "local",
-  method: "set-remote-control-connections-enabled",
-  params: { enabled: true },
-});
-const remoteConnectionsRefresh = await window.electronBridge.sendMessageFromView({
-  type: "send-cli-request-for-host",
-  hostId: "local",
-  method: "refresh-remote-connections",
-  params: {},
-});
-const remoteAutoConnect = await window.electronBridge.sendMessageFromView({
-  type: "send-cli-request-for-host",
-  hostId: "local",
-  method: "set-remote-connection-auto-connect",
-  params: { hostId: "remote-control:test", autoConnect: true },
-});
-const remoteDirectoryEntries = await window.electronBridge.sendMessageFromView({
-  type: "send-cli-request-for-host",
-  hostId: "local",
-  method: "remote-workspace-directory-entries",
-  params: { hostId: "local", directoryPath: "/workspace", directoriesOnly: true },
-});
-const appServerConnectionState = await window.electronBridge.sendMessageFromView({
-  type: "send-cli-request-for-host",
-  hostId: "local",
-  method: "app-server-connection-state",
-  params: { hostId: "local" },
-});
-const projectlessStart = await window.electronBridge.sendMessageFromView({
-  type: "send-cli-request-for-host",
-  hostId: "local",
-  method: "start-conversation",
-  params: {
-    workspaceKind: "projectless",
-    input: [{ type: "text", text: "hello", text_elements: [] }],
-  },
-});
-const followerTurn = await window.electronBridge.sendMessageFromView({
-  type: "thread-follower-start-turn",
-  conversationId: "thread-started",
-  turnStartParams: {
-    input: [{ type: "text", text: "follow-up", text_elements: [] }],
-  },
-});
-const addedRoot = await window.electronBridge.sendMessageFromView({
-  type: "electron-add-new-workspace-root-option",
-  root: "/workspace/existing",
-});
-const promptedRoot = await window.electronBridge.sendMessageFromView({
-  type: "electron-add-new-workspace-root-option",
-});
-const createdRoot = await window.electronBridge.sendMessageFromView({
-  type: "electron-create-new-workspace-root-option",
-  projectName: "Created project",
-});
-const activeRoot = await window.electronBridge.sendMessageFromView({
-  type: "electron-set-active-workspace-root",
-  root: "/workspace/existing",
-});
-const updatedRoots = await window.electronBridge.sendMessageFromView({
-  type: "electron-update-workspace-root-options",
-  roots: ["/workspace/existing", "/workspace/second"],
-});
-const clearedRoot = await window.electronBridge.sendMessageFromView({
-  type: "electron-clear-active-workspace-root",
-});
-await window.electronBridge.sendMessageFromView({
-  type: "mcp-response",
-  hostId: "local",
-  message: { id: "server-request-1", result: { ok: true } },
-});
-eventSources[0]?.onmessage?.({
-  data: JSON.stringify({ method: "thread/updated", params: { threadId: "thread-id" } }),
-});
-eventSources[0]?.onerror?.(new Error("disconnect"));
-await new Promise((resolve) => setTimeout(resolve, 300));
-eventSources[1]?.onmessage?.({
-  data: JSON.stringify({ method: "thread/status/changed", params: { threadId: "thread-started", status: { type: "idle" } } }),
-});
-await window.electronBridge.sendMessageFromView({
-  type: "global-dictation-start",
-});
-await new Promise((resolve) => setTimeout(resolve, 0));
+    cat > "$fixture/bin/npm" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'npm %s\n' "$*" >> "$CALL_LOG"
+EOF
+    chmod +x "$fixture/bin/npm"
 
-const responses = posted.filter((message) => message.type === "mcp-response");
-if (responses.length !== 5) {
-  throw new Error(`expected 5 fallback responses, got ${responses.length}: ${JSON.stringify(posted)}`);
-}
-if (JSON.stringify(responses[0].message.result) !== JSON.stringify({ items: [] })) {
-  throw new Error(`list-automations fallback had wrong shape: ${JSON.stringify(responses[0])}`);
-}
-if (responses[1].message.result !== false) {
-  throw new Error(`archiving fallback had wrong shape: ${JSON.stringify(responses[1])}`);
-}
-if (JSON.stringify(responses[2].message.result) !== JSON.stringify({ configuredHotkey: null })) {
-  throw new Error(`hotkey fallback had wrong shape: ${JSON.stringify(responses[2])}`);
-}
-if (JSON.stringify(responses[3].message.result) !== JSON.stringify({ items: [] })) {
-  throw new Error(`global dictation history fallback had wrong shape: ${JSON.stringify(responses[3])}`);
-}
-if (JSON.stringify(responses[4].message.result) !== JSON.stringify({ ok: true })) {
-  throw new Error(`global dictation copy fallback had wrong shape: ${JSON.stringify(responses[4])}`);
-}
-const fetchResponses = posted.filter((message) => message.type === "fetch-response");
-if (fetchResponses.length !== 17) {
-  throw new Error(`expected 17 fetch fallback/proxy responses, got ${fetchResponses.length}: ${JSON.stringify(posted)}`);
-}
-const fetchByRequestId = new Map(fetchResponses.map((message) => [message.requestId, JSON.parse(message.bodyJsonString)]));
-if (JSON.stringify(fetchByRequestId.get("fetch-1")) !== JSON.stringify({ items: [] })) {
-  throw new Error(`fetch list-automations fallback had wrong shape: ${JSON.stringify(fetchResponses)}`);
-}
-if (fetchByRequestId.get("fetch-2") !== false) {
-  throw new Error(`fetch archiving fallback had wrong shape: ${JSON.stringify(fetchResponses)}`);
-}
-if (JSON.stringify(fetchByRequestId.get("fetch-3")) !== JSON.stringify({ configuredHotkey: null })) {
-  throw new Error(`fetch hotkey fallback had wrong shape: ${JSON.stringify(fetchResponses)}`);
-}
-if (JSON.stringify(fetchByRequestId.get("fetch-16")) !== JSON.stringify({ items: [] })) {
-  throw new Error(`fetch global dictation history fallback had wrong shape: ${JSON.stringify(fetchResponses)}`);
-}
-if (JSON.stringify(fetchByRequestId.get("fetch-17")) !== JSON.stringify({ ok: true })) {
-  throw new Error(`fetch global dictation copy fallback had wrong shape: ${JSON.stringify(fetchResponses)}`);
-}
-if (fetchByRequestId.get("fetch-4")?.plan_type !== "prolite" || fetchByRequestId.get("fetch-4")?.rate_limit?.primary_window?.used_percent !== 1) {
-  throw new Error(`local HTTP fetch proxy had wrong shape: ${JSON.stringify(fetchResponses)}`);
-}
-if (fetchByRequestId.get("fetch-5")?.contents !== "hello web mode" || fetchByRequestId.get("fetch-5")?.contentsBase64 !== encodedFile) {
-  throw new Error(`read-file fallback had wrong shape: ${JSON.stringify(fetchResponses)}`);
-}
-if (fetchByRequestId.get("fetch-6")?.contentsBase64 !== encodedFile) {
-  throw new Error(`read-file-binary fallback had wrong shape: ${JSON.stringify(fetchResponses)}`);
-}
-if (fetchByRequestId.get("fetch-7")?.installed !== true) {
-  throw new Error(`chrome extension fallback had wrong shape: ${JSON.stringify(fetchResponses)}`);
-}
-if (fetchByRequestId.get("fetch-8")?.interrupted !== true || fetchByRequestId.get("fetch-8")?.turnId !== "turn-1") {
-  throw new Error(`interrupt fallback had wrong shape: ${JSON.stringify(fetchResponses)}`);
-}
-if (!Array.isArray(fetchByRequestId.get("fetch-9")?.marketplaces)) {
-  throw new Error(`list-plugins forwarding had wrong shape: ${JSON.stringify(fetchResponses)}`);
-}
-if (fetchByRequestId.get("fetch-10")?.approvalMode !== "alwaysAsk") {
-  throw new Error(`browser-use origin state fallback had wrong shape: ${JSON.stringify(fetchResponses)}`);
-}
-if (fetchByRequestId.get("fetch-11")?.sizeBytes !== 14 || fetchByRequestId.get("fetch-11")?.isFile !== true) {
-  throw new Error(`read-file-metadata fallback had wrong shape: ${JSON.stringify(fetchResponses)}`);
-}
-if (!Array.isArray(fetchByRequestId.get("fetch-12")?.approvedApps)) {
-  throw new Error(`computer-use app approvals fallback had wrong shape: ${JSON.stringify(fetchResponses)}`);
-}
-if (fetchByRequestId.get("fetch-13")?.wroteFeature !== true || fetchByRequestId.get("fetch-13")?.params?.enablement !== true) {
-  throw new Error(`local feature enablement forwarding had wrong shape: ${JSON.stringify(fetchResponses)}`);
-}
-if (
-  fetchByRequestId.get("fetch-14")?.wroteConfig !== true ||
-  !fetchByRequestId.get("fetch-14")?.params?.edits?.some((edit) => edit.keyPath === "model")
-) {
-  throw new Error(`default model config forwarding had wrong shape: ${JSON.stringify(fetchResponses)}`);
-}
-if (JSON.stringify(fetchByRequestId.get("fetch-15")?.existingPaths) !== JSON.stringify(["/workspace/existing"])) {
-  throw new Error(`paths-exist should return existing local paths only: ${JSON.stringify(fetchResponses)}`);
-}
-if (workerResult?.reason !== "electron-worker-bridge-unavailable-in-web-mode") {
-  throw new Error(`worker bridge fallback threw or returned wrong result: ${JSON.stringify(workerResult)}`);
-}
-if (!Array.isArray(cliResult?.marketplaces)) {
-  throw new Error(`send-cli-request-for-host did not return plugin/list result: ${JSON.stringify(cliResult)}`);
-}
-if (!cliResult?.marketplaces?.[0]?.plugins?.[0]?.interface?.logo?.includes("/__codex/local-file?")) {
-  throw new Error(`plugin local asset URLs should be rewritten for browser loading: ${JSON.stringify(cliResult)}`);
-}
-const rewrittenPluginLogoUrl = new URL(cliResult.marketplaces[0].plugins[0].interface.logo);
-if (rewrittenPluginLogoUrl.searchParams.get("path") !== "/workspace/chrome.png") {
-  throw new Error(`plugin local asset URLs should strip query/hash before serving from disk: ${JSON.stringify(cliResult)}`);
-}
-if (appsResult?.data?.[0]?.id !== "connector_test") {
-  throw new Error(`list-apps did not forward to app/list: ${JSON.stringify(appsResult)}`);
-}
-if (capabilitiesResult?.realtimeVoice !== true || capabilitiesResult?.voiceInput !== true) {
-  throw new Error(`model capabilities did not advertise web voice support: ${JSON.stringify(capabilitiesResult)}`);
-}
-if (appConnectCallback?.callbackUrl !== "http://127.0.0.1:3773/oauth/callback") {
-  throw new Error(`app connect callback URL had wrong shape: ${JSON.stringify(appConnectCallback)}`);
-}
-if (remoteControlRefresh?.state?.available !== true || !Array.isArray(remoteControlRefresh?.connections)) {
-  throw new Error(`remote control refresh did not use desktop host contract: ${JSON.stringify(remoteControlRefresh)}`);
-}
-if (!Array.isArray(remoteControlRefresh?.remoteControlConnections)) {
-  throw new Error(`remote control refresh should return desktop remoteControlConnections: ${JSON.stringify(remoteControlRefresh)}`);
-}
-if (
-  !posted.some(
-    (message) =>
-      message.type === "shared-object-updated" &&
-      message.key === "remote_control_connections_state" &&
-      message.value?.available === true,
-  )
-) {
-  throw new Error(`desktop host sharedObjects should hydrate subscribed web state: ${JSON.stringify(posted)}`);
-}
-if (remoteControlEnable?.enabled !== true || remoteControlEnable?.state?.available !== true) {
-  throw new Error(`remote control enablement did not use desktop host contract: ${JSON.stringify(remoteControlEnable)}`);
-}
-if (!Array.isArray(remoteConnectionsRefresh?.connections)) {
-  throw new Error(`remote connections refresh did not use desktop host contract: ${JSON.stringify(remoteConnectionsRefresh)}`);
-}
-if (remoteAutoConnect?.autoConnect !== true || !Array.isArray(remoteAutoConnect?.connections) || remoteAutoConnect?.state !== "disconnected") {
-  throw new Error(`remote auto-connect did not use desktop host contract: ${JSON.stringify(remoteAutoConnect)}`);
-}
-if (
-  remoteDirectoryEntries?.directoryPath !== "/workspace" ||
-  !Array.isArray(remoteDirectoryEntries?.entries) ||
-  remoteDirectoryEntries.entries[0]?.type !== "directory"
-) {
-  throw new Error(`remote workspace directory lookup did not use desktop host contract: ${JSON.stringify(remoteDirectoryEntries)}`);
-}
-if (appServerConnectionState?.state !== "connected") {
-  throw new Error(`app-server connection state did not use desktop host contract: ${JSON.stringify(appServerConnectionState)}`);
-}
-if (
-  projectlessStart?.resultType !== "success" ||
-  projectlessStart?.result?.conversationId !== "thread-started" ||
-  projectlessStart?.result?.projectlessOutputDirectory !== "/workspace"
-) {
-  throw new Error(`projectless start did not synthesize output directory: ${JSON.stringify(projectlessStart)}`);
-}
-if (followerTurn?.resultType !== "success" || followerTurn?.result?.turn?.threadId !== "thread-started") {
-  throw new Error(`thread-follower-start-turn did not map to turn/start: ${JSON.stringify(followerTurn)}`);
-}
-if (addedRoot?.root !== "/workspace/existing" || !addedRoot?.activeWorkspaceRoots?.roots?.includes("/workspace/existing")) {
-  throw new Error(`explicit workspace root add failed: ${JSON.stringify(addedRoot)}`);
-}
-if (promptedRoot?.root !== "/workspace/from-prompt") {
-  throw new Error(`prompted workspace root add failed: ${JSON.stringify(promptedRoot)}`);
-}
-if (createdRoot?.root !== "/workspace/Created project") {
-  throw new Error(`created workspace root add failed: ${JSON.stringify(createdRoot)}`);
-}
-if (activeRoot?.activeWorkspaceRoots?.roots?.[0] !== "/workspace/existing") {
-  throw new Error(`active workspace root set failed: ${JSON.stringify(activeRoot)}`);
-}
-if (JSON.stringify(updatedRoots?.workspaceRootOptions?.roots) !== JSON.stringify(["/workspace/existing", "/workspace/second"])) {
-  throw new Error(`workspace root options update failed: ${JSON.stringify(updatedRoots)}`);
-}
-if (JSON.stringify(clearedRoot?.activeWorkspaceRoots?.roots) !== JSON.stringify([])) {
-  throw new Error(`workspace root clear failed: ${JSON.stringify(clearedRoot)}`);
-}
-const unexpectedAppServerCalls = fetches.filter(
-  (entry) =>
-    entry.startsWith("appServer.rpc:") &&
-    ![
-      "appServer.rpc:fs/readFile",
-      "appServer.rpc:plugin/list",
-      "appServer.rpc:app/list",
-      "appServer.rpc:modelProvider/capabilities/read",
-      "appServer.rpc:config/batchWrite",
-      "appServer.rpc:experimentalFeature/enablement/set",
-      "appServer.rpc:thread/start",
-      "appServer.rpc:turn/start",
-      "appServer.rpc:thread/turns/list",
-    ].includes(entry),
-);
-if (unexpectedAppServerCalls.length > 0) {
-  throw new Error(`fallback methods should not be forwarded to app-server: ${JSON.stringify(fetches)}`);
-}
-if (fetches.filter((entry) => entry === "appServer.rpc:fs/readFile").length !== 2) {
-  throw new Error(`read-file methods should be forwarded through fs/readFile: ${JSON.stringify(fetches)}`);
-}
-if (fetches.filter((entry) => entry === "appServer.rpc:plugin/list").length !== 2) {
-  throw new Error(`plugin list should be forwarded by fetch and send-cli-request-for-host: ${JSON.stringify(fetches)}`);
-}
-if (fetches.filter((entry) => entry === "appServer.rpc:app/list").length !== 1) {
-  throw new Error(`list-apps should be forwarded through app/list: ${JSON.stringify(fetches)}`);
-}
-if (fetches.filter((entry) => entry === "appServer.rpc:modelProvider/capabilities/read").length !== 1) {
-  throw new Error(`model provider capabilities should be forwarded and augmented: ${JSON.stringify(fetches)}`);
-}
-if (fetches.filter((entry) => entry === "appServer.rpc:thread/start").length !== 1) {
-  throw new Error(`projectless chat should start one app-server thread: ${JSON.stringify(fetches)}`);
-}
-if (fetches.filter((entry) => entry === "appServer.rpc:turn/start").length !== 2) {
-  throw new Error(`chat starts and follower turns should be forwarded through turn/start: ${JSON.stringify(fetches)}`);
-}
-if (fetches.filter((entry) => entry === "appServer.rpc:thread/turns/list").length < 1) {
-  throw new Error(`active turns should be recovered through thread/turns/list: ${JSON.stringify(fetches)}`);
-}
-if (!fetches.includes("appServer.rpc:config/batchWrite")) {
-  throw new Error(`default model config should be forwarded through config/batchWrite: ${JSON.stringify(fetches)}`);
-}
-if (!fetches.includes("appServer.rpc:experimentalFeature/enablement/set")) {
-  throw new Error(`feature enablement should be forwarded through experimentalFeature/enablement/set: ${JSON.stringify(fetches)}`);
-}
-if (!fetches.includes("chromeExtension.installed")) {
-  throw new Error(`chrome extension status should be forwarded to the web-mode server: ${JSON.stringify(fetches)}`);
-}
-if (!fetches.includes("conversation.interrupt")) {
-  throw new Error(`interrupt conversation should be forwarded to the web-mode server: ${JSON.stringify(fetches)}`);
-}
-if (!fetches.includes("desktopHost.request:refresh-remote-control-connections")) {
-  throw new Error(`remote control refresh should be handled by desktopHost.request: ${JSON.stringify(fetches)}`);
-}
-if (!fetches.includes("desktopHost.request:set-remote-control-connections-enabled")) {
-  throw new Error(`remote control enablement should be handled by desktopHost.request: ${JSON.stringify(fetches)}`);
-}
-if (!fetches.includes("desktopHost.request:refresh-remote-connections")) {
-  throw new Error(`remote connections refresh should be handled by desktopHost.request: ${JSON.stringify(fetches)}`);
-}
-if (!fetches.includes("desktopHost.request:set-remote-connection-auto-connect")) {
-  throw new Error(`remote auto-connect should be handled by desktopHost.request: ${JSON.stringify(fetches)}`);
-}
-if (!fetches.includes("desktopHost.request:remote-workspace-directory-entries")) {
-  throw new Error(`remote directory lookup should be handled by desktopHost.request: ${JSON.stringify(fetches)}`);
-}
-if (!fetches.includes("desktopHost.request:app-server-connection-state")) {
-  throw new Error(`app-server connection state should be handled by desktopHost.request: ${JSON.stringify(fetches)}`);
-}
-if (!fetches.includes("appServer.write")) {
-  throw new Error(`mcp-response should be written back to the app-server: ${JSON.stringify(fetches)}`);
-}
-if (!fetches.includes("fs.metadata")) {
-  throw new Error(`read-file-metadata should be forwarded to the web-mode server: ${JSON.stringify(fetches)}`);
-}
-if (fetches.filter((entry) => entry === "workspace.rootMetadata").length < 4) {
-  throw new Error(`workspace root changes should validate local directories through web-mode server: ${JSON.stringify(fetches)}`);
-}
-if (!fetches.includes("workspace.createProject")) {
-  throw new Error(`new workspace projects should be created through web-mode server: ${JSON.stringify(fetches)}`);
-}
-if (!fetches.includes("workspace.selectDirectory")) {
-  throw new Error(`use existing folder should ask web-mode server for a native folder picker: ${JSON.stringify(fetches)}`);
-}
-if (!fetches.includes("/wham/usage")) {
-  throw new Error(`local HTTP fetch proxy did not hit the expected route: ${JSON.stringify(fetches)}`);
-}
-if (posted.some((message) => message.type === "mcp-request" && message.request?.method === "thread/updated")) {
-  throw new Error(`app-server notifications must not be relayed as renderer-originated requests: ${JSON.stringify(posted)}`);
-}
-if (!posted.some((message) => message.type === "mcp-notification" && message.method === "thread/updated")) {
-  throw new Error(`app-server notifications should be relayed as mcp-notification: ${JSON.stringify(posted)}`);
-}
-if (!posted.some((message) => message.type === "mcp-notification" && message.method === "turn/completed")) {
-  throw new Error(`active turn recovery should synthesize a completed turn notification: ${JSON.stringify(posted)}`);
-}
-if (!eventSources[0]?.closed || eventSources.length < 2) {
-  throw new Error(`event stream should close and reconnect after errors`);
-}
-if (!editable.value.includes("dictated text")) {
-  throw new Error(`dictation should insert recognized text into the focused composer: ${JSON.stringify(editable)}`);
-}
-})().catch((error) => {
-  console.error(error);
-  process.exit(1);
-});
-NODE
+    git -C "$fixture" init -q
+    git -C "$fixture" config user.name "Test"
+    git -C "$fixture" config user.email "test@example.invalid"
+    git -C "$fixture" add flake.nix nix/native-modules/package.json nix/native-modules/package-lock.json
+    git -C "$fixture" commit -q -m "fixture"
 }
 
-test_web_mode_codex_home_policy() {
-    info "Checking web mode Codex identity/profile policy"
-    local server="$REPO_DIR/launcher/web-mode-server.mjs"
-    local workspace="$TMP_DIR/web-mode-codex-home/workspace"
-    local profile="$TMP_DIR/web-mode-codex-home/profile"
-    local shared_home="$TMP_DIR/web-mode-codex-home/shared-codex"
-    local custom_home="$TMP_DIR/web-mode-codex-home/custom-codex"
-    local home_dir="$TMP_DIR/web-mode-codex-home/home"
-    local default_home="$home_dir/.codex"
+run_update_nix_hash_fixture() {
+    local label="$1"
+    local validate_pin_change="$2"
+    local nix_hash="$3"
+    local fixture="$TMP_DIR/$label"
 
-    mkdir -p "$workspace" "$profile" "$shared_home" "$custom_home" "$home_dir"
-
-    env -u CODEX_COMPUTER_USE_BROWSER_ONLY CODEX_COMPUTER_CONTROL_MODE=desktop CODEX_HOME="$shared_home" node "$server" inspect \
-        --workspace "$workspace" \
-        --profile "$profile" > "$TMP_DIR/web-mode-shared-home.json"
-    assert_contains "$TMP_DIR/web-mode-shared-home.json" "\"codex_home\": \"$shared_home\""
-    assert_contains "$TMP_DIR/web-mode-shared-home.json" "\"profile\": \"$profile\""
-    assert_contains "$TMP_DIR/web-mode-shared-home.json" "\"isolated\": false"
-    assert_contains "$TMP_DIR/web-mode-shared-home.json" "\"mode\": \"desktop\""
-    assert_contains "$TMP_DIR/web-mode-shared-home.json" "\"physical_host_control\": true"
-    assert_not_contains "$TMP_DIR/web-mode-shared-home.json" "$profile/identity/codex-home"
-
-    env -u CODEX_COMPUTER_CONTROL_MODE -u CODEX_COMPUTER_USE_BROWSER_ONLY -u DISPLAY -u WAYLAND_DISPLAY -u DBUS_SESSION_BUS_ADDRESS -u XDG_RUNTIME_DIR CODEX_HOME="$shared_home" node "$server" inspect \
-        --workspace "$workspace" \
-        --profile "$profile" > "$TMP_DIR/web-mode-auto-browser-only.json"
-    assert_contains "$TMP_DIR/web-mode-auto-browser-only.json" "\"mode\": \"browser-only\""
-    assert_contains "$TMP_DIR/web-mode-auto-browser-only.json" "\"physical_host_control\": false"
-
-    env -u CODEX_COMPUTER_USE_BROWSER_ONLY CODEX_COMPUTER_CONTROL_MODE=browser-only CODEX_HOME="$shared_home" node "$server" inspect \
-        --workspace "$workspace" \
-        --profile "$profile" > "$TMP_DIR/web-mode-browser-only.json"
-    assert_contains "$TMP_DIR/web-mode-browser-only.json" "\"mode\": \"browser-only\""
-    assert_contains "$TMP_DIR/web-mode-browser-only.json" "\"physical_host_control\": false"
-
-    HOME="$home_dir" env -u CODEX_HOME node "$server" inspect \
-        --workspace "$workspace" \
-        --profile "$profile" > "$TMP_DIR/web-mode-default-home.json"
-    assert_contains "$TMP_DIR/web-mode-default-home.json" "\"codex_home\": \"$default_home\""
-
-    env -u CODEX_HOME node "$server" inspect \
-        --workspace "$workspace" \
-        --profile "$profile" \
-        --codex-home "$custom_home" > "$TMP_DIR/web-mode-custom-home.json"
-    assert_contains "$TMP_DIR/web-mode-custom-home.json" "\"codex_home\": \"$custom_home\""
-
-    env -u CODEX_HOME node "$server" inspect \
-        --workspace "$workspace" \
-        --profile "$profile" \
-        --isolated > "$TMP_DIR/web-mode-isolated-home.json"
-    assert_contains "$TMP_DIR/web-mode-isolated-home.json" "\"codex_home\": \"$profile/identity/codex-home\""
-    assert_contains "$TMP_DIR/web-mode-isolated-home.json" "\"isolated\": true"
+    make_update_nix_hash_fixture "$fixture"
+    : > "$fixture/calls.log"
+    PATH="$fixture/bin:$PATH" \
+        REPO_DIR="$fixture" \
+        FLAKE_FILE="$fixture/flake.nix" \
+        UPSTREAM_DMG_PATH="$fixture/Codex.dmg" \
+        VERIFY_LOG="$fixture/verify.log" \
+        CALL_LOG="$fixture/calls.log" \
+        VALIDATE_PIN_CHANGE="$validate_pin_change" \
+        NIX_HASH="$nix_hash" \
+        bash "$fixture/scripts/ci/update-nix-hashes.sh" > "$fixture/output.log" 2>&1
 }
 
-test_web_mode_inventory_script_reports_host_markers() {
-    info "Checking web mode bridge inventory script"
-    local script="$REPO_DIR/scripts/web-mode-inventory.mjs"
-    local webview_dir="$TMP_DIR/web-mode-inventory/webview"
-    local out="$TMP_DIR/web-mode-inventory/bridge-inventory.json"
+test_update_nix_hashes_skips_unchanged_package_verification() {
+    info "Checking Nix hash refresh skips package verification when pins are unchanged"
+    local fixture="$TMP_DIR/nix-hash-refresh-unchanged"
+    local hash_a="sha256-VVQNu/E7Wuyxfsy93Gorknr0t7H7wy9kxMOiBZYOo/o="
 
-    mkdir -p "$webview_dir/assets"
-    cat > "$webview_dir/index.html" <<'HTML'
-<!doctype html>
-<html>
-<head><title>Codex</title></head>
-<body>
-<script>window.acquireVsCodeApi && window.acquireVsCodeApi();</script>
-<script src="./assets/app.js"></script>
-</body>
-</html>
-HTML
-    cat > "$webview_dir/assets/app.js" <<'JS'
-const host = {
-  dispatchHostMessage: "dispatchHostMessage",
-  dispatchMessage: "dispatchMessage",
-  ipcRenderer: "ipcRenderer",
-  electron: "electron",
-  uri: "vscode://codex",
-  get: "get-global-state",
-  set: "set-global-state",
-  computer: "computer_use",
-  browser: "Browser Use",
-};
-console.log(host);
-JS
+    run_update_nix_hash_fixture "$(basename "$fixture")" 0 "$hash_a"
 
-    assert_file_exists "$script"
-    node "$script" --webview-dir "$webview_dir" --out "$out"
-    assert_file_exists "$out"
-    assert_contains "$out" '"schema_version": 1'
-    assert_contains "$out" '"scanned_files": 2'
-    assert_contains "$out" '"host_api_markers"'
-    assert_contains "$out" '"acquireVsCodeApi": 2'
-    assert_contains "$out" '"dispatchHostMessage": 2'
-    assert_contains "$out" '"vscode://codex": 1'
-    assert_contains "$out" '"Browser Use": 1'
+    assert_contains "$fixture/output.log" "Nix pins unchanged; skipping package-output verification."
+    assert_not_contains "$fixture/calls.log" "nix-store"
+    assert_not_contains "$fixture/calls.log" "nix build"
 }
 
-test_web_mode_contract_harness_fixture() {
-    info "Checking web mode contract harness fixture"
-    local script="$REPO_DIR/scripts/web-mode-contract-harness.mjs"
-    local out="$TMP_DIR/web-mode-contract/contract-matrix.json"
+test_update_nix_hashes_verifies_changed_pins() {
+    info "Checking Nix hash refresh still verifies changed pins"
+    local fixture="$TMP_DIR/nix-hash-refresh-version-change"
+    local hash_a="sha256-VVQNu/E7Wuyxfsy93Gorknr0t7H7wy9kxMOiBZYOo/o="
 
-    assert_file_exists "$script"
-    node --check "$script"
-    node "$script" --fixture --out "$out"
-    assert_file_exists "$out"
-    assert_contains "$out" '"schema_version": 1'
-    assert_contains "$out" '"status": "pass"'
-    assert_contains "$out" '"id": "connections"'
-    assert_contains "$out" '"id": "remote-control-clients"'
-    assert_contains "$out" '"id": "mic-realtime"'
-    assert_contains "$out" '"id": "computer-use"'
-    assert_contains "$out" '"host_calls"'
-    assert_contains "$out" '"GET /wham/remote/control/clients?limit=100"'
-    assert_contains "$REPO_DIR/docs/superpowers/plans/2026-05-18-codex-desktop-serve-contract-spike.md" "Codex Desktop Serve Contract Spike"
-    assert_contains "$REPO_DIR/docs/superpowers/plans/2026-05-18-codex-desktop-serve-contract-spike.md" "Do not fake Connections"
+    run_update_nix_hash_fixture "$(basename "$fixture")" 1 "$hash_a"
+
+    assert_contains "$fixture/output.log" "Nix builds succeeded after refreshing the upstream pins and Codex.dmg hash."
+    assert_contains "$fixture/calls.log" "nix-store --add-fixed"
+    assert_contains "$fixture/calls.log" "nix build"
 }
 
-test_web_mode_remote_control_controller_fixture() {
-    info "Checking web mode remote-control websocket controller fixture"
-    local test_script="$REPO_DIR/tests/web-mode-remote-control-controller.test.mjs"
+test_update_nix_hashes_verifies_changed_dmg_hash() {
+    info "Checking Nix hash refresh still verifies changed DMG hashes"
+    local fixture="$TMP_DIR/nix-hash-refresh-dmg-hash-change"
+    local hash_b="sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
 
-    assert_file_exists "$test_script"
-    node --check "$test_script"
-    node "$test_script"
+    run_update_nix_hash_fixture "$(basename "$fixture")" 0 "$hash_b"
+
+    assert_contains "$fixture/output.log" "Nix builds succeeded after refreshing the upstream pins and Codex.dmg hash."
+    assert_contains "$fixture/calls.log" "nix-store --add-fixed"
+    assert_contains "$fixture/calls.log" "nix build"
 }
 
 test_installer_detects_electron_version_from_plist() {
@@ -4655,6 +3338,7 @@ SCRIPT
 
     assert_file_exists "$workspace/work/.v8-nullptr-fix.h"
     assert_file_exists "$workspace/work/.cxx-v8-nullptr"
+    assert_contains "$workspace/work/.cxx-v8-nullptr" "#!/usr/bin/env bash"
     assert_contains "$workspace/work/.v8-nullptr-fix.h" "using std::nullptr_t;"
     assert_contains "$cxx_state" "CXX=$workspace/work/.cxx-v8-nullptr"
     assert_contains "$cxx_log" "-include"
@@ -4740,17 +3424,6 @@ echo "npx should not be used for electron-rebuild" >&2
 exit 99
 SCRIPT
     chmod +x "$fake_bin/npx"
-    cat > "$fake_bin/c++" <<'SCRIPT'
-#!/usr/bin/env bash
-set -euo pipefail
-for arg in "$@"; do
-    if [ -f "$arg" ]; then
-        cat "$arg" >/dev/null
-    fi
-done
-exit 0
-SCRIPT
-    chmod +x "$fake_bin/c++"
 
     (
         PATH="$fake_bin:$PATH"
@@ -4882,60 +3555,10 @@ test_launcher_template_sanity() {
     assert_contains "$REPO_DIR/scripts/lib/native-modules.sh" "CODEX_ELECTRON_CACHE_DIR"
     assert_contains "$REPO_DIR/scripts/lib/native-modules.sh" "--continue-at -"
     assert_file_exists "$REPO_DIR/launcher/webview-server.py"
-    assert_file_exists "$REPO_DIR/launcher/web-mode-server.mjs"
-    assert_file_exists "$REPO_DIR/launcher/web-mode-bootstrap.js"
-    assert_file_exists "$REPO_DIR/launcher/remote-control-hosts.mjs"
     assert_contains "$REPO_DIR/launcher/webview-server.py" "Cache-Control"
     assert_contains "$REPO_DIR/launcher/webview-server.py" "If-Modified-Since"
     assert_contains "$REPO_DIR/install.sh" "webview-server.py"
-    assert_contains "$REPO_DIR/install.sh" "web-mode-server.mjs"
-    assert_contains "$REPO_DIR/install.sh" "web-mode-bootstrap.js"
-    assert_contains "$REPO_DIR/install.sh" "remote-control-hosts.mjs"
-    assert_contains "$REPO_DIR/scripts/lib/package-common.sh" "web-mode-server.mjs"
-    assert_contains "$REPO_DIR/scripts/lib/package-common.sh" "web-mode-bootstrap.js"
-    assert_contains "$REPO_DIR/scripts/lib/package-common.sh" "remote-control-hosts.mjs"
-    assert_contains "$REPO_DIR/updater/src/builder.rs" "launcher/web-mode-server.mjs"
-    assert_contains "$REPO_DIR/updater/src/builder.rs" "launcher/web-mode-bootstrap.js"
-    assert_contains "$REPO_DIR/updater/src/builder.rs" "launcher/remote-control-hosts.mjs"
     assert_contains "$REPO_DIR/launcher/start.sh.template" 'python3 "$SCRIPT_DIR/.codex-linux/webview-server.py" "$CODEX_LINUX_WEBVIEW_PORT" --bind 127.0.0.1'
-    assert_contains "$REPO_DIR/launcher/start.sh.template" "remote-control hosts"
-    assert_contains "$REPO_DIR/launcher/remote-control-hosts.mjs" "/codex/remote/control/environments"
-    assert_contains "$REPO_DIR/launcher/remote-control-hosts.mjs" "renderButtonRows"
-    assert_contains "$REPO_DIR/launcher/remote-control-hosts.mjs" "const twoPane = width >= 104"
-    assert_contains "$REPO_DIR/launcher/start.sh.template" "codex_desktop_web_mode"
-    assert_contains "$REPO_DIR/launcher/start.sh.template" "codex_desktop_web_mode serve"
-    assert_contains "$REPO_DIR/launcher/start.sh.template" "serve --workspace DIR"
-    assert_contains "$REPO_DIR/launcher/start.sh.template" "serve status --workspace DIR"
-    assert_contains "$REPO_DIR/launcher/start.sh.template" "serve stop --workspace DIR"
-    assert_contains "$REPO_DIR/launcher/start.sh.template" "--codex-home DIR|--isolated"
-    assert_contains "$REPO_DIR/launcher/start.sh.template" "CODEX_DESKTOP_WEB_MODE=1"
-    assert_contains "$REPO_DIR/launcher/start.sh.template" "CODEX_BROWSER_MODE"
-    assert_contains "$REPO_DIR/launcher/start.sh.template" "CODEX_COMPUTER_CONTROL_MODE"
-    assert_contains "$REPO_DIR/launcher/start.sh.template" 'CODEX_COMPUTER_CONTROL_MODE="browser-only"'
-    assert_contains "$REPO_DIR/launcher/start.sh.template" 'early_truthy_env_value "${CODEX_COMPUTER_USE_BROWSER_ONLY:-}"'
-    assert_not_contains "$REPO_DIR/launcher/start.sh.template" 'CODEX_COMPUTER_USE_BROWSER_ONLY="${CODEX_COMPUTER_USE_BROWSER_ONLY:-1}"'
-    assert_not_contains "$REPO_DIR/launcher/start.sh.template" 'CODEX_COMPUTER_CONTROL_MODE="${CODEX_COMPUTER_CONTROL_MODE:-desktop}"'
-    assert_not_contains "$REPO_DIR/launcher/start.sh.template" 'CODEX_COMPUTER_CONTROL_MODE="${CODEX_COMPUTER_CONTROL_MODE:-browser-only}"'
-    assert_contains "$REPO_DIR/launcher/web-mode-server.mjs" 'codex app-server'
-    assert_contains "$REPO_DIR/launcher/web-mode-server.mjs" 'app-server'
-    assert_contains "$REPO_DIR/launcher/web-mode-server.mjs" 'stdio://'
-    assert_contains "$REPO_DIR/launcher/web-mode-server.mjs" '"initialize"'
-    assert_contains "$REPO_DIR/launcher/web-mode-server.mjs" '"initialized"'
-    assert_contains "$REPO_DIR/launcher/web-mode-server.mjs" '"account/read"'
-    assert_contains "$REPO_DIR/launcher/web-mode-server.mjs" '/__codex/app-server/rpc'
-    assert_contains "$REPO_DIR/launcher/web-mode-server.mjs" '/__codex/app-server/events'
-    assert_contains "$REPO_DIR/launcher/web-mode-server.mjs" 'CODEX_BROWSER_MODE'
-    assert_contains "$REPO_DIR/launcher/web-mode-server.mjs" 'container-chromium'
-    assert_contains "$REPO_DIR/launcher/web-mode-server.mjs" 'CODEX_BROWSER_CDP_ENDPOINT'
-    assert_contains "$REPO_DIR/launcher/web-mode-server.mjs" 'CODEX_BROWSER_USE_SOCKET_DIR'
-    assert_contains "$REPO_DIR/launcher/web-mode-server.mjs" 'CODEX_COMPUTER_USE_BROWSER_ONLY'
-    assert_contains "$REPO_DIR/launcher/web-mode-server.mjs" 'CODEX_COMPUTER_CONTROL_MODE'
-    assert_contains "$REPO_DIR/launcher/web-mode-server.mjs" 'CODEX_HOME: args.codexHome'
-    assert_contains "$REPO_DIR/launcher/web-mode-server.mjs" 'process.env.CODEX_HOME'
-    assert_contains "$REPO_DIR/launcher/web-mode-server.mjs" '--codex-home'
-    assert_contains "$REPO_DIR/launcher/web-mode-server.mjs" '--isolated'
-    assert_contains "$REPO_DIR/launcher/web-mode-bootstrap.js" 'health?.codex_home'
-    assert_contains "$REPO_DIR/launcher/web-mode-server.mjs" 'browser-only'
     assert_contains "$REPO_DIR/launcher/start.sh.template" "WEBVIEW_PID_FILE"
     assert_contains "$REPO_DIR/launcher/start.sh.template" "owned_webview_server_pid"
     assert_contains "$REPO_DIR/launcher/start.sh.template" "discover_webview_server_pid"
@@ -4960,6 +3583,8 @@ test_launcher_template_sanity() {
     assert_contains "$REPO_DIR/launcher/start.sh.template" "ADOPTED_WEBVIEW_PID"
     assert_contains "$REPO_DIR/launcher/start.sh.template" "Reusing webview server pid="
     assert_contains "$REPO_DIR/launcher/start.sh.template" "run_cold_start_hooks"
+    assert_contains "$REPO_DIR/launcher/start.sh.template" '2>/dev/null 1>&"\$LAUNCHER_EARLY_STDERR_FD" || true'
+    assert_not_contains "$REPO_DIR/launcher/start.sh.template" '>&"\$LAUNCHER_EARLY_STDERR_FD" 2>/dev/null || true'
     assert_contains "$REPO_DIR/linux-features/remote-mobile-control/feature.json" '"stageHook": "./stage.sh"'
     assert_contains "$REPO_DIR/linux-features/remote-mobile-control/stage.sh" "cold-start.d"
     assert_contains "$REPO_DIR/linux-features/remote-mobile-control/stage.sh" "remote-mobile-control"
@@ -4986,6 +3611,7 @@ launch_body = source.split("launch_electron() {", 1)[1].split("load_packaged_run
 runtime_body = source.split("trap cleanup_launcher EXIT", 1)[1].split("launch_electron", 1)[0]
 webview_probe_body = source.split("webview_port_is_open() {", 1)[1].split("wait_for_webview_server() {", 1)[0]
 wait_body = source.split("wait_for_webview_server() {", 1)[1].split("verify_webview_origin() {", 1)[0]
+send_body = source.split("send_warm_start_launch_action() {", 1)[1].split("webview_origin_is_reachable() {", 1)[0]
 prelaunch_hooks_body = source.split("run_feature_prelaunch_hooks() {", 1)[1].split("bundled_plugin_version() {", 1)[0]
 launcher_hooks_body = source.split("run_feature_launcher_hooks() {", 1)[1].split("build_electron_launch_args() {", 1)[0]
 cold_start_hooks_body = source.split("run_cold_start_hooks() {", 1)[1].split("run_cli_preflight() {", 1)[0]
@@ -5036,6 +3662,8 @@ if 'CODEX_ELECTRON_USER_DATA_DIR="$APP_STATE_DIR/electron-user-data"' not in mul
     raise SystemExit("multi-launch must force a per-instance Electron user-data dir")
 if 'send_warm_start_launch_action "${LAUNCHER_ARGS[@]}"' not in source:
     raise SystemExit("warm-start handoff must not receive launcher-only multi-launch flags")
+if "client.shutdown(socket.SHUT_WR)" not in send_body or "response = client.recv(32)" not in send_body:
+    raise SystemExit("warm-start IPC client must read the Electron socket acknowledgement")
 if 'launch_electron "${LAUNCHER_ARGS[@]}"' not in source:
     raise SystemExit("Electron launch must receive sanitized launcher args")
 if 'FEATURE_LAUNCHER_HOOK_DIR="$SCRIPT_DIR/.codex-linux/launcher.d"' not in source:
@@ -5101,7 +3729,7 @@ if "second_instance_handoff_ready" not in runtime_body:
     raise SystemExit("second-instance handoff must skip cold-start setup")
 if "clear_bundled_marketplace_tmp_cache\nmonitor_bundled_marketplace_tmp_permissions\nreconcile_runtime_state" in runtime_body:
     raise SystemExit("warm-start path must not clear bundled marketplace temp cache")
-if not re.search(r'if needs_cold_start; then\s+log_phase "cold_start_cache_sync_start"\s+clear_bundled_marketplace_tmp_cache.*?monitor_bundled_marketplace_tmp_permissions.*?sync_browser_use_bundled_plugin_cache.*?sync_chrome_bundled_plugin_cache.*?(?:if ! early_truthy_env_value .*?sync_computer_use_bundled_plugin_cache\s+fi\s+)?log_phase "computer_use_plugin_cache_synced".*?sync_read_aloud_bundled_plugin_cache.*?run_cold_start_hooks.*?log_phase "cold_start_hooks_dispatched"\s+fi', runtime_body, re.S):
+if not re.search(r'if needs_cold_start; then\s+log_phase "cold_start_cache_sync_start"\s+clear_bundled_marketplace_tmp_cache.*?monitor_bundled_marketplace_tmp_permissions.*?sync_browser_use_bundled_plugin_cache.*?sync_chrome_bundled_plugin_cache.*?sync_computer_use_bundled_plugin_cache.*?sync_read_aloud_bundled_plugin_cache.*?run_cold_start_hooks.*?log_phase "cold_start_hooks_dispatched"\s+fi', runtime_body, re.S):
     raise SystemExit("bundled marketplace cleanup, plugin sync, and cold-start hooks must run only on cold start")
 for marker in (
     "initial_launch_state_refresh_start",
@@ -5123,6 +3751,17 @@ if 'if needs_cold_start && [ -z "$CODEX_CLI_PATH" ]; then' not in runtime_body:
     raise SystemExit("second-instance handoff must skip missing-CLI failure")
 if '"$HOME/.bun/bin/codex"' not in source:
     raise SystemExit("CLI lookup must include bun global install path")
+if "codex_cli_version_probe()" not in source or "codex_cli_version()" not in source:
+    raise SystemExit("CLI lookup must log a bounded best-effort resolved CLI version probe")
+if "version unknown; set CODEX_CLI_PATH=/path/to/codex" not in source:
+    raise SystemExit("CLI lookup diagnostics must explain explicit CODEX_CLI_PATH pinning")
+if 'local self_pid="${BASHPID:-$$}"' not in source or 'pid_parent_matches "$probe_pid" "$self_pid"' not in source:
+    raise SystemExit("CLI version probe watchdog must guard kills against PID reuse")
+if source.count('{ exec 9>&-; } 2>/dev/null || true') < 3:
+    raise SystemExit("CLI version probe children and Electron child must close launcher lock fd 9")
+for unexpected in ("find_codex_cli_entry", "codex_cli_version_compare", "codex_cli_version_gt", "sort -V"):
+    if unexpected in source:
+        raise SystemExit(f"launcher must not rank discovered CLI candidates with {unexpected}")
 if "if needs_cold_start;" not in runtime_body:
     raise SystemExit("second-instance handoff must skip CLI preflight")
 if 'run_cold_start_hooks' not in runtime_body:
@@ -5292,12 +3931,51 @@ open(output_path, "w", encoding="utf-8").write(probe)
 PY
     chmod +x "$launcher_probe"
 
-    output="$(env -i PATH="$PATH" HOME="$HOME" CODEX_LINUX_RENDERING_MODE=default "$launcher_probe" probe --x11 -- --use-gl=angle)"
+    local at_stub_dir="$TMP_DIR/assistive-tech-stubs"
+    mkdir -p "$at_stub_dir/none" "$at_stub_dir/orca" "$at_stub_dir/screenreader" \
+        "$at_stub_dir/toolkit" "$at_stub_dir/atspibus" "$at_stub_dir/slowbus"
+    printf '%s\n' '#!/usr/bin/env bash' 'exit 1' > "$at_stub_dir/none/pgrep"
+    printf '%s\n' '#!/usr/bin/env bash' "printf 'false\\n'" > "$at_stub_dir/none/gsettings"
+    printf '%s\n' '#!/usr/bin/env bash' 'exit 0' > "$at_stub_dir/orca/pgrep"
+    printf '%s\n' '#!/usr/bin/env bash' "printf 'false\\n'" > "$at_stub_dir/orca/gsettings"
+    printf '%s\n' '#!/usr/bin/env bash' 'exit 1' > "$at_stub_dir/screenreader/pgrep"
+    printf '%s\n' '#!/usr/bin/env bash' "printf 'true\\n'" > "$at_stub_dir/screenreader/gsettings"
+    # Computer Use gsettings fallback: toolkit-accessibility on, screen reader off.
+    cat > "$at_stub_dir/toolkit/gsettings" <<'EOF'
+#!/usr/bin/env bash
+case "${3:-}" in
+    toolkit-accessibility) printf 'true\n' ;;
+    *) printf 'false\n' ;;
+esac
+EOF
+    printf '%s\n' '#!/usr/bin/env bash' 'exit 1' > "$at_stub_dir/toolkit/pgrep"
+    # Computer Use primary path: org.a11y.Status IsEnabled=true via busctl.
+    printf '%s\n' '#!/usr/bin/env bash' "printf 'false\\n'" > "$at_stub_dir/atspibus/gsettings"
+    printf '%s\n' '#!/usr/bin/env bash' 'exit 1' > "$at_stub_dir/atspibus/pgrep"
+    printf '%s\n' '#!/usr/bin/env bash' "printf 'b true\\n'" > "$at_stub_dir/atspibus/busctl"
+    # Hung session bus: gsettings blocks far past the launch-path budget.
+    cat > "$at_stub_dir/slowbus/gsettings" <<'EOF'
+#!/usr/bin/env bash
+: "${CODEX_TEST_SLOWBUS_PID_FILE:=}"
+if [ -n "$CODEX_TEST_SLOWBUS_PID_FILE" ]; then
+    printf '%s\n' "$$" > "$CODEX_TEST_SLOWBUS_PID_FILE"
+fi
+sleep 5
+printf 'true\n'
+EOF
+    printf '%s\n' '#!/usr/bin/env bash' 'exit 1' > "$at_stub_dir/slowbus/pgrep"
+    local at_stub_variant
+    for at_stub_variant in none orca screenreader toolkit slowbus; do
+        printf '%s\n' '#!/usr/bin/env bash' 'exit 1' > "$at_stub_dir/$at_stub_variant/busctl"
+    done
+    chmod +x "$at_stub_dir"/*/pgrep "$at_stub_dir"/*/gsettings "$at_stub_dir"/*/busctl
+
+    output="$(env -i PATH="$at_stub_dir/none:$PATH" HOME="$HOME" CODEX_LINUX_RENDERING_MODE=default "$launcher_probe" probe --x11 -- --use-gl=angle)"
     [[ "$output" == *"electron=<--use-gl=angle>"* ]] || fail "launcher must pass Electron args after -- without the separator: $output"
     [[ "$output" != *"electron=<--><--use-gl=angle>"* ]] || fail "launcher must not pass the -- separator to Electron: $output"
     [[ "$output" == *"<--ozone-platform=x11>"* ]] || fail "launcher --x11 must still set the Electron ozone platform: $output"
     [[ "$output" == *"comp=0"* && "$output" != *"<--disable-gpu-compositing>"* ]] || fail "default Linux profile must keep GPU compositing enabled: $output"
-    [[ "$output" == *"renderer_accessibility=1"* && "$output" == *"<--force-renderer-accessibility>"* ]] || fail "default Linux profile must still force renderer accessibility: $output"
+    [[ "$output" == *"renderer_accessibility=0"* && "$output" != *"<--force-renderer-accessibility>"* ]] || fail "default Linux profile must not force renderer accessibility without assistive technology: $output"
 
     output="$(env -i PATH="$PATH" HOME="$HOME" XDG_SESSION_TYPE=wayland CODEX_LINUX_RENDERING_MODE=default "$launcher_probe" probe)"
     [[ "$output" == *"comp=1"* && "$output" == *"<--disable-gpu-compositing>"* ]] || fail "Wayland default profile must disable GPU compositing for side-panel stability: $output"
@@ -5371,20 +4049,30 @@ EOF
     [[ "$output" == *"<--ozone-platform=wayland>"* && "$output" == *"<--enable-features=WaylandWindowDecorations>"* ]] || fail "wayland-gpu profile must add Wayland launch args: $output"
     [[ "$output" == *"renderer_accessibility=0"* && "$output" != *"<--force-renderer-accessibility>"* ]] || fail "wayland-gpu profile must skip renderer accessibility by default: $output"
 
+    local portal_feature_args_dir="$TMP_DIR/portal-feature-electron-args"
+    mkdir -p "$portal_feature_args_dir"
+    printf '%s\n' '--enable-features=GlobalShortcutsPortal' '--enable-features=GlobalShortcutsPortal' > "$portal_feature_args_dir/appshots"
+    output="$(env -i PATH="$PATH" HOME="$HOME" FEATURE_ELECTRON_ARGS_DIR="$portal_feature_args_dir" CODEX_LINUX_RENDERING_MODE=wayland-gpu "$launcher_probe" probe)"
+    [[ "$output" == *"<--enable-features=GlobalShortcutsPortal,WaylandWindowDecorations>"* ]] || fail "feature and Wayland Electron feature flags must be merged: $output"
+    [[ "$output" != *"electron=<--enable-features=GlobalShortcutsPortal>"* ]] || fail "merged Electron feature flags must not remain in pass-through args: $output"
+
     output="$(env -i PATH="$PATH" HOME="$HOME" CODEX_LINUX_RENDERING_MODE=wayland-gpu CODEX_FORCE_RENDERER_ACCESSIBILITY=1 "$launcher_probe" probe)"
     [[ "$output" == *"renderer_accessibility=1"* && "$output" == *"<--force-renderer-accessibility>"* ]] || fail "CODEX_FORCE_RENDERER_ACCESSIBILITY=1 must force renderer accessibility under wayland-gpu: $output"
 
-    output="$(env -i PATH="$PATH" HOME="$HOME" CODEX_LINUX_RENDERING_MODE=wayland-gpu "$launcher_probe" probe --x11)"
+    output="$(env -i PATH="$at_stub_dir/none:$PATH" HOME="$HOME" CODEX_LINUX_RENDERING_MODE=wayland-gpu "$launcher_probe" probe --x11)"
     [[ "$output" == *"mode=wayland-gpu"* && "$output" == *"ozone_platform=x11"* ]] || fail "explicit --x11 must override the wayland-gpu platform: $output"
-    [[ "$output" == *"renderer_accessibility=1"* && "$output" == *"<--force-renderer-accessibility>"* ]] || fail "wayland-gpu with explicit --x11 must keep X11 renderer accessibility default: $output"
+    [[ "$output" == *"renderer_accessibility=0"* && "$output" != *"<--force-renderer-accessibility>"* ]] || fail "wayland-gpu with explicit --x11 must fall back to assistive-technology detection: $output"
 
-    output="$(env -i PATH="$PATH" HOME="$HOME" CODEX_LINUX_RENDERING_MODE=wayland-gpu "$launcher_probe" probe --safe-mode)"
+    output="$(env -i PATH="$at_stub_dir/orca:$PATH" HOME="$HOME" CODEX_LINUX_RENDERING_MODE=wayland-gpu "$launcher_probe" probe --x11)"
+    [[ "$output" == *"renderer_accessibility=1"* && "$output" == *"<--force-renderer-accessibility>"* ]] || fail "wayland-gpu with explicit --x11 must force renderer accessibility when a screen reader runs: $output"
+
+    output="$(env -i PATH="$at_stub_dir/none:$PATH" HOME="$HOME" CODEX_LINUX_RENDERING_MODE=wayland-gpu "$launcher_probe" probe --safe-mode)"
     [[ "$output" == *"mode=wayland-gpu"* && "$output" == *"ozone_platform=x11"* && "$output" == *"gpu=0"* ]] || fail "safe-mode must override wayland-gpu to X11 software rendering: $output"
-    [[ "$output" == *"renderer_accessibility=1"* && "$output" == *"<--force-renderer-accessibility>"* ]] || fail "wayland-gpu with safe-mode must keep X11 renderer accessibility default: $output"
+    [[ "$output" == *"renderer_accessibility=0"* && "$output" != *"<--force-renderer-accessibility>"* ]] || fail "wayland-gpu with safe-mode must fall back to assistive-technology detection: $output"
 
-    output="$(env -i PATH="$PATH" HOME="$HOME" CODEX_LINUX_RENDERING_MODE=wayland-gpu "$launcher_probe" probe -- --ozone-platform=x11)"
+    output="$(env -i PATH="$at_stub_dir/none:$PATH" HOME="$HOME" CODEX_LINUX_RENDERING_MODE=wayland-gpu "$launcher_probe" probe -- --ozone-platform=x11)"
     [[ "$output" == *"electron=<--ozone-platform=x11>"* && "$output" != *"<--ozone-platform-hint=auto>"* ]] || fail "pass-through X11 platform must override wayland-gpu hinting: $output"
-    [[ "$output" == *"renderer_accessibility=1"* && "$output" == *"<--force-renderer-accessibility>"* ]] || fail "wayland-gpu with pass-through X11 platform must keep X11 renderer accessibility default: $output"
+    [[ "$output" == *"renderer_accessibility=0"* && "$output" != *"<--force-renderer-accessibility>"* ]] || fail "wayland-gpu with pass-through X11 platform must fall back to assistive-technology detection: $output"
 
     output="$(env -i PATH="$PATH" HOME="$HOME" CODEX_LINUX_RENDERING_MODE=wslg "$launcher_probe" probe)"
     [[ "$output" == *"mode=wslg"* && "$output" == *"comp=0"* && "$output" == *"gl_added=1"* ]] || fail "forced WSLg profile must keep GPU compositing enabled and add ANGLE: $output"
@@ -5397,6 +4085,43 @@ EOF
 
     output="$(env -i PATH="$PATH" HOME="$HOME" CODEX_LINUX_RENDERING_MODE=default CODEX_FORCE_RENDERER_ACCESSIBILITY=0 "$launcher_probe" probe)"
     [[ "$output" == *"renderer_accessibility=0"* && "$output" != *"<--force-renderer-accessibility>"* ]] || fail "CODEX_FORCE_RENDERER_ACCESSIBILITY=0 must disable renderer accessibility under default Linux: $output"
+
+    output="$(env -i PATH="$at_stub_dir/orca:$PATH" HOME="$HOME" CODEX_LINUX_RENDERING_MODE=default "$launcher_probe" probe)"
+    [[ "$output" == *"renderer_accessibility=1"* && "$output" == *"<--force-renderer-accessibility>"* ]] || fail "a running screen reader must force renderer accessibility under default Linux: $output"
+
+    output="$(env -i PATH="$at_stub_dir/screenreader:$PATH" HOME="$HOME" CODEX_LINUX_RENDERING_MODE=default "$launcher_probe" probe)"
+    [[ "$output" == *"renderer_accessibility=1"* && "$output" == *"<--force-renderer-accessibility>"* ]] || fail "the GNOME screen-reader setting must force renderer accessibility under default Linux: $output"
+
+    output="$(env -i PATH="$at_stub_dir/none:$PATH" HOME="$HOME" GNOME_ACCESSIBILITY=1 CODEX_LINUX_RENDERING_MODE=default "$launcher_probe" probe)"
+    [[ "$output" == *"renderer_accessibility=1"* && "$output" == *"<--force-renderer-accessibility>"* ]] || fail "GNOME_ACCESSIBILITY=1 must force renderer accessibility under default Linux: $output"
+
+    output="$(env -i PATH="$at_stub_dir/none:$PATH" HOME="$HOME" QT_LINUX_ACCESSIBILITY_ALWAYS_ON=1 CODEX_LINUX_RENDERING_MODE=default "$launcher_probe" probe)"
+    [[ "$output" == *"renderer_accessibility=1"* && "$output" == *"<--force-renderer-accessibility>"* ]] || fail "QT_LINUX_ACCESSIBILITY_ALWAYS_ON=1 must force renderer accessibility under default Linux: $output"
+
+    output="$(env -i PATH="$at_stub_dir/none:$PATH" HOME="$HOME" CODEX_LINUX_RENDERING_MODE=default CODEX_FORCE_RENDERER_ACCESSIBILITY=1 "$launcher_probe" probe)"
+    [[ "$output" == *"renderer_accessibility=1"* && "$output" == *"<--force-renderer-accessibility>"* ]] || fail "CODEX_FORCE_RENDERER_ACCESSIBILITY=1 must force renderer accessibility without detected assistive technology: $output"
+
+    output="$(env -i PATH="$at_stub_dir/toolkit:$PATH" HOME="$HOME" CODEX_LINUX_RENDERING_MODE=default "$launcher_probe" probe)"
+    [[ "$output" == *"renderer_accessibility=1"* && "$output" == *"<--force-renderer-accessibility>"* ]] || fail "toolkit-accessibility=true (Computer Use gsettings fallback) must force renderer accessibility: $output"
+
+    output="$(env -i PATH="$at_stub_dir/atspibus:$PATH" HOME="$HOME" CODEX_LINUX_RENDERING_MODE=default "$launcher_probe" probe)"
+    [[ "$output" == *"renderer_accessibility=1"* && "$output" == *"<--force-renderer-accessibility>"* ]] || fail "org.a11y.Status IsEnabled (Computer Use setup) must force renderer accessibility: $output"
+
+    local at_probe_start_ns at_probe_end_ns at_probe_elapsed_ms slowbus_pid slowbus_pid_file
+    slowbus_pid_file="$TMP_DIR/slowbus-gsettings.pid"
+    rm -f "$slowbus_pid_file"
+    at_probe_start_ns="$(date +%s%N)"
+    output="$(env -i PATH="$at_stub_dir/slowbus:$PATH" HOME="$HOME" CODEX_LINUX_RENDERING_MODE=default CODEX_TEST_SLOWBUS_PID_FILE="$slowbus_pid_file" "$launcher_probe" probe)"
+    at_probe_end_ns="$(date +%s%N)"
+    at_probe_elapsed_ms=$(( (10#$at_probe_end_ns - 10#$at_probe_start_ns) / 1000000 ))
+    [[ "$output" == *"renderer_accessibility=0"* && "$output" != *"<--force-renderer-accessibility>"* ]] || fail "a hung session bus must not force renderer accessibility: $output"
+    [ "$at_probe_elapsed_ms" -lt 3000 ] || fail "session-bus assistive-tech probe must be watchdog-capped, took ${at_probe_elapsed_ms}ms: $output"
+    [ -s "$slowbus_pid_file" ] || fail "hung session-bus probe did not start the gsettings helper"
+    slowbus_pid="$(< "$slowbus_pid_file")"
+    if kill -0 "$slowbus_pid" 2>/dev/null; then
+        kill -KILL "$slowbus_pid" 2>/dev/null || true
+        fail "session-bus assistive-tech watchdog leaked hung gsettings pid $slowbus_pid"
+    fi
 
     output="$(env -i PATH="$PATH" HOME="$HOME" CODEX_LINUX_RENDERING_MODE=wslg "$launcher_probe" probe --wayland --use-gl=desktop)"
     [[ "$output" == *"<--ozone-platform=wayland>"* && "$output" == *"electron=<--use-gl=desktop>"* ]] || fail "explicit rendering args must override WSLg defaults: $output"
@@ -5417,6 +4142,142 @@ EOF
 
     output="$(env -i PATH="$PATH" HOME="$HOME" WSL_INTEROP=/tmp/codex-wsl WAYLAND_DISPLAY=wayland-0 "$launcher_probe" probe)"
     [[ "$output" == *"mode=wslg"* && "$output" == *"wslg=1"* ]] || fail "auto rendering mode must detect WSLg from WSL and GUI markers: $output"
+
+    local dev_shm_stub_dir="$TMP_DIR/dev-shm-stubs"
+    mkdir -p "$dev_shm_stub_dir/large" "$dev_shm_stub_dir/small" "$dev_shm_stub_dir/broken"
+    cat > "$dev_shm_stub_dir/large/df" <<'EOF'
+#!/usr/bin/env bash
+printf 'Filesystem 1024-blocks Used Available Capacity Mounted on\n'
+printf 'tmpfs 16000000 0 16000000 0%% /dev/shm\n'
+EOF
+    cat > "$dev_shm_stub_dir/small/df" <<'EOF'
+#!/usr/bin/env bash
+printf 'Filesystem 1024-blocks Used Available Capacity Mounted on\n'
+printf 'tmpfs 65536 0 65536 0%% /dev/shm\n'
+EOF
+    cat > "$dev_shm_stub_dir/broken/df" <<'EOF'
+#!/usr/bin/env bash
+exit 1
+EOF
+    chmod +x "$dev_shm_stub_dir/large/df" "$dev_shm_stub_dir/small/df" "$dev_shm_stub_dir/broken/df"
+
+    output="$(env -i PATH="$dev_shm_stub_dir/large:$PATH" HOME="$HOME" "$launcher_probe" probe)"
+    [[ "$output" != *"<--disable-dev-shm-usage>"* ]] || fail "adequate /dev/shm must not disable Chromium /dev/shm usage: $output"
+
+    output="$(env -i PATH="$dev_shm_stub_dir/small:$PATH" HOME="$HOME" "$launcher_probe" probe)"
+    [[ "$output" == *"<--disable-dev-shm-usage>"* ]] || fail "small /dev/shm must keep --disable-dev-shm-usage: $output"
+
+    output="$(env -i PATH="$dev_shm_stub_dir/broken:$PATH" HOME="$HOME" "$launcher_probe" probe)"
+    [[ "$output" == *"<--disable-dev-shm-usage>"* ]] || fail "unreadable /dev/shm capacity must keep --disable-dev-shm-usage: $output"
+
+    output="$(env -i PATH="$dev_shm_stub_dir/large:$PATH" HOME="$HOME" CODEX_ELECTRON_DISABLE_DEV_SHM_USAGE=1 "$launcher_probe" probe)"
+    [[ "$output" == *"<--disable-dev-shm-usage>"* ]] || fail "CODEX_ELECTRON_DISABLE_DEV_SHM_USAGE=1 must force --disable-dev-shm-usage: $output"
+
+    output="$(env -i PATH="$dev_shm_stub_dir/small:$PATH" HOME="$HOME" CODEX_ELECTRON_DISABLE_DEV_SHM_USAGE=0 "$launcher_probe" probe)"
+    [[ "$output" != *"<--disable-dev-shm-usage>"* ]] || fail "CODEX_ELECTRON_DISABLE_DEV_SHM_USAGE=0 must suppress --disable-dev-shm-usage: $output"
+
+    output="$(env -i PATH="$dev_shm_stub_dir/small:$PATH" HOME="$HOME" CODEX_ELECTRON_DISABLE_DEV_SHM_USAGE=bogus "$launcher_probe" probe 2>/dev/null)"
+    [[ "$output" == *"<--disable-dev-shm-usage>"* ]] || fail "invalid CODEX_ELECTRON_DISABLE_DEV_SHM_USAGE must fall back to /dev/shm detection: $output"
+    output="$(env -i PATH="$PATH" HOME="$HOME" CODEX_LINUX_RENDERING_MODE=default CODEX_OZONE_PLATFORM=x11 "$launcher_probe" probe)"
+    [[ "$output" == *"<--ozone-platform=x11>"* && "$output" != *"<--ozone-platform-hint=auto>"* ]] || fail "CODEX_OZONE_PLATFORM=x11 must select the X11 Ozone backend: $output"
+
+    output="$(env -i PATH="$PATH" HOME="$HOME" CODEX_LINUX_RENDERING_MODE=default CODEX_OZONE_PLATFORM=wayland "$launcher_probe" probe)"
+    [[ "$output" == *"<--ozone-platform=wayland>"* && "$output" == *"WaylandWindowDecorations"* ]] || fail "CODEX_OZONE_PLATFORM=wayland must select native Wayland with decorations: $output"
+
+    output="$(env -i PATH="$PATH" HOME="$HOME" CODEX_LINUX_RENDERING_MODE=default CODEX_OZONE_PLATFORM=auto SOMMELIER_VERSION=1 "$launcher_probe" probe)"
+    [[ "$output" == *"<--ozone-platform-hint=auto>"* && "$output" != *"<--ozone-platform=x11>"* ]] || fail "CODEX_OZONE_PLATFORM=auto must override the Sommelier X11 fallback: $output"
+
+    output="$(env -i PATH="$PATH" HOME="$HOME" CODEX_LINUX_RENDERING_MODE=default CODEX_OZONE_PLATFORM=wayland "$launcher_probe" probe --x11)"
+    [[ "$output" == *"<--ozone-platform=x11>"* && "$output" != *"<--ozone-platform=wayland>"* ]] || fail "explicit --x11 must win over CODEX_OZONE_PLATFORM: $output"
+
+    output="$(env -i PATH="$PATH" HOME="$HOME" CODEX_LINUX_RENDERING_MODE=default CODEX_OZONE_PLATFORM=bogus "$launcher_probe" probe 2>/dev/null)"
+    [[ "$output" == *"<--ozone-platform-hint=auto>"* ]] || fail "invalid CODEX_OZONE_PLATFORM must fall back to the default ozone hint: $output"
+
+    output="$(env -i PATH="$PATH" HOME="$HOME" CODEX_LINUX_RENDERING_MODE=default CODEX_FORCE_DEVICE_SCALE_FACTOR=1 "$launcher_probe" probe)"
+    [[ "$output" == *"<--force-device-scale-factor=1>"* ]] || fail "CODEX_FORCE_DEVICE_SCALE_FACTOR=1 must pass the scale flag to Electron: $output"
+
+    output="$(env -i PATH="$PATH" HOME="$HOME" CODEX_LINUX_RENDERING_MODE=default CODEX_FORCE_DEVICE_SCALE_FACTOR=1.25 "$launcher_probe" probe)"
+    [[ "$output" == *"<--force-device-scale-factor=1.25>"* ]] || fail "fractional CODEX_FORCE_DEVICE_SCALE_FACTOR must pass through: $output"
+
+    output="$(env -i PATH="$PATH" HOME="$HOME" CODEX_LINUX_RENDERING_MODE=default CODEX_FORCE_DEVICE_SCALE_FACTOR=abc "$launcher_probe" probe 2>/dev/null)"
+    [[ "$output" != *"--force-device-scale-factor"* ]] || fail "invalid CODEX_FORCE_DEVICE_SCALE_FACTOR must be ignored: $output"
+
+    output="$(env -i PATH="$PATH" HOME="$HOME" CODEX_LINUX_RENDERING_MODE=default CODEX_FORCE_DEVICE_SCALE_FACTOR=0 "$launcher_probe" probe 2>/dev/null)"
+    [[ "$output" != *"--force-device-scale-factor"* ]] || fail "zero CODEX_FORCE_DEVICE_SCALE_FACTOR must be ignored: $output"
+
+    output="$(env -i PATH="$PATH" HOME="$HOME" CODEX_LINUX_RENDERING_MODE=default CODEX_FORCE_DEVICE_SCALE_FACTOR=1 "$launcher_probe" probe -- --force-device-scale-factor=2)"
+    [[ "$output" == *"electron=<--force-device-scale-factor=2>"* && "$output" != *"<--force-device-scale-factor=1>"* ]] || fail "explicit --force-device-scale-factor must win over the env override: $output"
+
+    # Feature launcher hooks run after set_electron_defaults() has already chosen
+    # the Ozone platform, so a hook-supplied explicit --ozone-platform must drop
+    # the launcher-computed value instead of leaving both in the final argv. This
+    # must hold no matter how the launcher picked the platform: CODEX_OZONE_PLATFORM,
+    # the CODEX_LINUX_RENDERING_MODE profile (wayland-gpu / wslg), or the Sommelier
+    # fallback.
+    local hook_force_x11_dir="$TMP_DIR/hook-force-x11"
+    mkdir -p "$hook_force_x11_dir"
+    printf '%s\n' '#!/usr/bin/env bash' "printf '%s\\n' 'electron-arg --ozone-platform=x11'" > "$hook_force_x11_dir/force-x11"
+    chmod +x "$hook_force_x11_dir/force-x11"
+    local hook_force_wayland_dir="$TMP_DIR/hook-force-wayland"
+    mkdir -p "$hook_force_wayland_dir"
+    printf '%s\n' '#!/usr/bin/env bash' "printf '%s\\n' 'electron-arg --ozone-platform=wayland'" > "$hook_force_wayland_dir/force-wayland"
+    chmod +x "$hook_force_wayland_dir/force-wayland"
+
+    output="$(env -i PATH="$PATH" HOME="$HOME" CODEX_LINUX_RENDERING_MODE=default FEATURE_LAUNCHER_HOOK_DIR="$hook_force_x11_dir" CODEX_OZONE_PLATFORM=wayland "$launcher_probe" probe)"
+    [[ "$output" == *"electron=<--ozone-platform=x11>"* ]] || fail "launcher hook --ozone-platform must reach Electron over CODEX_OZONE_PLATFORM: $output"
+    [[ "$output" != *"<--ozone-platform=wayland>"* ]] || fail "env-derived --ozone-platform must be dropped when a launcher hook overrides it: $output"
+    [[ "$output" != *"WaylandWindowDecorations"* ]] || fail "cleared env Wayland platform must not still add Wayland decorations: $output"
+
+    output="$(env -i PATH="$PATH" HOME="$HOME" CODEX_LINUX_RENDERING_MODE=wayland-gpu FEATURE_LAUNCHER_HOOK_DIR="$hook_force_x11_dir" "$launcher_probe" probe)"
+    [[ "$output" == *"electron=<--ozone-platform=x11>"* ]] || fail "launcher hook --ozone-platform must reach Electron under wayland-gpu: $output"
+    [[ "$output" != *"<--ozone-platform=wayland>"* ]] || fail "wayland-gpu launcher platform must be dropped when a hook overrides it: $output"
+    [[ "$output" != *"WaylandWindowDecorations"* ]] || fail "dropped wayland-gpu platform must not still add Wayland decorations: $output"
+
+    output="$(env -i PATH="$PATH" HOME="$HOME" CODEX_LINUX_RENDERING_MODE=wslg FEATURE_LAUNCHER_HOOK_DIR="$hook_force_wayland_dir" "$launcher_probe" probe)"
+    [[ "$output" == *"<--ozone-platform=wayland>"* ]] || fail "launcher hook --ozone-platform must reach Electron under wslg: $output"
+    [[ "$output" != *"<--ozone-platform=x11>"* ]] || fail "wslg launcher platform must be dropped when a hook overrides it: $output"
+
+    output="$(env -i PATH="$PATH" HOME="$HOME" CODEX_LINUX_RENDERING_MODE=default SOMMELIER_VERSION=1 FEATURE_LAUNCHER_HOOK_DIR="$hook_force_wayland_dir" "$launcher_probe" probe)"
+    [[ "$output" == *"<--ozone-platform=wayland>"* ]] || fail "launcher hook --ozone-platform must reach Electron over the Sommelier fallback: $output"
+    [[ "$output" != *"<--ozone-platform=x11>"* ]] || fail "Sommelier X11 fallback must be dropped when a hook overrides it: $output"
+
+    local hook_scale_dir="$TMP_DIR/hook-scale-override"
+    mkdir -p "$hook_scale_dir"
+    printf '%s\n' '#!/usr/bin/env bash' "printf '%s\\n' 'electron-arg --force-device-scale-factor=2'" > "$hook_scale_dir/force-scale2"
+    chmod +x "$hook_scale_dir/force-scale2"
+    output="$(env -i PATH="$PATH" HOME="$HOME" CODEX_LINUX_RENDERING_MODE=default FEATURE_LAUNCHER_HOOK_DIR="$hook_scale_dir" CODEX_FORCE_DEVICE_SCALE_FACTOR=1 "$launcher_probe" probe)"
+    [[ "$output" == *"electron=<--force-device-scale-factor=2>"* ]] || fail "launcher hook --force-device-scale-factor must reach Electron over CODEX_FORCE_DEVICE_SCALE_FACTOR: $output"
+    [[ "$output" != *"<--force-device-scale-factor=1>"* ]] || fail "env-derived --force-device-scale-factor must be dropped when a launcher hook overrides it: $output"
+
+    # A hook-emitted arg must also replace a conflicting arg already collected in
+    # ELECTRON_ARGS (pass-through CLI, persistent flags file, or feature
+    # electron-args) instead of appending a duplicate switch to the final argv.
+    output="$(env -i PATH="$PATH" HOME="$HOME" CODEX_LINUX_RENDERING_MODE=default FEATURE_LAUNCHER_HOOK_DIR="$hook_force_wayland_dir" "$launcher_probe" probe -- --ozone-platform=x11)"
+    [[ "$output" == *"electron=<--ozone-platform=wayland>"* ]] || fail "launcher hook --ozone-platform must replace a pass-through ozone arg: $output"
+    [[ "$output" != *"<--ozone-platform=x11>"* ]] || fail "pass-through --ozone-platform must be dropped when a launcher hook supersedes it: $output"
+
+    output="$(env -i PATH="$PATH" HOME="$HOME" CODEX_LINUX_RENDERING_MODE=default FEATURE_LAUNCHER_HOOK_DIR="$hook_force_wayland_dir" "$launcher_probe" probe -- --ozone-platform-hint=auto)"
+    [[ "$output" == *"electron=<--ozone-platform=wayland>"* ]] || fail "launcher hook --ozone-platform must replace a pass-through ozone hint: $output"
+    [[ "$output" != *"<--ozone-platform-hint=auto>"* ]] || fail "pass-through --ozone-platform-hint must be dropped when a hook supplies an explicit platform: $output"
+
+    output="$(env -i PATH="$PATH" HOME="$HOME" CODEX_LINUX_RENDERING_MODE=default FEATURE_LAUNCHER_HOOK_DIR="$hook_scale_dir" "$launcher_probe" probe -- --force-device-scale-factor=1)"
+    [[ "$output" == *"electron=<--force-device-scale-factor=2>"* ]] || fail "launcher hook scale arg must replace a pass-through scale arg: $output"
+    [[ "$output" != *"<--force-device-scale-factor=1>"* ]] || fail "pass-through --force-device-scale-factor must be dropped when a launcher hook supersedes it: $output"
+
+    local hook_scale_flags_dir="$TMP_DIR/hook-scale-user-flags"
+    local hook_scale_flags_file="$hook_scale_flags_dir/electron-flags.conf"
+    mkdir -p "$hook_scale_flags_dir"
+    printf '%s\n' '--force-device-scale-factor=1' > "$hook_scale_flags_file"
+    output="$(env -i PATH="$PATH" HOME="$HOME" APP_CONFIG_DIR="$hook_scale_flags_dir" USER_ELECTRON_FLAGS_FILE="$hook_scale_flags_file" CODEX_LINUX_RENDERING_MODE=default FEATURE_LAUNCHER_HOOK_DIR="$hook_scale_dir" "$launcher_probe" probe)"
+    [[ "$output" == *"electron=<--force-device-scale-factor=2>"* ]] || fail "launcher hook scale arg must replace a persistent-flags scale arg: $output"
+    [[ "$output" != *"<--force-device-scale-factor=1>"* ]] || fail "persistent-flags --force-device-scale-factor must be dropped when a launcher hook supersedes it: $output"
+
+    local hook_scale_feature_args_dir="$TMP_DIR/hook-scale-feature-args"
+    mkdir -p "$hook_scale_feature_args_dir"
+    printf '%s\n' '--force-device-scale-factor=1' > "$hook_scale_feature_args_dir/feature"
+    output="$(env -i PATH="$PATH" HOME="$HOME" FEATURE_ELECTRON_ARGS_DIR="$hook_scale_feature_args_dir" CODEX_LINUX_RENDERING_MODE=default FEATURE_LAUNCHER_HOOK_DIR="$hook_scale_dir" "$launcher_probe" probe)"
+    [[ "$output" == *"electron=<--force-device-scale-factor=2>"* ]] || fail "launcher hook scale arg must replace a feature electron-args scale arg: $output"
+    [[ "$output" != *"<--force-device-scale-factor=1>"* ]] || fail "feature electron-args --force-device-scale-factor must be dropped when a launcher hook supersedes it: $output"
 
     assert_contains "$REPO_DIR/launcher/start.sh.template" "warm_start_ipc_sent"
     assert_contains "$REPO_DIR/launcher/start.sh.template" "launcher_phase"
@@ -5447,8 +4308,16 @@ EOF
     assert_contains "$REPO_DIR/launcher/start.sh.template" "CODEX_LINUX_RENDERING_MODE=auto|default|wslg|wayland-gpu"
     assert_contains "$REPO_DIR/launcher/start.sh.template" '--ozone-platform-hint="$ELECTRON_OZONE_HINT"'
     assert_contains "$REPO_DIR/launcher/start.sh.template" "--disable-gpu-sandbox"
+    assert_contains "$REPO_DIR/launcher/start.sh.template" "CODEX_ELECTRON_DISABLE_DEV_SHM_USAGE=auto|0|1"
+    assert_contains "$REPO_DIR/launcher/start.sh.template" "dev_shm_usage_disabled="
     assert_contains "$REPO_DIR/launcher/start.sh.template" "--force-renderer-accessibility"
     assert_contains "$REPO_DIR/launcher/start.sh.template" "CODEX_FORCE_RENDERER_ACCESSIBILITY=auto|0|1"
+    assert_contains "$REPO_DIR/launcher/start.sh.template" "assistive_technology_detected"
+    assert_contains "$REPO_DIR/launcher/start.sh.template" "session_bus_probe_command"
+    assert_contains "$REPO_DIR/launcher/start.sh.template" "CODEX_OZONE_PLATFORM=x11|wayland|auto"
+    assert_contains "$REPO_DIR/launcher/start.sh.template" "CODEX_FORCE_DEVICE_SCALE_FACTOR=N"
+    assert_contains "$REPO_DIR/launcher/start.sh.template" "print_scaling_diagnostics"
+    assert_contains "$REPO_DIR/launcher/start.sh.template" "--diagnose-scaling"
     assert_contains "$REPO_DIR/launcher/start.sh.template" "PACKAGED_RUNTIME_HELPER"
     assert_contains "$REPO_DIR/launcher/start.sh.template" "--allow-install-missing"
     assert_contains "$REPO_DIR/scripts/lib/process-detection.sh" "CODEX_INSTALL_ALLOW_RUNNING"
@@ -5514,8 +4383,10 @@ EOF
     assert_contains "$REPO_DIR/scripts/lib/package-common.sh" "node-runtime"
     assert_contains "$REPO_DIR/tests/fixtures/create-packaged-app-fixture.sh" "resources/node-runtime/bin"
     assert_contains "$REPO_DIR/.github/workflows/ci.yml" "tests/fixtures/create-packaged-app-fixture.sh codex-app"
-    assert_contains "$REPO_DIR/.github/workflows/ci.yml" "for file in scripts/patches/"
-    assert_contains "$REPO_DIR/scripts/ci/container-entrypoint.sh" "for file in scripts/patches/"
+    assert_contains "$REPO_DIR/.github/workflows/ci.yml" "bash scripts/ci/run-node-checks.sh"
+    assert_contains "$REPO_DIR/scripts/ci/container-entrypoint.sh" "bash scripts/ci/run-node-checks.sh"
+    assert_contains "$REPO_DIR/scripts/ci/run-node-checks.sh" "git ls-files '\\*.js'"
+    assert_contains "$REPO_DIR/scripts/ci/run-node-checks.sh" "git ls-files '\\*.test.js' 'linux-features/\\*/test.js'"
     assert_contains "$REPO_DIR/flake.nix" "rewriteCratesIoDownloadUrl"
     assert_contains "$REPO_DIR/flake.nix" "https://static.crates.io/crates/"
     assert_contains "$REPO_DIR/flake.nix" "api/v1/crates/"
@@ -5588,39 +4459,256 @@ if (!launcher.includes('ln -sfnT "$target" "$link_path"')) {
   throw new Error("replace_symlink must replace plugin links as paths, not as directory children");
 }
 NODE
+}
 
-    node - "$REPO_DIR/launcher/web-mode-server.mjs" <<'NODE' || fail "Web mode bundled plugin sync must use current bundled plugin ids"
-const fs = require("node:fs");
-const source = fs.readFileSync(process.argv[2], "utf8");
-const match = source.match(/const BUNDLED_PLUGIN_NAMES = (\[[^\]]+\]);/);
-if (match == null) {
-  throw new Error("missing BUNDLED_PLUGIN_NAMES");
+test_launcher_cli_resolution_policy() {
+    info "Checking launcher CLI resolution policy"
+    local launcher_probe="$TMP_DIR/launcher-cli-policy-probe.sh"
+    python3 - "$REPO_DIR/launcher/start.sh.template" "$launcher_probe" <<'PY'
+import pathlib
+import re
+import sys
+
+source = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
+functions = []
+for name in ("find_codex_cli", "pid_parent_matches", "codex_cli_version_probe", "codex_cli_version", "log_codex_cli_path"):
+    match = re.search(r"^" + re.escape(name) + r"\(\) \{[\s\S]*?^\}\n", source, re.M)
+    if match is None:
+        raise SystemExit(f"missing {name}")
+    functions.append(match.group(0))
+
+pathlib.Path(sys.argv[2]).write_text(
+    "#!/usr/bin/env bash\n"
+    "set -Eeuo pipefail\n\n"
+    + "\n".join(functions)
+    + r'''
+case "${1:?}" in
+    find)
+        find_codex_cli
+        ;;
+    version)
+        codex_cli_version "$2"
+        ;;
+    log)
+        CODEX_CLI_PATH="${2:-}"
+        export CODEX_CLI_PATH
+        log_codex_cli_path
+        ;;
+    *)
+        exit 64
+        ;;
+esac
+''',
+    encoding="utf-8",
+)
+PY
+    chmod +x "$launcher_probe"
+
+    local workspace="$TMP_DIR/launcher-cli-policy"
+    local fake_home="$workspace/home"
+    local path_cli_bin="$workspace/path-cli-bin"
+    local selected_cli
+    mkdir -p "$path_cli_bin" "$fake_home/.npm-global/bin"
+
+    printf '#!/usr/bin/env bash\nprintf "codex-cli 0.120.0\\n"\n' > "$path_cli_bin/codex"
+    printf '#!/usr/bin/env bash\nprintf "codex-cli 9.999.0\\n"\n' > "$fake_home/.npm-global/bin/codex"
+    chmod +x "$path_cli_bin/codex" "$fake_home/.npm-global/bin/codex"
+
+    selected_cli="$(env -i PATH="$path_cli_bin:/usr/bin:/bin" HOME="$fake_home" "$launcher_probe" find)"
+    [ "$selected_cli" = "$path_cli_bin/codex" ] || fail "CLI lookup must keep the first PATH hit, got $selected_cli"
+
+    local override_cli="$workspace/override-codex"
+    local log_output
+    printf '#!/usr/bin/env bash\nprintf "codex-cli 0.42.0\\n"\n' > "$override_cli"
+    chmod +x "$override_cli"
+    log_output="$(env -i PATH="$path_cli_bin:/usr/bin:/bin" HOME="$fake_home" "$launcher_probe" log "$override_cli")"
+    [[ "$log_output" == "Using CODEX_CLI_PATH=$override_cli (version 0.42.0)" ]] || fail "CODEX_CLI_PATH must remain an explicit override with version logging: $log_output"
+
+    local dash_version_cli="$workspace/dash-version-codex"
+    local fallback_version_cli="$workspace/fallback-version-codex"
+    local version_output
+    printf '#!/usr/bin/env bash\n[ "${1:-}" = "--version" ] || exit 2\nprintf "codex-cli 0.150.0\\n"\n' > "$dash_version_cli"
+    printf '#!/usr/bin/env bash\nif [ "${1:-}" = "--version" ]; then exit 2; fi\n[ "${1:-}" = "version" ] || exit 2\nprintf "codex-cli v0.151.0\\n"\n' > "$fallback_version_cli"
+    chmod +x "$dash_version_cli" "$fallback_version_cli"
+
+    version_output="$(env -i PATH="/usr/bin:/bin" HOME="$fake_home" "$launcher_probe" version "$dash_version_cli")"
+    [ "$version_output" = "0.150.0" ] || fail "CLI version probe must read --version output, got $version_output"
+    version_output="$(env -i PATH="/usr/bin:/bin" HOME="$fake_home" "$launcher_probe" version "$fallback_version_cli")"
+    [ "$version_output" = "0.151.0" ] || fail "CLI version probe must fall back to version output, got $version_output"
+
+    local unknown_cli="$workspace/unknown-version-codex"
+    printf '#!/usr/bin/env bash\nprintf "codex-cli dev build\\n"\n' > "$unknown_cli"
+    chmod +x "$unknown_cli"
+    log_output="$(env -i PATH="/usr/bin:/bin" HOME="$fake_home" "$launcher_probe" log "$unknown_cli")"
+    [[ "$log_output" == "Using CODEX_CLI_PATH=$unknown_cli (version unknown; set CODEX_CLI_PATH=/path/to/codex to pin a known CLI)" ]] || fail "CLI diagnostics must explain unknown versions and explicit pinning: $log_output"
+
+    local fd_probe_cli="$workspace/fd-probe-codex"
+    local fd_state="$workspace/fd9.state"
+    {
+        printf '#!/usr/bin/env bash\n'
+        printf 'if { true >&9; } 2>/dev/null; then printf "open\\n" > %q; else printf "closed\\n" > %q; fi\n' "$fd_state" "$fd_state"
+        printf 'printf "codex-cli 0.200.0\\n"\n'
+    } > "$fd_probe_cli"
+    chmod +x "$fd_probe_cli"
+    version_output="$(
+        exec 9>"$workspace/launcher.lock"
+        env -i PATH="/usr/bin:/bin" HOME="$fake_home" "$launcher_probe" version "$fd_probe_cli"
+    )"
+    [ "$version_output" = "0.200.0" ] || fail "fd-guarded CLI probe must still read versions, got $version_output"
+    [ "$(cat "$fd_state")" = "closed" ] || fail "CLI version probe child must not inherit launcher lock fd 9"
+
+    local hanging_cli="$workspace/hanging-codex"
+    local hanging_pid_file="$workspace/hanging.pid"
+    {
+        printf '#!/usr/bin/env bash\n'
+        printf 'printf "%%s\\n" "$$" > %q\n' "$hanging_pid_file"
+        printf 'printf "codex-cli 9.999.0\\n"\n'
+        printf 'exec sleep 30\n'
+    } > "$hanging_cli"
+    chmod +x "$hanging_cli"
+
+    version_output="$(env -i PATH="/usr/bin:/bin" HOME="$fake_home" TMPDIR="$workspace" "$launcher_probe" version "$hanging_cli" || true)"
+    [ -z "$version_output" ] || fail "hanging CLI probe must ignore partial version output, got $version_output"
+    assert_file_exists "$hanging_pid_file"
+    local hanging_pid
+    hanging_pid="$(cat "$hanging_pid_file")"
+    if kill -0 "$hanging_pid" 2>/dev/null; then
+        sleep 0.1
+    fi
+    if kill -0 "$hanging_pid" 2>/dev/null; then
+        kill -9 "$hanging_pid" 2>/dev/null || true
+        fail "hanging CLI probe left process $hanging_pid alive"
+    fi
+
+    local hanging_log_cli="$workspace/hanging-log-codex"
+    local hanging_log_pid_file="$workspace/hanging-log.pid"
+    {
+        printf '#!/usr/bin/env bash\n'
+        printf 'printf "%%s\\n" "$$" > %q\n' "$hanging_log_pid_file"
+        printf 'printf "codex-cli 9.999.0\\n"\n'
+        printf 'exec sleep 2\n'
+    } > "$hanging_log_cli"
+    chmod +x "$hanging_log_cli"
+
+    log_output="$(env -i PATH="/usr/bin:/bin" HOME="$fake_home" TMPDIR="$workspace" "$launcher_probe" log "$hanging_log_cli")"
+    [[ "$log_output" == "Using CODEX_CLI_PATH=$hanging_log_cli (version unknown; set CODEX_CLI_PATH=/path/to/codex to pin a known CLI)" ]] || fail "log path must time out hung CLI version probes under command substitution: $log_output"
+    assert_file_exists "$hanging_log_pid_file"
+    local hanging_log_pid
+    hanging_log_pid="$(cat "$hanging_log_pid_file")"
+    if kill -0 "$hanging_log_pid" 2>/dev/null; then
+        sleep 0.1
+    fi
+    if kill -0 "$hanging_log_pid" 2>/dev/null; then
+        kill -9 "$hanging_log_pid" 2>/dev/null || true
+        fail "hanging CLI log probe left process $hanging_log_pid alive"
+    fi
 }
-const names = JSON.parse(match[1]);
-for (const name of ["browser", "chrome", "computer-use", "read-aloud"]) {
-  if (!names.includes(name)) {
-    throw new Error(`missing bundled plugin id ${name}`);
-  }
-}
-if (names.includes("browser-use")) {
-  throw new Error("stale browser-use bundled plugin id would prune Browser from runtime sync");
-}
-const enrichIndex = source.indexOf("marketplace.plugins = await Promise.all(");
-const existingNamesIndex = source.indexOf("const marketplacePluginNames = new Set");
-if (enrichIndex === -1 || existingNamesIndex === -1 || enrichIndex > existingNamesIndex) {
-  throw new Error("web-mode bundled marketplace must enrich existing entries before checking missing plugins");
-}
-for (const required of [
-  "manifestMetadataForPlugin",
-  "...manifestMetadata",
-  "...plugin",
-  "interface: { ...(manifestMetadata.interface || {}), ...(pluginInterface || {}) }",
-]) {
-  if (!source.includes(required)) {
-    throw new Error(`web-mode bundled marketplace missing manifest metadata merge marker: ${required}`);
-  }
-}
-NODE
+
+test_webview_server_cache_policy() {
+    info "Checking webview server cache policy"
+    python3 - "$REPO_DIR/launcher/webview-server.py" <<'PY'
+import http.client
+import os
+import pathlib
+import shutil
+import socket
+import subprocess
+import sys
+import tempfile
+import time
+
+server_path = pathlib.Path(sys.argv[1])
+workspace = pathlib.Path(tempfile.mkdtemp(prefix="codex-webview-cache-policy-"))
+proc = None
+
+try:
+    (workspace / "assets").mkdir()
+    (workspace / "apps").mkdir()
+    (workspace / "index.html").write_text("<!doctype html><title>Codex</title>", encoding="utf8")
+    (workspace / "assets" / "app-test-abc123.js").write_text("export default 1;\n", encoding="utf8")
+    (workspace / "apps" / "icon.png").write_bytes(b"png")
+    fixed_mtime = 1_700_000_000
+    for path in workspace.rglob("*"):
+        if path.is_file():
+            os.utime(path, (fixed_mtime, fixed_mtime))
+
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+
+    proc = subprocess.Popen(
+        [sys.executable, str(server_path), str(port), "--bind", "127.0.0.1"],
+        cwd=workspace,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        text=True,
+    )
+
+    deadline = time.time() + 5
+    while True:
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=0.2):
+                break
+        except OSError:
+            if proc.poll() is not None:
+                raise AssertionError(f"webview server exited early with {proc.returncode}")
+            if time.time() > deadline:
+                raise AssertionError("webview server did not start")
+            time.sleep(0.05)
+
+    def request(method, path, headers=None):
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request(method, path, headers=headers or {})
+        response = conn.getresponse()
+        body = response.read()
+        result = (response.status, {k.lower(): v for k, v in response.getheaders()}, body)
+        conn.close()
+        return result
+
+    index_status, index_headers, _ = request("HEAD", "/index.html")
+    assert index_status == 200, index_status
+    assert index_headers.get("cache-control") == "no-store, max-age=0", index_headers
+    assert index_headers.get("pragma") == "no-cache", index_headers
+    assert index_headers.get("expires") == "0", index_headers
+
+    asset_status, asset_headers, _ = request("HEAD", "/assets/app-test-abc123.js")
+    assert asset_status == 200, asset_status
+    assert asset_headers.get("cache-control") == "public, max-age=31536000, immutable", asset_headers
+    assert "pragma" not in asset_headers, asset_headers
+    assert "expires" not in asset_headers, asset_headers
+
+    cached_status, cached_headers, _ = request(
+        "GET",
+        "/assets/app-test-abc123.js",
+        {"If-Modified-Since": asset_headers["last-modified"]},
+    )
+    assert cached_status == 304, (cached_status, cached_headers)
+    assert cached_headers.get("cache-control") == "public, max-age=31536000, immutable", cached_headers
+
+    refreshed_index_status, _, _ = request(
+        "GET",
+        "/index.html",
+        {"If-Modified-Since": index_headers["last-modified"]},
+    )
+    assert refreshed_index_status == 200, refreshed_index_status
+
+    icon_status, icon_headers, _ = request("HEAD", "/apps/icon.png")
+    assert icon_status == 200, icon_status
+    assert icon_headers.get("cache-control") == "no-store, max-age=0", icon_headers
+
+    escaped_index_status, escaped_index_headers, _ = request("HEAD", "/assets/../index.html")
+    assert escaped_index_status == 200, escaped_index_status
+    assert escaped_index_headers.get("cache-control") == "no-store, max-age=0", escaped_index_headers
+finally:
+    if proc is not None:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=5)
+    shutil.rmtree(workspace, ignore_errors=True)
+PY
 }
 
 test_process_detection_helper_cmdline_shapes() {
@@ -5640,69 +4728,6 @@ test_process_detection_helper_cmdline_shapes() {
         cmdline_has_electron_helper_type "$space_cmdline" || exit 1
         ! cmdline_has_electron_helper_type "$main_cmdline" || exit 1
     ) || fail "Electron helper detection must handle NUL-separated and space-joined cmdline formats"
-}
-
-test_launcher_seeds_computer_use_ui_for_remote_mobile_build() {
-    info "Checking launcher seeds Computer Use UI for remote-mobile self-hosted builds"
-    local workspace="$TMP_DIR/computer-use-ui-launcher-seed"
-    local app_dir="$workspace/app"
-    local fake_home="$workspace/home"
-    local settings="$fake_home/.config/codex-desktop/settings.json"
-    local probe="$workspace/probe.sh"
-
-    mkdir -p "$app_dir/.codex-linux" "$(dirname "$settings")"
-    cat > "$probe" <<'SCRIPT'
-#!/usr/bin/env bash
-set -euo pipefail
-early_truthy_env_value() {
-    case "${1:-}" in
-        1|true|TRUE|yes|YES|on|ON) return 0 ;;
-        *) return 1 ;;
-    esac
-}
-SCRIPT
-    awk '
-        /^computer_use_ui_seed_requested\(\) \{/ { emit = 1 }
-        /^load_packaged_runtime_helper\(\) \{/ { if (emit) exit }
-        emit { print }
-    ' "$REPO_DIR/launcher/start.sh.template" >> "$probe"
-    cat >> "$probe" <<'SCRIPT'
-seed_self_hosted_computer_use_ui_setting
-SCRIPT
-    chmod +x "$probe"
-
-    printf '%s\n' 'remote-mobile-control' > "$app_dir/.codex-linux/remote-mobile-control-enabled"
-    SCRIPT_DIR="$app_dir" APP_SETTINGS_FILE="$settings" bash "$probe"
-    python3 - "$settings" <<'PY'
-import json
-import sys
-with open(sys.argv[1], "r", encoding="utf-8") as handle:
-    data = json.load(handle)
-raise SystemExit(0 if data.get("codex-linux-computer-use-ui-enabled") is True else 1)
-PY
-
-    printf '%s\n' '{"codex-linux-computer-use-ui-enabled": false}' > "$settings"
-    SCRIPT_DIR="$app_dir" APP_SETTINGS_FILE="$settings" bash "$probe"
-    python3 - "$settings" <<'PY'
-import json
-import sys
-with open(sys.argv[1], "r", encoding="utf-8") as handle:
-    data = json.load(handle)
-raise SystemExit(0 if data.get("codex-linux-computer-use-ui-enabled") is False else 1)
-PY
-
-    rm -f "$app_dir/.codex-linux/remote-mobile-control-enabled" "$settings"
-    SCRIPT_DIR="$app_dir" APP_SETTINGS_FILE="$settings" bash "$probe"
-    assert_file_not_exists "$settings"
-
-    CODEX_LINUX_ENABLE_COMPUTER_USE_UI=1 SCRIPT_DIR="$app_dir" APP_SETTINGS_FILE="$settings" bash "$probe"
-    python3 - "$settings" <<'PY'
-import json
-import sys
-with open(sys.argv[1], "r", encoding="utf-8") as handle:
-    data = json.load(handle)
-raise SystemExit(0 if data.get("codex-linux-computer-use-ui-enabled") is True else 1)
-PY
 }
 
 test_side_by_side_launcher_identity() {
@@ -6008,9 +5033,9 @@ MD
 {"extensionId":"hehggadaopoacecdllhhajmbjkdcmajg","extensionHostName":"com.openai.codexextension"}
 JSON
     cat > "$chrome_dir/scripts/browser-client.mjs" <<'JS'
-import{resolve as GF}from"path";import{homedir as VF,platform as WF}from"os";var Tc=GF(VF(),WF()==="win32"?"AppData\\Local\\Google\\Chrome\\User Data":"Library/Application Support/Google/Chrome");import{ClassicLevel as KF}from"./node_modules/classic-level.mjs";import{resolve as Gf}from"path";import{tmpdir as YF}from"os";import{cp as ZF,mkdtemp as JF,rm as kS}from"fs/promises";import{existsSync as XF}from"fs";var IS=async(t,e)=>{let r=Gf(Tc,t,"Local Extension Settings",e);if(!XF(r))return null;let n=await JF(Gf(QF(),"codex"));await ZF(r,n,{recursive:!0}),await kS(Gf(n,"LOCK"));let o=new KF(n,{createIfMissing:!1,keyEncoding:"utf8",valueEncoding:"utf8"});try{await o.open();let i=await o.get("extensionInstanceId");if(!i)return null;let s=JSON.parse(i);return typeof s!="string"?null:s}finally{await o.close(),await kS(n,{force:!0,recursive:!0})}},QF=()=>"nodeRepl"in globalThis&&globalThis.nodeRepl?globalThis.nodeRepl.tmpDir:YF();var AS=async t=>{if(t.type!=="extension"||!t.metadata?.extensionInstanceId||!t.metadata.extensionId)return t;let e=await rO(t.metadata.extensionId,t.metadata.extensionInstanceId);return e?{...t,metadata:{...t.metadata,profileName:e.name,profileIsLastUsed:e.isLastUsed.toString(),profileOrdering:e.orderingIndex.toString()}}:t},rO=async(t,e)=>(await nO(t)).find(o=>o.instanceId===e)||null,nO=async t=>{let e=await oO();return await Promise.all(e.map(async r=>({...r,instanceId:await IS(r.id,t).catch(n=>(ee(n),null))})))},oO=async()=>{let t=tO(Tc,"Local State"),e=JSON.parse(await eO(t,"utf8"));return e.profile.profiles_order.map((r,n)=>{let o=e.profile.info_cache[r];return o?{id:r,name:o.name,isLastUsed:e.profile.last_used===r,orderingIndex:n,avatarUrl:o.avatar_icon}:null}).filter(r=>!!r)};
-var Xv=t=>t==="win32"?"\\\\.\\pipe\\codex-browser-use":"/tmp/codex-browser-use";function Tm(){let t=import.meta.__codexNativePipe;return t==null||typeof t.createConnection!="function"?null:t}
-var oh=Vb(l9.platform()),d9=async e=>{let t=ST(),r=e.filter(o=>o.info.type==="iab"),n=p9(r,t);return await Promise.all(r.filter(o=>!n.includes(o)).map(async({api:o})=>o.close())),[...e.filter(o=>o.info.type!=="iab"),...n]},p9=(e,t)=>t==null?[]:e.filter(r=>r.info.metadata?.codexSessionId===t);
+import{readdir as ZI}from"node:fs/promises";import L7,{platform as XI}from"node:os";import QI from"node:path";import{readFile as P7}from"fs/promises";import{resolve as D7}from"path";import{resolve as S7}from"path";import{homedir as v7,platform as E7}from"os";var Cd=S7(v7(),E7()==="win32"?"AppData\\Local\\Google\\Chrome\\User Data":"Library/Application Support/Google/Chrome");import{ClassicLevel as C7}from"./node_modules/classic-level.mjs";import{resolve as bg}from"path";import{tmpdir as T7}from"os";import{cp as A7,mkdtemp as I7,rm as HI}from"fs/promises";import{existsSync as k7}from"fs";var VI=async(e,t)=>{let r=bg(Cd,e,"Local Extension Settings",t);if(!k7(r))return null;let n=await I7(bg(R7(),"codex"));await A7(r,n,{recursive:!0}),await HI(bg(n,"LOCK"));let o=new C7(n,{createIfMissing:!1,keyEncoding:"utf8",valueEncoding:"utf8"});try{await o.open();let i=await o.get("extensionInstanceId");if(!i)return null;let s=JSON.parse(i);return typeof s!="string"?null:s}finally{await o.close(),await HI(n,{force:!0,recursive:!0})}},R7=()=>"nodeRepl"in globalThis&&globalThis.nodeRepl?globalThis.nodeRepl.tmpDir:T7();var GI=async e=>{if(e.type!=="extension"||!e.metadata?.extensionInstanceId||!e.metadata.extensionId)return e;let t=await N7(e.metadata.extensionId,e.metadata.extensionInstanceId);return t?{...e,metadata:{...e.metadata,profileName:t.name,profileIsLastUsed:t.isLastUsed.toString(),profileOrdering:t.orderingIndex.toString()}}:e},N7=async(e,t)=>(await O7(e)).find(o=>o.instanceId===t)||null,O7=async e=>{let t=await M7();return await Promise.all(t.map(async r=>({...r,instanceId:await VI(r.id,e).catch(n=>(le(n),null))})))},M7=async()=>{let e=D7(Cd,"Local State"),t=JSON.parse(await P7(e,"utf8"));return t.profile.profiles_order.map((r,n)=>{let o=t.profile.info_cache[r];return o?{id:r,name:o.name,isLastUsed:t.profile.last_used===r,orderingIndex:n,avatarUrl:o.avatar_icon}:null}).filter(r=>!!r)};
+var U7=5e3,_g=__(L7.platform()),j7=async(e,{codexSessionId:t})=>{let r=tl(p_),n=e.filter(i=>i.info.type==="iab"),o=q7(n,t,r);return await Promise.all(n.filter(i=>!o.includes(i)).map(async({api:i})=>i.close())),[...e.filter(i=>i.info.type!=="iab"),...o]},q7=(e,t,r)=>t==null?[]:e.filter(n=>n.info.metadata?.codexSessionId===t&&(r==null||n.info.metadata.codexAppBuildFlavor===r)),ek=async()=>{};
+function og(e){return e}function ig(e){return e==="extension"||e==="iab"||e==="cdp"}function li(e){return e}function KI(e){return e}class Id{async getBrowsers(){return[]}async get(e){return e}}function tI({browserId:e,clientInfo:t,requestedBrowserId:r}){return ig(r)?og(t.type)===r:e===r}function ld(){return null}async function mwe({globals:e}){let r=new Id,n=new Map(),l={browser_id:"extension"};if(ig(l.browser_id)){let _=li(l.browser_id);KI(_)}let p=await r.get(l.browser_id),f=n.get(p.api);return f}
 function lu(e){let t=globalThis.nodeRepl?.env[e];return typeof t=="string"?t:void 0}
 function Me(){let e=globalThis.nodeRepl;return e?.config==null?void 0:e}
 import{platform as yT}from"node:os";function eh(){return"privileged native pipe bridge is not available; browser-client is not trusted"}function th(){let e=globalThis.nodeRepl?.nativePipe;return e==null||typeof e.createConnection!="function"?null:e}var ml=class e{constructor(t){this.socket=t}static async create(t){let r=th();if(r!=null){let n=await r.createConnection(t);return new e(n)}throw new Error(eh())}};
@@ -6191,9 +5216,7 @@ test_chrome_plugin_staging() {
     assert_contains "$chrome_dir/scripts/browser-client.mjs" "codexLinuxChromeUserDataDirectories"
     assert_contains "$chrome_dir/scripts/browser-client.mjs" '"BraveSoftware","Brave-Browser"'
     assert_contains "$chrome_dir/scripts/browser-client.mjs" '".config","chromium"'
-    assert_contains "$chrome_dir/scripts/browser-client.mjs" "instanceId:await IS(o.id,t,r)"
-    assert_contains "$chrome_dir/scripts/browser-client.mjs" "codexLinuxNativePipeBridge"
-    assert_contains "$chrome_dir/scripts/browser-client.mjs" "CODEX_BROWSER_USE_SOCKET_DIR"
+    assert_contains "$chrome_dir/scripts/browser-client.mjs" "instanceId:await VI(o.id,e,r)"
     assert_contains "$chrome_dir/scripts/browser-client.mjs" "codexLinuxRankBrowserBackends"
     assert_contains "$chrome_dir/scripts/browser-client.mjs" "codexLinuxFilterBrowserBackends"
     assert_contains "$chrome_dir/scripts/browser-client.mjs" "codexLinuxCloseDiscardedBrowserBackends"
@@ -6228,76 +5251,37 @@ test_chrome_plugin_staging() {
 }
 
 test_chrome_browser_client_profile_root_variants() {
-    info "Checking Chrome browser-client profile root variants"
+    info "Checking current Chrome browser-client profile root patch"
     local workspace="$TMP_DIR/chrome-browser-client-profile-roots"
     local chrome_dir="$workspace/chrome"
     local browser_client="$chrome_dir/scripts/browser-client.mjs"
+    local patch_log="$workspace/current-browser-client.log"
 
     mkdir -p "$chrome_dir/scripts"
 
     cat > "$browser_client" <<'JS'
-import{resolve as GF}from"path";import{homedir as VF,platform as WF}from"os";var Tc=GF(VF(),WF()==="win32"?"AppData\\Local\\Google\\Chrome\\User Data":"Library/Application Support/Google/Chrome");
+import{readdir as ZI}from"node:fs/promises";import L7,{platform as XI}from"node:os";import QI from"node:path";import{readFile as P7}from"fs/promises";import{resolve as D7}from"path";import{resolve as S7}from"path";import{homedir as v7,platform as E7}from"os";var Cd=S7(v7(),E7()==="win32"?"AppData\\Local\\Google\\Chrome\\User Data":"Library/Application Support/Google/Chrome");import{ClassicLevel as C7}from"./node_modules/classic-level.mjs";import{resolve as bg}from"path";import{tmpdir as T7}from"os";import{cp as A7,mkdtemp as I7,rm as HI}from"fs/promises";import{existsSync as k7}from"fs";var VI=async(e,t)=>{let r=bg(Cd,e,"Local Extension Settings",t);if(!k7(r))return null;let n=await I7(bg(R7(),"codex"));await A7(r,n,{recursive:!0}),await HI(bg(n,"LOCK"));let o=new C7(n,{createIfMissing:!1,keyEncoding:"utf8",valueEncoding:"utf8"});try{await o.open();let i=await o.get("extensionInstanceId");if(!i)return null;let s=JSON.parse(i);return typeof s!="string"?null:s}finally{await o.close(),await HI(n,{force:!0,recursive:!0})}},R7=()=>"nodeRepl"in globalThis&&globalThis.nodeRepl?globalThis.nodeRepl.tmpDir:T7();var GI=async e=>e,N7=async(e,t)=>(await O7(e)).find(o=>o.instanceId===t)||null,O7=async e=>{let t=await M7();return await Promise.all(t.map(async r=>({...r,instanceId:await VI(r.id,e).catch(n=>(le(n),null))})))},M7=async()=>{let e=D7(Cd,"Local State"),t=JSON.parse(await P7(e,"utf8"));return t.profile.profiles_order.map((r,n)=>{let o=t.profile.info_cache[r];return o?{id:r,name:o.name,isLastUsed:t.profile.last_used===r,orderingIndex:n,avatarUrl:o.avatar_icon}:null}).filter(r=>!!r)};var U7=5e3,_g=__(L7.platform()),j7=async(e,{codexSessionId:t})=>{let r=tl(p_),n=e.filter(i=>i.info.type==="iab"),o=q7(n,t,r);return await Promise.all(n.filter(i=>!o.includes(i)).map(async({api:i})=>i.close())),[...e.filter(i=>i.info.type!=="iab"),...o]},q7=(e,t,r)=>t==null?[]:e.filter(n=>n.info.metadata?.codexSessionId===t&&(r==null||n.info.metadata.codexAppBuildFlavor===r)),ek=async()=>{};function og(e){return e}function ig(e){return e==="extension"||e==="iab"||e==="cdp"}function li(e){return e}function KI(e){return e}class Id{async getBrowsers(){return[]}async get(e){return e}}function tI({browserId:e,clientInfo:t,requestedBrowserId:r}){return ig(r)?og(t.type)===r:e===r}function ld(){return null}async function mwe({globals:e}){let r=new Id,n=new Map(),l={browser_id:"extension"};if(ig(l.browser_id)){let _=li(l.browser_id);KI(_)}let p=await r.get(l.browser_id),f=n.get(p.api);return f}
 JS
-    node "$REPO_DIR/scripts/lib/patch-chrome-plugin.js" "$chrome_dir" >/dev/null 2>&1
-    assert_contains "$browser_client" "codexLinuxChromeUserDataDirectories"
-    assert_contains "$browser_client" '"BraveSoftware","Brave-Browser"'
-    assert_contains "$browser_client" '".config","chromium"'
-
-    cat > "$browser_client" <<'JS'
-import{resolve as eO}from"path";import{homedir as tO,platform as rO}from"os";var Ic=eO(tO(),rO()==="win32"?"AppData\\Local\\Google\\Chrome\\User Data":"Library/Application Support/Google/Chrome");
-JS
-    node "$REPO_DIR/scripts/lib/patch-chrome-plugin.js" "$chrome_dir" >/dev/null 2>&1
-    assert_contains "$browser_client" "codexLinuxChromeUserDataDirectories"
-    assert_contains "$browser_client" '"BraveSoftware","Brave-Browser"'
-    assert_contains "$browser_client" '".config","chromium"'
-
-    cat > "$browser_client" <<'JS'
-import{resolve as Y5}from"path";import{homedir as Z5,platform as X5}from"os";var hl=Y5(Z5(),X5()==="win32"?"AppData\\Local\\Google\\Chrome\\User Data":"Library/Application Support/Google/Chrome");import{ClassicLevel as Q5}from"./node_modules/classic-level.mjs";import{resolve as rh}from"path";import{tmpdir as o9}from"os";import{cp as t9,mkdtemp as r9,rm as fT}from"fs/promises";import{existsSync as n9}from"fs";var mT=async(e,t)=>{let r=rh(hl,e,"Local Extension Settings",t);if(!n9(r))return null;let n=await r9(rh(o9(),"codex"));await t9(r,n,{recursive:!0}),await fT(rh(n,"LOCK"));let o=new Q5(n,{createIfMissing:!1,keyEncoding:"utf8",valueEncoding:"utf8"});try{await o.open();let i=await o.get("extensionInstanceId");if(!i)return null;let s=JSON.parse(i);return typeof s!="string"?null:s}finally{await o.close(),await fT(n,{force:!0,recursive:!0})}};var a9=async(e,t)=>(await u9(e)).find(o=>o.instanceId===t)||null,u9=async e=>{let t=await c9();return await Promise.all(t.map(async r=>({...r,instanceId:await mT(r.id,e).catch(n=>(ne(n),null))})))},c9=async()=>{let e=s9(hl,"Local State"),t=JSON.parse(await i9(e,"utf8"));return t.profile.profiles_order.map((r,n)=>{let o=t.profile.info_cache[r];return o?{id:r,name:o.name,isLastUsed:t.profile.last_used===r,orderingIndex:n,avatarUrl:o.avatar_icon}:null}).filter(r=>!!r)}
-JS
-    node "$REPO_DIR/scripts/lib/patch-chrome-plugin.js" "$chrome_dir" >/dev/null 2>&1
-    assert_contains "$browser_client" "codexLinuxChromeUserDataDirectories"
-    assert_contains "$browser_client" '"BraveSoftware","Brave-Browser"'
-    assert_contains "$browser_client" '".config","chromium"'
-    assert_contains "$browser_client" "async(e,t,r=hl)"
-    assert_contains "$browser_client" "instanceId:await mT(o.id,e,r)"
-
-    cat > "$browser_client" <<'JS'
-import{readFile as $j}from"fs/promises";import{resolve as zj}from"path";import{resolve as Nj}from"path";import{homedir as Oj,platform as Mj}from"os";var $c=Nj(Oj(),Mj()==="win32"?"AppData\\Local\\Google\\Chrome\\User Data":"Library/Application Support/Google/Chrome");import{ClassicLevel as Fj}from"./node_modules/classic-level.mjs";import{resolve as Ih}from"path";import{tmpdir as Bj}from"os";import{cp as Lj,mkdtemp as Uj,rm as gk}from"fs/promises";import{existsSync as jj}from"fs";var bk=async(e,t)=>{let r=Ih($c,e,"Local Extension Settings",t);if(!jj(r))return null;let n=await Uj(Ih(qj(),"codex"));await Lj(r,n,{recursive:!0}),await gk(Ih(n,"LOCK"));let o=new Fj(n,{createIfMissing:!1,keyEncoding:"utf8",valueEncoding:"utf8"});try{await o.open();let i=await o.get("extensionInstanceId");if(!i)return null;let s=JSON.parse(i);return typeof s!="string"?null:s}finally{await o.close(),await gk(n,{force:!0,recursive:!0})}},qj=()=>"nodeRepl"in globalThis&&globalThis.nodeRepl?globalThis.nodeRepl.tmpDir:Bj();var yk=async e=>{if(e.type!=="extension"||!e.metadata?.extensionInstanceId||!e.metadata.extensionId)return e;let t=await Wj(e.metadata.extensionId,e.metadata.extensionInstanceId);return t?{...e,metadata:{...e.metadata,profileName:t.name,profileIsLastUsed:t.isLastUsed.toString(),profileOrdering:t.orderingIndex.toString()}}:e},Wj=async(e,t)=>(await Hj(e)).find(o=>o.instanceId===t)||null,Hj=async e=>{let t=await Vj();return await Promise.all(t.map(async r=>({...r,instanceId:await bk(r.id,e).catch(n=>(ue(n),null))})))},Vj=async()=>{let e=zj($c,"Local State"),t=JSON.parse(await $j(e,"utf8"));return t.profile.profiles_order.map((r,n)=>{let o=t.profile.info_cache[r];return o?{id:r,name:o.name,isLastUsed:t.profile.last_used===r,orderingIndex:n,avatarUrl:o.avatar_icon}:null}).filter(r=>!!r)};var Ph=Iy(Gj.platform()),Kj=async(e,{codexSessionId:t})=>{let r=ap(Ey),n=e.filter(i=>i.info.type==="iab"),o=Jj(n,t,r);return await Promise.all(n.filter(i=>!o.includes(i)).map(async({api:i})=>i.close())),[...e.filter(i=>i.info.type!=="iab"),...o]},Jj=(e,t,r)=>t==null?[]:e.filter(n=>n.info.metadata?.codexSessionId===t&&(r==null||n.info.metadata.codexAppBuildFlavor===r));var vk=async e=>[];
-JS
-    node "$REPO_DIR/scripts/lib/patch-chrome-plugin.js" "$chrome_dir" >/dev/null 2>&1
-    assert_contains "$browser_client" "codexLinuxChromeUserDataDirectories"
-    assert_contains "$browser_client" '"BraveSoftware","Brave-Browser"'
-    assert_contains "$browser_client" '".config","chromium"'
-    assert_contains "$browser_client" 'async(e,t,r=$c)'
-    assert_contains "$browser_client" "instanceId:await bk(o.id,e,r)"
-    assert_contains "$browser_client" "codexLinuxRankBrowserBackends"
-
-    cat > "$browser_client" <<'JS'
-async function sye({globals:e}){return e}export{sye as setupBrowserRuntime};
-JS
-    local patch_log="$workspace/current-browser-client.log"
     node "$REPO_DIR/scripts/lib/patch-chrome-plugin.js" "$chrome_dir" >"$patch_log" 2>&1
     assert_not_contains "$patch_log" "browser-client.mjs missing patch target for Linux Chrome profile roots"
     assert_not_contains "$patch_log" "browser-client.mjs missing patch target for Linux Chrome profile metadata lookup"
     assert_not_contains "$patch_log" "browser-client.mjs missing patch target for Linux Chrome profile instance matching"
     assert_not_contains "$patch_log" "browser-client.mjs missing patch target for Linux Chrome active profile backend ordering"
-
-    cat > "$browser_client" <<'JS'
-import p$,{platform as ek}from"node:os";import{readFile as a$}from"fs/promises";import{resolve as u$}from"path";import{resolve as Xq}from"path";import{homedir as Qq,platform as e$}from"os";var ld=Xq(Qq(),e$()==="win32"?"AppData\\Local\\Google\\Chrome\\User Data":"Library/Application Support/Google/Chrome");import{ClassicLevel as t$}from"./node_modules/classic-level.mjs";import{resolve as Zh}from"path";import{tmpdir as r$}from"os";import{cp as n$,mkdtemp as o$,rm as YA}from"fs/promises";import{existsSync as i$}from"fs";var ZA=async(e,t)=>{let r=Zh(ld,e,"Local Extension Settings",t);if(!i$(r))return null;let n=await o$(Zh(s$(),"codex"));await n$(r,n,{recursive:!0}),await YA(Zh(n,"LOCK"));let o=new t$(n,{createIfMissing:!1,keyEncoding:"utf8",valueEncoding:"utf8"});try{await o.open();let i=await o.get("extensionInstanceId");if(!i)return null;let s=JSON.parse(i);return typeof s!="string"?null:s}finally{await o.close(),await YA(n,{force:!0,recursive:!0})}},s$=()=>"nodeRepl"in globalThis&&globalThis.nodeRepl?globalThis.nodeRepl.tmpDir:r$();var XA=async e=>{if(e.type!=="extension"||!e.metadata?.extensionInstanceId||!e.metadata.extensionId)return e;let t=await l$(e.metadata.extensionId,e.metadata.extensionInstanceId);return t?{...e,metadata:{...e.metadata,profileName:t.name,profileIsLastUsed:t.isLastUsed.toString(),profileOrdering:t.orderingIndex.toString()}}:e},l$=async(e,t)=>(await c$(e)).find(o=>o.instanceId===t)||null,c$=async e=>{let t=await d$();return await Promise.all(t.map(async r=>({...r,instanceId:await ZA(r.id,e).catch(n=>(ue(n),null))})))},d$=async()=>{let e=u$(ld,"Local State"),t=JSON.parse(await a$(e,"utf8"));return t.profile.profiles_order.map((r,n)=>{let o=t.profile.info_cache[r];return o?{id:r,name:o.name,isLastUsed:t.profile.last_used===r,orderingIndex:n,avatarUrl:o.avatar_icon}:null}).filter(r=>!!r)};var Qh=Xy(p$.platform()),f$=async(e,{codexSessionId:t})=>{let r=Vu(Vy),n=e.filter(i=>i.info.type==="iab"),o=m$(n,t,r);return await Promise.all(n.filter(i=>!o.includes(i)).map(async({api:i})=>i.close())),[...e.filter(i=>i.info.type!=="iab"),...o]},m$=(e,t,r)=>t==null?[]:e.filter(n=>n.info.metadata?.codexSessionId===t&&(r==null||n.info.metadata.codexAppBuildFlavor===r));function eg(e){return e}function cd(e){return e==="extension"||e==="iab"||e==="cdp"}function dd(e){return e}function lk({browserId:e,clientInfo:t,requestedBrowserId:r}){return cd(r)?eg(t.type)===r:e===r}var B$={};async function executeAgentCommand(l){let i=[],n={};let{type:d,...p}=l;if("browser_id"in p){if(cd(p.browser_id)){let h=dd(p.browser_id);tg(h)||hk({diagnostics:n,reason:"backend-disabled",requestedBrowserId:p.browser_id}),ck(h)}let f=i.find(h=>lk({browserId:h.browserId,clientInfo:h.clientInfo,requestedBrowserId:p.browser_id}));}}
-JS
-    node "$REPO_DIR/scripts/lib/patch-chrome-plugin.js" "$chrome_dir" >/dev/null 2>&1
+    assert_not_contains "$patch_log" "browser-client.mjs missing patch target for Linux idle Chrome profile filtering"
+    assert_not_contains "$patch_log" "browser-client.mjs missing patch target for Linux ambiguous active Chrome extension alias guard"
+    assert_not_contains "$patch_log" "browser-client.mjs missing patch target for Linux ambiguous active Chrome extension alias check"
     assert_contains "$browser_client" "codexLinuxChromeUserDataDirectories"
     assert_contains "$browser_client" '"BraveSoftware","Brave-Browser"'
     assert_contains "$browser_client" '".config","chromium"'
-    assert_contains "$browser_client" 'async(e,t,r=ld)'
-    assert_contains "$browser_client" "instanceId:await ZA(o.id,e,r)"
+    assert_contains "$browser_client" 'async(e,t,r=Cd)'
+    assert_contains "$browser_client" "instanceId:await VI(o.id,e,r)"
     assert_contains "$browser_client" "codexLinuxRankBrowserBackends"
     assert_contains "$browser_client" "codexLinuxFilterBrowserBackends"
     assert_contains "$browser_client" "codexLinuxCloseDiscardedBrowserBackends"
     assert_contains "$browser_client" "await codexLinuxFilterBrowserBackends"
-    assert_contains "$browser_client" "p$.platform()"
+    assert_contains "$browser_client" "XI()"
     assert_contains "$browser_client" "codexLinuxRejectAmbiguousBrowserAlias"
-    assert_contains "$browser_client" "codexLinuxRejectAmbiguousBrowserAlias(p.browser_id,i)"
+    assert_contains "$browser_client" "codexLinuxRejectAmbiguousBrowserAlias(l.browser_id,await r.getBrowsers())"
 }
 
 test_chrome_marketplace_fallback_synthesis() {
@@ -6352,85 +5336,6 @@ JSON
     assert_contains "$marketplace" '"installation": "AVAILABLE"'
     assert_contains "$marketplace" '"authentication": "ON_INSTALL"'
     assert_not_contains "$marketplace" "Bundled marketplace does not contain chrome plugin"
-}
-
-test_computer_use_marketplace_fallback_synthesis() {
-    info "Checking Computer Use marketplace fallback synthesis from staged manifest"
-    local workspace="$TMP_DIR/computer-use-marketplace-fallback"
-    local app_dir="$workspace/Codex.app"
-    local install_dir="$workspace/install"
-    local output_log="$workspace/output.log"
-    local marketplace="$install_dir/resources/plugins/openai-bundled/.agents/plugins/marketplace.json"
-
-    mkdir -p "$app_dir/Contents/Resources/plugins/openai-bundled/.agents/plugins" "$install_dir/resources"
-    cat > "$app_dir/Contents/Resources/plugins/openai-bundled/.agents/plugins/marketplace.json" <<'JSON'
-{"plugins":[]}
-JSON
-
-    (
-        SCRIPT_DIR="$REPO_DIR"
-        INSTALL_DIR="$install_dir"
-        WORK_DIR="$workspace/work"
-        ARCH="x86_64"
-        ICON_SOURCE="$workspace/missing-icon.png"
-        CODEX_APP_ID="codex-desktop"
-        mkdir -p "$WORK_DIR"
-        warn() { echo "[WARN] $*" >&2; }
-        info() { echo "[INFO] $*" >&2; }
-        # shellcheck disable=SC1091
-        source "$REPO_DIR/scripts/lib/bundled-plugins.sh"
-        stage_linux_computer_use_plugin() {
-            local target_plugins="$1"
-            local target_plugin="$target_plugins/computer-use"
-            mkdir -p "$target_plugin/.codex-plugin" "$target_plugin/bin"
-            cat > "$target_plugin/.codex-plugin/plugin.json" <<'JSON'
-{"name":"computer-use","version":"9.9.9","description":"Manifest description","homepage":"https://example.invalid","license":"MIT","author":{"name":"Linux"},"keywords":["desktop"],"interface":{"displayName":"Computer Use Manifest","category":"ManifestCategory","shortDescription":"Manifest short"}}
-JSON
-            printf '#!/bin/sh\n' > "$target_plugin/bin/codex-computer-use-linux"
-            printf '#!/bin/sh\n' > "$target_plugin/bin/codex-computer-use-cosmic"
-            chmod +x "$target_plugin/bin/codex-computer-use-linux" "$target_plugin/bin/codex-computer-use-cosmic"
-            return 0
-        }
-        install_bundled_plugin_resources "$app_dir"
-    ) >"$output_log" 2>&1
-
-    assert_file_exists "$marketplace"
-    node - "$marketplace" <<'NODE' || fail "Expected Computer Use fallback marketplace entry to use staged manifest metadata"
-const fs = require("node:fs");
-const marketplace = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
-const plugin = marketplace.plugins.find((entry) => entry.name === "computer-use");
-if (plugin == null) {
-  throw new Error("missing computer-use marketplace entry");
-}
-const expected = {
-  source: "local",
-  path: "./plugins/computer-use",
-  installation: "AVAILABLE",
-  authentication: "ON_INSTALL",
-  category: "ManifestCategory",
-  version: "9.9.9",
-  displayName: "Computer Use Manifest",
-  description: "Manifest description",
-};
-if (plugin.source?.source !== expected.source || plugin.source?.path !== expected.path) {
-  throw new Error(`bad source: ${JSON.stringify(plugin.source)}`);
-}
-if (
-  plugin.policy?.installation !== expected.installation ||
-  plugin.policy?.authentication !== expected.authentication
-) {
-  throw new Error(`bad policy: ${JSON.stringify(plugin.policy)}`);
-}
-if (plugin.category !== expected.category || plugin.interface?.category !== expected.category) {
-  throw new Error(`bad category: ${JSON.stringify(plugin)}`);
-}
-if (plugin.version !== expected.version || plugin.interface?.displayName !== expected.displayName) {
-  throw new Error(`missing manifest display metadata: ${JSON.stringify(plugin)}`);
-}
-if (plugin.description !== expected.description) {
-  throw new Error(`missing manifest description: ${JSON.stringify(plugin)}`);
-}
-NODE
 }
 
 test_chrome_native_host_manifest_writer() {
@@ -6492,7 +5397,7 @@ make_fake_extracted_asar() {
     printf 'export{s as t};\n' > "$root/webview/assets/chunk-test.js"
     printf 'import{t as e}from"./chunk-test.js";Symbol.for(`react.transitional.element`);export{e as t};\n' > "$root/webview/assets/react-test.js"
     printf 'import{t as e}from"./chunk-test.js";Symbol.for(`react.transitional.element`);export{e as t};\n' > "$root/webview/assets/jsx-runtime-test.js"
-    printf 'let marker=`vscode://codex`;async function n(){return{}}export{n};\n' > "$root/webview/assets/vscode-api-test.js"
+    printf 'async function send(e,t,n,r,i){return fetch(`vscode://codex/${e}`)}function request(...e){let[t,n]=e,{params:r,select:i,signal:a,source:o}=n??{};return send(t,r,i,a,o)}export{request as l};\n' > "$root/webview/assets/setting-storage-test.js"
     cat > "$root/webview/assets/app-server-manager-signals-test.js" <<'JS'
 function j(e){return e}function B(e){if(e==null||typeof e==`string`)return null;let t=Mi(e);return t==null?null:Ni(t)}function Mi(e){return`subAgent`in e?e.subAgent:null}function Ni(e){return typeof e==`string`?Pi():`thread_spawn`in e?{parentThreadId:j(e.thread_spawn.parent_thread_id),depth:e.thread_spawn.depth,agentNickname:e.thread_spawn.agent_nickname,agentRole:e.thread_spawn.agent_role}:Pi()}function Pi(){return{parentThreadId:null,depth:null,agentNickname:null,agentRole:null}}function Xl(e){return e==null?null:Zl(e.agentNickname)??Zl(B(e.source)?.agentNickname)}function Zl(e){if(e==null)return null;let t=e.trim();return t.length===0?null:t}
 JS
@@ -6524,7 +5429,8 @@ test_linux_file_manager_patch_smoke() {
     node "$REPO_DIR/scripts/patch-linux-window-ui.js" "$extracted" >"$output_log" 2>&1
     assert_contains "$extracted/.vite/build/main-test.js" 'detect:()=>`linux-file-manager`'
     assert_contains "$extracted/.vite/build/main-test.js" 'linux:{label:`File Manager`'
-    assert_contains "$extracted/.vite/build/main-test.js" 'process.platform===`linux`&&D.setMenuBarVisibility(!1),'
+    assert_contains "$extracted/.vite/build/main-test.js" 'process.platform===`linux`&&D.removeMenu(),process.platform===`win32`&&D.removeMenu(),'
+    assert_not_contains "$extracted/.vite/build/main-test.js" 'D.setMenuBarVisibility(!1)'
     assert_contains "$extracted/.vite/build/main-test.js" '&&D.setIcon('
     assert_contains "$extracted/webview/assets/app-server-manager-signals-test.js" '`subAgent`in e?e.subAgent:`subagent`in e?e.subagent:null'
     assert_contains "$extracted/webview/assets/app-server-manager-signals-test.js" 'Zl(e.agentNickname)??Zl(e.agent_nickname)??Zl(B(e.source)?.agentNickname)'
@@ -6714,7 +5620,7 @@ if (!result.event.prevented || result.state.hideCalls !== 1) {
 NODE
 
     node "$REPO_DIR/scripts/patch-linux-window-ui.js" "$extracted" >"$output_log" 2>&1
-    assert_occurrence_count "$extracted/.vite/build/main-test.js" 'process.platform!==`linux`' '1'
+    assert_occurrence_count "$extracted/.vite/build/main-test.js" 'process.platform!==`win32`&&process.platform!==`darwin`&&process.platform!==`linux`?null:' '1'
     assert_occurrence_count "$extracted/.vite/build/main-test.js" 'nativeImage.createFromPath(process.resourcesPath' '3'
     assert_occurrence_count "$extracted/.vite/build/main-test.js" 'nativeImage.createFromPath(process.resourcesPath+`/../.codex-linux/codex-desktop-tray.png`)' '1'
     assert_occurrence_count "$extracted/.vite/build/main-test.js" 'nativeImage.createFromPath(process.resourcesPath+`/../.codex-linux/codex-desktop.png`)' '1'
@@ -6754,7 +5660,7 @@ JS
     assert_contains "$extracted/.vite/build/main-test.js" 'codexLinuxShouldBypassQuitPrompt=()=>codexLinuxExplicitQuitApproved===!0'
     assert_contains "$extracted/.vite/build/main-test.js" '{label:rB(this.appName),click:()=>{typeof codexLinuxPrepareForExplicitQuit===`function`?codexLinuxPrepareForExplicitQuit():typeof codexLinuxMarkQuitInProgress===`function`&&codexLinuxMarkQuitInProgress(),n.app.quit()}}'
     assert_contains "$extracted/.vite/build/main-test.js" 'if(o.type===`quit-app`){typeof codexLinuxPrepareForExplicitQuit===`function`?codexLinuxPrepareForExplicitQuit():typeof codexLinuxMarkQuitInProgress===`function`&&codexLinuxMarkQuitInProgress(),n.app.quit();return}'
-    assert_contains "$extracted/.vite/build/main-test.js" 'if((typeof codexLinuxShouldBypassQuitPrompt===`function`&&codexLinuxShouldBypassQuitPrompt())||e||(typeof i.canQuitWithoutPrompt===`function`&&i.canQuitWithoutPrompt())||r||!s&&!c){process.platform===`linux`&&typeof codexLinuxMarkQuitInProgress===`function`&&codexLinuxMarkQuitInProgress(),g=!0,a.markAppQuitting();return}'
+    assert_contains "$extracted/.vite/build/main-test.js" 'if((typeof codexLinuxShouldBypassQuitPrompt===`function`&&codexLinuxShouldBypassQuitPrompt())||e||i.canQuitWithoutPrompt()||r||!s&&!c){process.platform===`linux`&&typeof codexLinuxMarkQuitInProgress===`function`&&codexLinuxMarkQuitInProgress(),g=!0,a.markAppQuitting();return}'
     assert_contains "$extracted/.vite/build/main-test.js" 'process.platform===`linux`&&typeof codexLinuxMarkQuitInProgress===`function`&&codexLinuxMarkQuitInProgress(),i.markQuitApproved(),g=!0,a.markAppQuitting()'
     assert_contains "$extracted/.vite/build/main-test.js" 'codexLinuxFinalizeQuit=()=>{d(),f.dispose(),n.app.quit()},codexLinuxDrainPromise=Promise.all('
     assert_contains "$extracted/.vite/build/main-test.js" 'codexLinuxExplicitQuitDrainTimeoutMs'
@@ -6772,7 +5678,7 @@ const source = fs.readFileSync(process.argv[2], "utf8");
 const helperSnippet = source.match(/let codexLinuxQuitInProgress=!1,[^;]*codexLinuxShouldBypassQuitPrompt=\(\)=>codexLinuxExplicitQuitApproved===!0,[^;]*codexLinuxIsQuitInProgress=\(\)=>codexLinuxQuitInProgress===!0;/)?.[0];
 const traySnippet = source.match(/\{label:rB\(this\.appName\),click:\(\)=>\{typeof codexLinuxPrepareForExplicitQuit===`function`\?codexLinuxPrepareForExplicitQuit\(\):typeof codexLinuxMarkQuitInProgress===`function`&&codexLinuxMarkQuitInProgress\(\),n\.app\.quit\(\)\}\}/)?.[0];
 const quitAppSnippet = source.match(/if\(o\.type===`quit-app`\)\{typeof codexLinuxPrepareForExplicitQuit===`function`\?codexLinuxPrepareForExplicitQuit\(\):typeof codexLinuxMarkQuitInProgress===`function`&&codexLinuxMarkQuitInProgress\(\),n\.app\.quit\(\);return\}/)?.[0];
-const beforeQuitSnippet = source.match(/if\(\(typeof codexLinuxShouldBypassQuitPrompt===`function`&&codexLinuxShouldBypassQuitPrompt\(\)\)\|\|e\|\|\(typeof i\.canQuitWithoutPrompt===`function`&&i\.canQuitWithoutPrompt\(\)\)\|\|r\|\|!s&&!c\)\{process\.platform===`linux`&&typeof codexLinuxMarkQuitInProgress===`function`&&codexLinuxMarkQuitInProgress\(\),g=!0,a\.markAppQuitting\(\);return\}/)?.[0];
+const beforeQuitSnippet = source.match(/if\(\(typeof codexLinuxShouldBypassQuitPrompt===`function`&&codexLinuxShouldBypassQuitPrompt\(\)\)\|\|e\|\|i\.canQuitWithoutPrompt\(\)\|\|r\|\|!s&&!c\)\{process\.platform===`linux`&&typeof codexLinuxMarkQuitInProgress===`function`&&codexLinuxMarkQuitInProgress\(\),g=!0,a\.markAppQuitting\(\);return\}/)?.[0];
 if (!helperSnippet || !traySnippet || !quitAppSnippet || !beforeQuitSnippet) {
   throw new Error("Could not extract explicit quit snippets");
 }
@@ -6830,18 +5736,6 @@ function runBeforeQuitBypass() {
   return { state, bypassed, shouldBypass: scope.bypass(), marked: scope.marked() };
 }
 
-function runBeforeQuitWithoutCanQuitWithoutPrompt() {
-  const scope = new Function(
-    "BI",
-    "t",
-    `${helperSnippet}return {runBeforeQuitCheck(e,i,r,a){let s=BI(),c=t.sr().some(e=>e.status===\`ACTIVE\`);${beforeQuitSnippet}return \`prompt\`;}};`,
-  )(
-    () => true,
-    { sr: () => [{ status: "ACTIVE" }] },
-  );
-  return scope.runBeforeQuitCheck(false, {}, false, { markAppQuitting() {} });
-}
-
 let state = runTrayQuit();
 if (state.prepareCalls !== 1 || state.markCalls !== 1 || state.quitCalls !== 1) {
   throw new Error("tray quit should prepare explicit quit before quitting");
@@ -6865,10 +5759,6 @@ if (state.prepareCalls !== 0 || state.markCalls !== 1 || state.quitCalls !== 1) 
 state = runBeforeQuitBypass();
 if (!state.shouldBypass || state.bypassed !== undefined || state.state.markCalls !== 1 || !state.marked) {
   throw new Error("before-quit should bypass the Linux quit confirmation after an explicit quit");
-}
-
-if (runBeforeQuitWithoutCanQuitWithoutPrompt() !== "prompt") {
-  throw new Error("before-quit should tolerate missing canQuitWithoutPrompt");
 }
 NODE
 
@@ -6913,8 +5803,7 @@ JS
     assert_contains "$extracted/webview/assets/linux-desktop-settings-linux.js" "codex-linux-system-tray-enabled"
     assert_contains "$extracted/webview/assets/linux-desktop-settings-linux.js" "codex-linux-warm-start-enabled"
     assert_contains "$extracted/webview/assets/linux-desktop-settings-linux.js" "codex-linux-prompt-window-enabled"
-    assert_contains "$extracted/webview/assets/linux-desktop-settings-linux.js" 'type:"checkbox"'
-    assert_contains "$extracted/webview/assets/linux-desktop-settings-linux.js" 'accent-token-text-primary'
+    assert_contains "$extracted/webview/assets/linux-desktop-settings-linux.js" ' as Toggle}from"./'
     assert_not_contains "$extracted/webview/assets/linux-desktop-settings-linux.js" "function LinuxSwitch"
     assert_not_contains "$extracted/webview/assets/linux-desktop-settings-linux.js" "bg-token-text-primary"
     assert_not_contains "$extracted/webview/assets/linux-desktop-settings-linux.js" "translate-x-4"
@@ -7219,6 +6108,39 @@ async function boot(settings = {}, env = { CODEX_DESKTOP_LAUNCH_ACTION_SOCKET: "
   const context = {
     console,
     process: { platform: "linux", env },
+    require(moduleName) {
+      if (moduleName === "node:path") {
+        return {
+          dirname(path) {
+            state.dirnameCalls.push(path);
+            return "/tmp";
+          },
+          join(...parts) {
+            return parts.join("/").replace(/\/+/g, "/");
+          },
+        };
+      }
+      if (moduleName === "node:fs") {
+        return {
+          mkdirSync(...args) {
+            state.mkdirSyncCalls.push(args);
+          },
+          rmSync(...args) {
+            state.rmSyncCalls.push(args);
+          },
+        };
+      }
+      if (moduleName === "node:net") {
+        return {
+          createServer(handler) {
+            state.createServerCalls++;
+            state.socketConnectionHandler = handler;
+            return state.socketServer;
+          },
+        };
+      }
+      throw new Error(`Unexpected require(${moduleName})`);
+    },
     __codexSmoke: state,
   };
   context.globalThis = context;
@@ -8452,6 +7374,7 @@ main() {
     test_rebuild_candidate_uses_validated_default_dmg
     test_native_shortcut_targets_compose_existing_flows
     test_fedora_dependency_bootstrap_installs_rpmbuild
+    test_fedora_atomic_rpm_ostree_target_detection
     test_setup_native_wizard_noninteractive_feature_writer
     test_setup_native_wizard_rejects_invalid_feature_ids
     test_setup_native_wizard_rejects_features_without_readme
@@ -8474,18 +7397,10 @@ main() {
     test_setup_native_wizard_blank_interactive_cleanup_ids_skip_cleanup
     test_setup_native_wizard_dry_run_cleanup_does_not_delete_confirmed_paths
     test_setup_native_wizard_cleanup_deletes_only_confirmed_paths
-    test_codex_desktop_publish_workflows_stay_disabled
-    test_main_to_self_hosted_workflow_opens_update_pr
-    test_devcontainer_homebrew_cask_is_local_tap_installable
-    test_devcontainer_homebrew_validation_script_targets_ror_image
-    test_devcontainer_desktop_host_is_loopback_and_container_scoped
-    test_web_mode_security_token_env_and_cdp_static_contract
-    test_web_mode_server_desktop_settings_contract
-    test_web_mode_bootstrap_desktop_fallback_contract
-    test_web_mode_codex_home_policy
-    test_web_mode_inventory_script_reports_host_markers
-    test_web_mode_contract_harness_fixture
-    test_web_mode_remote_control_controller_fixture
+    test_upstream_build_app_workflow_tracks_dmg_metadata
+    test_update_nix_hashes_skips_unchanged_package_verification
+    test_update_nix_hashes_verifies_changed_pins
+    test_update_nix_hashes_verifies_changed_dmg_hash
     test_installer_detects_electron_version_from_plist
     test_installer_keeps_electron_fallback_for_bad_metadata
     test_port_validation_rejects_oversized_numeric_values
@@ -8505,11 +7420,11 @@ main() {
     test_chrome_plugin_staging
     test_chrome_browser_client_profile_root_variants
     test_chrome_marketplace_fallback_synthesis
-    test_computer_use_marketplace_fallback_synthesis
     test_chrome_native_host_manifest_writer
     test_launcher_template_sanity
+    test_launcher_cli_resolution_policy
+    test_webview_server_cache_policy
     test_process_detection_helper_cmdline_shapes
-    test_launcher_seeds_computer_use_ui_for_remote_mobile_build
     test_webview_probe_equivalence
     test_side_by_side_launcher_identity
     test_linux_file_manager_patch_smoke

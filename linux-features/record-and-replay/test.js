@@ -18,7 +18,6 @@ const {
 const {
   applyRecordReplayDictationTranscriptPatch,
   applyRecordReplayGlobalDictationTranscriptPatch,
-  applyRecordReplayChronicleSettingsPatch,
   applyRecordReplayHudPatch,
   applyRecordReplayPluginGatePatch,
   applyRecordReplayMainBridgePatch,
@@ -114,7 +113,6 @@ test("record-and-replay patch descriptor loads only when feature is enabled", ()
     assert.deepEqual(loaded.map((descriptor) => descriptor.id), [
       "feature:record-and-replay:record-and-replay-plugin-gate",
       "feature:record-and-replay:linux-record-replay-main-bridge",
-      "feature:record-and-replay:record-replay-chronicle-settings",
       "feature:record-and-replay:record-replay-hud",
       "feature:record-and-replay:record-replay-dictation-transcript",
       "feature:record-and-replay:record-replay-global-dictation-transcript",
@@ -140,7 +138,7 @@ test("record-and-replay global dictation descriptor tracks floating dictation bu
 });
 
 test("record-and-replay bridge patch is idempotent and uses execFile", () => {
-  assert.equal(descriptors.length, 6);
+  assert.equal(descriptors.length, 5);
   const source = [
     "const cp=require(\"node:child_process\"),fs=require(\"node:fs\"),path=require(\"node:path\");",
     "var bridge={\"get-global-state\":async({key:e})=>null};",
@@ -160,11 +158,8 @@ test("record-and-replay bridge patch is idempotent and uses execFile", () => {
   assert.match(patched, /"toggleChronicleSidecar":async/);
   assert.match(patched, /codexLinuxChronicleControlStateFromSkysight/);
   assert.match(patched, /codexLinuxChronicleEnsureSidecarRunning/);
-  assert.match(
-    patched,
-    /"chronicle-permissions":async\(\)=>\{let e=await codexLinuxChronicleSidecarControlStateOrStartIfEnabled\(\)/,
-  );
-  assert.match(patched, /codexLinuxChronicleSidecarControlStateOrStartIfEnabled/);
+  assert.match(patched, /"chronicle-permissions":async\(\)=>\{let e=await codexLinuxChronicleSidecarControlStateAsync\(\)/);
+  assert.doesNotMatch(patched, /"chronicle-permissions":async\(\)=>\{let e=await codexLinuxChronicleEnsureSidecarRunning/);
   assert.match(patched, /"skysight","status"/);
   assert.match(patched, /"linux-record-replay-status":async/);
   assert.match(patched, /"linux-record-replay-start":async/);
@@ -286,87 +281,6 @@ test("record-and-replay Chronicle permissions probe is side-effect free", async 
   };
 
   const state = await vm.runInNewContext(`${helperSource};codexLinuxChronicleSidecarControlStateAsync()`, context);
-  assert.deepEqual(JSON.parse(JSON.stringify(calls)), [["skysight", "status"]]);
-  assert.equal(state.enabled, true);
-  assert.equal(state.running, false);
-  assert.equal(state.state, "stopped");
-});
-
-test("record-and-replay Chronicle permissions bridge starts when summary agent policy is enabled", async () => {
-  const helperSource = recordReplayHelperSource({
-    childProcessVar: "childProcess",
-    fsVar: "fs",
-    pathVar: "path",
-  });
-  const calls = [];
-  const responses = [
-    { state: "stopped", is_running: false, paused: false, summary_agent_enabled: true },
-    { state: "stopped", is_running: false, paused: false, summary_agent_enabled: true },
-    { state: "running", is_running: true, paused: false, summary_agent_enabled: true },
-  ];
-  const context = {
-    childProcess: {
-      execFile(_bin, args, _options, callback) {
-        calls.push(args);
-        callback(null, JSON.stringify(responses.shift()), "");
-      },
-    },
-    fs,
-    path,
-    process: {
-      env: { CODEX_RECORD_REPLAY_LINUX_BIN: "/tmp/codex-record-replay-linux" },
-      cwd: () => "/tmp",
-      pid: 4242,
-    },
-    JSON,
-    Promise,
-    String,
-  };
-
-  const state = await vm.runInNewContext(
-    `${helperSource};codexLinuxChronicleSidecarControlStateOrStartIfEnabled()`,
-    context,
-  );
-  assert.deepEqual(JSON.parse(JSON.stringify(calls)), [
-    ["skysight", "status"],
-    ["skysight", "status"],
-    ["skysight", "start", "--summary-agent", "enabled"],
-  ]);
-  assert.equal(state.enabled, true);
-  assert.equal(state.running, true);
-  assert.equal(state.state, "running");
-});
-
-test("record-and-replay Chronicle permissions bridge stays passive when summary agent policy is disabled", async () => {
-  const helperSource = recordReplayHelperSource({
-    childProcessVar: "childProcess",
-    fsVar: "fs",
-    pathVar: "path",
-  });
-  const calls = [];
-  const context = {
-    childProcess: {
-      execFile(_bin, args, _options, callback) {
-        calls.push(args);
-        callback(null, JSON.stringify({ state: "stopped", is_running: false, paused: false, summary_agent_enabled: false }), "");
-      },
-    },
-    fs,
-    path,
-    process: {
-      env: { CODEX_RECORD_REPLAY_LINUX_BIN: "/tmp/codex-record-replay-linux" },
-      cwd: () => "/tmp",
-      pid: 4242,
-    },
-    JSON,
-    Promise,
-    String,
-  };
-
-  const state = await vm.runInNewContext(
-    `${helperSource};codexLinuxChronicleSidecarControlStateOrStartIfEnabled()`,
-    context,
-  );
   assert.deepEqual(JSON.parse(JSON.stringify(calls)), [["skysight", "status"]]);
   assert.equal(state.enabled, true);
   assert.equal(state.running, false);
@@ -507,79 +421,6 @@ test("record-and-replay generic Skysight start can pass summary agent true or fa
   );
   assert.match(patched, /t===!0&&n\.push\("--summary-agent","enabled"\)/);
   assert.match(patched, /t===!1&&n\.push\("--summary-agent","disabled"\)/);
-});
-
-test("record-and-replay patch wires Chronicle Settings switch to Linux Skysight", () => {
-  const source = [
-    "function Bt(){",
-    "let F=async({rememberConsentAccepted:r,showSetupDialog:i})=>{let a=O;w(!0),S(null),_(!1),y(i);try{r===!0&&await H(t,k.CHRONICLE_CONSENT_ACCEPTED,!0),i||H(t,k.CHRONICLE_SETUP_COMPLETION_PENDING,!1),await c.mutateAsync({enabled:!0}),e?.(a,!0),await o.invalidateQueries({queryKey:m(`chronicle-permissions`)})}catch(e){let r=nn(e);H(t,k.CHRONICLE_SETUP_COMPLETION_PENDING,!1),S(r),n.error(`Failed to enable Chronicle`,{safe:{errorMessage:r},sensitive:{error:e}})}finally{w(!1)}};",
-    "let I=async()=>{let n=O;w(!0),S(null),H(t,k.CHRONICLE_SETUP_COMPLETION_PENDING,!1);try{await c.mutateAsync({enabled:!1}),e?.(n,!1)}catch{}finally{w(!1)}};",
-    "}",
-  ].join("");
-
-  const patched = applyRecordReplayChronicleSettingsPatch(source);
-
-  assert.notEqual(patched, source);
-  assert.equal(applyRecordReplayChronicleSettingsPatch(patched), patched);
-  assert.match(patched, /linux-record-replay-skysight-start`,\{summaryAgent:!0\}/);
-  assert.match(patched, /linux-record-replay-skysight-resume`/);
-  assert.match(patched, /linux-record-replay-skysight-start`,\{summaryAgent:!1\}/);
-  assert.match(patched, /linux-record-replay-skysight-pause`/);
-  assert.match(
-    patched,
-    /await ue\(`linux-record-replay-skysight-start`,\{summaryAgent:!0\}\),await ue\(`linux-record-replay-skysight-resume`\)/,
-  );
-  assert.match(
-    patched,
-    /await ue\(`linux-record-replay-skysight-start`,\{summaryAgent:!1\}\),await ue\(`linux-record-replay-skysight-pause`\)/,
-  );
-  assert.doesNotMatch(patched, /Promise\.allSettled\(\[[^\]]*linux-record-replay-skysight/);
-});
-
-test("record-and-replay patch upgrades concurrent Chronicle Settings bridge", () => {
-  const source = [
-    "function Bt(){",
-    "let F=async()=>{try{await c.mutateAsync({enabled:!0}),await Promise.allSettled([ue(`linux-record-replay-skysight-start`,{summaryAgent:!0}),ue(`linux-record-replay-skysight-resume`)]),e?.(a,!0)}catch(e){}};",
-    "let I=async()=>{try{await c.mutateAsync({enabled:!1}),await Promise.allSettled([ue(`linux-record-replay-skysight-start`,{summaryAgent:!1}),ue(`linux-record-replay-skysight-pause`)]),e?.(n,!1)}catch(e){}};",
-    "}",
-  ].join("");
-
-  const patched = applyRecordReplayChronicleSettingsPatch(source);
-
-  assert.notEqual(patched, source);
-  assert.equal(applyRecordReplayChronicleSettingsPatch(patched), patched);
-  assert.match(
-    patched,
-    /await ue\(`linux-record-replay-skysight-start`,\{summaryAgent:!0\}\),await ue\(`linux-record-replay-skysight-resume`\)/,
-  );
-  assert.match(
-    patched,
-    /await ue\(`linux-record-replay-skysight-start`,\{summaryAgent:!1\}\),await ue\(`linux-record-replay-skysight-pause`\)/,
-  );
-  assert.doesNotMatch(patched, /Promise\.allSettled\(\[[^\]]*linux-record-replay-skysight/);
-});
-
-test("record-and-replay patch syncs Skysight when broad Memory toggle controls Chronicle", () => {
-  const source = [
-    "function fn(){",
-    "let E=Nt(),he=a.kind===`local`,w=ue(S);",
-    "ve(`batch-write-config-value`,{hostId:i});",
-    "let R=e=>{un({productLogger:r,previousState:L(),selectedEnabled:e,featureWrite:()=>w.mutateAsync({featureName:ee,enabled:e}),configWrite:()=>x.mutateAsync({edits:[{keyPath:`memories.generate_memories`,value:e},{keyPath:`memories.use_memories`,value:e}]}),...!e&&he?{chronicleDisable:()=>E.mutateAsync({enabled:!1})}:{}})};",
-    "}",
-  ].join("");
-
-  const patched = applyRecordReplayChronicleSettingsPatch(source);
-
-  assert.notEqual(patched, source);
-  assert.equal(applyRecordReplayChronicleSettingsPatch(patched), patched);
-  assert.match(
-    patched,
-    /let R=async e=>\{e&&he&&\(await ve\(`linux-record-replay-skysight-start`,\{summaryAgent:!0\}\),await ve\(`linux-record-replay-skysight-resume`\)\);un/,
-  );
-  assert.match(
-    patched,
-    /chronicleDisable:async\(\)=>\{await E\.mutateAsync\(\{enabled:!1\}\),await ve\(`linux-record-replay-skysight-start`,\{summaryAgent:!1\}\),await ve\(`linux-record-replay-skysight-pause`\)\}/,
-  );
 });
 
 test("record-and-replay patch wires Linux Chronicle tray controls to Skysight", () => {

@@ -63,6 +63,67 @@ make setup-native
 See [Native setup](docs/native-setup.md) for the wizard, non-interactive
 feature selection, cleanup flow, and `PACKAGE_WITH_UPDATER=0`.
 
+## Uninstall
+
+Close Codex Desktop first, then remove the native package with your distro's
+package manager:
+
+```bash
+# Debian / Ubuntu
+sudo apt remove codex-desktop
+
+# Fedora
+sudo dnf remove codex-desktop
+
+# openSUSE
+sudo zypper remove codex-desktop
+
+# Arch / Manjaro
+sudo pacman -R codex-desktop
+```
+
+Native package removal stops and disables `codex-update-manager.service` when
+the service is installed. If the service was left behind by an older package or
+a manual install, disable it explicitly:
+
+```bash
+systemctl --user disable --now codex-update-manager.service
+```
+
+AppImage builds are not installed system-wide by this repository; delete the
+AppImage file you created. A repo-only generated app can be removed from the
+checkout with:
+
+```bash
+rm -rf codex-app
+```
+
+`nix run github:ilysenko/codex-desktop-linux` is ephemeral. If you installed
+the flake through a Nix profile, Home Manager, or a NixOS module, remove that
+profile or configuration entry and rebuild your profile/system.
+
+User data is preserved for reinstall. To remove only this wrapper's local app
+state, logs, launcher flags, and updater state, delete these paths.
+
+If you enabled Remote Mobile Control, `~/.config/codex-desktop` can contain
+`remote-control-device-keys-v1.json`. Revoke paired devices in Codex
+Settings/Connections or ChatGPT before deleting that file or removing the whole
+directory. For feature-owned data, prefer the cleanup flow in
+[Native setup](docs/native-setup.md#feature-cleanup).
+
+```bash
+rm -rf \
+  ~/.config/codex-desktop \
+  ~/.local/state/codex-desktop \
+  ~/.cache/codex-desktop \
+  ~/.config/codex-update-manager \
+  ~/.local/state/codex-update-manager \
+  ~/.cache/codex-update-manager
+```
+
+Do not remove `~/.codex` unless you also want to delete your Codex CLI
+configuration and project state.
+
 ## Before You Install
 
 The generated app and native packages bundle a managed Linux Node.js runtime.
@@ -71,7 +132,10 @@ Use, Codex CLI install/update, or local auto-update rebuilds.
 
 The Codex CLI is still required at runtime. The first launch can install or
 update `@openai/codex` with the bundled `npm`, or you can manage the CLI
-yourself.
+yourself. The launcher does not rank installed CLIs by version; it uses an
+explicit `CODEX_CLI_PATH` first, then the normal lookup order, and logs the
+resolved CLI path plus best-effort version so GUI PATH issues are visible.
+Set `CODEX_CLI_PATH=/path/to/codex` when you want to pin a specific binary.
 
 X11 and Wayland sessions are supported. The launcher prefers XWayland on
 Wayland when available for better Electron popup positioning, then falls back
@@ -219,8 +283,9 @@ not download or extract the DMG themselves. See
 |---|---|
 | `/tmp` is mounted `noexec` | Set `TMPDIR` and `XDG_CACHE_HOME` to executable directories under `$HOME` |
 | Blank window or splash stuck | Check `~/.cache/codex-desktop/launcher.log` and whether port `5175` is already in use |
-| `CODEX_CLI_PATH` or CLI install error | Reopen the app or install `@openai/codex` manually |
+| `CODEX_CLI_PATH` or CLI install error | Check `~/.cache/codex-desktop/launcher.log`, set `CODEX_CLI_PATH=/path/to/codex` to pin a binary, or install `@openai/codex` manually |
 | Wayland / GPU / Vulkan hang | Try `CODEX_LINUX_RENDERING_MODE=wayland-gpu ./codex-app/start.sh` or persistent launch flags |
+| UI oversized or blurry (HiDPI / fractional scaling) | Try `CODEX_FORCE_DEVICE_SCALE_FACTOR=1 ./codex-app/start.sh` or `CODEX_OZONE_PLATFORM=x11 ./codex-app/start.sh`; see `./codex-app/start.sh --diagnose-scaling` |
 | Resize ghosting or stale frame trails | Try `CODEX_ELECTRON_DISABLE_GPU_COMPOSITING=1 ./codex-app/start.sh` or `--disable-gpu-compositing` |
 | Computer Use UI is hidden | Enable the UI opt-in; account/server rollouts may still hide upstream-gated parts |
 | Computer Use has no input backend | Check `/dev/uinput`, portal support, or `ydotoold` / `ydotool.service` |
@@ -242,6 +307,7 @@ Full list: [Troubleshooting](docs/troubleshooting.md).
 - [Linux Features architecture](docs/linux-features-architecture.md)
 - [Wayland input focus investigation](docs/wayland-input-focus-investigation.md)
 - [Webview server evaluation](docs/webview-server-evaluation.md)
+- [Launcher performance notes](docs/launcher-performance.md)
 
 ## Disclaimer
 

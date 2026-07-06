@@ -5,7 +5,7 @@ const {
   escapeRegExp,
   findMatchingBrace,
   requireName,
-} = require("../shared.js");
+} = require("../../lib/minified-js.js");
 
 function findNamedFunctionBody(source, functionName) {
   const functionMatch = source.match(

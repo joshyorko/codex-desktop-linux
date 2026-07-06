@@ -18,7 +18,7 @@ const {
   RUNTIME_MARKER,
   STYLE_ID,
   applySidebarProjectNameStylePatch,
-  patches,
+  descriptors: patches,
   sidebarProjectNameCss,
 } = require("./patches/sidebar-project-name.js");
 

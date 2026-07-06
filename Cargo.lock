@@ -236,7 +236,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c77886257be21c9cd89a4ae7e64860c6f0eefca799bb79127913052bd0eefb3d"
 dependencies = [
  "atspi-common",
- "atspi-connection",
  "atspi-proxies",
  "zbus",
 ]
@@ -482,10 +481,11 @@ dependencies = [
 
 [[package]]
 name = "codex-computer-use-linux"
-version = "0.2.10-linux-alpha1"
+version = "0.3.1-linux-alpha1"
 dependencies = [
  "anyhow",
  "atspi",
+ "atspi-connection",
  "base64",
  "cosmic-protocols",
  "evdev",

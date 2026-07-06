@@ -9,8 +9,10 @@ const {
   findLinuxGlobalStateExpression,
   findMatchingBrace,
   inferModuleAlias,
+} = require("../lib/minified-js.js");
+const {
   linuxSettingsKeys,
-} = require("./shared.js");
+} = require("../lib/settings-keys.js");
 
 function inferNodeModuleAliasByShape(currentSource, methodName) {
   const methodPattern = new RegExp(

@@ -12,11 +12,11 @@ const path = require("node:path");
 // semantics. Shapes handled, with minified variable names captured
 // dynamically (enabled flag, electron namespace):
 //   upstream:  if(!(!S||n.app.requestSingleInstanceLock()))
-//   legacy:    if(!(!S||process.platform===`linux`&&process.env.CODEX_LINUX_MULTI_LAUNCH===`1`||n.app.requestSingleInstanceLock()))
+//   guarded:   if(!(!S||process.platform===`linux`&&process.env.CODEX_LINUX_MULTI_LAUNCH===`1`||n.app.requestSingleInstanceLock()))
 //   enforced:  if(!(process.platform===`linux`?process.env.CODEX_LINUX_MULTI_LAUNCH===`1`||n.app.requestSingleInstanceLock():!S||n.app.requestSingleInstanceLock()))
 const enforcedLockRegex =
   /if\(!\(process\.platform===`linux`\?process\.env\.CODEX_LINUX_MULTI_LAUNCH===`1`\|\|([A-Za-z_$][\w$]*)\.app\.requestSingleInstanceLock\(\):!([A-Za-z_$][\w$]*)\|\|\1\.app\.requestSingleInstanceLock\(\)\)\)/;
-const legacyGuardedLockRegex =
+const guardedLockRegex =
   /if\(!\(!([A-Za-z_$][\w$]*)\|\|process\.platform===`linux`&&process\.env\.CODEX_LINUX_MULTI_LAUNCH===`1`\|\|([A-Za-z_$][\w$]*)\.app\.requestSingleInstanceLock\(\)\)\)/;
 const unguardedLockRegex =
   /if\(!\(!([A-Za-z_$][\w$]*)\|\|([A-Za-z_$][\w$]*)\.app\.requestSingleInstanceLock\(\)\)\)/;
@@ -33,9 +33,9 @@ function applyLinuxMultiInstanceBootstrapPatch(currentSource) {
   if (enforcedLockRegex.test(currentSource)) {
     return currentSource;
   }
-  if (legacyGuardedLockRegex.test(currentSource)) {
+  if (guardedLockRegex.test(currentSource)) {
     return currentSource.replace(
-      legacyGuardedLockRegex,
+      guardedLockRegex,
       (_match, enabledVar, appVar) => enforcedLockCondition(enabledVar, appVar),
     );
   }

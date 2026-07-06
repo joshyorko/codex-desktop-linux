@@ -5,9 +5,11 @@ const path = require("node:path");
 
 const {
   findMatchingBrace,
-  readDirectoryNames,
   requireName,
-} = require("./shared.js");
+} = require("../lib/minified-js.js");
+const {
+  readDirectoryNames,
+} = require("../lib/assets.js");
 
 function hasChromePluginLiteral(source) {
   return /(?:`chrome`|"chrome"|'chrome')/.test(source);

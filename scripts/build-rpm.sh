@@ -97,7 +97,7 @@ main() {
     stage_optional_update_builder_bundle "$staging_root"
 
     cat > "$staging_root/usr/bin/$PACKAGE_NAME" <<SCRIPT
-#!/bin/bash
+#!/usr/bin/env bash
 exec /opt/$PACKAGE_NAME/start.sh "\$@"
 SCRIPT
     chmod 0755 "$staging_root/usr/bin/$PACKAGE_NAME"

@@ -153,7 +153,9 @@ The current flow is:
 ### Patch Registry (`scripts/patches/`)
 
 - `scripts/patch-linux-window-ui.js`
-  ASAR patcher CLI and compatibility export surface.
+  ASAR patcher CLI only: argument parsing, optional JSON report writing,
+  runner invocation, and critical gating. Do not import internals from this
+  file.
 - `scripts/patches/core/**/patch.js`
   Source of truth for shipped Linux compatibility patch descriptors. New core
   patches should be added as descriptors here, grouped under `all-linux/`,
@@ -161,15 +163,21 @@ The current flow is:
   `all-linux/` (split into `extracted-app/`, `main-process/`, and `webview/`);
   the `distro/`, `package/`, and `desktop/` buckets are README-only placeholders
   reserved for future target-scoped patches.
+- `scripts/patches/descriptor.js`
+  Descriptor factories, phase constants, and CI policy constants. Use
+  `mainBundlePatch`, `webviewAssetPatch`, or `extractedAppPatch` when adding
+  core descriptors.
 - `scripts/patches/engine.js`
-  Discovers descriptors, normalizes them, checks duplicate ids, applies target
-  filters, and records patch report metadata.
-- `scripts/patches/registry.js`
+  Normalizes descriptors, checks duplicate ids, applies target/enabled filters,
+  executes phases, captures warnings, and records patch report metadata.
+- `scripts/patches/runner.js`
   Orchestrates discovered core descriptors plus enabled Linux feature
-  descriptors.
-- `scripts/patches/*.js`
-  Shared implementation helpers and compatibility modules used by descriptors.
-  Do not treat these as the preferred location for new shipped patch entries.
+  descriptors. It owns `patchExtractedApp`, `patchMainBundleSource`,
+  `allPatchPolicies`, and `requiredPatchNamesForProfile`.
+- `scripts/patches/impl/` and `scripts/patches/lib/`
+  Domain implementations and generic helpers used by descriptors. Do not
+  recreate the deleted compatibility barrels `main-process.js`,
+  `webview-assets.js`, or `shared.js`.
 - `scripts/patches/core/README.md`
   Descriptor contract. Read it before adding or moving core patches.
 - `scripts/patch-linux-window-ui.test.js`
@@ -195,8 +203,9 @@ Detailed contract: `linux-features/README.md` and
   features cannot shadow repository features.
 - `defaultEnabled: true` is rejected. Optional features are always opt-in.
 - Every feature must have `feature.json` and `README.md`.
-- Prefer `entrypoints.patchDescriptors` for new patching. Legacy
-  `mainBundlePatch` and `stageHook` remain supported for existing features.
+- Feature patching uses only `entrypoints.patchDescriptors`. `stageHook` remains
+  available for custom staging, but removed patch entrypoints such as
+  `mainBundlePatch` and `entrypoints.patches` are not supported.
 - Manifest `requires` and `conflicts` are validated by setup, installer,
   patcher, and package builders.
 - Declarative `resources`, `runtimeHooks`, and `packageHooks` are preferred
@@ -385,6 +394,9 @@ package. The daily-driver flow remains `install.sh` plus a native package plus
   Historical Wayland/X11 input-focus investigation for issue #569.
 - `docs/webview-server-evaluation.md`
   Decision record for the future local webview server model.
+- `docs/launcher-performance.md`
+  Decision record for launcher Electron performance defaults and the
+  alternatives that were reviewed and deliberately left unchanged.
 
 ## Generated Artifacts
 

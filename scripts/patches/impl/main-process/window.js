@@ -2,9 +2,7 @@
 
 const {
   escapeRegExp,
-  findCallBlock,
-  requireName,
-} = require("../shared.js");
+} = require("../../lib/minified-js.js");
 
 const LINUX_TITLEBAR_OVERLAY_HEIGHT = 30;
 const LINUX_TITLEBAR_OVERLAY_HELPER = "codexLinuxTitleBarOverlay";
@@ -33,91 +31,6 @@ function ensureLinuxTitlebarOverlayHelper(source, anchorText, helperSource) {
     helperSource +
     source.slice(anchorIndex + anchorText.length)
   );
-}
-
-function insertLinuxOpenTargetExecutableHelper(currentSource, insertionIndex, { fsVar, pathVar }) {
-  if (currentSource.includes("function codexLinuxOpenTargetExecutable(")) {
-    return currentSource;
-  }
-
-  const helper =
-    `function codexLinuxOpenTargetExecutable(e){if(process.platform!==\`linux\`||!e)return null;let t=[...(process.env.PATH||\`\`).split(\`:\`),process.env.HOME?\`\${process.env.HOME}/.local/bin\`:null,process.env.HOME?\`\${process.env.HOME}/bin\`:null,\`/home/linuxbrew/.linuxbrew/bin\`,\`/usr/local/bin\`,\`/usr/bin\`,\`/bin\`],n=new Set;for(let r of t){if(!r||n.has(r)||(n.add(r),!(0,${pathVar}.isAbsolute)(r)))continue;let t=(0,${pathVar}.join)(r,e);try{if((0,${fsVar}.existsSync)(t)&&(0,${fsVar}.statSync)(t).isFile())try{(0,${fsVar}.accessSync)(t,${fsVar}.constants.X_OK);return t}catch{}}catch{}}return null}`;
-
-  return currentSource.slice(0, insertionIndex) + helper + currentSource.slice(insertionIndex);
-}
-
-function patchLinuxCodeEditorTarget(currentSource, marker, command) {
-  const block = findCallBlock(currentSource, marker);
-  if (block == null) {
-    return { source: currentSource, found: false, changed: false };
-  }
-
-  const brokenDetectorRegex = new RegExp(
-    `linuxDetect:\\(\\)=>[A-Za-z_$][\\w$]*\\(\`${escapeRegExp(command)}\`\\)`,
-    "u",
-  );
-  if (!brokenDetectorRegex.test(block.text)) {
-    return { source: currentSource, found: true, changed: false };
-  }
-
-  const patchedBlock = block.text.replace(
-    brokenDetectorRegex,
-    `linuxDetect:()=>codexLinuxOpenTargetExecutable(\`${command}\`)`,
-  );
-  return {
-    source: currentSource.slice(0, block.start) + patchedBlock + currentSource.slice(block.end),
-    found: true,
-    changed: true,
-  };
-}
-
-function applyLinuxCodeEditorOpenTargetPatch(currentSource) {
-  const targets = [
-    { marker: "id:`vscode`", command: "code" },
-    { marker: "id:`vscodeInsiders`", command: "code-insiders" },
-  ];
-  const targetBlocks = targets.map((target) => ({ ...target, block: findCallBlock(currentSource, target.marker) }));
-  const needsPatch = targetBlocks.some(({ block, command }) =>
-    block?.text.match(
-      new RegExp(`linuxDetect:\\(\\)=>[A-Za-z_$][\\w$]*\\(\`${escapeRegExp(command)}\`\\)`, "u"),
-    ),
-  );
-  if (!needsPatch) {
-    return currentSource;
-  }
-
-  const fsVar = requireName(currentSource, "node:fs");
-  const pathVar = requireName(currentSource, "node:path");
-  if (fsVar == null || pathVar == null) {
-    console.warn("WARN: Could not identify fs/path helpers — skipping Linux VS Code open target patch");
-    return currentSource;
-  }
-
-  const insertionIndex = Math.min(...targetBlocks.map(({ block }) => block?.start ?? Infinity));
-  if (!Number.isFinite(insertionIndex)) {
-    console.warn("WARN: Could not find VS Code open target declarations — skipping Linux VS Code open target patch");
-    return currentSource;
-  }
-
-  let patchedSource = insertLinuxOpenTargetExecutableHelper(currentSource, insertionIndex, { fsVar, pathVar });
-  let patchedAny = false;
-  for (const { marker, command } of targets) {
-    const result = patchLinuxCodeEditorTarget(patchedSource, marker, command);
-    patchedSource = result.source;
-    patchedAny = patchedAny || result.changed;
-  }
-
-  if (
-    !patchedAny ||
-    !patchedSource.includes("function codexLinuxOpenTargetExecutable(") ||
-    !patchedSource.includes("linuxDetect:()=>codexLinuxOpenTargetExecutable(`code`)") ||
-    !patchedSource.includes("linuxDetect:()=>codexLinuxOpenTargetExecutable(`code-insiders`)")
-  ) {
-    console.warn("WARN: Could not apply Linux VS Code open target patch");
-    return currentSource;
-  }
-
-  return patchedSource;
 }
 
 // Main-process patches adapt Electron shell behavior: windows, tray, menu,
@@ -430,31 +343,39 @@ function applyLinuxNativeTitlebarPatch(currentSource) {
 
 function applyLinuxMenuPatch(currentSource) {
   const menuRegex = /process\.platform===`win32`&&([A-Za-z_$][\w$]*)\.removeMenu\(\),/g;
-  let patchedAny = false;
-  const patchedSource = currentSource.replace(menuRegex, (match, windowVar, offset) => {
-    const linuxPatch = `process.platform===\`linux\`&&${windowVar}.setMenuBarVisibility(!1),`;
-    // The frameless-titlebar feature upgrades the inserted snippet to also
-    // call removeMenu?.(); treat that form as already applied so re-running
-    // the pipeline over feature-patched output stays idempotent.
-    const upgradedLinuxPatch = `process.platform===\`linux\`&&(${windowVar}.setMenuBarVisibility(!1),${windowVar}.removeMenu?.()),`;
-    if (
-      currentSource.slice(Math.max(0, offset - linuxPatch.length), offset) === linuxPatch ||
-      currentSource.slice(Math.max(0, offset - upgradedLinuxPatch.length), offset) === upgradedLinuxPatch
-    ) {
+  let patchedSource = currentSource
+    .replace(
+      /process\.platform===`linux`&&\(([A-Za-z_$][\w$]*)\.setMenuBarVisibility\(!1\),\1\.removeMenu\?\.\(\)\),process\.platform===`win32`&&\1\.removeMenu\(\),/g,
+      (_match, windowVar) => `process.platform===\`linux\`&&${windowVar}.removeMenu(),process.platform===\`win32\`&&${windowVar}.removeMenu(),`,
+    )
+    .replace(
+      /process\.platform===`linux`&&([A-Za-z_$][\w$]*)\.setMenuBarVisibility\(!1\),process\.platform===`win32`&&\1\.removeMenu\(\),/g,
+      (_match, windowVar) => `process.platform===\`linux\`&&${windowVar}.removeMenu(),process.platform===\`win32\`&&${windowVar}.removeMenu(),`,
+    );
+  let patchedAny = patchedSource !== currentSource;
+  patchedSource = patchedSource.replace(menuRegex, (match, windowVar, offset, source) => {
+    const linuxPatch = `process.platform===\`linux\`&&${windowVar}.removeMenu(),`;
+    if (source.slice(Math.max(0, offset - linuxPatch.length), offset) === linuxPatch) {
       return match;
     }
     patchedAny = true;
     return `${linuxPatch}${match}`;
   });
 
-  if (!patchedAny && !currentSource.includes("setMenuBarVisibility(!1)")) {
-    const hasWindowsRemoveMenu = /process\.platform===`win32`&&[A-Za-z_$][\w$]*\.removeMenu\(\),/.test(currentSource);
-    if (hasWindowsRemoveMenu) {
-      console.warn("WARN: Could not find window menu visibility snippet — skipping menu patch");
-    }
+  const hasWindowsRemoveMenu = /process\.platform===`win32`&&[A-Za-z_$][\w$]*\.removeMenu\(\),/.test(patchedSource);
+  const hasLinuxRemoveMenu = /process\.platform===`linux`&&([A-Za-z_$][\w$]*)\.removeMenu\(\),process\.platform===`win32`&&\1\.removeMenu\(\),/.test(patchedSource);
+  if (!patchedAny && hasWindowsRemoveMenu && !hasLinuxRemoveMenu) {
+    console.warn("WARN: Could not find window menu visibility snippet — skipping menu patch");
   }
 
   return patchedSource;
+}
+
+function applyLinuxApplicationMenuPatch(currentSource) {
+  return currentSource.replace(
+    /([A-Za-z_$][\w$]*)\.Menu\.setApplicationMenu\(process\.platform===`linux`\?null:([A-Za-z_$][\w$]*)\)/g,
+    (_match, electronAlias, menuAlias) => `${electronAlias}.Menu.setApplicationMenu(${menuAlias})`,
+  );
 }
 
 function applyLinuxSetIconPatch(currentSource, iconAsset) {
@@ -773,7 +694,7 @@ process.platform===\`linux\`?Promise.resolve((()=>{let __codexLinuxAboutIcon=$5.
 
 module.exports = {
   applyLinuxAboutDialogPatch,
-  applyLinuxCodeEditorOpenTargetPatch,
+  applyLinuxApplicationMenuPatch,
   applyLinuxMenuPatch,
   applyLinuxNativeTitlebarPatch,
   applyLinuxOpaqueBackgroundPatch,

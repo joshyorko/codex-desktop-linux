@@ -1,6 +1,6 @@
 "use strict";
 
-const { requireName } = require("../../scripts/patches/shared.js");
+const { requireName } = require("../../scripts/patches/lib/minified-js.js");
 
 const RECORD_REPLAY_PLUGIN_NAME = "record-and-replay";
 const HUD_RUNTIME_VERSION = 5;
@@ -96,7 +96,7 @@ function applyRecordReplayPluginGatePatch(currentSource) {
 
 function recordReplayBridgeSource({ childProcessVar, fsVar, pathVar }) {
   return [
-    `"chronicle-permissions":async()=>{let e=await codexLinuxChronicleSidecarControlStateOrStartIfEnabled(),t=e.enabled===!0?"granted":"unknown";return{accessibility:t,screenRecording:t,chronicleSidecarPresent:e.enabled===!0,chronicleSidecarProcessState:e.state??"disabled",chronicleOcrAvailable:e.chronicleOcrAvailable===!0,chronicleOcrStatus:e.chronicleOcrStatus??"unknown",chronicleOcrBackend:e.chronicleOcrBackend??null,chronicleOcrLanguage:e.chronicleOcrLanguage??null}}`,
+    `"chronicle-permissions":async()=>{let e=await codexLinuxChronicleSidecarControlStateAsync(),t=e.enabled===!0?"granted":"unknown";return{accessibility:t,screenRecording:t,chronicleSidecarPresent:e.enabled===!0,chronicleSidecarProcessState:e.state??"disabled",chronicleOcrAvailable:e.chronicleOcrAvailable===!0,chronicleOcrStatus:e.chronicleOcrStatus??"unknown",chronicleOcrBackend:e.chronicleOcrBackend??null,chronicleOcrLanguage:e.chronicleOcrLanguage??null}}`,
     `"getChronicleSidecarControlState":async()=>codexLinuxChronicleSidecarControlStateAsync()`,
     `"toggleChronicleSidecar":async()=>codexLinuxChronicleToggleSidecar()`,
     `"linux-record-replay-doctor":async()=>codexLinuxRecordReplayRun([${JSON.stringify("doctor")}],15000)`,
@@ -144,7 +144,6 @@ function recordReplayChronicleHelperSource({ childProcessVar }) {
 function codexLinuxChronicleControlStateFromSkysight(e){let t=e?.json&&typeof e.json==="object"?e.json:null;if(!e?.ok&&t==null)return{enabled:!1,running:!1,state:"disabled"};let n=String(t?.state||""),r=t?.is_running===!0||t?.isRunning===!0,a=t?.paused===!0||t?.is_paused===!0||t?.isPaused===!0||n==="paused",o=n==="running"&&r&&!a;return{enabled:!0,running:o,state:o?"running":"stopped",skysight:t,chronicleOcrAvailable:t?.ocr_available===!0||t?.ocrAvailable===!0,chronicleOcrStatus:t?.ocr_status??t?.ocrStatus??"unknown",chronicleOcrBackend:t?.ocr_backend??t?.ocrBackend??null,chronicleOcrLanguage:t?.ocr_language??t?.ocrLanguage??null}}
 function codexLinuxChronicleSidecarControlState(){return codexLinuxChronicleControlStateFromSkysight(codexLinuxRecordReplayRunSync(["skysight","status"],3000))}
 async function codexLinuxChronicleSidecarControlStateAsync(){return codexLinuxChronicleControlStateFromSkysight(await codexLinuxRecordReplayRun(["skysight","status"],5000))}
-async function codexLinuxChronicleSidecarControlStateOrStartIfEnabled(){let e=await codexLinuxRecordReplayRun(["skysight","status"],5000),t=codexLinuxChronicleControlStateFromSkysight(e),n=e?.json&&typeof e.json==="object"?e.json:null;if(t.running!==!0&&(n?.summary_agent_enabled===!0||n?.summaryAgentEnabled===!0))return codexLinuxChronicleEnsureSidecarRunning(!0);return t}
 function codexLinuxChronicleSummaryAgentArgs(e){return e===!0?["--summary-agent","enabled"]:e===!1?["--summary-agent","disabled"]:[]}
 async function codexLinuxChronicleEnsureSidecarRunning(e){let t=await codexLinuxRecordReplayRun(["skysight","status"],5000),n=t?.json&&typeof t.json==="object"?t.json:null,r=String(n?.state||""),a=n?.is_running===!0||n?.isRunning===!0,o=n?.paused===!0||n?.is_paused===!0||n?.isPaused===!0||r==="paused",s=codexLinuxChronicleSummaryAgentArgs(e),i=e===!0&&(n?.summary_agent_enabled!==!0&&n?.summaryAgentEnabled!==!0);if(r==="running"&&a&&!o)return i?codexLinuxChronicleControlStateFromSkysight(await codexLinuxRecordReplayRun(["skysight","start",...s],15000)):codexLinuxChronicleControlStateFromSkysight(t);if(a&&o){i&&await codexLinuxRecordReplayRun(["skysight","start",...s],15000);return codexLinuxChronicleControlStateFromSkysight(await codexLinuxRecordReplayRun(["skysight","resume"],10000))}return codexLinuxChronicleControlStateFromSkysight(await codexLinuxRecordReplayRun(["skysight","start",...s],15000))}
 async function codexLinuxChronicleToggleSidecar(){let e=await codexLinuxRecordReplayRun(["skysight","status"],5000),t=e?.json&&typeof e.json==="object"?e.json:null,n=String(t?.state||""),r=t?.is_running===!0||t?.isRunning===!0,a=t?.paused===!0||t?.is_paused===!0||t?.isPaused===!0||n==="paused";if(n==="running"&&r&&!a)return codexLinuxChronicleControlStateFromSkysight(await codexLinuxRecordReplayRun(["skysight","pause"],10000));if(r&&a)return codexLinuxChronicleEnsureSidecarRunning(!0);return codexLinuxChronicleControlStateFromSkysight(await codexLinuxRecordReplayRun(["skysight","start","--summary-agent","enabled"],15000))}`;
@@ -216,113 +215,6 @@ function applyRecordReplayChronicleTrayPatch(currentSource) {
     ) =>
       `getChronicleSidecarControlState:()=>process.platform===\`linux\`?codexLinuxChronicleSidecarControlState():${upstreamStateExpression},toggleChronicleSidecar:async()=>{if(process.platform===\`linux\`)return codexLinuxChronicleToggleSidecar();let ${connectionVar}=${connectionExpression};return ${connectionVar}==null?${disabledStateVar}:${connectionVar}.getChronicleSidecarControlState().running?${connectionVar}.pauseChronicleSidecar():${connectionVar}.resumeChronicleSidecar()}`,
   );
-}
-
-function applyRecordReplayChronicleSettingsPatch(currentSource) {
-  const patchName = "Record & Replay Chronicle settings bridge patch";
-  const hasConcurrentChronicleToggle =
-    /Promise\.allSettled\(\[[^\]]*linux-record-replay-skysight-(?:start|resume|pause)/u.test(
-      currentSource,
-    );
-  const hasPatchedChronicleToggle =
-    currentSource.includes("linux-record-replay-skysight-start`,{summaryAgent:!0}") &&
-    currentSource.includes("linux-record-replay-skysight-resume`") &&
-    currentSource.includes("linux-record-replay-skysight-start`,{summaryAgent:!1}") &&
-    currentSource.includes("linux-record-replay-skysight-pause`") &&
-    !hasConcurrentChronicleToggle;
-  const hasUnpatchedMemoryDisable =
-    /chronicleDisable:\(\)=>[A-Za-z_$][\w$]*\.mutateAsync\(\{enabled:!1\}\)/u.test(
-      currentSource,
-    );
-  const hasUnpatchedMemoryEnable =
-    /[A-Za-z_$][\w$]*=e=>\{un\(\{productLogger:[^;]*selectedEnabled:e,featureWrite:/u.test(
-      currentSource,
-    );
-  const hasPatchedMemoryDisable =
-    /chronicleDisable:async\(\)=>\{await [A-Za-z_$][\w$]*\.mutateAsync\(\{enabled:!1\}\),await [A-Za-z_$][\w$]*\(`linux-record-replay-skysight-start`,\{summaryAgent:!1\}\),await [A-Za-z_$][\w$]*\(`linux-record-replay-skysight-pause`\)\}/u.test(
-      currentSource,
-    );
-  const hasPatchedMemoryEnable =
-    /[A-Za-z_$][\w$]*=async e=>\{e&&[A-Za-z_$][\w$]*&&\(await [A-Za-z_$][\w$]*\(`linux-record-replay-skysight-start`,\{summaryAgent:!0\}\),await [A-Za-z_$][\w$]*\(`linux-record-replay-skysight-resume`\)\);un\(\{productLogger:/u.test(
-      currentSource,
-    );
-  if (
-    hasPatchedChronicleToggle &&
-    (!hasUnpatchedMemoryDisable || hasPatchedMemoryDisable) &&
-    (!hasUnpatchedMemoryEnable || hasPatchedMemoryEnable)
-  ) {
-    return currentSource;
-  }
-
-  const rpcVar =
-    currentSource.match(/([A-Za-z_$][\w$]*)\(`batch-write-config-value`,\{hostId:/u)?.[1] ?? "ue";
-  const localHostVar =
-    currentSource.match(/([A-Za-z_$][\w$]*)=[A-Za-z_$][\w$]*\.kind===`local`/u)?.[1] ??
-    "he";
-  let patchedSource = currentSource;
-  let patchedEnable = false;
-  let patchedDisable = false;
-  let patchedMemoryEnable = false;
-  let patchedMemoryDisable = false;
-
-  patchedSource = patchedSource.replace(
-    /await Promise\.allSettled\(\[([A-Za-z_$][\w$]*)\(`linux-record-replay-skysight-start`,\{summaryAgent:!0\}\),\1\(`linux-record-replay-skysight-resume`\)\]\)/u,
-    (_match, rpc) => {
-      patchedEnable = true;
-      return `await ${rpc}(\`linux-record-replay-skysight-start\`,{summaryAgent:!0}),await ${rpc}(\`linux-record-replay-skysight-resume\`)`;
-    },
-  );
-
-  patchedSource = patchedSource.replace(
-    /await Promise\.allSettled\(\[([A-Za-z_$][\w$]*)\(`linux-record-replay-skysight-start`,\{summaryAgent:!1\}\),\1\(`linux-record-replay-skysight-pause`\)\]\)/u,
-    (_match, rpc) => {
-      patchedDisable = true;
-      return `await ${rpc}(\`linux-record-replay-skysight-start\`,{summaryAgent:!1}),await ${rpc}(\`linux-record-replay-skysight-pause\`)`;
-    },
-  );
-
-  patchedSource = patchedSource.replace(
-    /await ([A-Za-z_$][\w$]*)\.mutateAsync\(\{enabled:!0\}\),([A-Za-z_$][\w$]*)\?\.\(([A-Za-z_$][\w$]*),!0\)/u,
-    (_match, mutationVar, callbackVar, previousEnabledVar) => {
-      patchedEnable = true;
-      return `await ${mutationVar}.mutateAsync({enabled:!0}),await ${rpcVar}(\`linux-record-replay-skysight-start\`,{summaryAgent:!0}),await ${rpcVar}(\`linux-record-replay-skysight-resume\`),${callbackVar}?.(${previousEnabledVar},!0)`;
-    },
-  );
-
-  patchedSource = patchedSource.replace(
-    /await ([A-Za-z_$][\w$]*)\.mutateAsync\(\{enabled:!1\}\),([A-Za-z_$][\w$]*)\?\.\(([A-Za-z_$][\w$]*),!1\)/u,
-    (_match, mutationVar, callbackVar, previousEnabledVar) => {
-      patchedDisable = true;
-      return `await ${mutationVar}.mutateAsync({enabled:!1}),await ${rpcVar}(\`linux-record-replay-skysight-start\`,{summaryAgent:!1}),await ${rpcVar}(\`linux-record-replay-skysight-pause\`),${callbackVar}?.(${previousEnabledVar},!1)`;
-    },
-  );
-
-  patchedSource = patchedSource.replace(
-    /chronicleDisable:\(\)=>([A-Za-z_$][\w$]*)\.mutateAsync\(\{enabled:!1\}\)/u,
-    (_match, mutationVar) => {
-      patchedMemoryDisable = true;
-      return `chronicleDisable:async()=>{await ${mutationVar}.mutateAsync({enabled:!1}),await ${rpcVar}(\`linux-record-replay-skysight-start\`,{summaryAgent:!1}),await ${rpcVar}(\`linux-record-replay-skysight-pause\`)}`;
-    },
-  );
-
-  patchedSource = patchedSource.replace(
-    /([A-Za-z_$][\w$]*)=e=>\{un\(\{productLogger:/u,
-    (_match, handlerVar) => {
-      patchedMemoryEnable = true;
-      return `${handlerVar}=async e=>{e&&${localHostVar}&&(await ${rpcVar}(\`linux-record-replay-skysight-start\`,{summaryAgent:!0}),await ${rpcVar}(\`linux-record-replay-skysight-resume\`));un({productLogger:`;
-    },
-  );
-
-  if (!hasPatchedChronicleToggle && (!patchedEnable || !patchedDisable)) {
-    warn("Could not find Chronicle settings toggle callbacks", patchName);
-  }
-  if (hasUnpatchedMemoryEnable && !patchedMemoryEnable) {
-    warn("Could not find Chronicle memory enable callback", patchName);
-  }
-  if (hasUnpatchedMemoryDisable && !patchedMemoryDisable) {
-    warn("Could not find Chronicle memory disable callback", patchName);
-  }
-  return patchedSource;
 }
 
 function applyRecordReplayMainBridgePatch(currentSource) {
@@ -506,16 +398,6 @@ const descriptors = [
     apply: applyRecordReplayMainBridgePatch,
   },
   {
-    id: "record-replay-chronicle-settings",
-    phase: "webview-asset",
-    order: 151,
-    ciPolicy: "optional",
-    pattern: /^personalization-settings-.*\.js$/,
-    missingDescription: "personalization settings bundle",
-    skipDescription: "Record & Replay Chronicle settings bridge patch",
-    apply: applyRecordReplayChronicleSettingsPatch,
-  },
-  {
     id: "record-replay-hud",
     phase: "webview-asset",
     order: 152,
@@ -551,7 +433,6 @@ const descriptors = [
 module.exports = {
   RECORD_REPLAY_PLUGIN_NAME,
   HUD_RUNTIME_VERSION,
-  applyRecordReplayChronicleSettingsPatch,
   applyRecordReplayDictationTranscriptPatch,
   applyRecordReplayGlobalDictationTranscriptPatch,
   applyRecordReplayPluginGatePatch,

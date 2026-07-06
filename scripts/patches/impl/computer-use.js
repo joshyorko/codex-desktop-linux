@@ -5,7 +5,7 @@ const path = require("node:path");
 
 const {
   requireName,
-} = require("./shared.js");
+} = require("../lib/minified-js.js");
 
 const COMPUTER_USE_UI_ENV_VAR = "CODEX_LINUX_ENABLE_COMPUTER_USE_UI";
 const COMPUTER_USE_UI_SETTINGS_KEY = "codex-linux-computer-use-ui-enabled";

@@ -27,6 +27,23 @@ const WINDOW_CONTROL_XML = `
       <arg name="ok" type="b" direction="out"/>
       <arg name="message" type="s" direction="out"/>
     </method>
+    <method name="MoveWindow">
+      <arg name="window_id" type="t" direction="in"/>
+      <arg name="x" type="i" direction="in"/>
+      <arg name="y" type="i" direction="in"/>
+      <arg name="ok" type="b" direction="out"/>
+      <arg name="message" type="s" direction="out"/>
+    </method>
+    <method name="ResizeWindow">
+      <arg name="window_id" type="t" direction="in"/>
+      <arg name="width" type="i" direction="in"/>
+      <arg name="height" type="i" direction="in"/>
+      <arg name="ok" type="b" direction="out"/>
+      <arg name="message" type="s" direction="out"/>
+    </method>
+    <method name="GetMonitorLayout">
+      <arg name="json" type="s" direction="out"/>
+    </method>
   </interface>
 </node>
 `;
@@ -142,6 +159,71 @@ class WindowControlDBus extends GObject.Object {
             invocation.return_value(new GLib.Variant('(bs)', [
                 false,
                 `Failed to start GNOME Shell screenshot: ${error.message}`,
+            ]));
+        }
+    }
+
+    MoveWindowAsync([windowId, x, y], invocation) {
+        this._withWindow(windowId, invocation, window => {
+            // move_frame positions the frame rect (what list_windows reports).
+            window.move_frame(true, x, y);
+            return `Moved window_id ${Number(windowId)} to ${x},${y}`;
+        });
+    }
+
+    ResizeWindowAsync([windowId, width, height], invocation) {
+        this._withWindow(windowId, invocation, window => {
+            if (width <= 0 || height <= 0)
+                throw new Error(`invalid size ${width}x${height}`);
+            // GNOME 49 removed Meta.Window.get_maximized() (use is_maximized())
+            // and dropped the flags argument from unmaximize(). Support both
+            // API generations: shell 45-48 (get_maximized + flags) and 49+.
+            if (window.is_maximized?.())
+                window.unmaximize();
+            else if (window.get_maximized?.())
+                window.unmaximize(Meta.MaximizeFlags.BOTH);
+            const rect = window.get_frame_rect();
+            window.move_resize_frame(true, rect.x, rect.y, width, height);
+            return `Resized window_id ${Number(windowId)} to ${width}x${height}`;
+        });
+    }
+
+    GetMonitorLayoutAsync(_params, invocation) {
+        const monitors = Main.layoutManager.monitors.map(monitor => ({
+            index: monitor.index,
+            x: monitor.x,
+            y: monitor.y,
+            width: monitor.width,
+            height: monitor.height,
+            primary: monitor.index === Main.layoutManager.primaryIndex,
+            scale: monitor.geometry_scale ?? 1,
+        }));
+        this._returnJson(invocation, monitors);
+    }
+
+    _withWindow(windowId, invocation, action) {
+        const requestedId = Number(windowId);
+        const window = this._listMetaWindows().find(
+            candidate => Number(candidate.get_id()) === requestedId);
+
+        if (!window) {
+            invocation.return_value(new GLib.Variant('(bs)', [
+                false,
+                `No window matched window_id ${requestedId}`,
+            ]));
+            return;
+        }
+
+        try {
+            const message = action(window);
+            invocation.return_value(new GLib.Variant('(bs)', [
+                true,
+                message,
+            ]));
+        } catch (error) {
+            invocation.return_value(new GLib.Variant('(bs)', [
+                false,
+                `Window operation failed: ${error.message}`,
             ]));
         }
     }

@@ -5,8 +5,10 @@ const path = require("node:path");
 
 const {
   findMatchingBrace,
+} = require("../lib/minified-js.js");
+const {
   readDirectoryNames,
-} = require("./shared.js");
+} = require("../lib/assets.js");
 
 const AUTOMATION_SCHEDULE_MARKER =
   "return t!=null&&n!=null?{hour:t,minute:n}:e.dtstart?{hour:e.dtstart.getHours(),minute:e.dtstart.getMinutes()}:null";
