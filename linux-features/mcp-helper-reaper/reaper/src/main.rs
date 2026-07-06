@@ -1,8 +1,8 @@
 use anyhow::{bail, Context, Result};
 use clap::{ArgGroup, Parser};
 use codex_mcp_helper_reaper::{
-    all_processes, codex_home_for_parent, discover_config_paths, escalate_orphan_helpers,
-    escalate_stale_helpers, is_codex_process, load_config_server_specs,
+    all_processes, codex_home_for_parent, discover_direct_child_config_paths,
+    escalate_orphan_helpers, escalate_stale_helpers, is_codex_process, load_config_server_specs,
     load_plugin_cache_server_specs, plan_orphan_reap, plan_reap, read_proc, same_process,
     sleep_duration, terminate_orphan_helpers, terminate_stale_helpers, ProcInfo, ServerSpec,
 };
@@ -111,7 +111,7 @@ fn run(args: Args) -> Result<()> {
         let mut orphan_specs = Vec::new();
         let mut seen_specs = BTreeSet::new();
         for parent in targets {
-            let specs = load_server_specs(&parent, &args)?;
+            let specs = load_server_specs(&parent, &processes, &args)?;
             push_specs_dedup(&mut orphan_specs, &mut seen_specs, specs.clone());
             reap_for_parent(&args, &parent, &processes, &specs)?;
         }
@@ -186,9 +186,18 @@ fn reap_orphans(
     Ok(())
 }
 
-fn load_server_specs(parent: &ProcInfo, args: &Args) -> Result<Vec<ServerSpec>> {
+fn load_server_specs(
+    parent: &ProcInfo,
+    processes: &BTreeMap<i32, ProcInfo>,
+    args: &Args,
+) -> Result<Vec<ServerSpec>> {
     let mut specs = Vec::new();
-    for path in discover_config_paths(parent, args.codex_home.as_deref(), &args.configs) {
+    for path in discover_direct_child_config_paths(
+        parent,
+        processes,
+        args.codex_home.as_deref(),
+        &args.configs,
+    ) {
         if !path.is_file() {
             continue;
         }

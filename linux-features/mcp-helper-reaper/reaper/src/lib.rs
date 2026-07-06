@@ -210,14 +210,22 @@ pub fn plan_orphan_reap(
     server_specs: &[ServerSpec],
     app_dir: Option<&Path>,
 ) -> Vec<OrphanReapCandidate> {
+    let live_generations = live_codex_helper_generations(processes, server_specs, app_dir);
     let mut candidates = Vec::new();
     for process in processes.values() {
-        if !is_orphan_helper_root(process, processes, server_specs, app_dir) {
-            continue;
-        }
         let Some(signature) = helper_signature_for_orphan(process, server_specs, app_dir) else {
             continue;
         };
+        if !is_orphan_helper_root(
+            process,
+            processes,
+            server_specs,
+            app_dir,
+            &signature,
+            &live_generations,
+        ) {
+            continue;
+        }
         candidates.push(OrphanReapCandidate {
             stale_pid: process.pid,
             signature,
@@ -229,6 +237,30 @@ pub fn plan_orphan_reap(
             .then(left.stale_pid.cmp(&right.stale_pid))
     });
     candidates
+}
+
+fn live_codex_helper_generations(
+    processes: &BTreeMap<i32, ProcInfo>,
+    server_specs: &[ServerSpec],
+    app_dir: Option<&Path>,
+) -> BTreeMap<String, u64> {
+    let mut generations: BTreeMap<String, u64> = BTreeMap::new();
+    for process in processes.values() {
+        let Some(parent) = processes.get(&process.ppid) else {
+            continue;
+        };
+        if !is_codex_process(parent) {
+            continue;
+        }
+        let Some(signature) = helper_signature_for_orphan(process, server_specs, app_dir) else {
+            continue;
+        };
+        generations
+            .entry(signature)
+            .and_modify(|start_time| *start_time = (*start_time).max(process.start_time))
+            .or_insert(process.start_time);
+    }
+    generations
 }
 
 pub fn load_config_server_specs(path: &Path) -> Result<Vec<ServerSpec>> {
@@ -488,6 +520,46 @@ pub fn discover_config_paths(
             break;
         }
         cwd = cwd.parent().expect("checked parent exists");
+    }
+
+    dedupe_paths(paths)
+}
+
+pub fn discover_direct_child_config_paths(
+    parent: &ProcInfo,
+    processes: &BTreeMap<i32, ProcInfo>,
+    codex_home: Option<&Path>,
+    extra: &[PathBuf],
+) -> Vec<PathBuf> {
+    let env = read_environ(parent.pid);
+    let home = env.get("HOME").map(PathBuf::from).unwrap_or_else(|| {
+        std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_default()
+    });
+    let codex_home = codex_home_for_parent(parent, codex_home);
+
+    let mut paths = Vec::new();
+    paths.extend(extra.iter().cloned());
+    paths.push(codex_home.join("config.toml"));
+
+    for process in processes.values() {
+        if process.ppid != parent.pid
+            || process.cwd.as_os_str().is_empty()
+            || !process.cwd.is_absolute()
+            || !is_helper_candidate(process)
+        {
+            continue;
+        }
+
+        let mut cwd = process.cwd.as_path();
+        loop {
+            paths.push(cwd.join(".codex/config.toml"));
+            if cwd == home || cwd.parent().is_none() {
+                break;
+            }
+            cwd = cwd.parent().expect("checked parent exists");
+        }
     }
 
     dedupe_paths(paths)
@@ -876,6 +948,8 @@ fn is_orphan_helper_root(
     processes: &BTreeMap<i32, ProcInfo>,
     server_specs: &[ServerSpec],
     app_dir: Option<&Path>,
+    signature: &str,
+    live_generations: &BTreeMap<String, u64>,
 ) -> bool {
     if !has_init_or_user_systemd_parent(process, processes) {
         return false;
@@ -886,10 +960,23 @@ fn is_orphan_helper_root(
     if has_helper_ancestor(process, processes, server_specs, app_dir) {
         return false;
     }
-    if !has_codex_origin_marker(process) {
+    if !has_codex_origin_marker(process)
+        && !has_newer_live_codex_generation(process, signature, live_generations)
+    {
         return false;
     }
-    helper_signature_for_orphan(process, server_specs, app_dir).is_some()
+    true
+}
+
+fn has_newer_live_codex_generation(
+    process: &ProcInfo,
+    signature: &str,
+    live_generations: &BTreeMap<String, u64>,
+) -> bool {
+    live_generations
+        .get(signature)
+        .map(|start_time| *start_time > process.start_time)
+        .unwrap_or(false)
 }
 
 fn has_codex_origin_marker(process: &ProcInfo) -> bool {
@@ -1175,6 +1262,106 @@ mod tests {
                     .to_string(),
             }]
         );
+    }
+
+    #[test]
+    fn discovers_repo_config_from_direct_helper_children_under_desktop_app_server() {
+        let dir = tempdir().unwrap();
+        let home = dir.path().join("home");
+        let repo = home.join("repo");
+        let app = dir.path().join("app");
+        fs::create_dir_all(repo.join(".codex")).unwrap();
+        fs::create_dir_all(&app).unwrap();
+        fs::write(
+            repo.join(".codex/config.toml"),
+            r#"
+[mcp_servers.code_index]
+command = "/tmp/code-index"
+args = ["serve"]
+"#,
+        )
+        .unwrap();
+
+        let mut processes = BTreeMap::new();
+        processes.insert(
+            100,
+            proc(
+                100,
+                1,
+                10,
+                &["/usr/bin/codex", "app-server", "--remote-control"],
+                app.to_str().unwrap(),
+            ),
+        );
+        processes.insert(
+            101,
+            proc(
+                101,
+                100,
+                20,
+                &["/tmp/code-index", "serve"],
+                repo.to_str().unwrap(),
+            ),
+        );
+
+        let paths = discover_direct_child_config_paths(
+            processes.get(&100).unwrap(),
+            &processes,
+            Some(&home.join(".codex")),
+            &[],
+        );
+
+        assert!(paths.contains(&repo.join(".codex/config.toml")));
+    }
+
+    #[test]
+    fn direct_child_config_discovery_ignores_shell_tool_children() {
+        let dir = tempdir().unwrap();
+        let home = dir.path().join("home");
+        let repo = home.join("repo");
+        let app = dir.path().join("app");
+        fs::create_dir_all(repo.join(".codex")).unwrap();
+        fs::create_dir_all(&app).unwrap();
+        fs::write(
+            repo.join(".codex/config.toml"),
+            r#"
+[mcp_servers.not_a_helper]
+command = "echo"
+args = ["mcp-server", "--stdio"]
+"#,
+        )
+        .unwrap();
+
+        let mut processes = BTreeMap::new();
+        processes.insert(
+            100,
+            proc(
+                100,
+                1,
+                10,
+                &["/usr/bin/codex", "app-server", "--remote-control"],
+                app.to_str().unwrap(),
+            ),
+        );
+        processes.insert(
+            101,
+            proc(
+                101,
+                100,
+                20,
+                &["bash", "-lc", "echo mcp-server --stdio"],
+                repo.to_str().unwrap(),
+            ),
+        );
+
+        let paths = discover_direct_child_config_paths(
+            processes.get(&100).unwrap(),
+            &processes,
+            Some(&home.join(".codex")),
+            &[],
+        );
+
+        assert!(!paths.contains(&repo.join(".codex/config.toml")));
     }
 
     #[test]
@@ -1697,6 +1884,90 @@ args = ["serve", "--stdio"]
             proc(
                 101,
                 10,
+                20,
+                &["python3", "/repo/bin/server-filter.py", "--stdio"],
+                "/repo",
+            ),
+        );
+        let specs = vec![ServerSpec {
+            name: "wrapped-server".to_string(),
+            command: "/repo/bin/server".to_string(),
+            args: Vec::new(),
+            cwd: None,
+        }];
+
+        assert!(plan_orphan_reap(&processes, &specs, None).is_empty());
+    }
+
+    #[test]
+    fn reaps_configured_orphan_when_newer_live_codex_generation_matches() {
+        let mut processes = BTreeMap::new();
+        processes.insert(1, proc(1, 0, 1, &["/usr/lib/systemd/systemd"], "/"));
+        processes.insert(
+            10,
+            proc(10, 1, 2, &["/usr/lib/systemd/systemd", "--user"], "/"),
+        );
+        processes.insert(100, proc(100, 1, 10, &["codex", "app-server"], "/app"));
+        processes.insert(
+            101,
+            proc(
+                101,
+                10,
+                20,
+                &["python3", "/repo/bin/server-filter.py", "--stdio"],
+                "/repo",
+            ),
+        );
+        processes.insert(
+            102,
+            proc(
+                102,
+                100,
+                30,
+                &["python3", "/repo/bin/server-filter.py", "--stdio"],
+                "/repo",
+            ),
+        );
+        let specs = vec![ServerSpec {
+            name: "wrapped-server".to_string(),
+            command: "/repo/bin/server".to_string(),
+            args: Vec::new(),
+            cwd: None,
+        }];
+
+        assert_eq!(
+            plan_orphan_reap(&processes, &specs, None),
+            vec![OrphanReapCandidate {
+                stale_pid: 101,
+                signature: "config:wrapped-server\u{0}/repo/bin/server\u{0}\u{0}/repo".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn ignores_configured_orphan_when_matching_live_codex_generation_is_older() {
+        let mut processes = BTreeMap::new();
+        processes.insert(1, proc(1, 0, 1, &["/usr/lib/systemd/systemd"], "/"));
+        processes.insert(
+            10,
+            proc(10, 1, 2, &["/usr/lib/systemd/systemd", "--user"], "/"),
+        );
+        processes.insert(100, proc(100, 1, 10, &["codex", "app-server"], "/app"));
+        processes.insert(
+            101,
+            proc(
+                101,
+                10,
+                30,
+                &["python3", "/repo/bin/server-filter.py", "--stdio"],
+                "/repo",
+            ),
+        );
+        processes.insert(
+            102,
+            proc(
+                102,
+                100,
                 20,
                 &["python3", "/repo/bin/server-filter.py", "--stdio"],
                 "/repo",
