@@ -49,6 +49,7 @@ const REMOTE_CONTROL_AUTO_CONNECT_CLEANUP_MARKER = "codexLinuxRemoteControlAutoC
 const REMOTE_CONTROL_SELF_AUTO_CONNECT_MARKER = "codexLinuxRemoteControlSelfAutoConnect";
 const REMOTE_MOBILE_ACTIVE_STATUS_MARKER = "codexLinuxRemoteMobileActiveStatus";
 const REMOTE_CONTROL_STATUS_READ_GUARD_MARKER = "codexLinuxRemoteControlShouldReadStatus";
+const REMOTE_CONTROL_STATUS_WAIT_MARKER = "codexLinuxRemoteControlStatusWaitMs";
 const REMOTE_CONTROL_REVOKE_SETUP_RESET_MARKER = "codexLinuxRemoteControlResetMobileSetupAfterRevoke";
 const REMOTE_MOBILE_APP_SERVER_REMOTE_CONTROL_MARKER = "codexLinuxRemoteMobileAppServerArgs";
 const REMOTE_MOBILE_APP_SERVER_ARGS_NEEDLE = "args:[`app-server`,`--analytics-default-enabled`]";
@@ -1418,6 +1419,30 @@ function applyLinuxRemoteControlStatusReadGuardPatch(source) {
   return source.replace(needle, replacement);
 }
 
+function applyLinuxRemoteControlStatusWaitPatch(source) {
+  if (source.includes(REMOTE_CONTROL_STATUS_WAIT_MARKER)) {
+    return source;
+  }
+  if (
+    !source.includes("Timed out waiting for remote control to connect") ||
+    !source.includes("remoteControl/status/changed")
+  ) {
+    return source;
+  }
+
+  const statusWaitRegex =
+    /\b([A-Za-z_$][\w$]*)=5e3(?=,[A-Za-z_$][\w$]*=Xi\(Z,e=>null\),[A-Za-z_$][\w$]*=Xi\(Z,e=>!1\),[A-Za-z_$][\w$]*=Zi\(Z,)/u;
+  if (!statusWaitRegex.test(source)) {
+    console.warn("WARN: Could not find remote-control status wait needle - skipping Linux remote-control status wait patch");
+    return source;
+  }
+
+  return source.replace(
+    statusWaitRegex,
+    `$1=typeof navigator!=\`undefined\`&&navigator.userAgent.includes(\`Linux\`)?3e4:5e3/*${REMOTE_CONTROL_STATUS_WAIT_MARKER}*/`,
+  );
+}
+
 function applyLinuxRemoteControlEnablementBridgePatch(source) {
   let patched = source;
 
@@ -1717,6 +1742,16 @@ module.exports = [
     apply: applyLinuxRemoteControlStatusReadGuardPatch,
   },
   {
+    id: "linux-remote-control-status-wait",
+    phase: "webview-asset",
+    pattern: /^(?:app-server-manager-signals|thread-context-inputs|app-initial~app-main~worktree-init-v2-page~remote-conversation-page~).*\.js$/,
+    order: 20_152,
+    ciPolicy: "optional",
+    missingDescription: "app-server manager signals bundle",
+    skipDescription: "Linux remote-control status wait patch",
+    apply: applyLinuxRemoteControlStatusWaitPatch,
+  },
+  {
     id: "linux-remote-control-enable-for-host-params",
     phase: "webview-asset",
     pattern: /^(?:app-main|app-initial~app-main~automations-page)-.*\.js$/,
@@ -1764,6 +1799,7 @@ module.exports.applyLinuxRemoteMobileAppServerRemoteControlPatch =
 module.exports.applyLinuxRemoteMobileChromeBridgePatch = applyLinuxRemoteMobileChromeBridgePatch;
 module.exports.applyLinuxRemoteMobileConversationHydrationPatch = applyLinuxRemoteMobileConversationHydrationPatch;
 module.exports.applyLinuxRemoteControlStatusReadGuardPatch = applyLinuxRemoteControlStatusReadGuardPatch;
+module.exports.applyLinuxRemoteControlStatusWaitPatch = applyLinuxRemoteControlStatusWaitPatch;
 module.exports.applyLinuxRemoteControlEnablementBridgePatch = applyLinuxRemoteControlEnablementBridgePatch;
 module.exports.applyLinuxRemoteControlEnableForHostParamsPatch =
   applyLinuxRemoteControlEnableForHostParamsPatch;

@@ -167,6 +167,149 @@ remote_mobile_process_mentions_path() {
     esac
 }
 
+remote_mobile_proc_is_current_user() {
+    local pid="$1"
+    local uid=""
+
+    [ -r "/proc/$pid/status" ] || return 1
+    uid="$(awk '/^Uid:/ {print $2; exit}' "/proc/$pid/status" 2>/dev/null || true)"
+    [ "$uid" = "$(id -u)" ]
+}
+
+remote_mobile_proc_env_value() {
+    local pid="$1"
+    local key="$2"
+    local entry=""
+
+    [ -r "/proc/$pid/environ" ] || return 1
+    while IFS= read -r -d '' entry; do
+        case "$entry" in
+            "$key="*)
+                printf '%s\n' "${entry#*=}"
+                return 0
+                ;;
+        esac
+    done < "/proc/$pid/environ"
+    return 1
+}
+
+remote_mobile_proc_start_time() {
+    local pid="$1"
+    local stat_line=""
+    local rest=""
+
+    stat_line="$(cat "/proc/$pid/stat" 2>/dev/null)" || return 1
+    rest="${stat_line##*) }"
+    # shellcheck disable=SC2086
+    set -- $rest
+    [ -n "${20:-}" ] || return 1
+    printf '%s\n' "$20"
+}
+
+remote_mobile_is_remote_control_app_server() {
+    local pid="$1"
+    local argv=()
+    local arg=""
+    local has_remote_control=0
+
+    [ -r "/proc/$pid/cmdline" ] || return 1
+    mapfile -d '' -t argv < "/proc/$pid/cmdline" 2>/dev/null || return 1
+    [ "${argv[1]:-}" = "app-server" ] || return 1
+    case "${argv[0]##*/}" in
+        codex|codex-*) ;;
+        *) return 1 ;;
+    esac
+    for arg in "${argv[@]:2}"; do
+        [ "$arg" = "--remote-control" ] && has_remote_control=1
+    done
+    [ "$has_remote_control" -eq 1 ]
+}
+
+remote_mobile_should_reap_desktop_app_server() {
+    local pid="$1"
+    local current_app_dir="${CODEX_LINUX_APP_DIR:-}"
+    local current_app_id="${CODEX_LINUX_APP_ID:-}"
+    local owner_app_dir=""
+    local owner_app_id=""
+
+    [ -n "$current_app_dir" ] || return 1
+    [ -n "$current_app_id" ] || return 1
+    [ "$pid" != "$$" ] || return 1
+    [ -d "/proc/$pid" ] || return 1
+    remote_mobile_proc_is_current_user "$pid" || return 1
+    remote_mobile_is_remote_control_app_server "$pid" || return 1
+
+    owner_app_dir="$(remote_mobile_proc_env_value "$pid" CODEX_LINUX_APP_DIR 2>/dev/null || true)"
+    [ -n "$owner_app_dir" ] || return 1
+    [ "$owner_app_dir" != "$current_app_dir" ] || return 1
+
+    owner_app_id="$(remote_mobile_proc_env_value "$pid" CODEX_LINUX_APP_ID 2>/dev/null || true)"
+    [ -n "$owner_app_id" ] || return 1
+    [ "$owner_app_id" = "$current_app_id" ]
+}
+
+remote_mobile_proc_identity_matches() {
+    local pid="$1"
+    local expected_start_time="$2"
+    local expected_app_dir="$3"
+    local start_time=""
+    local app_dir=""
+
+    [ -d "/proc/$pid" ] || return 1
+    remote_mobile_is_remote_control_app_server "$pid" || return 1
+    start_time="$(remote_mobile_proc_start_time "$pid" 2>/dev/null || true)"
+    [ -n "$start_time" ] && [ "$start_time" = "$expected_start_time" ] || return 1
+    app_dir="$(remote_mobile_proc_env_value "$pid" CODEX_LINUX_APP_DIR 2>/dev/null || true)"
+    [ "$app_dir" = "$expected_app_dir" ]
+}
+
+reap_stale_desktop_remote_control_app_servers() {
+    local proc=""
+    local pid=""
+    local owner_app_dir=""
+    local start_time=""
+    local entries=()
+    local entry=""
+    local still_running=0
+
+    for proc in /proc/[0-9]*/cmdline; do
+        [ -r "$proc" ] || continue
+        pid="${proc#/proc/}"
+        pid="${pid%/cmdline}"
+        remote_mobile_should_reap_desktop_app_server "$pid" || continue
+        owner_app_dir="$(remote_mobile_proc_env_value "$pid" CODEX_LINUX_APP_DIR 2>/dev/null || true)"
+        start_time="$(remote_mobile_proc_start_time "$pid" 2>/dev/null || true)"
+        [ -n "$owner_app_dir" ] && [ -n "$start_time" ] || continue
+        echo "Stopping stale Desktop remote-control app-server pid=$pid app_dir=$owner_app_dir"
+        kill "$pid" 2>/dev/null || continue
+        entries+=("$pid:$start_time:$owner_app_dir")
+    done
+
+    [ "${#entries[@]}" -gt 0 ] || return 0
+    for _ in $(seq 1 40); do
+        still_running=0
+        for entry in "${entries[@]}"; do
+            pid="${entry%%:*}"
+            if kill -0 "$pid" 2>/dev/null; then
+                still_running=1
+                break
+            fi
+        done
+        [ "$still_running" -eq 0 ] && return 0
+        sleep 0.05
+    done
+
+    for entry in "${entries[@]}"; do
+        pid="${entry%%:*}"
+        start_time="${entry#*:}"
+        start_time="${start_time%%:*}"
+        owner_app_dir="${entry#*:*:}"
+        remote_mobile_proc_identity_matches "$pid" "$start_time" "$owner_app_dir" || continue
+        echo "WARN: stale Desktop remote-control app-server still running after SIGTERM; sending SIGKILL pid=$pid app_dir=$owner_app_dir"
+        kill -9 "$pid" 2>/dev/null || true
+    done
+}
+
 desktop_app_server_remote_control_enabled() {
     local app_dir="${CODEX_LINUX_APP_DIR:-}"
     local marker=""
@@ -226,6 +369,9 @@ remote_mobile_control_main() {
     [ -n "$standalone_root" ] || standalone_root="$codex_home/packages/standalone"
 
     cleanup_remote_mobile_control_interactive_symlink "$codex_home"
+    if desktop_app_server_remote_control_enabled; then
+        reap_stale_desktop_remote_control_app_servers
+    fi
 
     if truthy_env_value "${CODEX_REMOTE_CONTROL_DAEMON_AUTOSTART_DISABLED:-}"; then
         echo "Remote mobile control daemon autostart disabled by CODEX_REMOTE_CONTROL_DAEMON_AUTOSTART_DISABLED"
