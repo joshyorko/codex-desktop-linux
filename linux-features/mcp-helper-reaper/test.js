@@ -24,6 +24,23 @@ function writeExecutable(file, body) {
   fs.writeFileSync(file, body, { mode: 0o755 });
 }
 
+function hostTool(name) {
+  for (const dir of ["/usr/bin", "/bin"]) {
+    const candidate = path.join(dir, name);
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  return name;
+}
+
+function symlinkHostTools(targetDir, names) {
+  fs.mkdirSync(targetDir, { recursive: true });
+  for (const name of names) {
+    fs.symlinkSync(hostTool(name), path.join(targetDir, name));
+  }
+}
+
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, {
     cwd: REPO_ROOT,
@@ -72,6 +89,67 @@ test("stage hook installs Rust reaper, launcher hooks, and idempotent node_repl 
     fs.readFileSync(path.join(appDir, "resources", "node_repl.codex-linux-original"), "utf8"),
     /original node_repl/,
   );
+
+  fs.rmSync(tempDir, { recursive: true, force: true });
+});
+
+test("stage hook finds cargo in HOME cargo bin when PATH omits it", () => {
+  const tempDir = makeTempDir("codex-mcp-helper-reaper-cargo-");
+  const scriptRoot = path.join(tempDir, "repo");
+  const appDir = path.join(tempDir, "app");
+  const workDir = path.join(tempDir, "work");
+  const homeDir = path.join(tempDir, "home");
+  const fakeBin = path.join(tempDir, "bin");
+  const featureDir = path.join(scriptRoot, "linux-features", "mcp-helper-reaper");
+  const cargoLog = path.join(tempDir, "cargo.log");
+  const nodeRepl = path.join(appDir, "resources", "node_repl");
+
+  fs.mkdirSync(featureDir, { recursive: true });
+  fs.mkdirSync(workDir, { recursive: true });
+  fs.mkdirSync(path.dirname(nodeRepl), { recursive: true });
+  symlinkHostTools(fakeBin, ["bash", "cat", "chmod", "grep", "install", "mkdir", "mv"]);
+  for (const file of [
+    "node-repl-wrapper.sh",
+    "install-session-hook.sh",
+    "cold-start-hook.sh",
+    "after-exit-hook.sh",
+  ]) {
+    fs.copyFileSync(path.join(FEATURE_DIR, file), path.join(featureDir, file));
+  }
+  writeExecutable(nodeRepl, "#!/usr/bin/env bash\necho original node_repl\n");
+  writeExecutable(
+    path.join(homeDir, ".cargo", "bin", "cargo"),
+    `#!${hostTool("bash")}
+set -euo pipefail
+printf '%s\\n' "$PWD $*" > "$CODEX_MCP_HELPER_REAPER_TEST_CARGO_LOG"
+mkdir -p target/release
+cat > target/release/codex-mcp-helper-reaper <<'EOF'
+#!${hostTool("bash")}
+exit 0
+EOF
+chmod 0755 target/release/codex-mcp-helper-reaper
+`,
+  );
+
+  run(hostTool("bash"), [STAGE], {
+    env: {
+      SCRIPT_DIR: scriptRoot,
+      INSTALL_DIR: appDir,
+      WORK_DIR: workDir,
+      ARCH: process.arch,
+      HOME: homeDir,
+      PATH: fakeBin,
+      CODEX_MCP_HELPER_REAPER_SOURCE: "",
+      CODEX_MCP_HELPER_REAPER_TEST_CARGO_LOG: cargoLog,
+    },
+  });
+
+  assert.match(fs.readFileSync(cargoLog, "utf8").trim(), / build --release -p codex-mcp-helper-reaper$/);
+  assert.equal(
+    fs.existsSync(path.join(appDir, ".codex-linux", "mcp-helper-reaper", "codex-mcp-helper-reaper")),
+    true,
+  );
+  assert.match(fs.readFileSync(nodeRepl, "utf8"), /mcp-helper-reaper-node-repl-wrapper/);
 
   fs.rmSync(tempDir, { recursive: true, force: true });
 });
