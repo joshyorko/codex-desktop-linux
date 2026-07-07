@@ -161,7 +161,8 @@ function applyBrowserUseNodeReplApprovalAssets(extractedDir) {
         const source = fs.readFileSync(candidate, "utf8");
         return (
           source.includes("startup_timeout_sec:120") ||
-          source.includes("NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S")
+          source.includes("NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S") ||
+          source.includes("trustedBrowserClientSha256s")
         );
       } catch {
         return false;

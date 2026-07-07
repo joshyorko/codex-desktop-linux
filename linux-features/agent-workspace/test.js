@@ -200,6 +200,17 @@ function syntheticSettingsPageWithRenamedIconMap() {
   ].join("");
 }
 
+function syntheticSettingsPageWithInitializerIconMap() {
+  return [
+    "var Bn,Vn,Q,Hn,Un=e(()=>{",
+    "Bn=o(),Vn=t(n(),1),Q=f(),Hn={\"general-settings\":W,\"local-environments\":Y,worktrees:U,environments:Y};",
+    "});",
+    "var ge=[`general-settings`,`local-environments`,`worktrees`,`data-controls`];",
+    "function visible(e){switch(e.slug){case`appearance`:case`git-settings`:case`worktrees`:case`local-environments`:case`environments`:return!0;case`data-controls`:return!0;}}",
+    "if(V)bb0:switch(B.slug){case`local-environments`:case`worktrees`:case`environments`:case`mcp-settings`:H=!1}",
+  ].join("");
+}
+
 function syntheticAppMainRouteRegistry() {
   return [
     "function render(e){return routeMap[e.slug]}",
@@ -253,6 +264,71 @@ function writeSyntheticExtractedApp(root) {
   fs.writeFileSync(path.join(assetsDir, "settings-content-layout-test.js"), "export function t(){}");
   fs.writeFileSync(path.join(assetsDir, "app-test.png"), "");
   return { buildDir, assetsDir };
+}
+
+function rewriteSettingsPageWithBundledRuntime(assetsDir) {
+  fs.rmSync(path.join(assetsDir, "jsx-runtime-test.js"), { force: true });
+  fs.rmSync(path.join(assetsDir, "react-test.js"), { force: true });
+  fs.rmSync(path.join(assetsDir, "settings-content-layout-test.js"), { force: true });
+  fs.writeFileSync(
+    path.join(assetsDir, "runtime-test.js"),
+    'import{s}from"./chunk-test.js";export{ReactFactory as r,jsxFactory as j};function ReactFactory(){return{createElement(){return{}},useState(value){return[value,()=>{}]},useCallback(fn){return fn},useEffect(){}}}function jsxFactory(){return{jsx(){},jsxs(){}}}',
+  );
+  const settingsPagePath = path.join(assetsDir, "settings-page-test.js");
+  const settingsPageSource = fs.readFileSync(settingsPagePath, "utf8");
+  fs.writeFileSync(
+    settingsPagePath,
+    [
+      'import{s as __toESM}from"./chunk-test.js";',
+      'import{r as ReactFactory,j as jsxFactory}from"./runtime-test.js";',
+      'var React=__toESM(ReactFactory(),1),$=jsxFactory();',
+      'function RuntimeProbe(){let [value]=(0,React.useState)(0);return (0,$.jsx)("span",{children:value})}',
+      settingsPageSource,
+    ].join(""),
+  );
+}
+
+function rewriteSettingsAssetsWithConsolidatedCurrentLayout(assetsDir) {
+  fs.rmSync(path.join(assetsDir, "jsx-runtime-test.js"), { force: true });
+  fs.rmSync(path.join(assetsDir, "react-test.js"), { force: true });
+  fs.rmSync(path.join(assetsDir, "settings-content-layout-test.js"), { force: true });
+  fs.rmSync(path.join(assetsDir, "settings-sections-test.js"), { force: true });
+  fs.rmSync(path.join(assetsDir, "settings-shared-test.js"), { force: true });
+  fs.rmSync(path.join(assetsDir, "index-test.js"), { force: true });
+  fs.writeFileSync(
+    path.join(assetsDir, "runtime-test.js"),
+    'import{s}from"./chunk-test.js";export{ReactFactory as r,jsxFactory as j};function ReactFactory(){return{createElement(){return{}},useState(value){return[value,()=>{}]},useCallback(fn){return fn},useEffect(){}}}function jsxFactory(){return{jsx(){},jsxs(){}}}',
+  );
+  fs.writeFileSync(
+    path.join(assetsDir, "settings-page-test.js"),
+    [
+      'import{s as __toESM}from"./chunk-test.js";',
+      'import{r as ReactFactory,j as jsxFactory}from"./runtime-test.js";',
+      'var React=__toESM(ReactFactory(),1),$=jsxFactory();',
+      'function RuntimeProbe(){let [value]=(0,React.useState)(0);return (0,$.jsx)("span",{children:value})}',
+      "var Z=$,S=e=>(0,Z.jsxs)(`svg`,{children:[]}),ln=S,F=S;",
+      'var Hn={"linux-desktop":S,"general-settings":S,"local-environments":ln,worktrees:F,environments:ln,"mcp-settings":S,connections:S};',
+      "var Wn=[`general-settings`,`linux-desktop`,`local-environments`,`worktrees`,`data-controls`],Gn=[{key:`personal`,slugs:[`general-settings`,`linux-desktop`]},{key:`coding`,slugs:[`local-environments`,`environments`,`worktrees`]}];",
+      "function visible(S){switch(S.slug){case`computer-use`:return!0;case`browser-use`:return!0;case`appearance`:return!0;case`pets`:case`git-settings`:case`worktrees`:case`local-environments`:case`environments`:return!0;case`data-controls`:return!0;case`linux-desktop`:case`general-settings`:case`agent`:case`personalization`:return!0;}}",
+      "function load(S){let T=!1;switch(S.slug){case`local-environments`:case`worktrees`:case`environments`:case`mcp-settings`:case`connections`:T=!1;break}return T}",
+      "var lr=[`profile`,`agent`,`personalization`,`mcp-settings`,`hooks-settings`,`local-environments`,`worktrees`,`data-controls`];",
+    ].join(""),
+  );
+  fs.writeFileSync(
+    path.join(assetsDir, "app-initial~app-main~messages-test.js"),
+    syntheticSettingsShared(),
+  );
+  fs.writeFileSync(
+    path.join(assetsDir, "app-initial~app-main~automations-page-test.js"),
+    [
+      "function EH(e){let t=(0,DH.c)(2),{slug:n}=e,r=AH[n],i;return t[0]===r?i=t[1]:(i=(0,kH.jsx)(r,{}),t[0]=r,t[1]=i),i}",
+      "var DH,OH,kH,AH,jH=e((()=>{DH=q(),OH=t(J(),1),kH=Y(),AH={",
+      '"linux-desktop":(0,OH.lazy)(()=>Cs(()=>import(`./linux-desktop-settings-linux.js`),[],import.meta.url)),',
+      '"general-settings":(0,OH.lazy)(()=>Cs(()=>import(`./general-settings-nSa2QlZR.js`).then(e=>({default:e.GeneralSettings})),__vite__mapDeps([1]),import.meta.url)),',
+      '"keyboard-shortcuts":(0,OH.lazy)(()=>Cs(()=>import(`./keyboard-shortcuts-settings-B1AsiCWy.js`).then(e=>({default:e.KeyboardShortcutsSettings})),__vite__mapDeps([2]),import.meta.url))',
+      "}}));",
+    ].join(""),
+  );
 }
 
 function writeModernCodexRequestAsset(assetsDir) {
@@ -1636,12 +1712,9 @@ test("settings asset patches add navigation, route, visibility, and title", () =
   assert.equal(applyAgentWorkspaceSettingsIndexPatch(appMain), appMain);
 
   const settingsPage = applyAgentWorkspaceSettingsPagePatch(syntheticSettingsPage());
-  assert.match(settingsPage, /codexLinuxAgentWorkspaceSettingsIcon=e=>/);
-  assert.match(settingsPage, /strokeDasharray/);
-  assert.match(settingsPage, /`circle`/);
+  assert.doesNotMatch(settingsPage, /codexLinuxAgentWorkspaceSettingsIcon/);
   assert.doesNotMatch(settingsPage, /M6 6\.25 7\.45 8 6 9\.75/);
-  assert.match(settingsPage, new RegExp(`"${SETTINGS_SLUG}":codexLinuxAgentWorkspaceSettingsIcon`));
-  assert.doesNotMatch(settingsPage, new RegExp(`"${SETTINGS_SLUG}":q`));
+  assert.match(settingsPage, new RegExp(`"local-environments":q,"${SETTINGS_SLUG}":q,worktrees`));
   assert.match(settingsPage, /`local-environments`,`agent-workspaces`,`worktrees`/);
   assert.match(settingsPage, /case`local-environments`:case`agent-workspaces`:case`environments`:return!0/);
   assert.match(settingsPage, /case`local-environments`:case`agent-workspaces`:case`worktrees`:case`environments`/);
@@ -1650,19 +1723,18 @@ test("settings asset patches add navigation, route, visibility, and title", () =
   const settingsPageWithRenamedIconMap = applyAgentWorkspaceSettingsPagePatch(
     syntheticSettingsPageWithRenamedIconMap(),
   );
-  assert.match(settingsPageWithRenamedIconMap, /codexLinuxAgentWorkspaceSettingsIcon=e=>\(0,Q\.jsxs\)/);
+  assert.doesNotMatch(settingsPageWithRenamedIconMap, /codexLinuxAgentWorkspaceSettingsIcon/);
+  assert.match(settingsPageWithRenamedIconMap, new RegExp(`"local-environments":Y,"${SETTINGS_SLUG}":Y,worktrees`));
+
+  const settingsPageWithInitializerIconMap = applyAgentWorkspaceSettingsPagePatch(
+    syntheticSettingsPageWithInitializerIconMap(),
+  );
+  assert.doesNotMatch(settingsPageWithInitializerIconMap, /codexLinuxAgentWorkspaceSettingsIcon/);
   assert.match(
-    settingsPageWithRenamedIconMap,
-    new RegExp(`"${SETTINGS_SLUG}":codexLinuxAgentWorkspaceSettingsIcon`),
+    settingsPageWithInitializerIconMap,
+    new RegExp(`Hn=\\{"general-settings":W,"local-environments":Y,"${SETTINGS_SLUG}":Y,worktrees:U`),
   );
-  assert.ok(
-    settingsPageWithRenamedIconMap.indexOf("codexLinuxAgentWorkspaceSettingsIcon=e=>") <
-      settingsPageWithRenamedIconMap.indexOf(`"${SETTINGS_SLUG}":codexLinuxAgentWorkspaceSettingsIcon`),
-  );
-  assert.equal(
-    (settingsPageWithRenamedIconMap.match(/codexLinuxAgentWorkspaceSettingsIcon=e=>/g) ?? []).length,
-    1,
-  );
+  assert.equal(applyAgentWorkspaceSettingsPagePatch(settingsPageWithInitializerIconMap), settingsPageWithInitializerIconMap);
 });
 
 test("agent-workspace feature participates in ASAR patching and reports", () => {
@@ -1724,6 +1796,78 @@ test("agent-workspace settings resolve latest upstream request API asset", () =>
     assert.match(settingsSource, /import\{l as __post\}from"\.\/setting-storage-test\.js"/);
     assert.match(settingsSource, /AgentWorkspacesSettings/);
     assert.match(fs.readFileSync(path.join(assetsDir, "index-test.js"), "utf8"), new RegExp(SETTINGS_ASSET));
+  } finally {
+    fs.rmSync(tempApp, { recursive: true, force: true });
+  }
+});
+
+test("agent-workspace settings infer runtime dependencies from bundled settings page", () => {
+  const tempApp = fs.mkdtempSync(path.join(os.tmpdir(), "codex-agent-workspace-bundled-runtime-"));
+  try {
+    const { assetsDir } = writeSyntheticExtractedApp(tempApp);
+    rewriteSettingsPageWithBundledRuntime(assetsDir);
+
+    assert.equal(fs.existsSync(path.join(assetsDir, "jsx-runtime-test.js")), false);
+    assert.equal(fs.existsSync(path.join(assetsDir, "react-test.js")), false);
+    assert.equal(fs.existsSync(path.join(assetsDir, "settings-content-layout-test.js")), false);
+
+    const { value: result, warnings } = captureWarns(() => patchAgentWorkspaceSettingsAssets(tempApp));
+
+    assert.equal(result.matched, true);
+    assert.ok(
+      warnings.every((warning) => !warning.includes("Agent Workspaces")),
+      warnings.join("\n"),
+    );
+    const settingsSource = fs.readFileSync(path.join(assetsDir, SETTINGS_ASSET), "utf8");
+    assert.match(settingsSource, /import\{r as __reactFactory\}from"\.\/runtime-test\.js"/);
+    assert.doesNotMatch(settingsSource, /settings-content-layout-test/);
+    assert.match(settingsSource, /function SettingsPage/);
+    assert.match(settingsSource, /AgentWorkspacesSettings/);
+    assert.match(fs.readFileSync(path.join(assetsDir, "settings-page-test.js"), "utf8"), /agent-workspaces/);
+    assert.match(fs.readFileSync(path.join(assetsDir, "index-test.js"), "utf8"), new RegExp(SETTINGS_ASSET));
+  } finally {
+    fs.rmSync(tempApp, { recursive: true, force: true });
+  }
+});
+
+test("agent-workspace settings patch supports consolidated current settings bundles", () => {
+  const tempApp = fs.mkdtempSync(path.join(os.tmpdir(), "codex-agent-workspace-current-settings-"));
+  try {
+    const { assetsDir } = writeSyntheticExtractedApp(tempApp);
+    rewriteSettingsAssetsWithConsolidatedCurrentLayout(assetsDir);
+
+    assert.equal(fs.existsSync(path.join(assetsDir, "settings-sections-test.js")), false);
+    assert.equal(fs.existsSync(path.join(assetsDir, "settings-shared-test.js")), false);
+    assert.equal(fs.existsSync(path.join(assetsDir, "index-test.js")), false);
+
+    const { value: result, warnings } = captureWarns(() => patchAgentWorkspaceSettingsAssets(tempApp));
+
+    assert.equal(result.matched, true);
+    assert.ok(
+      warnings.every((warning) => !warning.includes("Agent Workspaces")),
+      warnings.join("\n"),
+    );
+    const settingsSource = fs.readFileSync(path.join(assetsDir, SETTINGS_ASSET), "utf8");
+    assert.match(settingsSource, /import\{r as __reactFactory\}from"\.\/runtime-test\.js"/);
+    assert.match(settingsSource, /function SettingsPage/);
+
+    const settingsPageSource = fs.readFileSync(path.join(assetsDir, "settings-page-test.js"), "utf8");
+    assert.match(settingsPageSource, /"local-environments":ln,"agent-workspaces":ln,worktrees:F/);
+    assert.doesNotMatch(settingsPageSource, /codexLinuxAgentWorkspaceSettingsIcon/);
+    assert.match(settingsPageSource, /`local-environments`,`agent-workspaces`,`worktrees`/);
+    assert.match(settingsPageSource, /slugs:\[`local-environments`,`agent-workspaces`,`environments`,`worktrees`\]/);
+    assert.match(settingsPageSource, /case`worktrees`:case`local-environments`:case`agent-workspaces`:case`environments`:return!0/);
+    assert.match(settingsPageSource, /case`local-environments`:case`agent-workspaces`:case`worktrees`:case`environments`/);
+    assert.match(settingsPageSource, /lr=\[`profile`,`agent`,`personalization`,`mcp-settings`,`hooks-settings`,`local-environments`,`agent-workspaces`,`worktrees`,`data-controls`\]/);
+
+    const sharedSource = fs.readFileSync(path.join(assetsDir, "app-initial~app-main~messages-test.js"), "utf8");
+    assert.match(sharedSource, /settings\.nav\.agent-workspaces/);
+    assert.match(sharedSource, /settings\.section\.agent-workspaces/);
+
+    const routeSource = fs.readFileSync(path.join(assetsDir, "app-initial~app-main~automations-page-test.js"), "utf8");
+    assert.match(routeSource, new RegExp(SETTINGS_ASSET));
+    assert.match(routeSource, /"agent-workspaces":\(0,OH\.lazy\)\(\(\)=>Cs\(\(\)=>import\(`\.\/agent-workspaces-linux\.js`\),\[\],import\.meta\.url\)\),"general-settings":/);
+    assert.equal(patchAgentWorkspaceSettingsAssets(tempApp).changed, 0);
   } finally {
     fs.rmSync(tempApp, { recursive: true, force: true });
   }
