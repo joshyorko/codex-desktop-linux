@@ -23,6 +23,7 @@ const ACTIONABLE_CLASSIFICATIONS = new Set([
   "REMOVED",
   "NEW_UPSTREAM_CAPABILITY",
   "PATCH_BROKEN",
+  "PATCH_INTEGRITY_BROKEN",
   "PATCH_REVIEW",
   "LINUX_SUBSTRATE_GAP",
   "PROTECTED_SURFACE_PARTIAL",
@@ -55,6 +56,10 @@ function normalizePath(value) {
 
 function toRegex(pattern) {
   return pattern instanceof RegExp ? pattern : new RegExp(pattern, "i");
+}
+
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function matchAny(patterns, value) {
@@ -682,6 +687,7 @@ function extractProtectedSurfaces({ inventory, registry, repoRoot = process.cwd(
   const bridgeMap = createBridgeMap(inventory);
   const pluginMap = createPluginMap(inventory);
   const nativeBinaryMap = createNativeBinaryMap(inventory, registry);
+  const postPatchIntegrity = findPostPatchIntegrityFindings(inventory);
   const surfaces = (registry.surfaces ?? []).map((surface) => {
     const evidence = fileEvidenceForSurface(inventory, surface).sort((a, b) => a.path.localeCompare(b.path));
     const anchors = evaluateRequiredAnchors(inventory, surface, { bridgeMap, pluginMap, nativeBinaryMap });
@@ -721,6 +727,7 @@ function extractProtectedSurfaces({ inventory, registry, repoRoot = process.cwd(
     bridgeMap,
     pluginMap,
     nativeBinaryMap,
+    postPatchIntegrity,
   };
 }
 
@@ -932,6 +939,39 @@ function createNativeBinaryMap(inventory, registry = null) {
   return { binaries };
 }
 
+const LINUX_SETTINGS_PATCH_SYMBOL_PATTERN = /\bcodexLinux[A-Za-z0-9_$]*SettingsIcon\b/g;
+
+function hasLocalPatchSymbolDeclaration(source, symbol) {
+  const escaped = escapeRegExp(symbol);
+  return (
+    new RegExp(`\\bfunction\\s+${escaped}\\s*\\(`).test(source) ||
+    new RegExp(`\\b(?:var|let|const)\\s+[^;]*\\b${escaped}\\s*=`).test(source) ||
+    new RegExp(`[;,]\\s*${escaped}\\s*=`).test(source)
+  );
+}
+
+function findPostPatchIntegrityFindings(inventory) {
+  const findings = [];
+  for (const file of inventory.files) {
+    if (file.text == null) {
+      continue;
+    }
+    const symbols = [...new Set(file.text.match(LINUX_SETTINGS_PATCH_SYMBOL_PATTERN) ?? [])];
+    for (const symbol of symbols) {
+      if (hasLocalPatchSymbolDeclaration(file.text, symbol)) {
+        continue;
+      }
+      findings.push({
+        path: file.relativePath,
+        reason: "Linux settings patch symbol is referenced without a local declaration",
+        snippet: textSnippet(file.text, symbol),
+        symbol,
+      });
+    }
+  }
+  return findings.sort((a, b) => `${a.symbol}:${a.path}`.localeCompare(`${b.symbol}:${b.path}`));
+}
+
 function classifySurfaceDrift({ baselineSurface, candidateSurface }) {
   const baselinePresent = baselineSurface?.status === "PRESENT";
   const candidatePresent = candidateSurface?.status === "PRESENT";
@@ -1058,6 +1098,18 @@ function compareProtectedSurfaces({ baseline, candidate, patchReport = null } = 
         });
       }
     }
+  }
+  const postPatchIntegrity = candidate?.postPatchIntegrity ?? [];
+  if (postPatchIntegrity.length > 0) {
+    surfaceDrift.push({
+      surfaceId: "linux_patch_integrity",
+      title: "Linux post-patch JavaScript integrity",
+      category: "patch-integrity",
+      classification: "PATCH_INTEGRITY_BROKEN",
+      findingCount: postPatchIntegrity.length,
+      findings: postPatchIntegrity.slice(0, 20),
+      omittedFindingCount: Math.max(0, postPatchIntegrity.length - 20),
+    });
   }
 
   const classificationCounts = {};
@@ -1653,6 +1705,7 @@ module.exports = {
   createPluginMap,
   compareMaps,
   extractProtectedSurfaces,
+  findPostPatchIntegrityFindings,
   renderActionPlanMarkdown,
   renderDriftMarkdown,
   resolveBaselinePath,
