@@ -414,12 +414,30 @@ test("classifies required patch-report failures as acceptance blockers", () =>
 test("classifies unresolved Linux settings patch symbols as acceptance blockers", () =>
   withTempDir((workspace) => {
     const candidateApp = createFixtureApp(workspace, "candidate");
+    const assetsDir = path.join(candidateApp, "Contents/Resources/webview/assets");
     writeFile(
-      path.join(
-        candidateApp,
-        "Contents/Resources/webview/assets/settings-page-bad-linux-patch.js",
-      ),
+      path.join(assetsDir, "settings-page-bad-linux-patch.js"),
       'var icons={"agent-workspaces":codexLinuxAgentWorkspaceSettingsIcon,worktrees:WorktreesIcon};',
+    );
+    writeFile(
+      path.join(assetsDir, "settings-page-bare-assignment.js"),
+      "codexLinuxReadAloudSettingsIcon=e=>null;var icons={read:codexLinuxReadAloudSettingsIcon};",
+    );
+    writeFile(
+      path.join(assetsDir, "settings-page-comma-assignment.js"),
+      "foo(),codexLinuxHooksSettingsIcon=e=>null;var icons={hooks:codexLinuxHooksSettingsIcon};",
+    );
+    writeFile(
+      path.join(assetsDir, "settings-page-nested-assignment.js"),
+      "var init=()=>{codexLinuxMcpSettingsIcon=e=>null};var icons={mcp:codexLinuxMcpSettingsIcon};",
+    );
+    writeFile(
+      path.join(assetsDir, "settings-page-good-direct-declaration.js"),
+      "var codexLinuxDeclaredSettingsIcon=e=>null;var icons={declared:codexLinuxDeclaredSettingsIcon};",
+    );
+    writeFile(
+      path.join(assetsDir, "settings-page-good-comma-declaration.js"),
+      "var existing=1,codexLinuxCommaDeclaredSettingsIcon=e=>null;var icons={declared:codexLinuxCommaDeclaredSettingsIcon};",
     );
 
     const candidate = extractProtectedSurfaces({
@@ -432,8 +450,49 @@ test("classifies unresolved Linux settings patch symbols as acceptance blockers"
     const finding = findClassification(driftReport, "linux_patch_integrity", "PATCH_INTEGRITY_BROKEN");
     assert.ok(finding);
     assert.equal(finding.category, "patch-integrity");
-    assert.match(finding.findings[0].symbol, /codexLinuxAgentWorkspaceSettingsIcon/);
-    assert.match(finding.findings[0].path, /settings-page-bad-linux-patch\.js$/);
+    const findingPaths = new Set(finding.findings.map((entry) => path.basename(entry.path)));
+    assert.ok(findingPaths.has("settings-page-bad-linux-patch.js"));
+    assert.ok(findingPaths.has("settings-page-bare-assignment.js"));
+    assert.ok(findingPaths.has("settings-page-comma-assignment.js"));
+    assert.ok(findingPaths.has("settings-page-nested-assignment.js"));
+    assert.equal(findingPaths.has("settings-page-good-direct-declaration.js"), false);
+    assert.equal(findingPaths.has("settings-page-good-comma-declaration.js"), false);
+  }));
+
+test("folds patch-report post-patch integrity findings into candidate-only reports", () =>
+  withTempDir((workspace) => {
+    const candidateApp = createFixtureApp(workspace, "candidate");
+    const outputDir = path.join(workspace, "post-patch-integrity-report");
+    const patchReportPath = path.join(workspace, "patch-report.json");
+    writeJson(patchReportPath, {
+      patches: [],
+      postPatchIntegrity: {
+        sourcePath: path.join(workspace, "app-extracted"),
+        findingCount: 1,
+        findings: [
+          {
+            path: "webview/assets/settings-page-patched.js",
+            reason: "Linux settings patch symbol is referenced without a local declaration",
+            snippet: '"agent-workspaces":codexLinuxAgentWorkspaceSettingsIcon',
+            symbol: "codexLinuxAgentWorkspaceSettingsIcon",
+          },
+        ],
+      },
+    });
+
+    const reports = buildIntelReports({
+      autoBaseline: false,
+      candidatePath: candidateApp,
+      outputDir,
+      patchReportPath,
+      registry,
+      repoRoot: process.cwd(),
+    });
+
+    const finding = findClassification(reports.driftReport, "linux_patch_integrity", "PATCH_INTEGRITY_BROKEN");
+    assert.ok(finding);
+    assert.equal(finding.findingCount, 1);
+    assert.equal(finding.findings[0].path, "webview/assets/settings-page-patched.js");
   }));
 
 test("keeps drift report evidence compact and marks hashed asset churn", () => {

@@ -941,12 +941,67 @@ function createNativeBinaryMap(inventory, registry = null) {
 
 const LINUX_SETTINGS_PATCH_SYMBOL_PATTERN = /\bcodexLinux[A-Za-z0-9_$]*SettingsIcon\b/g;
 
+function segmentDeclaresSymbol(segment, symbol) {
+  const escaped = escapeRegExp(symbol);
+  return new RegExp(`^\\s*${escaped}(?![A-Za-z0-9_$])`).test(segment);
+}
+
+function hasVariableDeclarator(source, symbol) {
+  const keywordPattern = /\b(?:var|let|const)\b/g;
+  let match;
+  while ((match = keywordPattern.exec(source)) != null) {
+    let segmentStart = keywordPattern.lastIndex;
+    let depth = 0;
+    let quote = null;
+    let escaped = false;
+    let terminated = false;
+    for (let index = segmentStart; index < source.length; index += 1) {
+      const char = source[index];
+      if (quote != null) {
+        if (escaped) {
+          escaped = false;
+        } else if (char === "\\") {
+          escaped = true;
+        } else if (char === quote) {
+          quote = null;
+        }
+        continue;
+      }
+      if (char === '"' || char === "'" || char === "`") {
+        quote = char;
+        continue;
+      }
+      if (char === "(" || char === "[" || char === "{") {
+        depth += 1;
+        continue;
+      }
+      if (char === ")" || char === "]" || char === "}") {
+        depth = Math.max(0, depth - 1);
+        continue;
+      }
+      if (depth === 0 && (char === "," || char === ";")) {
+        if (segmentDeclaresSymbol(source.slice(segmentStart, index), symbol)) {
+          return true;
+        }
+        if (char === ";") {
+          terminated = true;
+          break;
+        }
+        segmentStart = index + 1;
+      }
+    }
+    if (!terminated && segmentDeclaresSymbol(source.slice(segmentStart), symbol)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function hasLocalPatchSymbolDeclaration(source, symbol) {
   const escaped = escapeRegExp(symbol);
   return (
     new RegExp(`\\bfunction\\s+${escaped}\\s*\\(`).test(source) ||
-    new RegExp(`\\b(?:var|let|const)\\s+[^;]*\\b${escaped}\\s*=`).test(source) ||
-    new RegExp(`[;,]\\s*${escaped}\\s*=`).test(source)
+    hasVariableDeclarator(source, symbol)
   );
 }
 
@@ -1035,6 +1090,31 @@ function patchFindingsBySurface(patchReport, surfacesById = {}) {
   return map;
 }
 
+function postPatchIntegrityFindingsFromReport(patchReport) {
+  const findings = patchReport?.postPatchIntegrity?.findings ?? patchReport?.postPatchIntegrity ?? [];
+  return Array.isArray(findings) ? findings : [];
+}
+
+function mergedPostPatchIntegrityFindings(...findingGroups) {
+  const merged = new Map();
+  for (const finding of findingGroups.flat()) {
+    if (finding == null || typeof finding !== "object") {
+      continue;
+    }
+    const symbol = finding.symbol ?? "unknown-symbol";
+    const pathKey = finding.path ?? "unknown-path";
+    const reason = finding.reason ?? "Linux settings patch symbol is referenced without a local declaration";
+    const key = `${symbol}\0${pathKey}\0${finding.snippet ?? ""}`;
+    merged.set(key, {
+      path: pathKey,
+      reason,
+      snippet: finding.snippet ?? null,
+      symbol,
+    });
+  }
+  return [...merged.values()].sort((a, b) => `${a.symbol}:${a.path}`.localeCompare(`${b.symbol}:${b.path}`));
+}
+
 function compareProtectedSurfaces({ baseline, candidate, patchReport = null } = {}) {
   const hasBaseline = baseline != null;
   const patchFindings = patchFindingsBySurface(patchReport, {
@@ -1099,7 +1179,10 @@ function compareProtectedSurfaces({ baseline, candidate, patchReport = null } = 
       }
     }
   }
-  const postPatchIntegrity = candidate?.postPatchIntegrity ?? [];
+  const postPatchIntegrity = mergedPostPatchIntegrityFindings(
+    candidate?.postPatchIntegrity ?? [],
+    postPatchIntegrityFindingsFromReport(patchReport),
+  );
   if (postPatchIntegrity.length > 0) {
     surfaceDrift.push({
       surfaceId: "linux_patch_integrity",

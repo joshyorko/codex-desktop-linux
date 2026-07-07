@@ -9,6 +9,10 @@ const {
 const {
   patchExtractedApp,
 } = require("./patches/runner.js");
+const {
+  createInventory,
+  findPostPatchIntegrityFindings,
+} = require("./lib/upstream-dmg-intel.js");
 
 const USAGE = "Usage: patch-linux-window-ui.js [--report-json path] [--enforce-critical] <extracted-app-asar-dir>";
 
@@ -47,6 +51,15 @@ function main() {
   // Enforcement needs the report data even when no --report-json was requested.
   const report = reportJson == null && !enforceCritical ? null : createPatchReport();
   patchExtractedApp(extractedDir, { report });
+  if (report != null) {
+    const inventory = createInventory({ sourcePath: extractedDir });
+    const findings = findPostPatchIntegrityFindings(inventory);
+    report.postPatchIntegrity = {
+      sourcePath: extractedDir,
+      findingCount: findings.length,
+      findings,
+    };
+  }
   // Write the report before gating so CI artifact upload sees it even on failure.
   writePatchReport(reportJson, report);
 
