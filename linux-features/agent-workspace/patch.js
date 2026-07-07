@@ -2117,6 +2117,19 @@ function agentWorkspaceSettingsNavIconSource(jsxAlias = "Z") {
   return `codexLinuxAgentWorkspaceSettingsIcon=e=>(0,${jsxAlias}.jsxs)(\`svg\`,{width:16,height:16,viewBox:\`0 0 16 16\`,fill:\`none\`,xmlns:\`http://www.w3.org/2000/svg\`,...e,children:[(0,${jsxAlias}.jsx)(\`rect\`,{x:2.25,y:2.25,width:11.5,height:11.5,rx:2.1,stroke:\`currentColor\`,strokeWidth:1.2,strokeDasharray:\`1.8 1.4\`}),(0,${jsxAlias}.jsx)(\`path\`,{d:\`M6.15 5.55 7.4 9.55M9.85 5.55 8.6 9.55M6.4 5h3.2\`,stroke:\`currentColor\`,strokeWidth:1.1,strokeLinecap:\`round\`,strokeLinejoin:\`round\`}),(0,${jsxAlias}.jsx)(\`circle\`,{cx:5.1,cy:5, r:1.15,stroke:\`currentColor\`,strokeWidth:1.1}),(0,${jsxAlias}.jsx)(\`circle\`,{cx:10.9,cy:5,r:1.15,stroke:\`currentColor\`,strokeWidth:1.1}),(0,${jsxAlias}.jsx)(\`circle\`,{cx:8,cy:11,r:1.15,stroke:\`currentColor\`,strokeWidth:1.1})]})`;
 }
 
+function commaStartsDeclarationList(source, index) {
+  const statementPrefix = source.slice(source.lastIndexOf(";", index - 1) + 1, index).trimStart();
+  if (!/^(?:var|let|const)\s/.test(statementPrefix)) {
+    return false;
+  }
+  let braceDepth = 0;
+  for (const character of statementPrefix) {
+    if (character === "{") braceDepth += 1;
+    if (character === "}") braceDepth -= 1;
+  }
+  return braceDepth === 0;
+}
+
 function applyAgentWorkspaceSettingsIconPatch(currentSource) {
   if (currentSource.includes("codexLinuxAgentWorkspaceSettingsIcon=e=>")) {
     return currentSource;
@@ -2132,6 +2145,9 @@ function applyAgentWorkspaceSettingsIconPatch(currentSource) {
   const iconSource = agentWorkspaceSettingsNavIconSource(inferSettingsPageJsxAlias(currentSource));
   const index = iconMapMatch.index ?? 0;
   if (iconMapMatch[0].startsWith(",")) {
+    if (!commaStartsDeclarationList(currentSource, index)) {
+      return `${currentSource.slice(0, index)};var ${iconSource};${currentSource.slice(index + 1)}`;
+    }
     return `${currentSource.slice(0, index)},${iconSource}${currentSource.slice(index)}`;
   }
 

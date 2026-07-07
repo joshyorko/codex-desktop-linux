@@ -200,6 +200,17 @@ function syntheticSettingsPageWithRenamedIconMap() {
   ].join("");
 }
 
+function syntheticSettingsPageWithInitializerIconMap() {
+  return [
+    "var Bn,Vn,Q,Hn,Un=e(()=>{",
+    "Bn=o(),Vn=t(n(),1),Q=f(),Hn={\"general-settings\":W,\"local-environments\":Y,worktrees:U,environments:Y};",
+    "});",
+    "var ge=[`general-settings`,`local-environments`,`worktrees`,`data-controls`];",
+    "function visible(e){switch(e.slug){case`appearance`:case`git-settings`:case`worktrees`:case`local-environments`:case`environments`:return!0;case`data-controls`:return!0;}}",
+    "if(V)bb0:switch(B.slug){case`local-environments`:case`worktrees`:case`environments`:case`mcp-settings`:H=!1}",
+  ].join("");
+}
+
 function syntheticAppMainRouteRegistry() {
   return [
     "function render(e){return routeMap[e.slug]}",
@@ -1728,6 +1739,17 @@ test("settings asset patches add navigation, route, visibility, and title", () =
     (settingsPageWithRenamedIconMap.match(/codexLinuxAgentWorkspaceSettingsIcon=e=>/g) ?? []).length,
     1,
   );
+
+  const settingsPageWithInitializerIconMap = applyAgentWorkspaceSettingsPagePatch(
+    syntheticSettingsPageWithInitializerIconMap(),
+  );
+  assert.match(settingsPageWithInitializerIconMap, /;var codexLinuxAgentWorkspaceSettingsIcon=e=>/);
+  assert.doesNotMatch(settingsPageWithInitializerIconMap, /,codexLinuxAgentWorkspaceSettingsIcon=e=>/);
+  assert.match(
+    settingsPageWithInitializerIconMap,
+    new RegExp(`Hn=\\{"general-settings":W,"local-environments":Y,"${SETTINGS_SLUG}":codexLinuxAgentWorkspaceSettingsIcon,worktrees:U`),
+  );
+  assert.equal(applyAgentWorkspaceSettingsPagePatch(settingsPageWithInitializerIconMap), settingsPageWithInitializerIconMap);
 });
 
 test("agent-workspace feature participates in ASAR patching and reports", () => {
