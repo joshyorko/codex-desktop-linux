@@ -3433,6 +3433,12 @@ esac
 SCRIPT
     chmod +x "$fake_bin/npm"
 
+    cat > "$fake_bin/c++" <<'SCRIPT'
+#!/usr/bin/env bash
+exit 0
+SCRIPT
+    chmod +x "$fake_bin/c++"
+
     cat > "$fake_bin/npx" <<'SCRIPT'
 #!/usr/bin/env bash
 echo "npx should not be used for electron-rebuild" >&2

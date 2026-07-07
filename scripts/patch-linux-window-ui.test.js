@@ -635,10 +635,12 @@ test("package profile distinguishes Fedora package managers by major version", (
   const fedora40 = detectLinuxTargetContext({
     osReleaseFields: { ID: "fedora", VERSION_ID: "40", PRETTY_NAME: "Fedora Linux 40" },
     env: { PATH: "" },
+    atomic: false,
   });
   const fedora41 = detectLinuxTargetContext({
     osReleaseFields: { ID: "fedora", VERSION_ID: "41", PRETTY_NAME: "Fedora Linux 41" },
     env: { PATH: "" },
+    atomic: false,
   });
 
   assert.equal(packageProfile(fedora40).packageManager, "dnf");
@@ -6718,6 +6720,38 @@ test("keeps object-helper Computer Use host compatibility on Linux when platform
     patched,
     /v=g\(\{enabled:a,isComputerUseFeatureEnabled:s===`linux`\|\|_\.enabled,isComputerUseFeatureLoading:s!==`linux`&&_\.isLoading,isComputerUseGateEnabled:s===`linux`\|\|d,isHostCompatiblePlatform:s===`linux`\|\|m\(s\),isHostLocal:c,isPlatformLoading:o,windowType:`electron`\}\)/,
   );
+});
+
+test("Computer Use availability descriptor matches the current settings bundle name", () => {
+  const [descriptor] = require("./patches/core/all-linux/webview/computer-use-ui/patch.js");
+
+  assert.match("computer-use-settings-B1QCeMSP.js", descriptor.pattern);
+});
+
+test("keeps current Computer Use settings availability enabled on Linux", () => {
+  const source =
+    "let availability=useAvailability(arg),{platform:platform}=usePlatform();" +
+    "let props={computerUseAvailability:availability,platform:platform};" +
+    "availability.available&&render(props);";
+
+  const patched = applyPatchTwice(applyLinuxComputerUseRendererAvailabilityPatch, source);
+
+  assert.match(
+    patched,
+    /platform===`linux`&&\(availability=\{\.\.\.availability,available:!0,isFetching:!1,isLoading:!1\}\);/,
+  );
+});
+
+test("does not give synthetic Computer Use plugin cards an invalid marketplace directory path", () => {
+  const source =
+    "let {computerUseAvailability:availability,platform:platform}=state;" +
+    "let pluginsQuery=usePlugins(selectedHost,emptyPlugins),marketplacePath=useMarketplacePath(selectedHost),featureFlag=useFeatureFlag(featureFlagArg),computerUsePlugin;" +
+    "computerUsePlugin=selectPlugin(pluginsQuery.availablePlugins,pluginName,marketplacePath);";
+
+  const patched = applyPatchTwice(applyLinuxComputerUseRendererAvailabilityPatch, source);
+
+  assert.match(patched, /marketplacePath:marketplacePath/);
+  assert.doesNotMatch(patched, /marketplacePath:`openai-bundled\/plugins\/computer-use`/);
 });
 
 test("warns without partially patching when Computer Use renderer availability gate drifts", () => {
