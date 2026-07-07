@@ -11,7 +11,7 @@ function applyBrowserUseNodeReplApprovalPatch(currentSource) {
   const approvalPatch =
     "startup_timeout_sec:120,tools:{js:{approval_mode:`approve`}},env:{";
   const needle = "startup_timeout_sec:120,env:{";
-  const runtimeFactoryMethods = String.raw`Dn|Pn|Fa|La|Ha|\$a`;
+  const runtimeFactoryMethods = String.raw`Dn|Pn|Fa|La|Ha|vo|\$a`;
   let patchedSource = currentSource;
   let patchedTrustedHashes = false;
   if (patchedSource.includes(needle)) {
