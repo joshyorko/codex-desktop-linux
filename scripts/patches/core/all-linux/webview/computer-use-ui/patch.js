@@ -26,7 +26,7 @@ module.exports = [
     order: 1110,
     ciPolicy: "opt-in",
     enabled: (context) => context.enableComputerUseUi,
-    pattern: /^app-initial~app-main~worktree-init-v2-page~remote-conversation-page~pull-requests-page~plug~.*\.js$/,
+    pattern: /^(?:app-initial~app-main~.*remote-conversation-page~.*(?:appgen|new-thread-panel-page|onboarding-page|plugin-detail-page|pull-requests-page|plug).*|(?:use-plugin-install-flow|plugins-availability)-.*)\.js$/,
     missingDescription: "Computer Use install flow bundle",
     skipDescription: "Linux Computer Use install flow patch",
     apply: applyLinuxComputerUseInstallFlowPatch,

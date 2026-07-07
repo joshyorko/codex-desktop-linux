@@ -7540,6 +7540,14 @@ test("patchExtractedApp scans apps bundles for Computer Use availability when UI
         "function Iz(e){let t=(0,Lz.c)(9),{enabled:n}=e,{platform:r,isLoading:i}=yt(),a=n&&(r===`macOS`||r===`windows`),o;t[0]===Symbol.for(`react.memo_cache_sentinel`)?(o={order:`usage`},t[0]=o):o=t[0];let s;t[1]===a?s=t[2]:(s={params:o,queryConfig:{enabled:a,staleTime:fe.FIVE_MINUTES,refetchOnWindowFocus:!1}},t[1]=a,t[2]=s);let c=Ce(`native-desktop-apps`,s),l;t[3]!==c||t[4]!==a?(l=a?c.data?.apps??[]:[],t[3]=c,t[4]=a,t[5]=l):l=t[5];let u=i||a&&c.isLoading,d;return t[6]!==l||t[7]!==u?(d={nativeApps:l,isLoading:u},t[6]=l,t[7]=u,t[8]=d):d=t[8],d}" +
           "function Ope(e){let{platform:u}=yt(),v=l.formatMessage({id:`computerUse.label`,defaultMessage:`Computer use`}),y=n[0]??null,b=[{description:l.formatMessage({id:`computerUse.nativeApps.microsoftExcel.detail`,defaultMessage:`Live workbook control`})}],D;t[4]===r?D=t[5]:(D=e=>({queryKey:ve(`computer-use-native-desktop-app-icon`,{appPath:e.appPath}),queryFn:()=>ie(`computer-use-native-desktop-app-icon`,{params:{appPath:e.appPath}}),enabled:r!=null,staleTime:fe.INFINITE,refetchOnWindowFocus:!1}),t[4]=r,t[5]=D);return v}",
       );
+      fs.writeFileSync(
+        path.join(
+          assetsDir,
+          "app-initial~app-main~remote-conversation-page~new-thread-panel-page~onboarding-page~appgen-~current.js",
+        ),
+        "function _p(e){return e===`macOS`||e===`windows`}" +
+          "function vp(e){let t=(0,Sp.c)(16),{enabled:n,hostId:r}=e,i=n===void 0?!0:n,{isLoading:a,platform:o}=ba(),s=gr(`1506311413`),c;t[0]===r?c=t[1]:(c={featureName:`computer_use`,hostId:r},t[0]=r,t[1]=c);let l=mp(c),u=o===`windows`&&!a,d=i&&u,f;t[2]===d?f=t[3]:(f={enabled:d},t[2]=d,t[3]=f);let p=yp(f),m=l.isLoading||u&&p.isLoading,h=l.enabled&&(!u||p.enabled),g;t[4]!==h||t[5]!==i||t[6]!==m||t[7]!==s||t[8]!==a||t[9]!==o?(g=xp({areRequiredFeaturesEnabled:h,enabled:i,isAnyFeatureLoading:m,isComputerUseGateEnabled:s,isHostCompatiblePlatform:_p(o),isPlatformLoading:a,windowType:`electron`}),t[4]=h,t[5]=i,t[6]=m,t[7]=s,t[8]=a,t[9]=o,t[10]=g):g=t[10];return g}",
+      );
       fs.writeFileSync(path.join(tempRoot, "package.json"), JSON.stringify({ name: "codex" }));
 
       patchExtractedApp(tempRoot);
@@ -7561,6 +7569,16 @@ test("patchExtractedApp scans apps bundles for Computer Use availability when UI
           "utf8",
         ),
         /a=n&&\(r===`macOS`\|\|r===`windows`\|\|r===`linux`\)/,
+      );
+      assert.match(
+        fs.readFileSync(
+          path.join(
+            assetsDir,
+            "app-initial~app-main~remote-conversation-page~new-thread-panel-page~onboarding-page~appgen-~current.js",
+          ),
+          "utf8",
+        ),
+        /g=xp\(\{areRequiredFeaturesEnabled:o===`linux`\|\|h,enabled:i,isAnyFeatureLoading:o===`linux`\?!1:m,isComputerUseGateEnabled:o===`linux`\|\|s,isHostCompatiblePlatform:o===`linux`\|\|_p\(o\),isPlatformLoading:a,windowType:`electron`\}\)/,
       );
     } finally {
       fs.rmSync(tempRoot, { recursive: true, force: true });
