@@ -261,7 +261,7 @@ build-dev-app:
 	CODEX_INSTALL_DIR="$(DEV_APP_DIR)" \
 		./install.sh "$(DMG)"
 	@mkdir -p "$(CURDIR)/bin"
-	@ln -sfn "$(DEV_APP_DIR)/start.sh" "$(DEV_APP_BIN)"
+	@ln -sfn "$$(realpath --relative-to="$$(dirname "$(DEV_APP_BIN)")" "$(DEV_APP_DIR)/start.sh")" "$(DEV_APP_BIN)"
 	@echo "[make] Side-by-side launcher: $(DEV_APP_BIN)"
 
 run-dev-app:

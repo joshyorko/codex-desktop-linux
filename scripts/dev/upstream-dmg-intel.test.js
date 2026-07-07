@@ -561,6 +561,31 @@ test("classifies required patch-report failures as acceptance blockers", () =>
     assert.ok(!findClassification(driftReport, "record_and_replay_event_stream", "PATCH_REVIEW"));
   }));
 
+test("classifies unresolved Linux settings patch symbols as acceptance blockers", () =>
+  withTempDir((workspace) => {
+    const candidateApp = createFixtureApp(workspace, "candidate");
+    writeFile(
+      path.join(
+        candidateApp,
+        "Contents/Resources/webview/assets/settings-page-bad-linux-patch.js",
+      ),
+      'var icons={"agent-workspaces":codexLinuxAgentWorkspaceSettingsIcon,worktrees:WorktreesIcon};',
+    );
+
+    const candidate = extractProtectedSurfaces({
+      inventory: createInventory({ registry, sourcePath: candidateApp }),
+      registry,
+      repoRoot: process.cwd(),
+    });
+    const driftReport = compareProtectedSurfaces({ candidate });
+
+    const finding = findClassification(driftReport, "linux_patch_integrity", "PATCH_INTEGRITY_BROKEN");
+    assert.ok(finding);
+    assert.equal(finding.category, "patch-integrity");
+    assert.match(finding.findings[0].symbol, /codexLinuxAgentWorkspaceSettingsIcon/);
+    assert.match(finding.findings[0].path, /settings-page-bad-linux-patch\.js$/);
+  }));
+
 test("keeps drift report evidence compact and marks hashed asset churn", () => {
   const baseline = {
     source: { path: "baseline.app" },

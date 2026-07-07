@@ -1957,7 +1957,7 @@ test("bypasses the upstream before-quit confirmation after a Linux explicit quit
 
   assert.match(
     patched,
-    /if\(\(typeof codexLinuxShouldBypassQuitPrompt===`function`&&codexLinuxShouldBypassQuitPrompt\(\)\)\|\|e\|\|i\.canQuitWithoutPrompt\(\)\|\|r\|\|!s&&!c\)\{process\.platform===`linux`&&typeof codexLinuxMarkQuitInProgress===`function`&&codexLinuxMarkQuitInProgress\(\),g=!0,a\.markAppQuitting\(\);return\}/,
+    /if\(\(typeof codexLinuxShouldBypassQuitPrompt===`function`&&codexLinuxShouldBypassQuitPrompt\(\)\)\|\|e\|\|\(typeof i\.canQuitWithoutPrompt===`function`&&i\.canQuitWithoutPrompt\(\)\)\|\|r\|\|!s&&!c\)\{process\.platform===`linux`&&typeof codexLinuxMarkQuitInProgress===`function`&&codexLinuxMarkQuitInProgress\(\),g=!0,a\.markAppQuitting\(\);return\}/,
   );
   assert.match(
     patched,
@@ -1993,7 +1993,7 @@ test("patches remaining before-quit and drain guards when another copy is alread
   assert.equal((patchedPromptSource.match(/codexLinuxShouldBypassQuitPrompt\(\)/g) ?? []).length, 2);
   assert.match(
     patchedPromptSource,
-    /function secondPrompt\(\)\{if\(\(typeof codexLinuxShouldBypassQuitPrompt===`function`&&codexLinuxShouldBypassQuitPrompt\(\)\)\|\|e\|\|i\.canQuitWithoutPrompt\(\)\|\|r\|\|!s&&!c\)\{process\.platform===`linux`&&typeof codexLinuxMarkQuitInProgress===`function`&&codexLinuxMarkQuitInProgress\(\),g=!0,a\.markAppQuitting\(\);return\}\}/,
+    /function secondPrompt\(\)\{if\(\(typeof codexLinuxShouldBypassQuitPrompt===`function`&&codexLinuxShouldBypassQuitPrompt\(\)\)\|\|e\|\|\(typeof i\.canQuitWithoutPrompt===`function`&&i\.canQuitWithoutPrompt\(\)\)\|\|r\|\|!s&&!c\)\{process\.platform===`linux`&&typeof codexLinuxMarkQuitInProgress===`function`&&codexLinuxMarkQuitInProgress\(\),g=!0,a\.markAppQuitting\(\);return\}\}/,
   );
 
   const unpatchedDrain =

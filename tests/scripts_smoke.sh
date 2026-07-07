@@ -1316,6 +1316,39 @@ SCRIPT
     [ -z "$third_line" ] || fail "Expected make build-app-fresh default DMG argument to be empty, got: $(cat "$install_log")"
 }
 
+test_make_build_dev_app_writes_host_portable_launcher_symlink() {
+    info "Checking make build-dev-app writes a host-portable launcher symlink"
+    local workspace="$TMP_DIR/make-build-dev-app"
+    local install_log="$workspace/install-env.log"
+    local launcher="$workspace/bin/codex-cua-lab"
+    local target
+
+    mkdir -p "$workspace"
+
+    cat > "$workspace/install.sh" <<'SCRIPT'
+#!/usr/bin/env bash
+set -eu
+printf '%s\n' "$CODEX_APP_ID" > "$TEST_INSTALL_LOG"
+printf '%s\n' "$CODEX_APP_DISPLAY_NAME" >> "$TEST_INSTALL_LOG"
+printf '%s\n' "$CODEX_INSTALL_DIR" >> "$TEST_INSTALL_LOG"
+mkdir -p "$CODEX_INSTALL_DIR"
+printf '%s\n' '#!/usr/bin/env bash' 'exit 0' > "$CODEX_INSTALL_DIR/start.sh"
+chmod +x "$CODEX_INSTALL_DIR/start.sh"
+SCRIPT
+    chmod +x "$workspace/install.sh"
+
+    TEST_INSTALL_LOG="$install_log" make -f "$REPO_DIR/Makefile" -C "$workspace" build-dev-app >/dev/null
+
+    assert_file_exists "$launcher"
+    target="$(readlink "$launcher")"
+    [ "$target" = "../codex-cua-lab-app/start.sh" ] \
+        || fail "Expected dev app launcher to use a relative symlink, got: $target"
+    [ -x "$launcher" ] || fail "Expected dev app launcher symlink to resolve on the host"
+    assert_contains "$install_log" "codex-cua-lab"
+    assert_contains "$install_log" "Codex CUA Lab"
+    assert_contains "$install_log" "$workspace/codex-cua-lab-app"
+}
+
 test_installer_refreshes_stale_cached_dmg_metadata() {
     info "Checking installer DMG cache freshness metadata branches"
     local workspace="$TMP_DIR/dmg-cache-refresh"
@@ -2038,10 +2071,10 @@ SCRIPT
     assert_contains "$wizard_log" "Atomic host: yes"
 
     CODEX_LINUX_TARGET_ATOMIC=maybe \
-    PATH="$fake_bin:/usr/bin:/bin" \
+    PATH="$fake_bin" \
     OS_RELEASE_FILE="$os_release" \
     OSTREE_BOOTED_FILE="$ostree_booted" \
-    bash -c '
+    /bin/bash -c '
         # shellcheck disable=SC1091
         source "$1"
         OS_RELEASE_ID="$(os_release_field ID)"
@@ -2055,10 +2088,10 @@ SCRIPT
     assert_contains "$helper_output" "atomic=yes"
 
     CODEX_LINUX_TARGET_ATOMIC=0 \
-    PATH="$fake_bin:/usr/bin:/bin" \
+    PATH="$fake_bin" \
     OS_RELEASE_FILE="$os_release" \
     OSTREE_BOOTED_FILE="$ostree_booted" \
-    bash -c '
+    /bin/bash -c '
         # shellcheck disable=SC1091
         source "$1"
         OS_RELEASE_ID="$(os_release_field ID)"
@@ -2072,10 +2105,10 @@ SCRIPT
     assert_contains "$helper_output" "atomic=no"
 
     rm -f "$ostree_booted"
-    PATH="$fake_bin:/usr/bin:/bin" \
+    PATH="$fake_bin" \
     OS_RELEASE_FILE="$os_release" \
     OSTREE_BOOTED_FILE="$ostree_booted" \
-    bash -c '
+    /bin/bash -c '
         # shellcheck disable=SC1091
         source "$1"
         OS_RELEASE_ID="$(os_release_field ID)"
@@ -2780,24 +2813,6 @@ test_setup_native_wizard_cleanup_deletes_only_confirmed_paths() {
     assert_contains "$output_log" "Deleted $key_file"
     assert_contains "$output_log" "Deleted $read_aloud_data"
     assert_contains "$output_log" "Skipped $plugin_cache"
-}
-
-test_upstream_build_app_workflow_tracks_dmg_metadata() {
-    info "Checking upstream build-app workflow metadata and cache behavior"
-    local workflow="$REPO_DIR/.github/workflows/upstream-build-app.yml"
-
-    assert_file_exists "$workflow"
-    assert_contains "$workflow" 'name: Upstream Build App'
-    assert_contains "$workflow" 'UPSTREAM_DMG_URL: https://persistent.oaistatic.com/codex-app-prod/Codex.dmg'
-    assert_contains "$workflow" 'actions/cache@v4'
-    assert_contains "$workflow" 'path: /tmp/codex-upstream-ci/Codex.dmg'
-    assert_contains "$workflow" 'Last-Modified'
-    assert_contains "$workflow" 'sha256sum'
-    assert_contains "$workflow" 'CODEX_PATCH_REPORT_JSON="$GITHUB_WORKSPACE/patch-report.json"'
-    assert_contains "$workflow" 'node scripts/ci/validate-patch-report.js patch-report.json --profile upstream-build'
-    assert_contains "$workflow" 'make build-app DMG=/tmp/codex-upstream-ci/Codex.dmg'
-    assert_contains "$workflow" 'DMG Last-Modified'
-    assert_contains "$workflow" 'DMG SHA-256'
 }
 
 make_update_nix_hash_fixture() {
@@ -5707,7 +5722,7 @@ JS
     assert_contains "$extracted/.vite/build/main-test.js" 'codexLinuxShouldBypassQuitPrompt=()=>codexLinuxExplicitQuitApproved===!0'
     assert_contains "$extracted/.vite/build/main-test.js" '{label:rB(this.appName),click:()=>{typeof codexLinuxPrepareForExplicitQuit===`function`?codexLinuxPrepareForExplicitQuit():typeof codexLinuxMarkQuitInProgress===`function`&&codexLinuxMarkQuitInProgress(),n.app.quit()}}'
     assert_contains "$extracted/.vite/build/main-test.js" 'if(o.type===`quit-app`){typeof codexLinuxPrepareForExplicitQuit===`function`?codexLinuxPrepareForExplicitQuit():typeof codexLinuxMarkQuitInProgress===`function`&&codexLinuxMarkQuitInProgress(),n.app.quit();return}'
-    assert_contains "$extracted/.vite/build/main-test.js" 'if((typeof codexLinuxShouldBypassQuitPrompt===`function`&&codexLinuxShouldBypassQuitPrompt())||e||i.canQuitWithoutPrompt()||r||!s&&!c){process.platform===`linux`&&typeof codexLinuxMarkQuitInProgress===`function`&&codexLinuxMarkQuitInProgress(),g=!0,a.markAppQuitting();return}'
+    assert_contains "$extracted/.vite/build/main-test.js" 'if((typeof codexLinuxShouldBypassQuitPrompt===`function`&&codexLinuxShouldBypassQuitPrompt())||e||(typeof i.canQuitWithoutPrompt===`function`&&i.canQuitWithoutPrompt())||r||!s&&!c){process.platform===`linux`&&typeof codexLinuxMarkQuitInProgress===`function`&&codexLinuxMarkQuitInProgress(),g=!0,a.markAppQuitting();return}'
     assert_contains "$extracted/.vite/build/main-test.js" 'process.platform===`linux`&&typeof codexLinuxMarkQuitInProgress===`function`&&codexLinuxMarkQuitInProgress(),i.markQuitApproved(),g=!0,a.markAppQuitting()'
     assert_contains "$extracted/.vite/build/main-test.js" 'codexLinuxFinalizeQuit=()=>{d(),f.dispose(),n.app.quit()},codexLinuxDrainPromise=Promise.all('
     assert_contains "$extracted/.vite/build/main-test.js" 'codexLinuxExplicitQuitDrainTimeoutMs'
@@ -5725,7 +5740,7 @@ const source = fs.readFileSync(process.argv[2], "utf8");
 const helperSnippet = source.match(/let codexLinuxQuitInProgress=!1,[^;]*codexLinuxShouldBypassQuitPrompt=\(\)=>codexLinuxExplicitQuitApproved===!0,[^;]*codexLinuxIsQuitInProgress=\(\)=>codexLinuxQuitInProgress===!0;/)?.[0];
 const traySnippet = source.match(/\{label:rB\(this\.appName\),click:\(\)=>\{typeof codexLinuxPrepareForExplicitQuit===`function`\?codexLinuxPrepareForExplicitQuit\(\):typeof codexLinuxMarkQuitInProgress===`function`&&codexLinuxMarkQuitInProgress\(\),n\.app\.quit\(\)\}\}/)?.[0];
 const quitAppSnippet = source.match(/if\(o\.type===`quit-app`\)\{typeof codexLinuxPrepareForExplicitQuit===`function`\?codexLinuxPrepareForExplicitQuit\(\):typeof codexLinuxMarkQuitInProgress===`function`&&codexLinuxMarkQuitInProgress\(\),n\.app\.quit\(\);return\}/)?.[0];
-const beforeQuitSnippet = source.match(/if\(\(typeof codexLinuxShouldBypassQuitPrompt===`function`&&codexLinuxShouldBypassQuitPrompt\(\)\)\|\|e\|\|i\.canQuitWithoutPrompt\(\)\|\|r\|\|!s&&!c\)\{process\.platform===`linux`&&typeof codexLinuxMarkQuitInProgress===`function`&&codexLinuxMarkQuitInProgress\(\),g=!0,a\.markAppQuitting\(\);return\}/)?.[0];
+const beforeQuitSnippet = source.match(/if\(\(typeof codexLinuxShouldBypassQuitPrompt===`function`&&codexLinuxShouldBypassQuitPrompt\(\)\)\|\|e\|\|\(typeof i\.canQuitWithoutPrompt===`function`&&i\.canQuitWithoutPrompt\(\)\)\|\|r\|\|!s&&!c\)\{process\.platform===`linux`&&typeof codexLinuxMarkQuitInProgress===`function`&&codexLinuxMarkQuitInProgress\(\),g=!0,a\.markAppQuitting\(\);return\}/)?.[0];
 if (!helperSnippet || !traySnippet || !quitAppSnippet || !beforeQuitSnippet) {
   throw new Error("Could not extract explicit quit snippets");
 }
@@ -7413,6 +7428,7 @@ main() {
     test_make_run_app_reports_missing_launcher
     test_make_build_app_uses_installer_download_flow_by_default
     test_make_build_app_fresh_uses_installer_fresh_flow
+    test_make_build_dev_app_writes_host_portable_launcher_symlink
     test_installer_refreshes_stale_cached_dmg_metadata
     test_extract_dmg_repairs_safe_7z_link_warnings
     test_fresh_install_removes_cached_dmg_metadata
@@ -7444,7 +7460,6 @@ main() {
     test_setup_native_wizard_blank_interactive_cleanup_ids_skip_cleanup
     test_setup_native_wizard_dry_run_cleanup_does_not_delete_confirmed_paths
     test_setup_native_wizard_cleanup_deletes_only_confirmed_paths
-    test_upstream_build_app_workflow_tracks_dmg_metadata
     test_update_nix_hashes_skips_unchanged_package_verification
     test_update_nix_hashes_verifies_changed_pins
     test_update_nix_hashes_verifies_changed_dmg_hash

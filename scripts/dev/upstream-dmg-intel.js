@@ -11,6 +11,7 @@ const defaultRegistryPath = path.join(__dirname, "upstream-dmg-protected-surface
 const BLOCKING_CLASSIFICATIONS = new Set([
   "REMOVED",
   "PATCH_BROKEN",
+  "PATCH_INTEGRITY_BROKEN",
   "LINUX_SUBSTRATE_GAP",
   "PROTECTED_SURFACE_PARTIAL",
   "PROTECTED_SURFACE_MISSING",
