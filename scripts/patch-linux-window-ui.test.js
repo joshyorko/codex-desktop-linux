@@ -8436,6 +8436,10 @@ test("patcher CLI writes --report-json output", () => {
       ].join(""),
     );
     fs.writeFileSync(path.join(tempRoot, "package.json"), JSON.stringify({ name: "codex" }));
+    fs.writeFileSync(
+      path.join(assetsDir, "settings-page-bad-linux-patch.js"),
+      'var icons={"agent-workspaces":codexLinuxAgentWorkspaceSettingsIcon,worktrees:WorktreesIcon};',
+    );
 
     const result = spawnSync(
       process.execPath,
@@ -8447,6 +8451,9 @@ test("patcher CLI writes --report-json output", () => {
     const report = JSON.parse(fs.readFileSync(reportPath, "utf8"));
     assert.equal(report.mainBundle, "main.js");
     assert.ok(report.patches.some((patch) => patch.name === "main-process-ui"));
+    assert.equal(report.postPatchIntegrity.findingCount, 1);
+    assert.match(report.postPatchIntegrity.findings[0].symbol, /codexLinuxAgentWorkspaceSettingsIcon/);
+    assert.match(report.postPatchIntegrity.findings[0].path, /settings-page-bad-linux-patch\.js$/);
   } finally {
     fs.rmSync(tempRoot, { recursive: true, force: true });
   }
