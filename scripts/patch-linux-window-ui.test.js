@@ -6571,6 +6571,18 @@ test("keeps object-helper Computer Use host compatibility on Linux when platform
   );
 });
 
+test("does not give synthetic Computer Use plugin cards an invalid marketplace directory path", () => {
+  const source =
+    "let {computerUseAvailability:availability,platform:platform}=state;" +
+    "let pluginsQuery=usePlugins(selectedHost,emptyPlugins),marketplacePath=useMarketplacePath(selectedHost),featureFlag=useFeatureFlag(featureFlagArg),computerUsePlugin;" +
+    "computerUsePlugin=selectPlugin(pluginsQuery.availablePlugins,pluginName,marketplacePath);";
+
+  const patched = applyPatchTwice(applyLinuxComputerUseRendererAvailabilityPatch, source);
+
+  assert.match(patched, /marketplacePath:marketplacePath/);
+  assert.doesNotMatch(patched, /marketplacePath:`openai-bundled\/plugins\/computer-use`/);
+});
+
 test("warns without partially patching when Computer Use renderer availability gate drifts", () => {
   const source =
     "function g(e){return e===`macOS`||e===`windows`}" +

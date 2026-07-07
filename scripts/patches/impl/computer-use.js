@@ -547,7 +547,7 @@ function applyLinuxComputerUseRendererAvailabilityPatch(currentSource) {
         return match;
       }
       availabilityChanged = true;
-      return `let ${pluginsQueryVar}=${pluginsHookVar}(${selectedHostVar},${emptyPluginsVar}),${marketplacePathVar}=${marketplacePathHookVar}(${selectedHostVar}),${featureFlagVar}=${featureFlagHookVar}(${featureFlagArgVar});${platformVar}===\`linux\`&&!${pluginsQueryVar}.availablePlugins.some(e=>e.plugin?.name===${pluginNameVar}||e.plugin?.id?.split(\`@\`)[0]===${pluginNameVar})&&(${pluginsQueryVar}={...${pluginsQueryVar},availablePlugins:[...${pluginsQueryVar}.availablePlugins,{marketplaceName:\`openai-curated\`,marketplacePath:\`openai-bundled/plugins/computer-use\`,logoPath:new URL(\`computer-use-plugin-icon-linux.png\`,import.meta.url).href,logoDarkPath:new URL(\`computer-use-plugin-icon-linux.png\`,import.meta.url).href,plugin:{id:${pluginNameVar},name:${pluginNameVar},installed:!0,enabled:!0}}]});let ${computerUsePluginVar};`;
+      return `let ${pluginsQueryVar}=${pluginsHookVar}(${selectedHostVar},${emptyPluginsVar}),${marketplacePathVar}=${marketplacePathHookVar}(${selectedHostVar}),${featureFlagVar}=${featureFlagHookVar}(${featureFlagArgVar});${platformVar}===\`linux\`&&!${pluginsQueryVar}.availablePlugins.some(e=>e.plugin?.name===${pluginNameVar}||e.plugin?.id?.split(\`@\`)[0]===${pluginNameVar})&&(${pluginsQueryVar}={...${pluginsQueryVar},availablePlugins:[...${pluginsQueryVar}.availablePlugins,{marketplaceName:\`openai-curated\`,marketplacePath:${marketplacePathVar},logoPath:new URL(\`computer-use-plugin-icon-linux.png\`,import.meta.url).href,logoDarkPath:new URL(\`computer-use-plugin-icon-linux.png\`,import.meta.url).href,plugin:{id:${pluginNameVar},name:${pluginNameVar},installed:!0,enabled:!0}}]});let ${computerUsePluginVar};`;
     },
   );
 
@@ -562,6 +562,14 @@ function applyLinuxComputerUseRendererAvailabilityPatch(currentSource) {
       linuxComputerUseSyntheticPluginNeedle,
       "{marketplaceName:`openai-curated`,marketplacePath:`openai-bundled/plugins/computer-use`,logoPath:new URL(`computer-use-plugin-icon-linux.png`,import.meta.url).href,logoDarkPath:new URL(`computer-use-plugin-icon-linux.png`,import.meta.url).href,plugin:{",
     );
+  }
+
+  const invalidSyntheticComputerUseMarketplacePath = "marketplacePath:`openai-bundled/plugins/computer-use`";
+  if (patchedSource.includes(invalidSyntheticComputerUseMarketplacePath)) {
+    availabilityChanged = true;
+    patchedSource = patchedSource
+      .split(invalidSyntheticComputerUseMarketplacePath)
+      .join("marketplacePath:null");
   }
 
   if (hasComputerUseNativeAppsMention(patchedSource)) {
