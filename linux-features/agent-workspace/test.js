@@ -211,6 +211,17 @@ function syntheticSettingsPageWithInitializerIconMap() {
   ].join("");
 }
 
+function syntheticSettingsPageWithOrphanedInjectedIcon() {
+  return [
+    "var Bn,Vn,Q,Hn,Un=e(()=>{",
+    "Bn=o(),Vn=t(n(),1),Q=f();var codexLinuxAgentWorkspaceSettingsIcon=e=>(0,Q.jsxs)(`svg`,{children:[(0,Q.jsx)(`path`,{d:`M6 6.25 7.45 8 6 9.75`})]});Hn={\"general-settings\":W,\"local-environments\":Y,\"agent-workspaces\":codexLinuxAgentWorkspaceSettingsIcon,worktrees:U,environments:Y};",
+    "});",
+    "var ge=[`general-settings`,`local-environments`,`worktrees`,`data-controls`];",
+    "function visible(e){switch(e.slug){case`appearance`:case`git-settings`:case`worktrees`:case`local-environments`:case`environments`:return!0;case`data-controls`:return!0;}}",
+    "if(V)bb0:switch(B.slug){case`local-environments`:case`worktrees`:case`environments`:case`mcp-settings`:H=!1}",
+  ].join("");
+}
+
 function syntheticAppMainRouteRegistry() {
   return [
     "function render(e){return routeMap[e.slug]}",
@@ -1735,6 +1746,17 @@ test("settings asset patches add navigation, route, visibility, and title", () =
     new RegExp(`Hn=\\{"general-settings":W,"local-environments":Y,"${SETTINGS_SLUG}":Y,worktrees:U`),
   );
   assert.equal(applyAgentWorkspaceSettingsPagePatch(settingsPageWithInitializerIconMap), settingsPageWithInitializerIconMap);
+
+  const settingsPageWithOrphanedInjectedIcon = applyAgentWorkspaceSettingsPagePatch(
+    syntheticSettingsPageWithOrphanedInjectedIcon(),
+  );
+  assert.doesNotMatch(settingsPageWithOrphanedInjectedIcon, /codexLinuxAgentWorkspaceSettingsIcon/);
+  assert.doesNotMatch(settingsPageWithOrphanedInjectedIcon, /M6 6\.25 7\.45 8 6 9\.75/);
+  assert.match(
+    settingsPageWithOrphanedInjectedIcon,
+    new RegExp(`Hn=\\{"general-settings":W,"local-environments":Y,"${SETTINGS_SLUG}":Y,worktrees:U`),
+  );
+  assert.equal(applyAgentWorkspaceSettingsPagePatch(settingsPageWithOrphanedInjectedIcon), settingsPageWithOrphanedInjectedIcon);
 });
 
 test("agent-workspace feature participates in ASAR patching and reports", () => {

@@ -2036,6 +2036,13 @@ function addAgentWorkspaceLoadingCases(currentSource) {
   return patchedSource;
 }
 
+function removeAgentWorkspaceSettingsIconDeclaration(currentSource) {
+  return currentSource.replace(
+    /var codexLinuxAgentWorkspaceSettingsIcon=[\s\S]*?\]\}\);(?=[A-Za-z_$][\w$]*=\{)/,
+    "",
+  );
+}
+
 function applyAgentWorkspaceSettingsSharedPatch(currentSource) {
   let patchedSource = currentSource;
   if (!patchedSource.includes(`settings.nav.${SETTINGS_SLUG}`)) {
@@ -2137,6 +2144,7 @@ function applyAgentWorkspaceSettingsPagePatch(currentSource) {
   patchedSource = addAgentWorkspaceToSettingsSlugLists(patchedSource);
   patchedSource = addAgentWorkspaceVisibilityCases(patchedSource);
   patchedSource = addAgentWorkspaceLoadingCases(patchedSource);
+  patchedSource = removeAgentWorkspaceSettingsIconDeclaration(patchedSource);
 
   if (!patchedSource.includes(`\`${SETTINGS_SLUG}\``)) {
     throw new Error("could not add agent workspace settings navigation");
