@@ -46,6 +46,7 @@ const {
 } = require("./patches/impl/avatar-overlay.js");
 const {
   applyBrowserUseNodeReplApprovalPatch,
+  applyBrowserUseNodeReplApprovalAssets,
   applyLinuxBrowserUseRouteLivenessPatch,
   applyLinuxChromeExtensionStatusPatch,
   applyLinuxExternalOpenEnvPatch,
@@ -6880,6 +6881,40 @@ test("auto-approves the current vo Browser Use node_repl runtime config builder"
     (patched.match(/function codexLinuxTrustedBrowserClientSha256s/g) || []).length,
     1,
   );
+});
+
+test("patches re-chunked Browser Use trust hash and approval assets", () => {
+  const extractedDir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-browser-rechunked-"));
+  try {
+    const buildDir = path.join(extractedDir, ".vite", "build");
+    fs.mkdirSync(buildDir, { recursive: true });
+    const mainChunk = path.join(buildDir, "main-current.js");
+    const srcChunk = path.join(buildDir, "src-current.js");
+    fs.writeFileSync(
+      mainChunk,
+      "\"use strict\";let l=require(`node:fs`),s=require(`node:path`),u=require(`node:crypto`),d=[`upstream-hash`],w=!1,t={vo:e=>e,Gr:e=>e},c={codexCliPath:null,nodePath:null,nodeReplPath:null,platform:`linux`},p=null,b=null,f=[],g=null,v=!1;function build(){return t.vo({codexCliPath:c.codexCliPath,codexHome:p,extraEnv:b,nodeModuleDirs:f,nodePath:c.nodePath,nodeReplPath:w?t.Gr(c.nodeReplPath):c.nodeReplPath,platform:c.platform,requestMeta:g,traceMeta:v,trustedBrowserClientSha256s:d,shouldUseWslPaths:w})}",
+      "utf8",
+    );
+    fs.writeFileSync(
+      srcChunk,
+      "return{[`mcp_servers.${pt}`]:{args:[],command:i,env:n,startup_timeout_sec:120}}",
+      "utf8",
+    );
+
+    const result = applyBrowserUseNodeReplApprovalAssets(extractedDir);
+
+    assert.deepEqual(result, { matched: 2, changed: 2 });
+    const patchedMain = fs.readFileSync(mainChunk, "utf8");
+    const patchedSrc = fs.readFileSync(srcChunk, "utf8");
+    assert.match(patchedMain, /function codexLinuxTrustedBrowserClientSha256s/);
+    assert.match(
+      patchedMain,
+      /trustedBrowserClientSha256s:codexLinuxTrustedBrowserClientSha256s\(d\),shouldUseWslPaths:w/,
+    );
+    assert.match(patchedSrc, /tools:\{js:\{approval_mode:`approve`\}\}/);
+  } finally {
+    fs.rmSync(extractedDir, { recursive: true, force: true });
+  }
 });
 
 test("auto-approves and trusts the current Browser Use node_repl runtime config builder", () => {

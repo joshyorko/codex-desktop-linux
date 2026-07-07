@@ -1712,12 +1712,9 @@ test("settings asset patches add navigation, route, visibility, and title", () =
   assert.equal(applyAgentWorkspaceSettingsIndexPatch(appMain), appMain);
 
   const settingsPage = applyAgentWorkspaceSettingsPagePatch(syntheticSettingsPage());
-  assert.match(settingsPage, /codexLinuxAgentWorkspaceSettingsIcon=e=>/);
-  assert.match(settingsPage, /strokeDasharray/);
-  assert.match(settingsPage, /`circle`/);
+  assert.doesNotMatch(settingsPage, /codexLinuxAgentWorkspaceSettingsIcon/);
   assert.doesNotMatch(settingsPage, /M6 6\.25 7\.45 8 6 9\.75/);
-  assert.match(settingsPage, new RegExp(`"${SETTINGS_SLUG}":codexLinuxAgentWorkspaceSettingsIcon`));
-  assert.doesNotMatch(settingsPage, new RegExp(`"${SETTINGS_SLUG}":q`));
+  assert.match(settingsPage, new RegExp(`"local-environments":q,"${SETTINGS_SLUG}":q,worktrees`));
   assert.match(settingsPage, /`local-environments`,`agent-workspaces`,`worktrees`/);
   assert.match(settingsPage, /case`local-environments`:case`agent-workspaces`:case`environments`:return!0/);
   assert.match(settingsPage, /case`local-environments`:case`agent-workspaces`:case`worktrees`:case`environments`/);
@@ -1726,28 +1723,16 @@ test("settings asset patches add navigation, route, visibility, and title", () =
   const settingsPageWithRenamedIconMap = applyAgentWorkspaceSettingsPagePatch(
     syntheticSettingsPageWithRenamedIconMap(),
   );
-  assert.match(settingsPageWithRenamedIconMap, /codexLinuxAgentWorkspaceSettingsIcon=e=>\(0,Q\.jsxs\)/);
-  assert.match(
-    settingsPageWithRenamedIconMap,
-    new RegExp(`"${SETTINGS_SLUG}":codexLinuxAgentWorkspaceSettingsIcon`),
-  );
-  assert.ok(
-    settingsPageWithRenamedIconMap.indexOf("codexLinuxAgentWorkspaceSettingsIcon=e=>") <
-      settingsPageWithRenamedIconMap.indexOf(`"${SETTINGS_SLUG}":codexLinuxAgentWorkspaceSettingsIcon`),
-  );
-  assert.equal(
-    (settingsPageWithRenamedIconMap.match(/codexLinuxAgentWorkspaceSettingsIcon=e=>/g) ?? []).length,
-    1,
-  );
+  assert.doesNotMatch(settingsPageWithRenamedIconMap, /codexLinuxAgentWorkspaceSettingsIcon/);
+  assert.match(settingsPageWithRenamedIconMap, new RegExp(`"local-environments":Y,"${SETTINGS_SLUG}":Y,worktrees`));
 
   const settingsPageWithInitializerIconMap = applyAgentWorkspaceSettingsPagePatch(
     syntheticSettingsPageWithInitializerIconMap(),
   );
-  assert.match(settingsPageWithInitializerIconMap, /;var codexLinuxAgentWorkspaceSettingsIcon=e=>/);
-  assert.doesNotMatch(settingsPageWithInitializerIconMap, /,codexLinuxAgentWorkspaceSettingsIcon=e=>/);
+  assert.doesNotMatch(settingsPageWithInitializerIconMap, /codexLinuxAgentWorkspaceSettingsIcon/);
   assert.match(
     settingsPageWithInitializerIconMap,
-    new RegExp(`Hn=\\{"general-settings":W,"local-environments":Y,"${SETTINGS_SLUG}":codexLinuxAgentWorkspaceSettingsIcon,worktrees:U`),
+    new RegExp(`Hn=\\{"general-settings":W,"local-environments":Y,"${SETTINGS_SLUG}":Y,worktrees:U`),
   );
   assert.equal(applyAgentWorkspaceSettingsPagePatch(settingsPageWithInitializerIconMap), settingsPageWithInitializerIconMap);
 });
@@ -1867,7 +1852,8 @@ test("agent-workspace settings patch supports consolidated current settings bund
     assert.match(settingsSource, /function SettingsPage/);
 
     const settingsPageSource = fs.readFileSync(path.join(assetsDir, "settings-page-test.js"), "utf8");
-    assert.match(settingsPageSource, /"agent-workspaces":codexLinuxAgentWorkspaceSettingsIcon/);
+    assert.match(settingsPageSource, /"local-environments":ln,"agent-workspaces":ln,worktrees:F/);
+    assert.doesNotMatch(settingsPageSource, /codexLinuxAgentWorkspaceSettingsIcon/);
     assert.match(settingsPageSource, /`local-environments`,`agent-workspaces`,`worktrees`/);
     assert.match(settingsPageSource, /slugs:\[`local-environments`,`agent-workspaces`,`environments`,`worktrees`\]/);
     assert.match(settingsPageSource, /case`worktrees`:case`local-environments`:case`agent-workspaces`:case`environments`:return!0/);
