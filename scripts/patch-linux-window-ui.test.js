@@ -1078,7 +1078,7 @@ function beforeQuitConfirmationBundleFixture() {
 
 function willQuitDrainBundleFixture() {
   return [
-    "n.app.on(`will-quit`,e=>{if(g=!0,!h){if(i.shouldSkipDrainBeforeQuit()){mB({hotkeyWindowLifecycleManager:c,globalDictationLifecycleManager:l,flushAndDisposeContexts:d,disposables:f});return}e.preventDefault(),h=!0,c.dispose(),l.dispose(),Promise.all([...u.values()].map(e=>e.flush())).finally(()=>{d(),f.dispose(),n.app.quit()})}});",
+    "n.app.on(`will-quit`,e=>{if(g=!0,!h){if(i.shouldSkipDrainBeforeQuit()){mB({hotkeyWindowLifecycleManager:c,globalDictationLifecycleManager:l,flushAndDisposeContexts:d,disposables:f});return}e.preventDefault(),h=!0,c.dispose(),l.dispose(),Promise.all([u.flush(),p.flush()]).finally(()=>{d(),f.dispose(),n.app.quit()})}});",
   ].join("");
 }
 
@@ -1923,30 +1923,29 @@ test("adds the Linux quit guard when electron/path/fs requires are split across 
   assert.match(patched, /codexLinuxIsQuitInProgress=\(\)=>codexLinuxQuitInProgress===!0/);
 });
 
-test("adds the Linux quit guard when only the Electron require is recognizable", () => {
+test("adds the Linux quit guard for the current wrapped electron/path/fs prelude", () => {
   const source =
-    "const e=require(`./app-session.js`);let t=require(`electron`);class WindowManager{}";
+    "function codexLinuxPatchExternalOpen(e){return e}let n=codexLinuxPatchExternalOpen(require(`electron`)),i=require(`node:path`),a=require(`node:fs`);";
 
   const patched = applyPatchTwice(applyLinuxQuitGuardPatch, source);
 
-  assert.match(patched, /^let codexLinuxQuitInProgress=!1/);
+  assert.match(patched, /let n=codexLinuxPatchExternalOpen\(require\(`electron`\)\),i=require\(`node:path`\),a=require\(`node:fs`\);let codexLinuxQuitInProgress=!1/);
   assert.match(patched, /codexLinuxExplicitQuitApproved=!1/);
-  assert.match(patched, /codexLinuxMarkQuitInProgress=\(\)=>\{codexLinuxQuitInProgress=!0\}/);
   assert.match(patched, /codexLinuxPrepareForExplicitQuit=\(\)=>\{codexLinuxExplicitQuitApproved=!0,codexLinuxMarkQuitInProgress\(\)\}/);
-  assert.match(patched, /codexLinuxShouldBypassQuitPrompt=\(\)=>codexLinuxExplicitQuitApproved===!0/);
-  assert.match(patched, /codexLinuxIsQuitInProgress=\(\)=>codexLinuxQuitInProgress===!0/);
   assert.equal((patched.match(/codexLinuxQuitInProgress=!1/g) ?? []).length, 1);
 });
 
-test("upgrades the legacy Linux quit guard helper when re-patching older bundles", () => {
+test("adds the Linux quit guard for the current interleaved bundler prelude", () => {
   const source =
-    "let n=require(`electron`),i=require(`node:path`),o=require(`node:fs`);let codexLinuxQuitInProgress=!1,codexLinuxMarkQuitInProgress=()=>{codexLinuxQuitInProgress=!0},codexLinuxIsQuitInProgress=()=>codexLinuxQuitInProgress===!0;var x=1;";
+    "let a=codexLinuxPatchExternalOpen(require(`electron`));a=e.o(a);let o=require(`node:os`);o=e.o(o);let s=require(`node:path`);s=e.o(s);let c=require(`node:util`),l=require(`node:crypto`),u=require(`node:fs`);u=e.o(u);let d=require(`node:fs/promises`);";
 
   const patched = applyPatchTwice(applyLinuxQuitGuardPatch, source);
 
-  assert.doesNotMatch(patched, /let codexLinuxQuitInProgress=!1,codexLinuxMarkQuitInProgress=\(\)=>\{codexLinuxQuitInProgress=!0\},codexLinuxIsQuitInProgress=\(\)=>codexLinuxQuitInProgress===!0;/);
+  assert.match(patched, /let d=require\(`node:fs\/promises`\);/);
+  assert.match(patched, /u=e\.o\(u\);let codexLinuxQuitInProgress=!1/);
+  assert.match(patched, /codexLinuxExplicitQuitApproved=!1/);
   assert.match(patched, /codexLinuxPrepareForExplicitQuit=\(\)=>\{codexLinuxExplicitQuitApproved=!0,codexLinuxMarkQuitInProgress\(\)\}/);
-  assert.match(patched, /codexLinuxShouldBypassQuitPrompt=\(\)=>codexLinuxExplicitQuitApproved===!0/);
+  assert.equal((patched.match(/codexLinuxQuitInProgress=!1/g) ?? []).length, 1);
 });
 
 test("bypasses the upstream before-quit confirmation after a Linux explicit quit", () => {
@@ -1958,7 +1957,7 @@ test("bypasses the upstream before-quit confirmation after a Linux explicit quit
 
   assert.match(
     patched,
-    /if\(\(typeof codexLinuxShouldBypassQuitPrompt===`function`&&codexLinuxShouldBypassQuitPrompt\(\)\)\|\|e\|\|\(typeof i\.canQuitWithoutPrompt===`function`&&i\.canQuitWithoutPrompt\(\)\)\|\|r\|\|!s&&!c\)\{process\.platform===`linux`&&typeof codexLinuxMarkQuitInProgress===`function`&&codexLinuxMarkQuitInProgress\(\),g=!0,a\.markAppQuitting\(\);return\}/,
+    /if\(\(typeof codexLinuxShouldBypassQuitPrompt===`function`&&codexLinuxShouldBypassQuitPrompt\(\)\)\|\|e\|\|i\.canQuitWithoutPrompt\(\)\|\|r\|\|!s&&!c\)\{process\.platform===`linux`&&typeof codexLinuxMarkQuitInProgress===`function`&&codexLinuxMarkQuitInProgress\(\),g=!0,a\.markAppQuitting\(\);return\}/,
   );
   assert.match(
     patched,
@@ -1974,42 +1973,11 @@ test("adds a bounded will-quit drain fallback for Linux explicit quit", () => {
   );
 
   assert.match(patched, /codexLinuxExplicitQuitDrainTimeoutMs=3e3/);
-  assert.match(patched, /\(\(\)=>\{let codexLinuxFinalizeQuit=\(\)=>\{d\(\),f\.dispose\(\),n\.app\.quit\(\)\},codexLinuxDrainPromise=Promise\.all\(\[\.\.\.u\.values\(\)\]\.map\(e=>e\.flush\(\)\)\);/);
+  assert.match(patched, /\(\(\)=>\{let codexLinuxFinalizeQuit=\(\)=>\{d\(\),f\.dispose\(\),n\.app\.quit\(\)\},codexLinuxDrainPromise=Promise\.all\(\[u\.flush\(\),p\.flush\(\)\]\);/);
   assert.match(patched, /if\(process\.platform===`linux`&&\(typeof codexLinuxIsQuitInProgress===`function`&&codexLinuxIsQuitInProgress\(\)\)\)\{Promise\.race\(\[codexLinuxDrainPromise,new Promise\(e=>setTimeout\(e,typeof codexLinuxExplicitQuitDrainTimeoutMs===`number`\?codexLinuxExplicitQuitDrainTimeoutMs:3e3\)\)\]\)\.finally\(codexLinuxFinalizeQuit\);return\}/);
   assert.doesNotMatch(patched, /\\`number\\`/);
   assert.match(patched, /codexLinuxDrainPromise\.finally\(codexLinuxFinalizeQuit\)\}\)\(\)/);
   assert.doesNotThrow(() => new Function(patched));
-});
-
-test("patches remaining before-quit and drain guards when another copy is already patched", () => {
-  const promptBypassExpression =
-    "(typeof codexLinuxShouldBypassQuitPrompt===`function`&&codexLinuxShouldBypassQuitPrompt())||";
-  const patchedPrompt = `if(${promptBypassExpression}e||i.canQuitWithoutPrompt()||r||!s&&!c){g=!0,a.markAppQuitting();return}`;
-  const unpatchedPrompt =
-    "if(e||i.canQuitWithoutPrompt()||r||!s&&!c){g=!0,a.markAppQuitting();return}";
-  const patchedPromptSource = applyPatchTwice(
-    applyLinuxExplicitQuitPromptBypassPatch,
-    `${patchedPrompt}function secondPrompt(){${unpatchedPrompt}}`,
-  );
-  assert.equal((patchedPromptSource.match(/codexLinuxShouldBypassQuitPrompt\(\)/g) ?? []).length, 2);
-  assert.match(
-    patchedPromptSource,
-    /function secondPrompt\(\)\{if\(\(typeof codexLinuxShouldBypassQuitPrompt===`function`&&codexLinuxShouldBypassQuitPrompt\(\)\)\|\|e\|\|\(typeof i\.canQuitWithoutPrompt===`function`&&i\.canQuitWithoutPrompt\(\)\)\|\|r\|\|!s&&!c\)\{process\.platform===`linux`&&typeof codexLinuxMarkQuitInProgress===`function`&&codexLinuxMarkQuitInProgress\(\),g=!0,a\.markAppQuitting\(\);return\}\}/,
-  );
-
-  const unpatchedDrain =
-    "Promise.all([...u.values()].map(e=>e.flush())).finally(()=>{d(),f.dispose(),n.app.quit()})";
-  const patchedDrain =
-    "(()=>{let codexLinuxFinalizeQuit=()=>{d(),f.dispose(),n.app.quit()},codexLinuxDrainPromise=Promise.all([...u.values()].map(e=>e.flush()));if(process.platform===`linux`&&(typeof codexLinuxIsQuitInProgress===`function`&&codexLinuxIsQuitInProgress())){Promise.race([codexLinuxDrainPromise,new Promise(e=>setTimeout(e,typeof codexLinuxExplicitQuitDrainTimeoutMs===`number`?codexLinuxExplicitQuitDrainTimeoutMs:3e3))]).finally(codexLinuxFinalizeQuit);return}codexLinuxDrainPromise.finally(codexLinuxFinalizeQuit)})()";
-  const patchedDrainSource = applyPatchTwice(
-    applyLinuxWillQuitDrainTimeoutPatch,
-    `${patchedDrain}function secondDrain(){${unpatchedDrain}}`,
-  );
-  assert.equal((patchedDrainSource.match(/codexLinuxDrainPromise=Promise\.all/g) ?? []).length, 2);
-  assert.match(
-    patchedDrainSource,
-    /function secondDrain\(\)\{\(\(\)=>\{let codexLinuxFinalizeQuit=\(\)=>\{d\(\),f\.dispose\(\),n\.app\.quit\(\)\},codexLinuxDrainPromise=Promise\.all\(\[\.\.\.u\.values\(\)\]\.map\(e=>e\.flush\(\)\)\);/,
-  );
 });
 
 test("marks Linux quit-in-progress for the tray quit path", () => {
@@ -6913,100 +6881,7 @@ test("uses xdg-open path when CODEX_LINUX_DISABLE_EXTERNAL_OPEN_PATCH is not 1",
   assert.equal(spawnCalls[0].command, "xdg-open");
 });
 
-test("auto-approves the app-provided Browser Use node_repl bridge", () => {
-  const source =
-    "return{[`mcp_servers.${pt}`]:{command:i.nodeReplPath,args:[],startup_timeout_sec:120,env:{[dt]:l,[ft]:i.nodePath}}}";
-
-  const patched = applyPatchTwice(applyBrowserUseNodeReplApprovalPatch, source);
-
-  assert.match(patched, /tools:\{js:\{approval_mode:`approve`\}\}/);
-  assert.match(patched, /env:\{\[dt\]:l,\[ft\]:i\.nodePath/);
-});
-
-test("patches all Browser Use node_repl approval configs in one pass", () => {
-  const source = [
-    "startup_timeout_sec:120,tools:{js:{approval_mode:`approve`}},env:{[dt]:l}",
-    "startup_timeout_sec:120,env:{[ft]:i.nodePath}",
-  ].join("");
-
-  const patched = applyBrowserUseNodeReplApprovalPatch(source);
-
-  assert.equal((patched.match(/approval_mode:`approve`/g) || []).length, 2);
-  assert.doesNotMatch(patched, /startup_timeout_sec:120,env:\{/);
-});
-
-test("auto-approves the older Browser Use node_repl runtime config builder", () => {
-  const source =
-    "return e.Dn({codexCliPath:o.codexCliPath,nodePath:o.nodePath,nodeReplPath:o.nodeReplPath,platform:o.platform})";
-
-  const patched = applyPatchTwice(applyBrowserUseNodeReplApprovalPatch, source);
-
-  assert.match(
-    patched,
-    /e\.Dn\(\{codexCliPath:o\.codexCliPath,nodePath:o\.nodePath,nodeReplPath:o\.nodeReplPath,tools:\{js:\{approval_mode:`approve`\}\},platform:o\.platform\}\)/,
-  );
-});
-
-test("auto-approves the current Browser Use node_repl runtime config builder", () => {
-  const source =
-    "return e.Pn({codexCliPath:c.codexCliPath,codexHome:f,extraEnv:y,nodeModuleDirs:d,nodePath:c.nodePath,nodeReplPath:l?t.Cr(c.nodeReplPath):c.nodeReplPath,platform:c.platform,requestMeta:h,traceMeta:_,trustAllCode:g,trustedBrowserClientSha256s:u,shouldUseWslPaths:l})";
-
-  const patched = applyPatchTwice(applyBrowserUseNodeReplApprovalPatch, source);
-
-  assert.match(
-    patched,
-    /e\.Pn\(\{codexCliPath:c\.codexCliPath,codexHome:f,extraEnv:y,nodeModuleDirs:d,nodePath:c\.nodePath,nodeReplPath:l\?t\.Cr\(c\.nodeReplPath\):c\.nodeReplPath,tools:\{js:\{approval_mode:`approve`\}\},platform:c\.platform/,
-  );
-});
-
-test("auto-approves the Electron 42 Browser Use node_repl runtime config builder", () => {
-  const source =
-    "return t.Fa({codexCliPath:c.codexCliPath,codexHome:m,extraEnv:b,nodeModuleDirs:f,nodePath:c.nodePath,nodeReplPath:u?t.kr(c.nodeReplPath):c.nodeReplPath,platform:c.platform,requestMeta:g,sentryUserId:l,traceMeta:v,trustAllCode:_,trustedBrowserClientSha256s:d,shouldUseWslPaths:u})";
-
-  const patched = applyPatchTwice(applyBrowserUseNodeReplApprovalPatch, source);
-
-  assert.match(
-    patched,
-    /t\.Fa\(\{codexCliPath:c\.codexCliPath,codexHome:m,extraEnv:b,nodeModuleDirs:f,nodePath:c\.nodePath,nodeReplPath:u\?t\.kr\(c\.nodeReplPath\):c\.nodeReplPath,tools:\{js:\{approval_mode:`approve`\}\},platform:c\.platform/,
-  );
-});
-
-test("auto-approves the current $a Browser Use node_repl runtime config builder", () => {
-  const source =
-    "\"use strict\";let l=require(`node:fs`),s=require(`node:path`),u=require(`node:crypto`),d=[`upstream-hash`],t={$a:e=>e,Fr:e=>e},c={codexCliPath:null,nodePath:null,nodeReplPath:null,platform:`linux`},p=null,b=null,f=[],g=null,v=null,_=!1,w=!1;function build(){return t.$a({codexCliPath:c.codexCliPath,codexHome:p,extraEnv:b,nodeModuleDirs:f,nodePath:c.nodePath,nodeReplPath:w?t.Fr(c.nodeReplPath):c.nodeReplPath,platform:c.platform,requestMeta:g,sentryUserId:v,traceMeta:_,trustAllCode:null,trustedBrowserClientSha256s:d,shouldUseWslPaths:w})}";
-
-  const patched = applyPatchTwice(applyBrowserUseNodeReplApprovalPatch, source);
-
-  assert.match(
-    patched,
-    /t\.\$a\(\{codexCliPath:c\.codexCliPath,codexHome:p,extraEnv:b,nodeModuleDirs:f,nodePath:c\.nodePath,nodeReplPath:w\?t\.Fr\(c\.nodeReplPath\):c\.nodeReplPath,tools:\{js:\{approval_mode:`approve`\}\},platform:c\.platform/,
-  );
-  assert.match(
-    patched,
-    /trustedBrowserClientSha256s:codexLinuxTrustedBrowserClientSha256s\(d\),shouldUseWslPaths:w/,
-  );
-});
-
-test("auto-approves the latest Browser Use node_repl runtime config builder", () => {
-  const source =
-    "\"use strict\";let l=require(`node:fs`),s=require(`node:path`),u=require(`node:crypto`),d=[`upstream-hash`],w=!1,t={Ha:e=>e,Nr:e=>e},c={codexCliPath:null,nodePath:null,nodeReplPath:null,platform:`linux`},p=null,b=null,f=[],g=null,v=!1;function build(){return t.Ha({codexCliPath:c.codexCliPath,codexHome:p,extraEnv:b,nodeModuleDirs:f,nodePath:c.nodePath,nodeReplPath:w?t.Nr(c.nodeReplPath):c.nodeReplPath,platform:c.platform,requestMeta:g,traceMeta:v,trustedBrowserClientSha256s:d,shouldUseWslPaths:w})}";
-
-  const { value: patched, warnings } = captureWarns(() =>
-    applyPatchTwice(applyBrowserUseNodeReplApprovalPatch, source),
-  );
-
-  assert.deepEqual(warnings, []);
-  assert.match(
-    patched,
-    /t\.Ha\(\{codexCliPath:c\.codexCliPath,codexHome:p,extraEnv:b,nodeModuleDirs:f,nodePath:c\.nodePath,nodeReplPath:w\?t\.Nr\(c\.nodeReplPath\):c\.nodeReplPath,tools:\{js:\{approval_mode:`approve`\}\},platform:c\.platform/,
-  );
-  assert.match(
-    patched,
-    /trustedBrowserClientSha256s:codexLinuxTrustedBrowserClientSha256s\(d\),shouldUseWslPaths:w/,
-  );
-});
-
-test("auto-approves the current vo Browser Use node_repl runtime config builder", () => {
+test("trusts the current vo Browser Use node_repl runtime config builder", () => {
   const source =
     "\"use strict\";let l=require(`node:fs`),s=require(`node:path`),u=require(`node:crypto`),d=[`upstream-hash`],w=!1,t={vo:e=>e,Gr:e=>e},c={codexCliPath:null,nodePath:null,nodeReplPath:null,platform:`linux`},p=null,b=null,f=[],g=null,v=!1;function build(){return t.vo({codexCliPath:c.codexCliPath,codexHome:p,extraEnv:b,nodeModuleDirs:f,nodePath:c.nodePath,nodeReplPath:w?t.Gr(c.nodeReplPath):c.nodeReplPath,platform:c.platform,requestMeta:g,traceMeta:v,trustedBrowserClientSha256s:d,shouldUseWslPaths:w})}";
 
@@ -7015,10 +6890,7 @@ test("auto-approves the current vo Browser Use node_repl runtime config builder"
   );
 
   assert.deepEqual(warnings, []);
-  assert.match(
-    patched,
-    /t\.vo\(\{codexCliPath:c\.codexCliPath,codexHome:p,extraEnv:b,nodeModuleDirs:f,nodePath:c\.nodePath,nodeReplPath:w\?t\.Gr\(c\.nodeReplPath\):c\.nodeReplPath,tools:\{js:\{approval_mode:`approve`\}\},platform:c\.platform/,
-  );
+  assert.doesNotMatch(patched, /tools:\{js:\{approval_mode:`approve`\}\}/);
   assert.match(
     patched,
     /trustedBrowserClientSha256s:codexLinuxTrustedBrowserClientSha256s\(d\),shouldUseWslPaths:w/,
@@ -7063,7 +6935,7 @@ test("patches re-chunked Browser Use trust hash and approval assets", () => {
   }
 });
 
-test("auto-approves and trusts the current Browser Use node_repl runtime config builder", () => {
+test("trusts Linux patched bundled Browser Use clients through the current vo config builder", () => {
   const resourcesRoot = fs.mkdtempSync(path.join(os.tmpdir(), "codex-current-browser-client-hash-"));
   try {
     const browserClient = path.join(
@@ -7091,15 +6963,12 @@ test("auto-approves and trusts the current Browser Use node_repl runtime config 
     const browserHash = cryptoHash("patched current browser client\n");
     const chromeHash = cryptoHash("patched current chrome client\n");
     const source =
-      "\"use strict\";let o=require(`node:fs`),a=require(`node:path`),s=require(`node:crypto`),d=[`upstream-hash`],u=!1,t={La:e=>e,jr:e=>e},c={codexCliPath:null,nodePath:null,nodeReplPath:null,platform:`linux`},m=null,b=null,f=[],g=null,l=null,v=null,_=!1;function build(){return t.La({codexCliPath:c.codexCliPath,codexHome:m,extraEnv:b,nodeModuleDirs:f,nodePath:c.nodePath,nodeReplPath:u?t.jr(c.nodeReplPath):c.nodeReplPath,platform:c.platform,requestMeta:g,sentryUserId:l,traceMeta:v,trustAllCode:_,trustedBrowserClientSha256s:d,shouldUseWslPaths:u}).trustedBrowserClientSha256s}";
+      "\"use strict\";let o=require(`node:fs`),a=require(`node:path`),s=require(`node:crypto`),d=[`upstream-hash`],u=!1,t={vo:e=>e,jr:e=>e},c={codexCliPath:null,nodePath:null,nodeReplPath:null,platform:`linux`},m=null,b=null,f=[],g=null,v=null;function build(){return t.vo({codexCliPath:c.codexCliPath,codexHome:m,extraEnv:b,nodeModuleDirs:f,nodePath:c.nodePath,nodeReplPath:u?t.jr(c.nodeReplPath):c.nodeReplPath,platform:c.platform,requestMeta:g,traceMeta:v,trustedBrowserClientSha256s:d,shouldUseWslPaths:u}).trustedBrowserClientSha256s}";
 
     const patched = applyPatchTwice(applyBrowserUseNodeReplApprovalPatch, source);
 
     assert.match(patched, /^"use strict";function codexLinuxTrustedBrowserClientSha256s/);
-    assert.match(
-      patched,
-      /t\.La\(\{codexCliPath:c\.codexCliPath,codexHome:m,extraEnv:b,nodeModuleDirs:f,nodePath:c\.nodePath,nodeReplPath:u\?t\.jr\(c\.nodeReplPath\):c\.nodeReplPath,tools:\{js:\{approval_mode:`approve`\}\},platform:c\.platform/,
-    );
+    assert.doesNotMatch(patched, /tools:\{js:\{approval_mode:`approve`\}\}/);
     assert.match(
       patched,
       /trustedBrowserClientSha256s:codexLinuxTrustedBrowserClientSha256s\(d\),shouldUseWslPaths:u/,
@@ -7114,71 +6983,6 @@ test("auto-approves and trusts the current Browser Use node_repl runtime config 
       process: { platform: "linux", resourcesPath: resourcesRoot },
     });
     assert.deepEqual(Array.from(linuxHashes), ["upstream-hash", browserHash, chromeHash]);
-  } finally {
-    fs.rmSync(resourcesRoot, { recursive: true, force: true });
-  }
-});
-
-test("recognizes already-approved Electron 42 Browser Use node_repl runtime config builder", () => {
-  const source =
-    "return t.Fa({codexCliPath:c.codexCliPath,codexHome:m,extraEnv:b,nodeModuleDirs:f,nodePath:c.nodePath,nodeReplPath:u?t.kr(c.nodeReplPath):c.nodeReplPath,tools:{js:{approval_mode:`approve`}},platform:c.platform,requestMeta:g,sentryUserId:l,traceMeta:v,trustAllCode:_,trustedBrowserClientSha256s:d,shouldUseWslPaths:u})";
-
-  const { value: patched, warnings } = captureWarns(() =>
-    applyPatchTwice(applyBrowserUseNodeReplApprovalPatch, source),
-  );
-
-  assert.equal(patched, source);
-  assert.deepEqual(warnings, []);
-});
-
-test("trusts Linux patched bundled Browser Use clients by hashing staged files", () => {
-  const resourcesRoot = fs.mkdtempSync(path.join(os.tmpdir(), "codex-browser-client-hash-"));
-  try {
-    const browserClient = path.join(
-      resourcesRoot,
-      "plugins",
-      "openai-bundled",
-      "plugins",
-      "browser",
-      "scripts",
-      "browser-client.mjs",
-    );
-    const chromeClient = path.join(
-      resourcesRoot,
-      "plugins",
-      "openai-bundled",
-      "plugins",
-      "chrome",
-      "scripts",
-      "browser-client.mjs",
-    );
-    fs.mkdirSync(path.dirname(browserClient), { recursive: true });
-    fs.mkdirSync(path.dirname(chromeClient), { recursive: true });
-    fs.writeFileSync(browserClient, "patched browser client\n", "utf8");
-    fs.writeFileSync(chromeClient, "patched chrome client\n", "utf8");
-    const browserHash = cryptoHash("patched browser client\n");
-    const chromeHash = cryptoHash("patched chrome client\n");
-    const source =
-      "\"use strict\";let o=require(`node:fs`),i=require(`node:path`),s=require(`node:crypto`),nt=[`upstream-hash`];function nn({trustedBrowserClientSha256s:e}){return e}function build(){let p=!0,v=!1,f=nt;return nn({trustedBrowserClientSha256s:p||v?f:[]})}";
-
-    const patched = applyPatchTwice(applyBrowserUseNodeReplApprovalPatch, source);
-
-    assert.match(patched, /^"use strict";function codexLinuxTrustedBrowserClientSha256s/);
-    assert.equal(
-      (patched.match(/function codexLinuxTrustedBrowserClientSha256s/g) || []).length,
-      1,
-    );
-    assert.match(patched, /codexLinuxTrustedBrowserClientSha256s\(f\)/);
-    const linuxHashes = vm.runInNewContext(`${patched};build();`, {
-      require,
-      process: { platform: "linux", resourcesPath: resourcesRoot },
-    });
-    assert.deepEqual(Array.from(linuxHashes), ["upstream-hash", browserHash, chromeHash]);
-    const darwinHashes = vm.runInNewContext(`${patched};build();`, {
-      require,
-      process: { platform: "darwin", resourcesPath: resourcesRoot },
-    });
-    assert.deepEqual(Array.from(darwinHashes), ["upstream-hash"]);
   } finally {
     fs.rmSync(resourcesRoot, { recursive: true, force: true });
   }

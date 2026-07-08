@@ -8,15 +8,9 @@ const {
 } = require("../../lib/minified-js.js");
 
 function applyBrowserUseNodeReplApprovalPatch(currentSource) {
-  const approvalPatch =
-    "startup_timeout_sec:120,tools:{js:{approval_mode:`approve`}},env:{";
-  const needle = "startup_timeout_sec:120,env:{";
-  const runtimeFactoryMethods = String.raw`Dn|Pn|Fa|La|Ha|vo|\$a`;
+  const runtimeFactoryMethods = "vo";
   let patchedSource = currentSource;
   let patchedTrustedHashes = false;
-  if (patchedSource.includes(needle)) {
-    patchedSource = patchedSource.split(needle).join(approvalPatch);
-  }
 
   const runtimeFactoryTrustedHashesRegex =
     new RegExp(String.raw`([A-Za-z_$][\w$]*)\.(${runtimeFactoryMethods})\(\{([^{}]*?trustedBrowserClientSha256s:)(?!codexLinuxTrustedBrowserClientSha256s\()([A-Za-z_$][\w$]*)(,[^{}]*?\})\)`, "g");
@@ -33,19 +27,6 @@ function applyBrowserUseNodeReplApprovalPatch(currentSource) {
       },
     );
   }
-
-  const currentRuntimeConfigRegex =
-    new RegExp(String.raw`([A-Za-z_$][\w$]*)\.(${runtimeFactoryMethods})\(\{([^{}]*?)nodeReplPath:([^,{}]+)(,)(?!tools:\{js:\{approval_mode:\`approve\`\}\})`, "g");
-  const currentRuntimeConfigAlreadyApprovedRegex =
-    new RegExp(String.raw`[A-Za-z_$][\w$]*\.(?:${runtimeFactoryMethods})\(\{[^{}]*?nodeReplPath:[^,{}]+,tools:\{js:\{approval_mode:\`approve\`\}\},`);
-  let patchedAnyCurrentRuntimeConfig = false;
-  patchedSource = patchedSource.replace(
-    currentRuntimeConfigRegex,
-    (_match, runtimeFactoryVar, runtimeFactoryMethod, configPrefix, nodeReplPathVar, comma) => {
-      patchedAnyCurrentRuntimeConfig = true;
-      return `${runtimeFactoryVar}.${runtimeFactoryMethod}({${configPrefix}nodeReplPath:${nodeReplPathVar}${comma}tools:{js:{approval_mode:\`approve\`}},`;
-    },
-  );
 
   // 26.623+: the browser-use node_repl mcp server config is emitted as a
   // standalone object literal `{args:[],command:VAR,env:VAR,startup_timeout_sec:120}`
@@ -64,19 +45,6 @@ function applyBrowserUseNodeReplApprovalPatch(currentSource) {
     },
   );
 
-  const trustedHashesRegex =
-    /trustedBrowserClientSha256s:([^,{}]+)\|\|([^,{}]+)\?([A-Za-z_$][\w$]*):\[\]/g;
-  patchedSource = patchedSource.replace(
-    trustedHashesRegex,
-    (match, browserUseEnabledVar, nativePipeEnabledVar, trustedHashesVar) => {
-      if (match.includes("codexLinuxTrustedBrowserClientSha256s(")) {
-        return match;
-      }
-      patchedTrustedHashes = true;
-      return `trustedBrowserClientSha256s:${browserUseEnabledVar}||${nativePipeEnabledVar}?codexLinuxTrustedBrowserClientSha256s(${trustedHashesVar}):[]`;
-    },
-  );
-
   if (
     patchedTrustedHashes &&
     !patchedSource.includes("function codexLinuxTrustedBrowserClientSha256s(")
@@ -87,10 +55,6 @@ function applyBrowserUseNodeReplApprovalPatch(currentSource) {
     if (fsVar == null || pathVar == null || cryptoVar == null) {
       console.warn(
         "WARN: Could not find fs/path/crypto aliases — skipping Linux Browser Use trusted hash patch",
-      );
-      patchedSource = patchedSource.replace(
-        /trustedBrowserClientSha256s:([^,{}]+)\|\|([^,{}]+)\?codexLinuxTrustedBrowserClientSha256s\(([A-Za-z_$][\w$]*)\):\[\]/g,
-        "trustedBrowserClientSha256s:$1||$2?$3:[]",
       );
       patchedSource = patchedSource.replace(
         /trustedBrowserClientSha256s:codexLinuxTrustedBrowserClientSha256s\(([A-Za-z_$][\w$]*)\)/g,
@@ -115,7 +79,7 @@ function applyBrowserUseNodeReplApprovalPatch(currentSource) {
     !patchedTrustedHashes &&
     !patchedSource.includes("codexLinuxTrustedBrowserClientSha256s(") &&
     patchedSource.includes("NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S") &&
-    /trustedBrowserClientSha256s:[^,{}]+\|\|/.test(patchedSource)
+    patchedSource.includes("trustedBrowserClientSha256s:")
   ) {
     console.warn(
       "WARN: Could not find Browser Use trusted hash insertion point — skipping Linux Browser Use trusted hash patch",
@@ -125,9 +89,6 @@ function applyBrowserUseNodeReplApprovalPatch(currentSource) {
   if (
     patchedSource === currentSource &&
     patchedSource.includes("startup_timeout_sec:120") &&
-    !patchedSource.includes(approvalPatch) &&
-    !patchedAnyCurrentRuntimeConfig &&
-    !currentRuntimeConfigAlreadyApprovedRegex.test(patchedSource) &&
     !patchedAnyMcpServerConfig &&
     !mcpServerConfigAlreadyApprovedRegex.test(patchedSource) &&
     !patchedTrustedHashes &&
