@@ -6423,7 +6423,7 @@ test("shows current Computer Use plugin UI on Linux without the upstream rollout
   );
 });
 
-test("shows current use-is-plugins-enabled Computer Use UI on Linux", () => {
+test("shows current Computer Use hook UI on Linux", () => {
   const source =
     "function p(e){return e===`macOS`||e===`windows`}" +
     "function m(e){let t=(0,d.c)(8),{enabled:n,hostId:r,isHostLocal:i}=e,a=n===void 0?!0:n,{isLoading:o,platform:s}=l(),u=c(`1506311413`),m;t[0]===r?m=t[1]:(m={featureName:`computer_use`,hostId:r},t[0]=r,t[1]=m);let h=f(m),g;t[2]===s?g=t[3]:(g=p(s),t[2]=s,t[3]=g);let _=a&&i&&u&&(o||g),v=_&&!o&&h.enabled&&!h.isLoading,y=_&&h.isLoading,b=_&&(o||h.isLoading),x;return x}";
@@ -6726,6 +6726,9 @@ test("Computer Use availability descriptor matches the current settings bundle n
   const [descriptor] = require("./patches/core/all-linux/webview/computer-use-ui/patch.js");
 
   assert.match("computer-use-settings-B1QCeMSP.js", descriptor.pattern);
+  assert.doesNotMatch("use-model-settings-5PHNqYL4.js", descriptor.pattern);
+  assert.doesNotMatch("use-is-plugins-enabled-current.js", descriptor.pattern);
+  assert.doesNotMatch("use-native-apps.electron-DhuUEit1.js", descriptor.pattern);
 });
 
 test("keeps current Computer Use settings availability enabled on Linux", () => {
@@ -7619,7 +7622,7 @@ test("missing icon asset skips only icon patches", () => {
   }
 });
 
-test("patchExtractedApp scans apps bundles for Computer Use availability when UI is enabled", () => {
+test("patchExtractedApp scans current Computer Use settings bundles when UI is enabled", () => {
   withIsolatedHome(() => {
     process.env[COMPUTER_USE_UI_ENV_VAR] = "1";
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "codex-computer-use-apps-assets-test-"));
@@ -7640,19 +7643,19 @@ test("patchExtractedApp scans apps bundles for Computer Use availability when UI
         ].join(""),
       );
       fs.writeFileSync(
-        path.join(assetsDir, "apps-current.js"),
+        path.join(assetsDir, "computer-use-settings-apps-current.js"),
         "function g(e){return e===`macOS`||e===`windows`}" +
           "function _(e){let t=(0,d.c)(8),{enabled:n,hostId:r,isHostLocal:i}=e,a=n===void 0?!0:n,{isLoading:o,platform:c}=u(),l=s(`1506311413`),f;t[0]===r?f=t[1]:(f={featureName:`computer_use`,hostId:r},t[0]=r,t[1]=f);let p=h(f),m;t[2]===c?m=t[3]:(m=g(c),t[2]=c,t[3]=m);let _=a&&i&&l&&(o||m),v=_&&!o&&p.enabled&&!p.isLoading,y=_&&p.isLoading,b=_&&(o||p.isLoading),x;return x}",
       );
       fs.writeFileSync(
-        path.join(assetsDir, "use-is-plugins-enabled-current.js"),
+        path.join(assetsDir, "computer-use-settings-plugins-current.js"),
         "function p(e){return e===`macOS`||e===`windows`}" +
           "function m(e){let n=(0,f.c)(15),{enabled:r,hostId:i}=e,a=r===void 0?!0:r,{isLoading:o,platform:s}=u(),c=t(i).kind===`local`,d=l(`1506311413`),h;n[0]===i?h=n[1]:(h={featureName:`computer_use`,hostId:i},n[0]=i,n[1]=h);let _=p(h),v;n[2]!==_.enabled||n[3]!==_.isLoading||n[4]!==a||n[5]!==d||n[6]!==c||n[7]!==o||n[8]!==s?(v=g({enabled:a,isComputerUseFeatureEnabled:_.enabled,isComputerUseFeatureLoading:_.isLoading,isComputerUseGateEnabled:d,isHostCompatiblePlatform:p(s),isHostLocal:c,isPlatformLoading:o,windowType:`electron`}),n[2]=_.enabled,n[3]=_.isLoading,n[4]=a,n[5]=d,n[6]=c,n[7]=o,n[8]=s,n[9]=v):v=n[9];return v}",
       );
       fs.writeFileSync(
         path.join(
           assetsDir,
-          "app-initial~app-main~remote-conversation-page~pull-requests-page~onboarding-page~hotkey-win~current.js",
+          "computer-use-settings-native-apps-current.js",
         ),
         "function Iz(e){let t=(0,Lz.c)(9),{enabled:n}=e,{platform:r,isLoading:i}=yt(),a=n&&(r===`macOS`||r===`windows`),o;t[0]===Symbol.for(`react.memo_cache_sentinel`)?(o={order:`usage`},t[0]=o):o=t[0];let s;t[1]===a?s=t[2]:(s={params:o,queryConfig:{enabled:a,staleTime:fe.FIVE_MINUTES,refetchOnWindowFocus:!1}},t[1]=a,t[2]=s);let c=Ce(`native-desktop-apps`,s),l;t[3]!==c||t[4]!==a?(l=a?c.data?.apps??[]:[],t[3]=c,t[4]=a,t[5]=l):l=t[5];let u=i||a&&c.isLoading,d;return t[6]!==l||t[7]!==u?(d={nativeApps:l,isLoading:u},t[6]=l,t[7]=u,t[8]=d):d=t[8],d}" +
           "function Ope(e){let{platform:u}=yt(),v=l.formatMessage({id:`computerUse.label`,defaultMessage:`Computer use`}),y=n[0]??null,b=[{description:l.formatMessage({id:`computerUse.nativeApps.microsoftExcel.detail`,defaultMessage:`Live workbook control`})}],D;t[4]===r?D=t[5]:(D=e=>({queryKey:ve(`computer-use-native-desktop-app-icon`,{appPath:e.appPath}),queryFn:()=>ie(`computer-use-native-desktop-app-icon`,{params:{appPath:e.appPath}}),enabled:r!=null,staleTime:fe.INFINITE,refetchOnWindowFocus:!1}),t[4]=r,t[5]=D);return v}",
@@ -7670,18 +7673,18 @@ test("patchExtractedApp scans apps bundles for Computer Use availability when UI
       patchExtractedApp(tempRoot);
 
       assert.match(
-        fs.readFileSync(path.join(assetsDir, "apps-current.js"), "utf8"),
+        fs.readFileSync(path.join(assetsDir, "computer-use-settings-apps-current.js"), "utf8"),
         /let _=a&&i&&\(c===`linux`\|\|l&&\(o\|\|m\)\),v=_&&!o&&\(c===`linux`\|\|p\.enabled\)&&!p\.isLoading/,
       );
       assert.match(
-        fs.readFileSync(path.join(assetsDir, "use-is-plugins-enabled-current.js"), "utf8"),
+        fs.readFileSync(path.join(assetsDir, "computer-use-settings-plugins-current.js"), "utf8"),
         /v=g\(\{enabled:a,isComputerUseFeatureEnabled:s===`linux`\|\|_\.enabled,isComputerUseFeatureLoading:s!==`linux`&&_\.isLoading,isComputerUseGateEnabled:s===`linux`\|\|d,isHostCompatiblePlatform:s===`linux`\|\|p\(s\),isHostLocal:c,isPlatformLoading:o,windowType:`electron`\}\)/,
       );
       assert.match(
         fs.readFileSync(
           path.join(
             assetsDir,
-            "app-initial~app-main~remote-conversation-page~pull-requests-page~onboarding-page~hotkey-win~current.js",
+            "computer-use-settings-native-apps-current.js",
           ),
           "utf8",
         ),

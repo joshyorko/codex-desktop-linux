@@ -547,27 +547,6 @@ function applyLinuxComputerUseRendererAvailabilityPatch(currentSource) {
     },
   );
 
-  const linuxComputerUseSyntheticPluginNeedle =
-    "{marketplaceName:`openai-curated`,marketplacePath:`openai-bundled/plugins/computer-use`,plugin:{";
-  if (
-    patchedSource.includes(linuxComputerUseSyntheticPluginNeedle) &&
-    !patchedSource.includes("computer-use-plugin-icon-linux.png")
-  ) {
-    availabilityChanged = true;
-    patchedSource = patchedSource.replace(
-      linuxComputerUseSyntheticPluginNeedle,
-      "{marketplaceName:`openai-curated`,marketplacePath:`openai-bundled/plugins/computer-use`,logoPath:new URL(`computer-use-plugin-icon-linux.png`,import.meta.url).href,logoDarkPath:new URL(`computer-use-plugin-icon-linux.png`,import.meta.url).href,plugin:{",
-    );
-  }
-
-  const invalidSyntheticComputerUseMarketplacePath = "marketplacePath:`openai-bundled/plugins/computer-use`";
-  if (patchedSource.includes(invalidSyntheticComputerUseMarketplacePath)) {
-    availabilityChanged = true;
-    patchedSource = patchedSource
-      .split(invalidSyntheticComputerUseMarketplacePath)
-      .join("marketplacePath:null");
-  }
-
   if (hasComputerUseNativeAppsMention(patchedSource)) {
     const nativeAppsPlatformPattern =
       /([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)&&\(([A-Za-z_$][\w$]*)===`macOS`\|\|\3===`windows`\)/g;

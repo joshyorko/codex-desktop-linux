@@ -6489,10 +6489,10 @@ test_linux_computer_use_ui_opt_in_smoke() {
     local fake_home="$workspace/home"
     local output_log="$workspace/output.log"
     local main_bundle="$extracted/.vite/build/main-test.js"
-    local renderer_asset="$extracted/webview/assets/use-model-settings-test.js"
-    local current_renderer_asset="$extracted/webview/assets/use-is-plugins-enabled-current-test.js"
+    local renderer_asset="$extracted/webview/assets/computer-use-settings-renderer-test.js"
+    local current_renderer_asset="$extracted/webview/assets/computer-use-settings-current-test.js"
     local install_flow_asset="$extracted/webview/assets/app-initial~app-main~worktree-init-v2-page~remote-conversation-page~pull-requests-page~plug~test.js"
-    local native_apps_asset="$extracted/webview/assets/use-native-apps.electron-test.js"
+    local native_apps_asset="$extracted/webview/assets/computer-use-settings-native-apps-test.js"
     local bundle_body
     local renderer_body
     local current_renderer_body
