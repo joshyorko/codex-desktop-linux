@@ -29,6 +29,14 @@ const ACTIONABLE_CLASSIFICATIONS = new Set([
   "PROTECTED_SURFACE_PARTIAL",
   "PROTECTED_SURFACE_MISSING",
 ]);
+const PLATFORM_GATE_BLOCKING_CATEGORIES = new Set(["linux-parity-drift"]);
+const PLATFORM_GATE_REVIEW_CATEGORIES = new Set([
+  "new-upstream-capability",
+  "platform-specific-unsupported",
+  "needs-review",
+]);
+const PLATFORM_GATE_MARKDOWN_LIMIT = 20;
+const NEW_CAPABILITY_MARKDOWN_LIMIT = 20;
 const STRING_LITERAL_PATTERN = /`([^`\\]*(?:\\.[^`\\]*)*)`|"([^"\\]*(?:\\.[^"\\]*)*)"|'([^'\\]*(?:\\.[^'\\]*)*)'/g;
 const BRIDGE_CHANNEL_TERM_PATTERN =
   /browser[-_]trace|chrome|chronicle|computer[-_]use|desktop[-_]snapshot|dictation|event[-_]stream|focused[-_]window|global[-_]dictation|nativeMessaging|record[-_ ]?(?:and[-_ ]?)?replay|skysight|speech[-_]context|window[-_]metadata/i;
@@ -1005,7 +1013,70 @@ function hasLocalPatchSymbolDeclaration(source, symbol) {
   );
 }
 
-function findPostPatchIntegrityFindings(inventory) {
+function findComputerUsePlatformGateFindings(inventory) {
+  const findings = [];
+  const nativeAppsQueryGatePattern =
+    /([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)&&\(([A-Za-z_$][\w$]*)===`macOS`\|\|\3===`windows`(?!\|\|\3===`linux`)\)/g;
+  const nativeAppMentionSectionPattern =
+    /([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)===`macOS`\|\|\2===`windows`(?!\|\|\2===`linux`)/g;
+  for (const file of inventory.files) {
+    if (file.text == null) {
+      continue;
+    }
+    if (file.text.includes("`native-desktop-apps`") && file.text.includes("nativeApps:")) {
+      for (const match of file.text.matchAll(nativeAppsQueryGatePattern)) {
+        const nextSource = file.text.slice(match.index + match[0].length, match.index + match[0].length + 1400);
+        if (!nextSource.includes("`native-desktop-apps`") || !nextSource.includes("nativeApps:")) {
+          continue;
+        }
+        findings.push({
+          path: file.relativePath,
+          reason: "Computer Use native app query is still gated to macOS/Windows after Linux patching",
+          snippet: textSnippet(file.text, match[0]),
+          symbol: "computer-use-native-apps-linux-gate",
+        });
+      }
+    }
+    if (
+      file.text.includes("computerUsePlugin:") &&
+      file.text.includes("chromeAppPlugins:") &&
+      file.text.includes("microsoftExcelAppPlugins:")
+    ) {
+      for (const match of file.text.matchAll(nativeAppMentionSectionPattern)) {
+        const nextSource = file.text.slice(match.index + match[0].length, match.index + match[0].length + 1600);
+        if (
+          !nextSource.includes("computerUsePlugin:") ||
+          !nextSource.includes("chromeAppPlugins:") ||
+          !nextSource.includes("microsoftExcelAppPlugins:")
+        ) {
+          continue;
+        }
+        findings.push({
+          path: file.relativePath,
+          reason: "Computer Use composer native-app mention section is still gated to macOS/Windows after Linux patching",
+          snippet: textSnippet(file.text, match[0]),
+          symbol: "computer-use-composer-native-app-mentions-linux-gate",
+        });
+      }
+    }
+    if (
+      file.text.includes("computer-use-plugin-icon-linux.png") &&
+      file.text.includes("availablePlugins.some") &&
+      file.text.includes("plugin?.name") &&
+      !file.text.includes("e.plugin?.installed===!0&&e.plugin?.enabled===!0")
+    ) {
+      findings.push({
+        path: file.relativePath,
+        reason: "Synthetic Linux Computer Use settings plugin can be masked by an unavailable upstream entry",
+        snippet: textSnippet(file.text, "computer-use-plugin-icon-linux.png"),
+        symbol: "computer-use-settings-synthetic-plugin-mask",
+      });
+    }
+  }
+  return findings;
+}
+
+function findPostPatchIntegrityFindings(inventory, options = {}) {
   const findings = [];
   for (const file of inventory.files) {
     if (file.text == null) {
@@ -1024,7 +1095,254 @@ function findPostPatchIntegrityFindings(inventory) {
       });
     }
   }
+  if (options.includeComputerUsePlatformGates === true) {
+    findings.push(...findComputerUsePlatformGateFindings(inventory));
+  }
   return findings.sort((a, b) => `${a.symbol}:${a.path}`.localeCompare(`${b.symbol}:${b.path}`));
+}
+
+function platformGateContext(file, index, matchLength, radius = 900) {
+  const start = Math.max(0, index - radius);
+  const end = Math.min(file.text.length, index + matchLength + radius);
+  return file.text.slice(start, end);
+}
+
+function compactSnippet(value) {
+  return String(value).replace(/\s+/g, " ").trim().slice(0, 260);
+}
+
+function isComputerUsePlatformGateContext(lower, pathLower) {
+  return (
+    pathLower.includes("computer-use") ||
+    lower.includes("computer-use") ||
+    lower.includes("computeruse") ||
+    lower.includes("computer use") ||
+    lower.includes("native-desktop-apps") ||
+    lower.includes("accessibility_snapshot") ||
+    lower.includes("computer-use-plugin-icon-linux")
+  );
+}
+
+function classifyPlatformGate({ file, gate, context }) {
+  const lower = context.toLowerCase();
+  const pathLower = file.relativePath.toLowerCase();
+
+  if (gate.includes("`linux`")) {
+    return {
+      category: "already-linux-enabled",
+      confidence: "high",
+      feature: "Linux-aware platform gate",
+      issueCandidate: false,
+      linuxSurfaceId: null,
+      patchTarget: "none",
+      recommendation: "No action; Linux is already part of this platform gate.",
+    };
+  }
+
+  if (isComputerUsePlatformGateContext(lower, pathLower)) {
+    return {
+      category: "linux-parity-drift",
+      confidence: "high",
+      feature: "Computer Use native app UI",
+      issueCandidate: false,
+      linuxSurfaceId: "computer_use_plugin",
+      patchTarget: "scripts/patches/impl/computer-use.js",
+      recommendation: "Patch the renderer availability gate so Linux exposes the existing Computer Use backend in settings and @ mentions.",
+    };
+  }
+
+  if (lower.includes("microsoftexcel") || lower.includes("microsoftpowerpoint")) {
+    return {
+      category: "platform-specific-unsupported",
+      confidence: "high",
+      feature: "Office live-control app mentions",
+      issueCandidate: true,
+      linuxSurfaceId: null,
+      patchTarget: "new issue or optional linux-features/<office-live-control>/",
+      recommendation: "Label as macOS/Windows-only until a Linux native app bridge exists; create a feature issue if parity is desired.",
+    };
+  }
+
+  if (
+    lower.includes("settogglehotkey") ||
+    lower.includes("synccommandkeybindings") ||
+    lower.includes("commandkeybindings") ||
+    lower.includes("globalhotkey")
+  ) {
+    return {
+      category: "platform-specific-unsupported",
+      confidence: "high",
+      feature: "Global hotkey/keybinding integration",
+      issueCandidate: true,
+      linuxSurfaceId: null,
+      patchTarget: "new issue or optional linux-features/<global-hotkeys>/",
+      recommendation: "Label as macOS/Windows-only until a Linux global shortcut backend exists; create a feature issue if parity is desired.",
+    };
+  }
+
+  if (lower.includes("agi intelligence") || lower.includes("supreme")) {
+    return {
+      category: "new-upstream-capability",
+      confidence: "high",
+      feature: "Unmapped high-signal desktop capability",
+      issueCandidate: true,
+      linuxSurfaceId: null,
+      patchTarget: "scripts/dev/upstream-dmg-protected-surfaces.json plus a new Linux feature or backend owner",
+      recommendation: "Create an issue for the new upstream desktop capability and decide whether Linux needs a native port.",
+    };
+  }
+
+  if (lower.includes("chronicle") || lower.includes("skysight") || lower.includes("recording") || lower.includes("event_stream")) {
+    return {
+      category: "needs-review",
+      confidence: "medium",
+      feature: "Chronicle/Skysight/Record & Replay desktop capability",
+      issueCandidate: true,
+      linuxSurfaceId: lower.includes("chronicle") ? "chronicle_settings_toggles" : "record_and_replay_plugin",
+      patchTarget: "linux-features/record-and-replay and record-replay-linux",
+      recommendation: "Review whether this gate hides an existing Linux-backed feature or a new upstream desktop capability.",
+    };
+  }
+
+  if (
+    lower.includes("titlebar") ||
+    lower.includes("trafficlight") ||
+    lower.includes("dock") ||
+    lower.includes("tray") ||
+    lower.includes("windowbutton") ||
+    pathLower.includes("titlebar")
+  ) {
+    return {
+      category: "expected-platform-native",
+      confidence: "medium",
+      feature: "OS-native window chrome or shell integration",
+      issueCandidate: false,
+      linuxSurfaceId: null,
+      patchTarget: "none by default",
+      recommendation: "Keep labeled as platform-native unless the Linux window shell regresses.",
+    };
+  }
+
+  if (
+    lower.includes("native") ||
+    lower.includes("desktop") ||
+    lower.includes("appplugin") ||
+    lower.includes("sidecar") ||
+    lower.includes("mcp") ||
+    lower.includes("plugin")
+  ) {
+    return {
+      category: "new-upstream-capability",
+      confidence: "medium",
+      feature: "Unmapped desktop/native/plugin capability",
+      issueCandidate: true,
+      linuxSurfaceId: null,
+      patchTarget: "scripts/dev/upstream-dmg-protected-surfaces.json plus a new Linux feature or backend owner",
+      recommendation: "Create an issue, decide whether Linux needs a port or explicit unsupported label, and add a protected surface if accepted.",
+    };
+  }
+
+  return {
+    category: "needs-review",
+    confidence: "low",
+    feature: "Unclassified platform gate",
+    issueCandidate: false,
+    linuxSurfaceId: null,
+    patchTarget: "manual review",
+    recommendation: "Classify this gate as Linux parity, new capability, unsupported, or expected platform-native before accepting release drift.",
+  };
+}
+
+function createPlatformGateEntry({ file, gate, index, patternName }) {
+  const context = platformGateContext(file, index, gate.length);
+  const classification = classifyPlatformGate({ file, gate, context });
+  return {
+    id: sha256(Buffer.from(`${file.relativePath}\0${gate}\0${compactSnippet(context)}`)).slice(0, 16),
+    path: file.relativePath,
+    gate,
+    platforms: gate.includes("darwin") || gate.includes("win32") ? ["darwin", "win32"] : ["macOS", "windows"],
+    pattern: patternName,
+    snippet: compactSnippet(context),
+    ...classification,
+  };
+}
+
+function createPlatformGateMap({ inventory } = {}) {
+  const gates = [];
+  const seen = new Set();
+  const gatePatterns = [
+    {
+      name: "ui-platform-macos-windows",
+      regex: /[A-Za-z_$][\w$]*===`macOS`\|\|[A-Za-z_$][\w$]*===`windows`(?:\|\|[A-Za-z_$][\w$]*===`linux`)?/g,
+    },
+    {
+      name: "process-platform-darwin-win32",
+      regex: /process\.platform===`darwin`\|\|process\.platform===`win32`|process\.platform!==`linux`&&process\.platform!==`darwin`/g,
+    },
+  ];
+
+  for (const file of inventory.files ?? []) {
+    if (file.text == null) {
+      continue;
+    }
+    for (const pattern of gatePatterns) {
+      for (const match of file.text.matchAll(pattern.regex)) {
+        const entry = createPlatformGateEntry({
+          file,
+          gate: match[0],
+          index: match.index,
+          patternName: pattern.name,
+        });
+        const key = `${entry.path}\0${entry.gate}\0${entry.category}\0${entry.feature}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          gates.push(entry);
+        }
+      }
+    }
+
+    if (
+      file.text.includes("computer-use-plugin-icon-linux.png") &&
+      file.text.includes("availablePlugins.some") &&
+      file.text.includes("plugin?.name") &&
+      !file.text.includes("e.plugin?.installed===!0&&e.plugin?.enabled===!0")
+    ) {
+      const entry = {
+        id: sha256(Buffer.from(`${file.relativePath}\0computer-use-settings-mask`)).slice(0, 16),
+        path: file.relativePath,
+        gate: "synthetic Linux Computer Use row masked by unavailable upstream plugin",
+        platforms: ["linux"],
+        pattern: "synthetic-plugin-mask",
+        snippet: textSnippet(file.text, "computer-use-plugin-icon-linux.png"),
+        category: "linux-parity-drift",
+        confidence: "high",
+        feature: "Computer Use settings row",
+        issueCandidate: false,
+        linuxSurfaceId: "computer_use_plugin",
+        patchTarget: "scripts/patches/impl/computer-use.js",
+        recommendation: "Prepend the enabled synthetic Linux Computer Use plugin unless an installed and enabled upstream entry already exists.",
+      };
+      const key = `${entry.path}\0${entry.gate}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        gates.push(entry);
+      }
+    }
+  }
+
+  const categoryCounts = {};
+  for (const gate of gates) {
+    categoryCounts[gate.category] = (categoryCounts[gate.category] ?? 0) + 1;
+  }
+
+  return {
+    generatedAt: new Date().toISOString(),
+    source: inventory.source,
+    categoryCounts,
+    blockingCount: gates.filter((gate) => PLATFORM_GATE_BLOCKING_CATEGORIES.has(gate.category)).length,
+    reviewCount: gates.filter((gate) => PLATFORM_GATE_REVIEW_CATEGORIES.has(gate.category)).length,
+    gates: gates.sort((a, b) => `${a.category}:${a.feature}:${a.path}`.localeCompare(`${b.category}:${b.feature}:${b.path}`)),
+  };
 }
 
 function classifySurfaceDrift({ baselineSurface, candidateSurface }) {
@@ -1476,11 +1794,163 @@ function summarizeMapDrift(mapDrift) {
   return summary;
 }
 
+function capabilityId(parts) {
+  return sha256(Buffer.from(parts.filter(Boolean).join("\0"))).slice(0, 16);
+}
+
+function capabilityFromPlatformGate(gate) {
+  if (!["new-upstream-capability", "platform-specific-unsupported"].includes(gate.category)) {
+    return null;
+  }
+  return {
+    id: `platform-gate:${gate.id}`,
+    type: "platform-gate",
+    name: gate.feature,
+    path: gate.path,
+    category: gate.category,
+    confidence: gate.confidence,
+    issueCandidate: gate.issueCandidate,
+    recommendation: gate.recommendation,
+    patchTarget: gate.patchTarget,
+    evidence: gate.gate,
+  };
+}
+
+function createNewCapabilityMap({ mapDrift, platformGateMap } = {}) {
+  const capabilities = [];
+  const addCapability = (capability) => {
+    if (capability == null) {
+      return;
+    }
+    capabilities.push({
+      confidence: "medium",
+      issueCandidate: true,
+      patchTarget: "scripts/dev/upstream-dmg-protected-surfaces.json",
+      recommendation: "Create an issue, classify Linux support, and add a protected surface if this capability needs parity.",
+      ...capability,
+    });
+  };
+
+  if (mapDrift?.mode === "baselineComparison") {
+    for (const pluginId of mapDrift?.pluginDrift?.added ?? []) {
+      addCapability({
+        id: `plugin:${pluginId}`,
+        type: "plugin",
+        name: pluginId,
+        category: "new-upstream-capability",
+        evidence: pluginId,
+      });
+    }
+
+    for (const key of mapDrift?.mcpDrift?.added ?? []) {
+      const [pluginId, serverName, toolName] = key.split(":");
+      addCapability({
+        id: `mcp:${key}`,
+        type: "mcp-tool",
+        name: toolName ?? serverName ?? key,
+        category: "new-upstream-capability",
+        evidence: key,
+        recommendation: `Review new MCP tool ${key}; add Linux backend coverage or an unsupported label.`,
+        patchTarget: pluginId ? `plugins/openai-bundled/plugins/${pluginId} or matching linux-features owner` : "matching Linux MCP owner",
+      });
+    }
+
+    for (const binaryPath of mapDrift?.nativeBinaryDrift?.added ?? []) {
+      addCapability({
+        id: `native:${binaryPath}`,
+        type: "native-binary",
+        name: path.posix.basename(binaryPath),
+        path: binaryPath,
+        category: "new-upstream-capability",
+        evidence: binaryPath,
+        recommendation: "Review the new native binary for Linux replacement, staging, or explicit unsupported status.",
+        patchTarget: "scripts/lib/bundled-plugins.sh or a dedicated linux-features/<id>/ owner",
+      });
+    }
+
+    for (const key of mapDrift?.bridgeHandlerDrift?.added ?? []) {
+      addCapability({
+        id: `bridge:${capabilityId(["bridge", key])}`,
+        type: "bridge-handler",
+        name: key.split(":")[1] ?? key,
+        category: "new-upstream-capability",
+        evidence: key,
+        recommendation: "Review the new Electron bridge handler and decide whether Linux needs a native mirror or patch.",
+        patchTarget: "scripts/patches/core/all-linux or matching linux-features owner",
+      });
+    }
+  }
+
+  for (const gate of platformGateMap?.gates ?? []) {
+    addCapability(capabilityFromPlatformGate(gate));
+  }
+
+  const deduped = new Map();
+  for (const capability of capabilities) {
+    deduped.set(capability.id, capability);
+  }
+  const items = [...deduped.values()].sort((a, b) => `${a.category}:${a.type}:${a.name}`.localeCompare(`${b.category}:${b.type}:${b.name}`));
+  const categoryCounts = {};
+  for (const item of items) {
+    categoryCounts[item.category] = (categoryCounts[item.category] ?? 0) + 1;
+  }
+  return {
+    generatedAt: new Date().toISOString(),
+    mode: mapDrift?.mode ?? "unknown",
+    categoryCounts,
+    issueCandidateCount: items.filter((item) => item.issueCandidate).length,
+    capabilities: items,
+  };
+}
+
 function markdownList(items) {
   if (items.length === 0) {
     return "- None\n";
   }
   return items.map((item) => `- ${item}`).join("\n") + "\n";
+}
+
+function markdownCell(value) {
+  return String(value ?? "")
+    .replace(/\s+/g, " ")
+    .replace(/\|/g, "\\|")
+    .trim();
+}
+
+function markdownTable(headers, rows) {
+  if (rows.length === 0) {
+    return "None.\n";
+  }
+  const headerLine = `| ${headers.map(markdownCell).join(" |")} |`;
+  const dividerLine = `| ${headers.map(() => "---").join(" |")} |`;
+  const rowLines = rows.map((row) => `| ${row.map(markdownCell).join(" |")} |`);
+  return `${[headerLine, dividerLine, ...rowLines].join("\n")}\n`;
+}
+
+function platformGateRows(gates, categories, limit = PLATFORM_GATE_MARKDOWN_LIMIT) {
+  return (gates ?? [])
+    .filter((gate) => categories.includes(gate.category))
+    .slice(0, limit)
+    .map((gate) => [
+      gate.feature,
+      gate.category,
+      gate.path,
+      gate.patchTarget,
+      gate.recommendation,
+    ]);
+}
+
+function capabilityRows(capabilities, limit = NEW_CAPABILITY_MARKDOWN_LIMIT) {
+  return (capabilities ?? [])
+    .slice(0, limit)
+    .map((capability) => [
+      capability.name,
+      capability.type,
+      capability.category,
+      capability.path ?? capability.evidence ?? "",
+      capability.patchTarget,
+      capability.recommendation,
+    ]);
 }
 
 function renderDriftMarkdown(report) {
@@ -1490,6 +1960,32 @@ function renderDriftMarkdown(report) {
   if (report.baselineSource != null) {
     lines.push(`Baseline: ${report.baselineSource.path}`);
   }
+  lines.push("");
+  lines.push("## Linux Parity Drift");
+  lines.push("");
+  lines.push(markdownTable(
+    ["Feature", "Category", "Path", "Patch target", "Recommendation"],
+    platformGateRows(report.platformGates, ["linux-parity-drift"]),
+  ).trimEnd());
+  lines.push("");
+  lines.push("## New Capability Candidates");
+  lines.push("");
+  lines.push(markdownTable(
+    ["Name", "Type", "Category", "Evidence", "Owner", "Recommendation"],
+    capabilityRows(report.newCapabilities),
+  ).trimEnd());
+  lines.push("");
+  lines.push("## Platform-Specific Labels");
+  lines.push("");
+  lines.push(markdownTable(
+    ["Feature", "Category", "Path", "Patch target", "Recommendation"],
+    platformGateRows(report.platformGates, [
+      "platform-specific-unsupported",
+      "expected-platform-native",
+      "needs-review",
+      "already-linux-enabled",
+    ]),
+  ).trimEnd());
   lines.push("");
   lines.push("## Classification Counts");
   lines.push("");
@@ -1583,6 +2079,10 @@ function changedPayloadList(entries, maxItems = ACTION_PLAN_PATH_SAMPLE_LIMIT) {
 
 function renderActionPlanMarkdown(driftReport, candidateProtected, mapDrift = null) {
   const actionable = driftReport.surfaceDrift.filter((item) => ACTIONABLE_CLASSIFICATIONS.has(item.classification));
+  const platformBlockers = (driftReport.platformGates ?? []).filter((gate) =>
+    PLATFORM_GATE_BLOCKING_CATEGORIES.has(gate.category),
+  );
+  const capabilityCandidates = driftReport.newCapabilities ?? [];
   const structuralSummary = driftReport.structuralDriftSummary ?? summarizeMapDrift(mapDrift);
   const lines = ["# Linux Substrate Action Plan", ""];
   lines.push(`Candidate: ${candidateProtected.source?.path ?? "unknown"}`);
@@ -1591,9 +2091,29 @@ function renderActionPlanMarkdown(driftReport, candidateProtected, mapDrift = nu
     lines.push(`Structural maps: ${summaryLine}`);
   }
   lines.push("");
-  if (actionable.length === 0) {
+  if (actionable.length === 0 && platformBlockers.length === 0 && capabilityCandidates.length === 0) {
     lines.push("No protected-surface action required by this report.");
     return `${lines.join("\n")}\n`;
+  }
+  if (platformBlockers.length > 0) {
+    lines.push("## Linux parity blockers");
+    for (const gate of platformBlockers) {
+      lines.push(`- ${gate.feature}: ${gate.recommendation}`);
+      lines.push(`  Patch target: ${gate.patchTarget}`);
+      lines.push(`  Evidence: ${gate.path} :: ${gate.gate}`);
+    }
+    lines.push("");
+  }
+  if (capabilityCandidates.length > 0) {
+    lines.push("## New capability / issue candidates");
+    for (const capability of capabilityCandidates.slice(0, NEW_CAPABILITY_MARKDOWN_LIMIT)) {
+      lines.push(`- ${capability.name} (${capability.category}): ${capability.recommendation}`);
+      lines.push(`  Owner: ${capability.patchTarget}`);
+    }
+    if (capabilityCandidates.length > NEW_CAPABILITY_MARKDOWN_LIMIT) {
+      lines.push(`- ${capabilityCandidates.length - NEW_CAPABILITY_MARKDOWN_LIMIT} additional candidates omitted; see new-capabilities.json.`);
+    }
+    lines.push("");
   }
   for (const item of actionable) {
     lines.push(`## ${item.surfaceId}`);
@@ -1737,7 +2257,20 @@ function buildIntelReports({
       patchReport,
     });
     const mapDrift = compareMaps({ baselineProtected, candidateProtected });
+    const platformGateMap = createPlatformGateMap({ inventory: candidateInventory });
+    const newCapabilityMap = createNewCapabilityMap({ mapDrift, platformGateMap });
     driftReport.structuralDriftSummary = summarizeMapDrift(mapDrift);
+    driftReport.platformGateSummary = {
+      categoryCounts: platformGateMap.categoryCounts,
+      blockingCount: platformGateMap.blockingCount,
+      reviewCount: platformGateMap.reviewCount,
+    };
+    driftReport.platformGates = platformGateMap.gates.slice(0, 50);
+    driftReport.newCapabilitySummary = {
+      categoryCounts: newCapabilityMap.categoryCounts,
+      issueCandidateCount: newCapabilityMap.issueCandidateCount,
+    };
+    driftReport.newCapabilities = newCapabilityMap.capabilities.slice(0, 50);
 
     fs.mkdirSync(reportDir, { recursive: true });
     writeJson(path.join(reportDir, "inventory.json"), publicInventory(candidateInventory));
@@ -1745,6 +2278,8 @@ function buildIntelReports({
     writeJson(path.join(reportDir, "bridge-map.json"), candidateProtected.bridgeMap);
     writeJson(path.join(reportDir, "plugin-map.json"), candidateProtected.pluginMap);
     writeJson(path.join(reportDir, "native-binary-map.json"), candidateProtected.nativeBinaryMap);
+    writeJson(path.join(reportDir, "platform-gates.json"), platformGateMap);
+    writeJson(path.join(reportDir, "new-capabilities.json"), newCapabilityMap);
     writeJson(path.join(reportDir, "map-drift.json"), mapDrift);
     writeJson(path.join(reportDir, "drift-report.json"), driftReport);
     fs.writeFileSync(path.join(reportDir, "drift-report.md"), renderDriftMarkdown(driftReport), "utf8");
@@ -1773,6 +2308,8 @@ function buildIntelReports({
       protectedSurfaces: candidateProtected,
       driftReport,
       mapDrift,
+      platformGateMap,
+      newCapabilityMap,
     };
   } finally {
     fs.rmSync(scratchRoot, { force: true, recursive: true });
@@ -1784,7 +2321,9 @@ module.exports = {
   compareProtectedSurfaces,
   createBridgeMap,
   createInventory,
+  createNewCapabilityMap,
   createNativeBinaryMap,
+  createPlatformGateMap,
   createPluginMap,
   compareMaps,
   extractProtectedSurfaces,

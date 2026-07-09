@@ -931,6 +931,21 @@ test("default core patch descriptors are grouped and unique", () => {
     descriptors.find((descriptor) => descriptor.id === "linux-computer-use-native-desktop-apps")?.ciPolicy,
     "opt-in",
   );
+  const computerUseInstallFlow = descriptors.find((descriptor) => descriptor.id === "linux-computer-use-install-flow");
+  assert.equal(
+    computerUseInstallFlow.pattern.test(
+      "app-initial~app-main~remote-conversation-page~new-thread-panel-page~onboarding-page~appgen-~current.js",
+    ),
+    true,
+  );
+  for (const legacyName of [
+    "plugins-availability-current.js",
+    "use-plugin-install-flow-current.js",
+    "app-initial~app-main~remote-conversation-page~plugin-detail-page~new-thread-panel-page~current.js",
+    "app-initial~app-main~remote-conversation-page~pull-requests-page~plug~current.js",
+  ]) {
+    assert.equal(computerUseInstallFlow.pattern.test(legacyName), false, legacyName);
+  }
   assert.equal(
     descriptors.find((descriptor) => descriptor.id === "linux-terminal-user-path")?.ciPolicy,
     "optional",
@@ -6583,6 +6598,24 @@ test("does not give synthetic Computer Use plugin cards an invalid marketplace d
   assert.doesNotMatch(patched, /marketplacePath:`openai-bundled\/plugins\/computer-use`/);
 });
 
+test("prefers the synthetic Linux Computer Use plugin over unavailable upstream entries", () => {
+  const source =
+    "let {computerUseAvailability:availability,platform:platform}=state;" +
+    "let pluginsQuery=usePlugins(selectedHost,emptyPlugins),marketplacePath=useMarketplacePath(selectedHost),featureFlag=useFeatureFlag(featureFlagArg),computerUsePlugin;" +
+    "computerUsePlugin=selectPlugin(pluginsQuery.availablePlugins,pluginName,marketplacePath);";
+
+  const patched = applyPatchTwice(applyLinuxComputerUseRendererAvailabilityPatch, source);
+
+  assert.match(
+    patched,
+    /availablePlugins:\[\{marketplaceName:`openai-curated`,marketplacePath:marketplacePath,[^}]+plugin:\{id:pluginName,name:pluginName,installed:!0,enabled:!0\}\},\.\.\.pluginsQuery\.availablePlugins\]/,
+  );
+  assert.match(
+    patched,
+    /some\(e=>\(e\.plugin\?\.name===pluginName\|\|e\.plugin\?\.id\?\.split\(`@`\)\[0\]===pluginName\)&&e\.plugin\?\.installed===!0&&e\.plugin\?\.enabled===!0\)/,
+  );
+});
+
 test("warns without partially patching when Computer Use renderer availability gate drifts", () => {
   const source =
     "function g(e){return e===`macOS`||e===`windows`}" +
@@ -6620,6 +6653,24 @@ test("enables native app mentions on Linux in the current Computer Use picker", 
 
   assert.match(patched, /a=n&&\(r===`macOS`\|\|r===`windows`\|\|r===`linux`\)/);
   assert.doesNotMatch(patched, /a=n&&\(r===`macOS`\|\|r===`windows`\)/);
+});
+
+test("enables split shared native app query chunks on Linux", () => {
+  const source =
+    "function zN(e){let t=(0,BN.c)(9),{enabled:n}=e,{platform:r,isLoading:i}=pi(),a=n&&(r===`macOS`||r===`windows`),o;t[0]===Symbol.for(`react.memo_cache_sentinel`)?(o={order:`usage`},t[0]=o):o=t[0];let s;t[1]===a?s=t[2]:(s={params:o,queryConfig:{enabled:a,staleTime:m.FIVE_MINUTES,refetchOnWindowFocus:!1}},t[1]=a,t[2]=s);let c=Ne(`native-desktop-apps`,s),l;t[3]!==c||t[4]!==a?(l=a?c.data?.apps??[]:[],t[3]=c,t[4]=a,t[5]=l):l=t[5];let u=i||a&&c.isLoading,d;return t[6]!==l||t[7]!==u?(d={nativeApps:l,isLoading:u},t[6]=l,t[7]=u,t[8]=d):d=t[8],d}";
+
+  const patched = applyPatchTwice(applyLinuxComputerUseRendererAvailabilityPatch, source);
+
+  assert.match(patched, /a=n&&\(r===`macOS`\|\|r===`windows`\|\|r===`linux`\)/);
+});
+
+test("enables the current composer Computer Use native-app mention section on Linux", () => {
+  const source =
+    "function z2e(e){let t=(0,q2e.c)(11),{hostId:n,query:r,roots:i}=e,a=Hn(Ve),o=Yu(),{platform:s}=Fp(),c=Wo(Q2e),l=Wo(mie),u=l?X2e:Y2e,d;t[0]===u?d=t[1]:(d={installSuggestionPluginNames:u},t[0]=u,t[1]=d);let{availablePlugins:f,isLoading:p}=Ud(n,i,d),m=!c,h;t[2]===m?h=t[3]:(h={enabled:m},t[2]=m,t[3]=h);let{availablePlugins:g,isLoading:_}=Ud(n,i,h),v=[...f];let y=p||!c&&_,{openPluginInstall:b}=_ne(),x=Sne(o),S=r.trim(),C=v.filter(e=>B2e(e,u)),w=cie(C),T=s===`macOS`||s===`windows`,E=T?U2e(C):[],D=T&&l?C.filter(Tie):[],O=T&&l?C.filter(lae):[],N=D2e({chromeAppPlugins:E,computerUsePlugin:w,microsoftExcelAppPlugins:D,microsoftPowerPointAppPlugins:O,onPluginMentionInserted:M,pluginMentionLabels:x,query:r});return N}";
+
+  const patched = applyPatchTwice(applyLinuxComputerUseRendererAvailabilityPatch, source);
+
+  assert.match(patched, /T=s===`macOS`\|\|s===`windows`\|\|s===`linux`/);
 });
 
 test("does not enable unrelated native desktop app queries on Linux", () => {
@@ -7613,6 +7664,17 @@ test("patchExtractedApp scans apps bundles for Computer Use availability when UI
           "function Ope(e){let{platform:u}=yt(),v=l.formatMessage({id:`computerUse.label`,defaultMessage:`Computer use`}),y=n[0]??null,b=[{description:l.formatMessage({id:`computerUse.nativeApps.microsoftExcel.detail`,defaultMessage:`Live workbook control`})}],D;t[4]===r?D=t[5]:(D=e=>({queryKey:ve(`computer-use-native-desktop-app-icon`,{appPath:e.appPath}),queryFn:()=>ie(`computer-use-native-desktop-app-icon`,{params:{appPath:e.appPath}}),enabled:r!=null,staleTime:fe.INFINITE,refetchOnWindowFocus:!1}),t[4]=r,t[5]=D);return v}",
       );
       fs.writeFileSync(
+        path.join(assetsDir, "app-initial~app-main~onboarding-page-current.js"),
+        "function z2e(e){let t=(0,q2e.c)(11),{hostId:n,query:r,roots:i}=e,a=Hn(Ve),o=Yu(),{platform:s}=Fp(),c=Wo(Q2e),l=Wo(mie),u=l?X2e:Y2e,d;t[0]===u?d=t[1]:(d={installSuggestionPluginNames:u},t[0]=u,t[1]=d);let{availablePlugins:f,isLoading:p}=Ud(n,i,d),m=!c,h;t[2]===m?h=t[3]:(h={enabled:m},t[2]=m,t[3]=h);let{availablePlugins:g,isLoading:_}=Ud(n,i,h),v=[...f];let y=p||!c&&_,{openPluginInstall:b}=_ne(),x=Sne(o),S=r.trim(),C=v.filter(e=>B2e(e,u)),w=cie(C),T=s===`macOS`||s===`windows`,E=T?U2e(C):[],D=T&&l?C.filter(Tie):[],O=T&&l?C.filter(lae):[],N=D2e({chromeAppPlugins:E,computerUsePlugin:w,microsoftExcelAppPlugins:D,microsoftPowerPointAppPlugins:O,onPluginMentionInserted:M,pluginMentionLabels:x,query:r});return N}",
+      );
+      fs.writeFileSync(
+        path.join(
+          assetsDir,
+          "app-initial~app-main~worktree-init-v2-page~remote-conversation-page~pull-requests-page~new-~current.js",
+        ),
+        "function zN(e){let t=(0,BN.c)(9),{enabled:n}=e,{platform:r,isLoading:i}=pi(),a=n&&(r===`macOS`||r===`windows`),o;t[0]===Symbol.for(`react.memo_cache_sentinel`)?(o={order:`usage`},t[0]=o):o=t[0];let s;t[1]===a?s=t[2]:(s={params:o,queryConfig:{enabled:a,staleTime:m.FIVE_MINUTES,refetchOnWindowFocus:!1}},t[1]=a,t[2]=s);let c=Ne(`native-desktop-apps`,s),l;t[3]!==c||t[4]!==a?(l=a?c.data?.apps??[]:[],t[3]=c,t[4]=a,t[5]=l):l=t[5];let u=i||a&&c.isLoading,d;return t[6]!==l||t[7]!==u?(d={nativeApps:l,isLoading:u},t[6]=l,t[7]=u,t[8]=d):d=t[8],d}",
+      );
+      fs.writeFileSync(
         path.join(
           assetsDir,
           "app-initial~app-main~remote-conversation-page~new-thread-panel-page~onboarding-page~appgen-~current.js",
@@ -7632,11 +7694,25 @@ test("patchExtractedApp scans apps bundles for Computer Use availability when UI
         fs.readFileSync(path.join(assetsDir, "use-is-plugins-enabled-current.js"), "utf8"),
         /v=g\(\{enabled:a,isComputerUseFeatureEnabled:s===`linux`\|\|_\.enabled,isComputerUseFeatureLoading:s!==`linux`&&_\.isLoading,isComputerUseGateEnabled:s===`linux`\|\|d,isHostCompatiblePlatform:s===`linux`\|\|p\(s\),isHostLocal:c,isPlatformLoading:o,windowType:`electron`\}\)/,
       );
-      assert.match(
+      assert.doesNotMatch(
         fs.readFileSync(
           path.join(
             assetsDir,
             "app-initial~app-main~remote-conversation-page~pull-requests-page~onboarding-page~hotkey-win~current.js",
+          ),
+          "utf8",
+        ),
+        /a=n&&\(r===`macOS`\|\|r===`windows`\|\|r===`linux`\)/,
+      );
+      assert.match(
+        fs.readFileSync(path.join(assetsDir, "app-initial~app-main~onboarding-page-current.js"), "utf8"),
+        /T=s===`macOS`\|\|s===`windows`\|\|s===`linux`/,
+      );
+      assert.match(
+        fs.readFileSync(
+          path.join(
+            assetsDir,
+            "app-initial~app-main~worktree-init-v2-page~remote-conversation-page~pull-requests-page~new-~current.js",
           ),
           "utf8",
         ),

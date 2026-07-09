@@ -53,7 +53,9 @@ function main() {
   patchExtractedApp(extractedDir, { report });
   if (report != null) {
     const inventory = createInventory({ sourcePath: extractedDir });
-    const findings = findPostPatchIntegrityFindings(inventory);
+    const findings = findPostPatchIntegrityFindings(inventory, {
+      includeComputerUsePlatformGates: true,
+    });
     report.postPatchIntegrity = {
       sourcePath: extractedDir,
       findingCount: findings.length,

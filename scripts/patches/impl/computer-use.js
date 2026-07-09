@@ -547,7 +547,7 @@ function applyLinuxComputerUseRendererAvailabilityPatch(currentSource) {
         return match;
       }
       availabilityChanged = true;
-      return `let ${pluginsQueryVar}=${pluginsHookVar}(${selectedHostVar},${emptyPluginsVar}),${marketplacePathVar}=${marketplacePathHookVar}(${selectedHostVar}),${featureFlagVar}=${featureFlagHookVar}(${featureFlagArgVar});${platformVar}===\`linux\`&&!${pluginsQueryVar}.availablePlugins.some(e=>e.plugin?.name===${pluginNameVar}||e.plugin?.id?.split(\`@\`)[0]===${pluginNameVar})&&(${pluginsQueryVar}={...${pluginsQueryVar},availablePlugins:[...${pluginsQueryVar}.availablePlugins,{marketplaceName:\`openai-curated\`,marketplacePath:${marketplacePathVar},logoPath:new URL(\`computer-use-plugin-icon-linux.png\`,import.meta.url).href,logoDarkPath:new URL(\`computer-use-plugin-icon-linux.png\`,import.meta.url).href,plugin:{id:${pluginNameVar},name:${pluginNameVar},installed:!0,enabled:!0}}]});let ${computerUsePluginVar};`;
+      return `let ${pluginsQueryVar}=${pluginsHookVar}(${selectedHostVar},${emptyPluginsVar}),${marketplacePathVar}=${marketplacePathHookVar}(${selectedHostVar}),${featureFlagVar}=${featureFlagHookVar}(${featureFlagArgVar});${platformVar}===\`linux\`&&!${pluginsQueryVar}.availablePlugins.some(e=>(e.plugin?.name===${pluginNameVar}||e.plugin?.id?.split(\`@\`)[0]===${pluginNameVar})&&e.plugin?.installed===!0&&e.plugin?.enabled===!0)&&(${pluginsQueryVar}={...${pluginsQueryVar},availablePlugins:[{marketplaceName:\`openai-curated\`,marketplacePath:${marketplacePathVar},logoPath:new URL(\`computer-use-plugin-icon-linux.png\`,import.meta.url).href,logoDarkPath:new URL(\`computer-use-plugin-icon-linux.png\`,import.meta.url).href,plugin:{id:${pluginNameVar},name:${pluginNameVar},installed:!0,enabled:!0}},...${pluginsQueryVar}.availablePlugins]});let ${computerUsePluginVar};`;
     },
   );
 
@@ -572,9 +572,27 @@ function applyLinuxComputerUseRendererAvailabilityPatch(currentSource) {
       .join("marketplacePath:null");
   }
 
+  const nativeAppMentionSectionPattern =
+    /([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)===`macOS`\|\|\2===`windows`(?!\|\|\2===`linux`)/g;
+  patchedSource = patchedSource.replace(
+    nativeAppMentionSectionPattern,
+    (match, availableVar, platformVar, offset) => {
+      const nextSource = patchedSource.slice(offset + match.length, offset + match.length + 1600);
+      if (
+        !nextSource.includes("computerUsePlugin:") ||
+        !nextSource.includes("chromeAppPlugins:") ||
+        !nextSource.includes("microsoftExcelAppPlugins:")
+      ) {
+        return match;
+      }
+      nativeAppsGateChanged = true;
+      return `${availableVar}=${platformVar}===\`macOS\`||${platformVar}===\`windows\`||${platformVar}===\`linux\``;
+    },
+  );
+
   if (hasComputerUseNativeAppsMention(patchedSource)) {
     const nativeAppsPlatformPattern =
-      /([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)&&\(([A-Za-z_$][\w$]*)===`macOS`\|\|\3===`windows`\)/g;
+      /([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)&&\(([A-Za-z_$][\w$]*)===`macOS`\|\|\3===`windows`(?!\|\|\3===`linux`)\)/g;
     patchedSource = patchedSource.replace(
       nativeAppsPlatformPattern,
       (match, availableVar, enabledVar, platformVar) => {
@@ -583,6 +601,24 @@ function applyLinuxComputerUseRendererAvailabilityPatch(currentSource) {
       },
     );
   }
+
+  const nativeAppsQueryGatePattern =
+    /([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)&&\(([A-Za-z_$][\w$]*)===`macOS`\|\|\3===`windows`(?!\|\|\3===`linux`)\)/g;
+  patchedSource = patchedSource.replace(
+    nativeAppsQueryGatePattern,
+    (match, availableVar, enabledVar, platformVar, offset) => {
+      const nextSource = patchedSource.slice(offset + match.length, offset + match.length + 1400);
+      if (
+        !nextSource.includes("`native-desktop-apps`") ||
+        !nextSource.includes("nativeApps:") ||
+        !nextSource.includes("isLoading:")
+      ) {
+        return match;
+      }
+      nativeAppsGateChanged = true;
+      return `${availableVar}=${enabledVar}&&(${platformVar}===\`macOS\`||${platformVar}===\`windows\`||${platformVar}===\`linux\`)`;
+    },
+  );
 
   if (availabilityChanged || nativeAppsGateChanged || availabilityAlreadyPatched()) {
     return patchedSource;

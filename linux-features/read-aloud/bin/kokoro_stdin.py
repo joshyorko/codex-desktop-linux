@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Read stdin aloud with Kokoro ONNX and aplay."""
+"""Read stdin aloud with Kokoro ONNX and a resolved PCM player."""
 
 from __future__ import annotations
 
@@ -146,9 +146,10 @@ def main() -> int:
     # --buffer-time/--period-time give ALSA a real cushion (0.5s buffer,
     # 0.1s period) to ride out scheduling jitter on a loaded machine. The
     # deep queue is the primary defense; this is cheap insurance.
+    audio_player = os.environ.get("CODEX_LINUX_READ_ALOUD_AUDIO_PLAYER", "aplay")
     player = subprocess.Popen(
         [
-            "aplay", "-q", "-r", str(sample_rate), "-c", "1",
+            audio_player, "-q", "-r", str(sample_rate), "-c", "1",
             "-f", "S16_LE", "-t", "raw",
             "--buffer-time=500000", "--period-time=100000",
         ],

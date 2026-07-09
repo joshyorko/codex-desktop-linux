@@ -81,6 +81,12 @@ Each run writes:
 - `plugin-map.json`: bundled plugin manifests, MCP configs, and skill files.
 - `native-binary-map.json`: native candidate paths, file type output when
   available, hashes, and protected string evidence.
+- `platform-gates.json`: macOS/Windows/Linux gate inventory with Linux parity,
+  unsupported platform, new capability, expected platform-native, and review
+  classifications.
+- `new-capabilities.json`: issue-candidate queue built from new plugins, MCP
+  tools, native binaries, bridge handlers, and platform-gated desktop feature
+  hints.
 - `map-drift.json`: baseline/candidate structural deltas for bridge handlers,
   plugin ids/files, MCP tools, native binaries, and Linux substrate gaps.
 - `drift-report.json` and `drift-report.md`: machine and human drift summaries.
@@ -88,9 +94,11 @@ Each run writes:
   newly discovered, patch-broken, or substrate-gap surfaces.
 
 The CLI stdout summary includes `decision.acceptance`, `blockersCount`,
-`reviewItemsCount`, protected-surface status counts, and whether every protected
-surface is fully present. `--fail-on-blockers` exits with status `2` after
-writing the report bundle when `decision.blockersCount` is nonzero.
+`reviewItemsCount`, `linuxParityGateBlockersCount`,
+`platformGateReviewItemsCount`, `newCapabilityIssueCandidatesCount`,
+protected-surface status counts, and whether every protected surface is fully
+present. `--fail-on-blockers` exits with status `2` after writing the report
+bundle when `decision.blockersCount` is nonzero.
 
 When a baseline is provided, the command also writes `baseline/` and
 `candidate/` subdirectories with their own inventory, protected-surface,
@@ -161,6 +169,29 @@ review item before accepting the upstream DMG.
   protected surface.
 - `LINUX_SUBSTRATE_GAP`: upstream evidence exists, but the registry's required
   Linux substrate path is missing.
+
+## Platform Gate Classifications
+
+The platform gate map is the first place to look when a feature exists in the
+bundle but disappears from Settings, `@` mentions, menus, or plugin entrypoints.
+It classifies gates separately from protected-surface drift:
+
+- `linux-parity-drift`: Linux already has a substrate or patch owner, but
+  upstream still gates the UI or query to macOS/Windows. This is a release
+  blocker; Computer Use belongs here.
+- `existing-linux-feature-drift`: protected-surface movement or patch failures
+  for features this repo already mirrors. This remains represented by the
+  protected-surface classifications above.
+- `new-upstream-capability`: new plugin, MCP tool, bridge, native sidecar, or
+  desktop feature hint that needs an issue and a Linux support decision.
+- `platform-specific-unsupported`: macOS/Windows feature with no Linux substrate
+  yet, such as Office live-control app rows.
+- `expected-platform-native`: OS-native details such as titlebar, Dock, tray, or
+  window chrome behavior that should be labeled but not patched by default.
+- `already-linux-enabled`: a platform gate already includes Linux; keep it out
+  of blocker counts.
+- `needs-review`: high-signal but ambiguous feature gate that must be triaged
+  before accepting release drift.
 
 ## Acceptance Gate
 

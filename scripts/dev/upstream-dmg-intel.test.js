@@ -11,7 +11,10 @@ const {
   buildIntelReports,
   compareProtectedSurfaces,
   createInventory,
+  createNewCapabilityMap,
+  createPlatformGateMap,
   extractProtectedSurfaces,
+  findPostPatchIntegrityFindings,
   renderActionPlanMarkdown,
   resolveBaselinePath,
 } = require("../lib/upstream-dmg-intel.js");
@@ -257,6 +260,17 @@ function createFixtureApp(root, variant = "baseline") {
   return appDir;
 }
 
+function writeBundledPlugin(appDir, pluginId, manifest = {}) {
+  const pluginRoot = path.join(appDir, "Contents/Resources/plugins/openai-bundled/plugins", pluginId);
+  writeJson(path.join(pluginRoot, ".codex-plugin/plugin.json"), {
+    id: pluginId,
+    name: pluginId,
+    version: "1.0.0",
+    ...manifest,
+  });
+  return pluginRoot;
+}
+
 function findClassification(driftReport, surfaceId, classification) {
   return driftReport.surfaceDrift.find(
     (entry) => entry.surfaceId === surfaceId && entry.classification === classification,
@@ -495,6 +509,135 @@ test("folds patch-report post-patch integrity findings into candidate-only repor
     assert.equal(finding.findings[0].path, "webview/assets/settings-page-patched.js");
   }));
 
+test("detects post-patch Computer Use gates left Darwin/Windows-only", () =>
+  withTempDir((workspace) => {
+    const candidateApp = createFixtureApp(workspace, "candidate");
+    const assetsDir = path.join(candidateApp, "Contents/Resources/webview/assets");
+    writeFile(
+      path.join(assetsDir, "use-native-apps-current.js"),
+      "function zN(e){let t=(0,BN.c)(9),{enabled:n}=e,{platform:r,isLoading:i}=pi(),a=n&&(r===`macOS`||r===`windows`),o;t[0]===Symbol.for(`react.memo_cache_sentinel`)?(o={order:`usage`},t[0]=o):o=t[0];let s;t[1]===a?s=t[2]:(s={params:o,queryConfig:{enabled:a,staleTime:m.FIVE_MINUTES,refetchOnWindowFocus:!1}},t[1]=a,t[2]=s);let c=Ne(`native-desktop-apps`,s),l;t[3]!==c||t[4]!==a?(l=a?c.data?.apps??[]:[],t[3]=c,t[4]=a,t[5]=l):l=t[5];let u=i||a&&c.isLoading,d;return t[6]!==l||t[7]!==u?(d={nativeApps:l,isLoading:u},t[6]=l,t[7]=u,t[8]=d):d=t[8],d}",
+    );
+    writeFile(
+      path.join(assetsDir, "composer-computer-use-current.js"),
+      "function z2e(){let T=s===`macOS`||s===`windows`,E=T?U2e(C):[],D=T&&l?C.filter(Tie):[],O=T&&l?C.filter(lae):[],N=D2e({chromeAppPlugins:E,computerUsePlugin:w,microsoftExcelAppPlugins:D,microsoftPowerPointAppPlugins:O,onPluginMentionInserted:M,pluginMentionLabels:x,query:r});return N}",
+    );
+    writeFile(
+      path.join(assetsDir, "computer-use-settings-current.js"),
+      "r===`linux`&&!v.availablePlugins.some(e=>e.plugin?.name===on||e.plugin?.id?.split(`@`)[0]===on)&&(v={...v,availablePlugins:[...v.availablePlugins,{marketplaceName:`openai-curated`,marketplacePath:y,logoPath:new URL(`computer-use-plugin-icon-linux.png`,import.meta.url).href,logoDarkPath:new URL(`computer-use-plugin-icon-linux.png`,import.meta.url).href,plugin:{id:on,name:on,installed:!0,enabled:!0}}]});",
+    );
+
+    const inventory = createInventory({ registry, sourcePath: candidateApp });
+
+    assert.equal(
+      findPostPatchIntegrityFindings(inventory).some((finding) =>
+        finding.symbol.startsWith("computer-use-"),
+      ),
+      false,
+    );
+    const findings = findPostPatchIntegrityFindings(inventory, {
+      includeComputerUsePlatformGates: true,
+    });
+    assert.deepEqual(
+      findings.map((finding) => finding.symbol).filter((symbol) => symbol.startsWith("computer-use-")).sort(),
+      [
+        "computer-use-composer-native-app-mentions-linux-gate",
+        "computer-use-native-apps-linux-gate",
+        "computer-use-settings-synthetic-plugin-mask",
+      ],
+    );
+  }));
+
+test("categorizes platform gates for Linux parity, unsupported features, and review candidates", () =>
+  withTempDir((workspace) => {
+    const candidateApp = createFixtureApp(workspace, "candidate");
+    const assetsDir = path.join(candidateApp, "Contents/Resources/webview/assets");
+    writeFile(
+      path.join(assetsDir, "computer-use-current.js"),
+      "function zN(e){let {enabled:n}=e,{platform:r}=pi(),a=n&&(r===`macOS`||r===`windows`);let c=Ne(`native-desktop-apps`,{queryConfig:{enabled:a}});return {nativeApps:c.data?.apps??[],computerUsePlugin:w}}",
+    );
+    writeFile(
+      path.join(assetsDir, "computer-use-settings-B1QCeMSP.js"),
+      "function settings(){return r===`macOS`||r===`windows`?`Computer Use settings`:null}",
+    );
+    writeFile(
+      path.join(assetsDir, "office-current.js"),
+      "function z2e(){let T=s===`macOS`||s===`windows`;return D2e({microsoftExcelAppPlugins:D,microsoftPowerPointAppPlugins:O,onPluginMentionInserted:M})}",
+    );
+    writeFile(
+      path.join(assetsDir, "hotkey-current.js"),
+      "function hotkeys(){return process.platform===`darwin`||process.platform===`win32`?{setToggleHotkey:()=>true,syncCommandKeybindings:()=>true}:null}",
+    );
+    writeFile(
+      path.join(assetsDir, "agi-skysight-supreme.js"),
+      "function supreme(){let ok=p===`macOS`||p===`windows`;return ok?`AGI Intelligence 9000 Skysight Supreme native desktop sidecar`:null}",
+    );
+    writeFile(
+      path.join(assetsDir, "titlebar-current.js"),
+      "function titlebar(){return process.platform===`darwin`||process.platform===`win32`?{titleBarStyle:`hiddenInset`,trafficLightPosition:{x:12,y:12}}:{}}",
+    );
+
+    const platformGateMap = createPlatformGateMap({
+      inventory: createInventory({ registry, sourcePath: candidateApp }),
+    });
+    const byCategory = new Map(platformGateMap.gates.map((gate) => [gate.category, gate]));
+
+    assert.ok(byCategory.get("linux-parity-drift"));
+    assert.equal(byCategory.get("linux-parity-drift").linuxSurfaceId, "computer_use_plugin");
+    assert.ok(
+      platformGateMap.gates
+        .filter((gate) => gate.path.includes("computer-use"))
+        .every((gate) => gate.category === "linux-parity-drift"),
+    );
+    assert.ok(byCategory.get("platform-specific-unsupported"));
+    assert.match(byCategory.get("platform-specific-unsupported").recommendation, /macOS\/Windows-only/);
+    assert.ok(
+      platformGateMap.gates.some(
+        (gate) =>
+          gate.category === "platform-specific-unsupported" &&
+          gate.feature === "Global hotkey/keybinding integration",
+      ),
+    );
+    assert.ok(byCategory.get("new-upstream-capability"));
+    assert.match(byCategory.get("new-upstream-capability").feature, /Unmapped/);
+    assert.ok(byCategory.get("expected-platform-native"));
+    assert.equal(platformGateMap.blockingCount, 2);
+  }));
+
+test("keeps review-only platform gates out of new capability candidates", () => {
+  const capabilityMap = createNewCapabilityMap({
+    mapDrift: { mode: "baselineComparison" },
+    platformGateMap: {
+      gates: [
+        {
+          id: "review-gate",
+          category: "needs-review",
+          confidence: "low",
+          feature: "Unclassified platform gate",
+          issueCandidate: false,
+          recommendation: "Review manually.",
+          patchTarget: "manual review",
+          path: "assets/review.js",
+          gate: "p===`macOS`||p===`windows`",
+        },
+        {
+          id: "new-gate",
+          category: "new-upstream-capability",
+          confidence: "medium",
+          feature: "New native capability",
+          issueCandidate: true,
+          recommendation: "Create a Linux feature issue.",
+          patchTarget: "linux-features/new-native-capability",
+          path: "assets/new.js",
+          gate: "p===`macOS`||p===`windows`",
+        },
+      ],
+    },
+  });
+
+  assert.ok(capabilityMap.capabilities.some((capability) => capability.id === "platform-gate:new-gate"));
+  assert.ok(!capabilityMap.capabilities.some((capability) => capability.id === "platform-gate:review-gate"));
+});
+
 test("keeps drift report evidence compact and marks hashed asset churn", () => {
   const baseline = {
     source: { path: "baseline.app" },
@@ -662,6 +805,8 @@ printf '00000000 T _SkyComputerUseClient\\n'
       "bridge-map.json",
       "plugin-map.json",
       "native-binary-map.json",
+      "platform-gates.json",
+      "new-capabilities.json",
       "map-drift.json",
       "drift-report.json",
       "drift-report.md",
@@ -683,9 +828,16 @@ printf '00000000 T _SkyComputerUseClient\\n'
     const nativeBinaryMap = JSON.parse(
       fs.readFileSync(path.join(reports.outputDir, "native-binary-map.json"), "utf8"),
     );
+    const platformGateMap = JSON.parse(
+      fs.readFileSync(path.join(reports.outputDir, "platform-gates.json"), "utf8"),
+    );
+    const newCapabilityMap = JSON.parse(
+      fs.readFileSync(path.join(reports.outputDir, "new-capabilities.json"), "utf8"),
+    );
     const mapDrift = JSON.parse(
       fs.readFileSync(path.join(reports.outputDir, "map-drift.json"), "utf8"),
     );
+    const driftMarkdown = fs.readFileSync(path.join(reports.outputDir, "drift-report.md"), "utf8");
     const actionPlan = fs.readFileSync(path.join(reports.outputDir, "substrate-action-plan.md"), "utf8");
     const skyDrift = findClassification(driftReport, "sky_computer_use_client", "MOVED");
     assert.ok(findClassification(driftReport, "chronicle_sidecar", "NEW_UPSTREAM_CAPABILITY"));
@@ -695,6 +847,10 @@ printf '00000000 T _SkyComputerUseClient\\n'
     assert.ok(skyDrift.evidenceDrift.addedPathSamples.length > 0);
     assert.equal(skyDrift.evidenceDrift.addedEvidence, undefined);
     assert.ok(inventory.files.every((file) => file.text == null && file.nativeStrings == null));
+    assert.ok(Array.isArray(platformGateMap.gates));
+    assert.ok(newCapabilityMap.capabilities.some((capability) => capability.type === "mcp-tool"));
+    assert.match(driftMarkdown, /## New Capability Candidates/);
+    assert.match(driftMarkdown, /## Linux Parity Drift/);
     assert.ok(
       nativeBinaryMap.binaries.some((binary) =>
         binary.protectedStringHits.some((hit) => hit.needle === "recording_controls"),
@@ -817,7 +973,7 @@ test("CLI exits nonzero with --fail-on-blockers when acceptance blockers are pre
     const summary = JSON.parse(result.stdout);
     assert.equal(summary.decision.acceptance, "blocked");
     assert.ok(summary.decision.blockersCount > 0);
-    assert.match(result.stderr, /protected-surface acceptance blocker/);
+    assert.match(result.stderr, /Linux acceptance blocker/);
     assert.ok(fs.existsSync(path.join(outputDir, "drift-report.json")));
   }));
 

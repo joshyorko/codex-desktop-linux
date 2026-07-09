@@ -99,16 +99,25 @@ function buildDecision({ driftReport, protectedSurfaces }) {
   const surfaceDrift = driftReport.surfaceDrift ?? [];
   const blockers = surfaceDrift.filter((item) => BLOCKING_CLASSIFICATIONS.has(item.classification));
   const reviewItems = surfaceDrift.filter((item) => !BLOCKING_CLASSIFICATIONS.has(item.classification));
+  const linuxParityGateBlockers = driftReport.platformGateSummary?.blockingCount ?? 0;
+  const platformGateReviewItems = driftReport.platformGateSummary?.reviewCount ?? 0;
+  const newCapabilityIssueCandidates = driftReport.newCapabilitySummary?.issueCandidateCount ?? 0;
   const protectedSurfaceStatusCounts = statusCounts(protectedSurfaces.surfaces ?? []);
   const allProtectedSurfacesPresent =
     (protectedSurfaces.surfaces ?? []).length > 0 &&
     (protectedSurfaces.surfaces ?? []).every((surface) => surface.status === "PRESENT");
-  const acceptance = blockers.length > 0 ? "blocked" : (reviewItems.length > 0 ? "review" : "accepted");
+  const blockerCount = blockers.length + linuxParityGateBlockers;
+  const reviewCount = reviewItems.length + platformGateReviewItems + newCapabilityIssueCandidates;
+  const acceptance = blockerCount > 0 ? "blocked" : (reviewCount > 0 ? "review" : "accepted");
 
   return {
     acceptance,
-    blockersCount: blockers.length,
-    reviewItemsCount: reviewItems.length,
+    blockersCount: blockerCount,
+    reviewItemsCount: reviewCount,
+    protectedSurfaceBlockersCount: blockers.length,
+    linuxParityGateBlockersCount: linuxParityGateBlockers,
+    platformGateReviewItemsCount: platformGateReviewItems,
+    newCapabilityIssueCandidatesCount: newCapabilityIssueCandidates,
     allProtectedSurfacesPresent,
     protectedSurfaceStatusCounts,
     blockerClassifications: [...new Set(blockers.map((item) => item.classification))].sort(),
@@ -151,6 +160,8 @@ function main(argv = process.argv.slice(2)) {
     outputDir: reports.outputDir,
     inventory: path.join(reports.outputDir, "inventory.json"),
     protectedSurfaces: path.join(reports.outputDir, "protected-surfaces.json"),
+    platformGates: path.join(reports.outputDir, "platform-gates.json"),
+    newCapabilities: path.join(reports.outputDir, "new-capabilities.json"),
     driftReport: path.join(reports.outputDir, "drift-report.json"),
     driftMarkdown: path.join(reports.outputDir, "drift-report.md"),
     substrateActionPlan: path.join(reports.outputDir, "substrate-action-plan.md"),
@@ -161,7 +172,7 @@ function main(argv = process.argv.slice(2)) {
   process.stdout.write(`${JSON.stringify(summary, null, 2)}\n`);
   if (args.failOnBlockers && decision.blockersCount > 0) {
     console.error(
-      `Upstream DMG intelligence found ${decision.blockersCount} protected-surface acceptance blocker(s).`,
+      `Upstream DMG intelligence found ${decision.blockersCount} Linux acceptance blocker(s).`,
     );
     return 2;
   }
