@@ -46,6 +46,47 @@ function captureWarnings(fn) {
   }
 }
 
+function runtimeHarness(sendMessageFromView) {
+  const messages = [];
+  const customEvents = [];
+  const context = {
+    console: { log() {}, info: (...args) => messages.push(args), warn: (...args) => messages.push(args) },
+    setTimeout,
+    clearTimeout,
+    MessageEvent: class MessageEvent {
+      constructor(type, init) {
+        this.type = type;
+        this.data = init.data;
+      }
+    },
+    document: {
+      head: { appendChild() {} },
+      getElementById() { return null; },
+      createElement() { return { style: {}, setAttribute() {} }; },
+    },
+    window: {
+      addEventListener(type, handler) {
+        if (type === "message") context.onMessage = handler;
+      },
+      dispatchEvent(event) {
+        customEvents.push(event);
+      },
+    },
+  };
+  if (sendMessageFromView !== undefined) {
+    context.window.electronBridge = { sendMessageFromView };
+  }
+  context.globalThis = context;
+  vm.createContext(context);
+  vm.runInContext(applyIndexRuntimePatch("console.log(`index`);"), context);
+  return {
+    context,
+    messages,
+    customEvents,
+    button: { dataset: {}, setAttribute() {}, blur() {} },
+  };
+}
+
 test("main bundle patch adds a Linux read aloud handler", () => {
   const source = [
     "let e=require(`node:child_process`),f=require(`node:fs`),p=require(`node:path`),o=require(`node:os`);",
@@ -237,6 +278,59 @@ test("current DMG bridge carries a button click to the main handler and response
   await context.codexLinuxReadAloudClick({ content: "ignored" }, "Hello from current DMG", "conversation-1", button);
   assert.ok(messages.some(([kind]) => kind === "bridge-entry"));
   assert.equal(customEvents.length, 0, "current DMG uses preload bridge, not the legacy DOM fallback");
+});
+
+test("missing current bridge fails boundedly without a DOM fallback", async () => {
+  const harness = runtimeHarness();
+  await harness.context.codexLinuxReadAloudClick({}, "bridge missing", "conversation-2", harness.button);
+  assert.equal(harness.customEvents.length, 0);
+  assert.ok(harness.messages.some(([kind]) => kind === "[linux-read-aloud] bridge-unavailable"));
+  assert.equal(harness.button.dataset.codexLinuxReadAloudState, "error");
+});
+
+test("rejected current bridge fails boundedly and reports bridge-error", async () => {
+  const harness = runtimeHarness(() => Promise.reject(new Error("ipc unavailable")));
+  await harness.context.codexLinuxReadAloudClick({}, "bridge rejected", "conversation-3", harness.button);
+  assert.equal(harness.customEvents.length, 0);
+  assert.ok(harness.messages.some(([kind]) => kind === "[linux-read-aloud] bridge-error"));
+  assert.equal(harness.button.dataset.codexLinuxReadAloudState, "error");
+});
+
+test("successful fetch-response consumes the response and enters speaking state", async () => {
+  let requestId;
+  const harness = runtimeHarness(async (payload) => {
+    if (payload.type === "fetch") requestId = payload.requestId;
+    harness.context.onMessage({
+      data: {
+        type: "fetch-response",
+        responseType: "success",
+        requestId,
+        status: 200,
+        bodyJsonString: JSON.stringify({ spoken: true, backend: "kokoro" }),
+      },
+    });
+  });
+  await harness.context.codexLinuxReadAloudClick({}, "response success", "conversation-4", harness.button);
+  assert.match(requestId, /^codex-linux-read-aloud-/);
+  assert.equal(harness.button.dataset.codexLinuxReadAloudState, "speaking");
+  assert.ok(harness.messages.some(([kind]) => kind === "[linux-read-aloud] bridge-response"));
+});
+
+test("error fetch-response clears the pending request and enters error state", async () => {
+  const harness = runtimeHarness(async (payload) => {
+    harness.context.onMessage({
+      data: {
+        type: "fetch-response",
+        responseType: "error",
+        requestId: payload.requestId,
+        status: 432,
+        error: "handler unavailable",
+      },
+    });
+  });
+  await harness.context.codexLinuxReadAloudClick({}, "response error", "conversation-5", harness.button);
+  assert.equal(harness.button.dataset.codexLinuxReadAloudState, "error");
+  assert.ok(harness.messages.some(([kind]) => kind === "[linux-read-aloud] bridge-response"));
 });
 
 test("kokoro stdin runner compiles and makes a bounded first streaming chunk", (t) => {
