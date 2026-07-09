@@ -21,3 +21,5 @@ linux-features/local/
 # graphify
 graphify-out/
 .graphify_*
+.tokensave
+.serena/
