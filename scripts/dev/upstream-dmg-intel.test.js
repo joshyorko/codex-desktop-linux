@@ -525,6 +525,14 @@ test("detects post-patch Computer Use gates left Darwin/Windows-only", () =>
       path.join(assetsDir, "computer-use-settings-current.js"),
       "r===`linux`&&!v.availablePlugins.some(e=>e.plugin?.name===on||e.plugin?.id?.split(`@`)[0]===on)&&(v={...v,availablePlugins:[...v.availablePlugins,{marketplaceName:`openai-curated`,marketplacePath:y,logoPath:new URL(`computer-use-plugin-icon-linux.png`,import.meta.url).href,logoDarkPath:new URL(`computer-use-plugin-icon-linux.png`,import.meta.url).href,plugin:{id:on,name:on,installed:!0,enabled:!0}}]});",
     );
+    writeFile(
+      path.join(assetsDir, "computer-use-settings-card-current.js"),
+      "function Rt(){let b=flag,r=platform,O=[getApp()],F=[];if(b&&(r===`macOS`||r===`windows`))for(let e of O){if(e.plugin==null)continue;let t=e.plugin;F.push({id:e.appControlId,label:e.toggleAriaLabel,installed:t.plugin.installed,enabled:t.plugin.enabled})}return F}",
+    );
+    writeFile(
+      path.join(assetsDir, "computer-use-native-icon-current.js"),
+      "function nI(e){let t=(0,rI.c)(10),{appPath:n}=e,{platform:r,isLoading:i}=pi(),a=(r===`macOS`||r===`windows`)&&n!=null&&n!==``,o=n??``;let u=Ne(`computer-use-native-desktop-app-icon`,l),d=a?u.data?.iconSmall??null:null;return d}",
+    );
 
     const inventory = createInventory({ registry, sourcePath: candidateApp });
 
@@ -541,7 +549,9 @@ test("detects post-patch Computer Use gates left Darwin/Windows-only", () =>
       findings.map((finding) => finding.symbol).filter((symbol) => symbol.startsWith("computer-use-")).sort(),
       [
         "computer-use-composer-native-app-mentions-linux-gate",
+        "computer-use-native-app-icon-linux-gate",
         "computer-use-native-apps-linux-gate",
+        "computer-use-settings-native-app-card-linux-gate",
         "computer-use-settings-synthetic-plugin-mask",
       ],
     );
@@ -557,7 +567,11 @@ test("categorizes platform gates for Linux parity, unsupported features, and rev
     );
     writeFile(
       path.join(assetsDir, "computer-use-settings-B1QCeMSP.js"),
-      "function settings(){return r===`macOS`||r===`windows`?`Computer Use settings`:null}",
+      "function settings(){let b=flag,r=platform,O=[getApp()],F=[];if(b&&(r===`macOS`||r===`windows`))for(let e of O){if(e.plugin==null)continue;let t=e.plugin;F.push({id:e.appControlId,label:e.toggleAriaLabel,installed:t.plugin.installed,enabled:t.plugin.enabled})}return F}",
+    );
+    writeFile(
+      path.join(assetsDir, "computer-use-native-icon-current.js"),
+      "function nI(e){let t=(0,rI.c)(10),{appPath:n}=e,{platform:r,isLoading:i}=pi(),a=(r===`macOS`||r===`windows`)&&n!=null&&n!==``,o=n??``;let u=Ne(`computer-use-native-desktop-app-icon`,l),d=a?u.data?.iconSmall??null:null;return d}",
     );
     writeFile(
       path.join(assetsDir, "office-current.js"),
@@ -588,6 +602,20 @@ test("categorizes platform gates for Linux parity, unsupported features, and rev
         .filter((gate) => gate.path.includes("computer-use"))
         .every((gate) => gate.category === "linux-parity-drift"),
     );
+    assert.ok(
+      platformGateMap.gates.some(
+        (gate) =>
+          gate.feature === "Computer Use settings native app cards" &&
+          gate.patchTarget === "scripts/patches/impl/computer-use.js",
+      ),
+    );
+    assert.ok(
+      platformGateMap.gates.some(
+        (gate) =>
+          gate.feature === "Computer Use native app icons" &&
+          gate.patchTarget === "scripts/patches/impl/computer-use.js",
+      ),
+    );
     assert.ok(byCategory.get("platform-specific-unsupported"));
     assert.match(byCategory.get("platform-specific-unsupported").recommendation, /macOS\/Windows-only/);
     assert.ok(
@@ -600,7 +628,7 @@ test("categorizes platform gates for Linux parity, unsupported features, and rev
     assert.ok(byCategory.get("new-upstream-capability"));
     assert.match(byCategory.get("new-upstream-capability").feature, /Unmapped/);
     assert.ok(byCategory.get("expected-platform-native"));
-    assert.equal(platformGateMap.blockingCount, 2);
+    assert.equal(platformGateMap.blockingCount, 3);
   }));
 
 test("keeps review-only platform gates out of new capability candidates", () => {

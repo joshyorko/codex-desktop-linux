@@ -1019,6 +1019,10 @@ function findComputerUsePlatformGateFindings(inventory) {
     /([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)&&\(([A-Za-z_$][\w$]*)===`macOS`\|\|\3===`windows`(?!\|\|\3===`linux`)\)/g;
   const nativeAppMentionSectionPattern =
     /([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)===`macOS`\|\|\2===`windows`(?!\|\|\2===`linux`)/g;
+  const nativeAppSettingsCardPattern =
+    /if\(([A-Za-z_$][\w$]*)&&\(([A-Za-z_$][\w$]*)===`macOS`\|\|\2===`windows`(?!\|\|\2===`linux`)\)\)for\(let ([A-Za-z_$][\w$]*) of ([A-Za-z_$][\w$]*)\)\{/g;
+  const nativeAppIconQueryGatePattern =
+    /([A-Za-z_$][\w$]*)=\(([A-Za-z_$][\w$]*)===`macOS`\|\|\2===`windows`(?!\|\|\2===`linux`)\)&&([A-Za-z_$][\w$]*)!=null&&\3!==``/g;
   for (const file of inventory.files) {
     if (file.text == null) {
       continue;
@@ -1056,6 +1060,42 @@ function findComputerUsePlatformGateFindings(inventory) {
           reason: "Computer Use composer native-app mention section is still gated to macOS/Windows after Linux patching",
           snippet: textSnippet(file.text, match[0]),
           symbol: "computer-use-composer-native-app-mentions-linux-gate",
+        });
+      }
+    }
+    if (
+      file.text.includes("appControlId") &&
+      file.text.includes("toggleAriaLabel") &&
+      file.text.includes("plugin.installed")
+    ) {
+      for (const match of file.text.matchAll(nativeAppSettingsCardPattern)) {
+        const nextSource = file.text.slice(match.index + match[0].length, match.index + match[0].length + 1800);
+        if (
+          !nextSource.includes("appControlId") ||
+          !nextSource.includes("toggleAriaLabel") ||
+          !nextSource.includes("plugin.installed")
+        ) {
+          continue;
+        }
+        findings.push({
+          path: file.relativePath,
+          reason: "Computer Use settings native app cards are still gated to macOS/Windows after Linux patching",
+          snippet: textSnippet(file.text, match[0]),
+          symbol: "computer-use-settings-native-app-card-linux-gate",
+        });
+      }
+    }
+    if (file.text.includes("`computer-use-native-desktop-app-icon`")) {
+      for (const match of file.text.matchAll(nativeAppIconQueryGatePattern)) {
+        const nextSource = file.text.slice(match.index + match[0].length, match.index + match[0].length + 1200);
+        if (!nextSource.includes("`computer-use-native-desktop-app-icon`")) {
+          continue;
+        }
+        findings.push({
+          path: file.relativePath,
+          reason: "Computer Use native app icon query is still gated to macOS/Windows after Linux patching",
+          snippet: textSnippet(file.text, match[0]),
+          symbol: "computer-use-native-app-icon-linux-gate",
         });
       }
     }
@@ -1136,6 +1176,34 @@ function classifyPlatformGate({ file, gate, context }) {
       linuxSurfaceId: null,
       patchTarget: "none",
       recommendation: "No action; Linux is already part of this platform gate.",
+    };
+  }
+
+  if (
+    lower.includes("appcontrolid") &&
+    lower.includes("togglearialabel") &&
+    lower.includes("plugin.installed")
+  ) {
+    return {
+      category: "linux-parity-drift",
+      confidence: "high",
+      feature: "Computer Use settings native app cards",
+      issueCandidate: false,
+      linuxSurfaceId: "computer_use_plugin",
+      patchTarget: "scripts/patches/impl/computer-use.js",
+      recommendation: "Patch the settings native app card loop so Linux renders the existing Computer Use Any App/native app controls.",
+    };
+  }
+
+  if (lower.includes("computer-use-native-desktop-app-icon")) {
+    return {
+      category: "linux-parity-drift",
+      confidence: "high",
+      feature: "Computer Use native app icons",
+      issueCandidate: false,
+      linuxSurfaceId: "computer_use_plugin",
+      patchTarget: "scripts/patches/impl/computer-use.js",
+      recommendation: "Patch the native desktop app icon query gate so Linux can request native app icons for Computer Use cards and mentions.",
     };
   }
 
