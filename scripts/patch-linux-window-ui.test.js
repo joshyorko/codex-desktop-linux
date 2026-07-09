@@ -6205,47 +6205,34 @@ test("reports missing Computer Use plugin gate as optional drift", () => {
   }
 });
 
-test("enables Computer Use desktop features on Linux", () => {
+test("preserves upstream Computer Use desktop feature rollout", () => {
   const patched = applyPatchTwice(
     applyLinuxComputerUseFeaturePatch,
     computerUseFeatureBundleFixture(),
   );
 
-  assert.match(
-    patched,
-    /return n===`linux`\?\{\.\.\.e,computerUse:!0,computerUseNodeRepl:!0\}:n!==`win32`\|\|t\.CODEX_ELECTRON_ENABLE_WINDOWS_COMPUTER_USE!==`1`\?e:\{\.\.\.e,computerUse:!0,computerUseNodeRepl:!0\}/,
-  );
-  assert.match(patched, /CODEX_ELECTRON_ENABLE_WINDOWS_COMPUTER_USE/);
+  assert.equal(patched, computerUseFeatureBundleFixture());
 });
 
-test("enables current Computer Use desktop features on Linux", () => {
+test("preserves current Computer Use desktop feature rollout", () => {
   const patched = applyPatchTwice(
     applyLinuxComputerUseFeaturePatch,
     currentComputerUseFeatureBundleFixture(),
   );
 
-  assert.match(
-    patched,
-    /let a=i===`linux`\?\{\.\.\.e,computerUse:!0,computerUseNodeRepl:!0\}:i===`win32`&&r\.CODEX_ELECTRON_ENABLE_WINDOWS_COMPUTER_USE===`1`\?\{\.\.\.e,computerUse:!0,computerUseNodeRepl:!0\}:e,o=n===t\.D\.Dev\?be\(r\):null;return o==null\?a:\{\.\.\.a,\.\.\.o\}/,
-  );
-  assert.match(patched, /CODEX_ELECTRON_ENABLE_WINDOWS_COMPUTER_USE/);
+  assert.equal(patched, currentComputerUseFeatureBundleFixture());
 });
 
-test("enables nested current Computer Use desktop features on Linux", () => {
+test("preserves nested current Computer Use desktop feature rollout", () => {
   const source =
     "function Ve(e,{buildFlavor:t=n.F.resolve(),env:r=p.default.env,platform:i=p.default.platform}={}){let a=i===`darwin`&&!n.F.isInternal(t)&&e.computerUseNodeRepl!=null?{...e,computerUseNodeRepl:!1}:e,o=i===`win32`&&e.computerUse===!0?{...a,computerUseNodeRepl:!0}:a,s=i===`win32`&&r.CODEX_ELECTRON_ENABLE_WINDOWS_COMPUTER_USE===`1`?{...o,computerUse:!0,computerUseNodeRepl:!0}:o,c=t===n.F.Dev?He(r):null;return c==null?{...s,deviceAttestation:ve({platform:i})}:{...s,...c,deviceAttestation:ve({platform:i})}}";
 
   const patched = applyPatchTwice(applyLinuxComputerUseFeaturePatch, source);
 
-  assert.match(
-    patched,
-    /,s=i===`linux`\?\{\.\.\.o,computerUse:!0,computerUseNodeRepl:!0\}:i===`win32`&&r\.CODEX_ELECTRON_ENABLE_WINDOWS_COMPUTER_USE===`1`\?\{\.\.\.o,computerUse:!0,computerUseNodeRepl:!0\}:o,/,
-  );
-  assert.match(patched, /i===`darwin`&&!n\.F\.isInternal\(t\)/);
-  assert.match(patched, /i===`win32`&&e\.computerUse===!0/);
+  assert.equal(patched, source);
 });
 
-test("patches all Computer Use desktop feature gates in one pass", () => {
+test("does not patch unrelated Computer Use desktop feature gates", () => {
   const patchedFeature =
     "function A(e,{env:t=process.env,platform:n=process.platform}={}){return n===`linux`?{...e,computerUse:!0,computerUseNodeRepl:!0}:n!==`win32`||t.CODEX_ELECTRON_ENABLE_WINDOWS_COMPUTER_USE!==`1`?e:{...e,computerUse:!0,computerUseNodeRepl:!0}}";
   const unpatchedFeature =
@@ -6253,11 +6240,7 @@ test("patches all Computer Use desktop feature gates in one pass", () => {
 
   const patched = applyLinuxComputerUseFeaturePatch(`${patchedFeature}${unpatchedFeature}`);
 
-  assert.equal((patched.match(/===`linux`/g) || []).length, 2);
-  assert.doesNotMatch(
-    patched,
-    /function B\(e,\{env:r=process\.env,platform:i=process\.platform\}=\{\}\)\{return i!==`win32`/,
-  );
+  assert.equal(patched, `${patchedFeature}${unpatchedFeature}`);
 });
 
 test("shows Computer Use plugin UI on Linux without the upstream rollout flag", () => {
@@ -6584,6 +6567,33 @@ test("keeps object-helper Computer Use host compatibility on Linux when platform
     patched,
     /v=g\(\{enabled:s===`linux`\|\|a,isComputerUseFeatureEnabled:s===`linux`\|\|_\.enabled,isComputerUseFeatureLoading:s!==`linux`&&_\.isLoading,isComputerUseGateEnabled:s===`linux`\|\|d,isHostCompatiblePlatform:s===`linux`\|\|m\(s\),isHostLocal:c,isPlatformLoading:o,windowType:`electron`\}\)/,
   );
+});
+
+test("Computer Use availability descriptor matches the current settings bundle name", () => {
+  const [descriptor] = require("./patches/core/all-linux/webview/computer-use-ui/patch.js");
+
+  assert.match("computer-use-settings-B1QCeMSP.js", descriptor.pattern);
+  assert.doesNotMatch("use-model-settings-5PHNqYL4.js", descriptor.pattern);
+  assert.doesNotMatch("use-is-plugins-enabled-current.js", descriptor.pattern);
+  assert.doesNotMatch("use-native-apps.electron-DhuUEit1.js", descriptor.pattern);
+});
+
+test("preserves current Computer Use settings availability result on Linux", () => {
+  const source =
+    "let availability=useAvailability(arg),{platform:platform}=usePlatform();" +
+    "let props={computerUseAvailability:availability,platform:platform};" +
+    "availability.available&&render(props);";
+
+  const patched = applyPatchTwice(applyLinuxComputerUseRendererAvailabilityPatch, source);
+
+  assert.equal(patched, source);
+});
+
+test("preserves entitlement-denied and rollout-disabled Computer Use results", () => {
+  const denied = "let availability=useAvailability(arg),{platform:platform}=usePlatform();availability={...availability,available:!1,entitled:!1,enabled:!1};";
+  const rolloutDisabled = "let availability=useAvailability(arg),{platform:platform}=usePlatform();availability={...availability,available:!1,rolloutEnabled:!1};";
+  assert.equal(applyPatchTwice(applyLinuxComputerUseRendererAvailabilityPatch, denied), denied);
+  assert.equal(applyPatchTwice(applyLinuxComputerUseRendererAvailabilityPatch, rolloutDisabled), rolloutDisabled);
 });
 
 test("uses only the real installed bundled Computer Use entry in settings", () => {
@@ -7538,10 +7548,7 @@ test("patchMainBundleSource applies Computer Use feature patch when env var is s
 
     const patched = patchMainBundleSource(source, null);
 
-    assert.match(
-      patched,
-      /return n===`linux`\?\{\.\.\.e,computerUse:!0,computerUseNodeRepl:!0\}/,
-    );
+    assert.doesNotMatch(patched, /return n===`linux`\?\{\.\.\.e,computerUse:!0/);
     assert.match(patched, /\(t===`darwin`\|\|t===`linux`\)&&e\.computerUse/);
   });
 });
@@ -7557,10 +7564,7 @@ test("patchMainBundleSource applies Computer Use feature patch when settings.jso
 
     const patched = patchMainBundleSource(source, null);
 
-    assert.match(
-      patched,
-      /return n===`linux`\?\{\.\.\.e,computerUse:!0,computerUseNodeRepl:!0\}/,
-    );
+    assert.doesNotMatch(patched, /return n===`linux`\?\{\.\.\.e,computerUse:!0/);
   });
 });
 
