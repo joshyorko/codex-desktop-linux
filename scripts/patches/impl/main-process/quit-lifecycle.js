@@ -1,52 +1,30 @@
 "use strict";
 
 function applyLinuxQuitGuardPatch(currentSource) {
-  let patchedSource = currentSource;
-
-  const quitGuardNeedle = "let n=require(`electron`),i=require(`node:path`),o=require(`node:fs`);";
-  const legacyQuitGuardSuffix =
-    "let codexLinuxQuitInProgress=!1,codexLinuxMarkQuitInProgress=()=>{codexLinuxQuitInProgress=!0},codexLinuxIsQuitInProgress=()=>codexLinuxQuitInProgress===!0;";
   const quitGuardSuffix =
     "let codexLinuxQuitInProgress=!1,codexLinuxExplicitQuitApproved=!1,codexLinuxExplicitQuitDrainTimeoutMs=3e3,codexLinuxMarkQuitInProgress=()=>{codexLinuxQuitInProgress=!0},codexLinuxPrepareForExplicitQuit=()=>{codexLinuxExplicitQuitApproved=!0,codexLinuxMarkQuitInProgress()},codexLinuxShouldBypassQuitPrompt=()=>codexLinuxExplicitQuitApproved===!0,codexLinuxIsQuitInProgress=()=>codexLinuxQuitInProgress===!0;";
-  const quitGuardPatch = `${quitGuardNeedle}${quitGuardSuffix}`;
 
-  if (patchedSource.includes("codexLinuxExplicitQuitApproved=!1")) {
-    return patchedSource;
+  if (currentSource.includes("codexLinuxExplicitQuitApproved=!1")) {
+    return currentSource;
   }
 
-  if (patchedSource.includes(legacyQuitGuardSuffix)) {
-    return patchedSource.replace(legacyQuitGuardSuffix, quitGuardSuffix);
+  const currentBundlerQuitGuardNeedle =
+    /(?:let|,)\s*([A-Za-z_$][\w$]*)=require\(`electron`\);\1=[^;]+;[\s\S]{0,500}?(?:let|,)\s*([A-Za-z_$][\w$]*)=require\(`node:path`\);\2=[^;]+;[\s\S]{0,500}?(?:let|,)\s*([A-Za-z_$][\w$]*)=require\(`node:fs`\);\3=[^;]+;/;
+  const currentBundlerQuitGuardMatch = currentSource.match(currentBundlerQuitGuardNeedle);
+  if (currentBundlerQuitGuardMatch != null) {
+    const matchedPrefix = currentBundlerQuitGuardMatch[0];
+    return currentSource.replace(matchedPrefix, `${matchedPrefix}${quitGuardSuffix}`);
   }
 
-  if (patchedSource.includes(quitGuardNeedle)) {
-    return patchedSource.replace(quitGuardNeedle, quitGuardPatch);
-  }
-
-  const splitQuitGuardNeedle =
-    /let ([A-Za-z_$][\w$]*)=require\(`electron`\);(?:\1=[^;]+;)?let ([A-Za-z_$][\w$]*)=require\(`node:path`\);(?:\2=[^;]+;)?let ([A-Za-z_$][\w$]*)=require\(`node:fs`\);(?:\3=[^;]+;)?/;
-  const splitQuitGuardMatch = patchedSource.match(splitQuitGuardNeedle);
-  if (splitQuitGuardMatch != null) {
-    const matchedPrefix = splitQuitGuardMatch[0];
-    return patchedSource.replace(matchedPrefix, `${matchedPrefix}${quitGuardSuffix}`);
-  }
-
-  if (patchedSource.includes("require(`electron`)")) {
-    return `${quitGuardSuffix}${patchedSource}`;
-  }
-
-  if (patchedSource.includes("require(`electron`)") && patchedSource.includes("require(`node:path`)")) {
+  if (currentSource.includes("require(`electron`)") && currentSource.includes("require(`node:path`)")) {
     console.warn("WARN: Could not find Linux quit guard insertion point — skipping explicit quit-state patch");
   }
 
-  return patchedSource;
+  return currentSource;
 }
 
 function linuxExplicitQuitExpression() {
   return "typeof codexLinuxPrepareForExplicitQuit===`function`?codexLinuxPrepareForExplicitQuit():typeof codexLinuxMarkQuitInProgress===`function`&&codexLinuxMarkQuitInProgress(),";
-}
-
-function linuxCanQuitWithoutPromptExpression(quitControllerVar) {
-  return `(typeof ${quitControllerVar}.canQuitWithoutPrompt===\`function\`&&${quitControllerVar}.canQuitWithoutPrompt())`;
 }
 
 function applyLinuxWillQuitDrainTimeoutPatch(currentSource) {
@@ -54,26 +32,15 @@ function applyLinuxWillQuitDrainTimeoutPatch(currentSource) {
 
   const explicitQuitDrainGuard =
     "process.platform===`linux`&&(typeof codexLinuxIsQuitInProgress===`function`&&codexLinuxIsQuitInProgress())";
-  const originalDrainSnippet =
-    "Promise.all([...u.values()].map(e=>e.flush())).finally(()=>{d(),f.dispose(),n.app.quit()})";
-  const patchedDrainSnippet =
-    "(()=>{let codexLinuxFinalizeQuit=()=>{d(),f.dispose(),n.app.quit()},codexLinuxDrainPromise=Promise.all([...u.values()].map(e=>e.flush()));" +
-    `if(${explicitQuitDrainGuard}){Promise.race([codexLinuxDrainPromise,new Promise(e=>setTimeout(e,typeof codexLinuxExplicitQuitDrainTimeoutMs===\`number\`?codexLinuxExplicitQuitDrainTimeoutMs:3e3))]).finally(codexLinuxFinalizeQuit);return}` +
-    "codexLinuxDrainPromise.finally(codexLinuxFinalizeQuit)})()";
   let patchedAny = false;
 
-  if (patchedSource.includes(originalDrainSnippet)) {
-    patchedAny = true;
-    patchedSource = patchedSource.split(originalDrainSnippet).join(patchedDrainSnippet);
-  }
-
   const drainRegex =
-    /Promise\.all\(\[\.\.\.([A-Za-z_$][\w$]*)\.values\(\)\]\.map\(e=>e\.flush\(\)\)\)\.finally\(\(\)=>\{([A-Za-z_$][\w$]*)\(\),([A-Za-z_$][\w$]*)\.dispose\(\),([A-Za-z_$][\w$]*)\.app\.quit\(\)\}\)/g;
+    /Promise\.all\(\[([A-Za-z_$][\w$]*)\.flush\(\),([A-Za-z_$][\w$]*)\.flush\(\)\]\)\.finally\(\(\)=>\{([A-Za-z_$][\w$]*)\(\),([A-Za-z_$][\w$]*)\.dispose\(\),([A-Za-z_$][\w$]*)\.app\.quit\(\)\}\)/g;
   patchedSource = patchedSource.replace(
     drainRegex,
-    (_match, globalStatesVar, flushDisposeVar, disposablesVar, electronVar) => {
+    (_match, firstDrainVar, secondDrainVar, flushDisposeVar, disposablesVar, electronVar) => {
       patchedAny = true;
-      return `(()=>{let codexLinuxFinalizeQuit=()=>{${flushDisposeVar}(),${disposablesVar}.dispose(),${electronVar}.app.quit()},codexLinuxDrainPromise=Promise.all([...${globalStatesVar}.values()].map(e=>e.flush()));if(${explicitQuitDrainGuard}){Promise.race([codexLinuxDrainPromise,new Promise(e=>setTimeout(e,typeof codexLinuxExplicitQuitDrainTimeoutMs===\`number\`?codexLinuxExplicitQuitDrainTimeoutMs:3e3))]).finally(codexLinuxFinalizeQuit);return}codexLinuxDrainPromise.finally(codexLinuxFinalizeQuit)})()`;
+      return `(()=>{let codexLinuxFinalizeQuit=()=>{${flushDisposeVar}(),${disposablesVar}.dispose(),${electronVar}.app.quit()},codexLinuxDrainPromise=Promise.all([${firstDrainVar}.flush(),${secondDrainVar}.flush()]);if(${explicitQuitDrainGuard}){Promise.race([codexLinuxDrainPromise,new Promise(e=>setTimeout(e,typeof codexLinuxExplicitQuitDrainTimeoutMs===\`number\`?codexLinuxExplicitQuitDrainTimeoutMs:3e3))]).finally(codexLinuxFinalizeQuit);return}codexLinuxDrainPromise.finally(codexLinuxFinalizeQuit)})()`;
     },
   );
 
@@ -81,7 +48,7 @@ function applyLinuxWillQuitDrainTimeoutPatch(currentSource) {
     !patchedAny &&
     !patchedSource.includes("codexLinuxDrainPromise=Promise.all(") &&
     patchedSource.includes("n.app.on(`will-quit`,") &&
-    patchedSource.includes(".map(e=>e.flush())")
+    patchedSource.includes(".flush()")
   ) {
     console.warn("WARN: Could not find will-quit drain sequence — skipping Linux explicit quit drain timeout patch");
   }
@@ -100,11 +67,9 @@ function applyLinuxExplicitQuitPromptBypassPatch(currentSource) {
   const beforeQuitNeedle =
     "if(e||i.canQuitWithoutPrompt()||r||!s&&!c){g=!0,a.markAppQuitting();return}";
   const beforeQuitPatch =
-    `if(${promptBypassExpression}e||${linuxCanQuitWithoutPromptExpression("i")}||r||!s&&!c){${quitMarkerExpression}g=!0,a.markAppQuitting();return}`;
+    `if(${promptBypassExpression}e||i.canQuitWithoutPrompt()||r||!s&&!c){${quitMarkerExpression}g=!0,a.markAppQuitting();return}`;
   const beforeQuitRegex =
     /if\(([A-Za-z_$][\w$]*)\|\|([A-Za-z_$][\w$]*)\.canQuitWithoutPrompt\(\)\|\|([A-Za-z_$][\w$]*)\|\|!([A-Za-z_$][\w$]*)&&!([A-Za-z_$][\w$]*)\)\{([A-Za-z_$][\w$]*)=!0,([A-Za-z_$][\w$]*)\.markAppQuitting\(\);return\}/g;
-  const patchedBeforeQuitWithoutMarkerRegex =
-    /if\(\(typeof codexLinuxShouldBypassQuitPrompt===`function`&&codexLinuxShouldBypassQuitPrompt\(\)\)\|\|([A-Za-z_$][\w$]*)\|\|([A-Za-z_$][\w$]*)\.canQuitWithoutPrompt\(\)\|\|([A-Za-z_$][\w$]*)\|\|!([A-Za-z_$][\w$]*)&&!([A-Za-z_$][\w$]*)\)\{([A-Za-z_$][\w$]*)=!0,([A-Za-z_$][\w$]*)\.markAppQuitting\(\);return\}/g;
   const acceptedPromptRegex =
     /([A-Za-z_$][\w$]*)\.markQuitApproved\(\),([A-Za-z_$][\w$]*)=!0,([A-Za-z_$][\w$]*)\.markAppQuitting\(\)/g;
   let patchedAny = false;
@@ -118,14 +83,7 @@ function applyLinuxExplicitQuitPromptBypassPatch(currentSource) {
     beforeQuitRegex,
     (_match, updateInstallVar, quitControllerVar, appQuittingVar, activeConversationVar, automationVar, quittingStateVar, appQuittingControllerVar) => {
       patchedAny = true;
-      return `if(${promptBypassExpression}${updateInstallVar}||${linuxCanQuitWithoutPromptExpression(quitControllerVar)}||${appQuittingVar}||!${activeConversationVar}&&!${automationVar}){${quitMarkerExpression}${quittingStateVar}=!0,${appQuittingControllerVar}.markAppQuitting();return}`;
-    },
-  );
-  patchedSource = patchedSource.replace(
-    patchedBeforeQuitWithoutMarkerRegex,
-    (_match, updateInstallVar, quitControllerVar, appQuittingVar, activeConversationVar, automationVar, quittingStateVar, appQuittingControllerVar) => {
-      patchedAny = true;
-      return `if(${promptBypassExpression}${updateInstallVar}||${linuxCanQuitWithoutPromptExpression(quitControllerVar)}||${appQuittingVar}||!${activeConversationVar}&&!${automationVar}){${quitMarkerExpression}${quittingStateVar}=!0,${appQuittingControllerVar}.markAppQuitting();return}`;
+      return `if(${promptBypassExpression}${updateInstallVar}||${quitControllerVar}.canQuitWithoutPrompt()||${appQuittingVar}||!${activeConversationVar}&&!${automationVar}){${quitMarkerExpression}${quittingStateVar}=!0,${appQuittingControllerVar}.markAppQuitting();return}`;
     },
   );
   patchedSource = patchedSource.replace(

@@ -27,7 +27,7 @@ function isTrayFactoryFunction(source, functionName) {
 
 function findDynamicTraySetup(source) {
   const setupRegex =
-    /let ([A-Za-z_$][\w$]*)=async\(\)=>\{[A-Za-z_$][\w$]*=!0;try\{await ([A-Za-z_$][\w$]*)\(\{(?:buildFlavor|appBrand):/g;
+    /let ([A-Za-z_$][\w$]*)=async\(\)=>\{[A-Za-z_$][\w$]*=!0;try\{await ([A-Za-z_$][\w$]*)\(\{appBrand:/g;
   let match;
   while ((match = setupRegex.exec(source)) != null) {
     const [, setupFn, factoryFn] = match;
@@ -87,7 +87,19 @@ function addDynamicTraySetupFailureLogging(source, traySetup) {
 
 function applyLinuxTrayPatch(currentSource, iconPathExpression) {
   let patchedSource = currentSource;
-  const electronVar = requireName(currentSource, "electron") ?? "n";
+  const electronVar = requireName(currentSource, "electron");
+  if (electronVar == null) {
+    if (
+      currentSource.includes("new ") && currentSource.includes(".Tray(") ||
+      currentSource.includes("canHideLastWindowToTray") ||
+      currentSource.includes("trayMenuThreads=")
+    ) {
+      console.warn(
+        "WARN: Could not find tray Electron binding — skipping Linux tray patch",
+      );
+    }
+    return currentSource;
+  }
   const packagedTrayIconPathExpression = "process.resourcesPath+`/../.codex-linux/codex-desktop-tray.png`";
   const packagedAppIconPathExpression = "process.resourcesPath+`/../.codex-linux/codex-desktop.png`";
 
@@ -112,25 +124,18 @@ function applyLinuxTrayPatch(currentSource, iconPathExpression) {
   if (iconPathExpression != null) {
     const linuxIconFallback =
       `if(process.platform===\`linux\`){let __codexLinuxTrayIcon=${electronVar}.nativeImage.createFromPath(${packagedTrayIconPathExpression});if(!__codexLinuxTrayIcon.isEmpty())return{defaultIcon:__codexLinuxTrayIcon,chronicleRunningIcon:null};let __codexLinuxAppIcon=${electronVar}.nativeImage.createFromPath(${packagedAppIconPathExpression});if(!__codexLinuxAppIcon.isEmpty())return{defaultIcon:__codexLinuxAppIcon,chronicleRunningIcon:null};let __codexLinuxUpstreamTrayIcon=${electronVar}.nativeImage.createFromPath(${iconPathExpression});if(!__codexLinuxUpstreamTrayIcon.isEmpty())return{defaultIcon:__codexLinuxUpstreamTrayIcon,chronicleRunningIcon:null}}`;
-    const legacyGetFileIconSize = `process.platform===\`win32\`?\`small\`:\`normal\``;
-    const trayIconNeedle =
-      `for(let e of o){let t=${electronVar}.nativeImage.createFromPath(e);if(!t.isEmpty())return{defaultIcon:t,chronicleRunningIcon:null}}return{defaultIcon:await ${electronVar}.app.getFileIcon(process.execPath,{size:${legacyGetFileIconSize}}),chronicleRunningIcon:null}}`;
-    const trayIconPatch =
-      `for(let e of o){let t=${electronVar}.nativeImage.createFromPath(e);if(!t.isEmpty())return{defaultIcon:t,chronicleRunningIcon:null}}${linuxIconFallback}return{defaultIcon:await ${electronVar}.app.getFileIcon(process.execPath,{size:${legacyGetFileIconSize}}),chronicleRunningIcon:null}}`;
     const trayIconFallbackRegex =
-      /for\(let ([A-Za-z_$][\w$]*) of ([A-Za-z_$][\w$]*)\)\{let ([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)\.nativeImage\.createFromPath\(\1\);if\(!\3\.isEmpty\(\)\)return\{defaultIcon:\3,chronicleRunningIcon:null\}\}return\{defaultIcon:await \4\.app\.getFileIcon\(process\.execPath,\{size:((?:process\.platform===`win32`\?`small`:`normal`)|`small`|`normal`)\}\),chronicleRunningIcon:null\}\}/;
+      /let ([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*(?:,[A-Za-z_$][\w$]*)*)\);return \1==null\?\{defaultIcon:await ([A-Za-z_$][\w$]*)\.app\.getFileIcon\(process\.execPath,\{size:`small`\}\),chronicleRunningIcon:null\}:\{defaultIcon:\1,chronicleRunningIcon:null\}/;
     if (
       patchedSource.includes(`nativeImage.createFromPath(${packagedTrayIconPathExpression})`) ||
       patchedSource.includes(`nativeImage.createFromPath(${packagedAppIconPathExpression})`)
     ) {
       // Already patched.
-    } else if (patchedSource.includes(trayIconNeedle)) {
-      patchedSource = patchedSource.replace(trayIconNeedle, trayIconPatch);
     } else if (trayIconFallbackRegex.test(patchedSource)) {
       patchedSource = patchedSource.replace(
         trayIconFallbackRegex,
-        (_match, iconPathVar, candidatesVar, imageVar, electronAlias, sizeExpression) =>
-          `for(let ${iconPathVar} of ${candidatesVar}){let ${imageVar}=${electronAlias}.nativeImage.createFromPath(${iconPathVar});if(!${imageVar}.isEmpty())return{defaultIcon:${imageVar},chronicleRunningIcon:null}}if(process.platform===\`linux\`){let __codexLinuxTrayIcon=${electronAlias}.nativeImage.createFromPath(${packagedTrayIconPathExpression});if(!__codexLinuxTrayIcon.isEmpty())return{defaultIcon:__codexLinuxTrayIcon,chronicleRunningIcon:null};let __codexLinuxAppIcon=${electronAlias}.nativeImage.createFromPath(${packagedAppIconPathExpression});if(!__codexLinuxAppIcon.isEmpty())return{defaultIcon:__codexLinuxAppIcon,chronicleRunningIcon:null};let __codexLinuxUpstreamTrayIcon=${electronAlias}.nativeImage.createFromPath(${iconPathExpression});if(!__codexLinuxUpstreamTrayIcon.isEmpty())return{defaultIcon:__codexLinuxUpstreamTrayIcon,chronicleRunningIcon:null}}return{defaultIcon:await ${electronAlias}.app.getFileIcon(process.execPath,{size:${sizeExpression}}),chronicleRunningIcon:null}}`,
+        (_match, resultAlias, resolverAlias, resolverArgs, electronAlias) =>
+          `let ${resultAlias}=${resolverAlias}(${resolverArgs});if(${resultAlias}!=null)return{defaultIcon:${resultAlias},chronicleRunningIcon:null};${linuxIconFallback}return{defaultIcon:await ${electronAlias}.app.getFileIcon(process.execPath,{size:\`small\`}),chronicleRunningIcon:null}`,
       );
     } else {
       console.warn("WARN: Could not find tray icon fallback — skipping Linux tray icon patch");
@@ -138,12 +143,12 @@ function applyLinuxTrayPatch(currentSource, iconPathExpression) {
   }
 
   const patchedCloseToTrayRegex =
-    /if\(\(process\.platform===`win32`\|\|process\.platform===`linux`\)&&!this\.isAppQuitting&&!\(typeof codexLinuxIsQuitInProgress===`function`&&codexLinuxIsQuitInProgress\(\)\)&&this\.options\.canHideLast(?:Local)?WindowToTray\?\.\(\)===!0&&![A-Za-z_$][\w$]*\)\{[A-Za-z_$][\w$]*\.preventDefault\(\),[A-Za-z_$][\w$]*\.hide\(\);return\}/;
+    /if\(\(process\.platform===`win32`\|\|process\.platform===`linux`\)&&!this\.isAppQuitting&&!\(typeof codexLinuxIsQuitInProgress===`function`&&codexLinuxIsQuitInProgress\(\)\)&&this\.options\.canHideLastWindowToTray\?\.\(\)===!0&&![A-Za-z_$][\w$]*\)\{[A-Za-z_$][\w$]*\.preventDefault\(\),[A-Za-z_$][\w$]*\.hide\(\);return\}/;
   if (patchedCloseToTrayRegex.test(patchedSource)) {
     // Already patched with a newer minifier's window variable.
   } else {
     const closeToTrayRegex =
-      /if\(process\.platform===`win32`&&!this\.isAppQuitting&&this\.options\.(canHideLast(?:Local)?WindowToTray)\?\.\(\)===!0&&!([A-Za-z_$][\w$]*)\)\{([A-Za-z_$][\w$]*)\.preventDefault\(\),([A-Za-z_$][\w$]*)\.hide\(\);return\}/;
+      /if\(process\.platform===`win32`&&!this\.isAppQuitting&&this\.options\.(canHideLastWindowToTray)\?\.\(\)===!0&&!([A-Za-z_$][\w$]*)\)\{([A-Za-z_$][\w$]*)\.preventDefault\(\),([A-Za-z_$][\w$]*)\.hide\(\);return\}/;
     const closeToTrayMatch = patchedSource.match(closeToTrayRegex);
     if (closeToTrayMatch != null) {
       const [, gateMethodName, hasOtherWindowVar, eventVar, windowVar] = closeToTrayMatch;
@@ -219,16 +224,8 @@ function applyLinuxTrayPatch(currentSource, iconPathExpression) {
     "e.once(`menu-will-show`,()=>{this.isNativeTrayMenuOpen=!0}),e.once(`menu-will-close`,()=>{this.isNativeTrayMenuOpen=!1,this.handleNativeTrayMenuClosed()}),this.tray.popUpContextMenu(e)}";
   const trayContextMenuPatch =
     "if(process.platform===`linux`)return;e.once(`menu-will-show`,()=>{this.isNativeTrayMenuOpen=!0}),e.once(`menu-will-close`,()=>{this.isNativeTrayMenuOpen=!1,this.handleNativeTrayMenuClosed()}),this.tray.popUpContextMenu(e)}";
-  const oldLinuxPopupPatch =
-    "e.once(`menu-will-show`,()=>{this.isNativeTrayMenuOpen=!0}),e.once(`menu-will-close`,()=>{this.isNativeTrayMenuOpen=!1,this.handleNativeTrayMenuClosed()}),process.platform===`linux`&&this.tray.setContextMenu?.(e),this.tray.popUpContextMenu(e)}";
-  const badLinuxPopupPatch =
-    "e.once(`menu-will-show`,()=>{this.isNativeTrayMenuOpen=!0}),if(process.platform===`linux`)return;e.once(`menu-will-close`,()=>{this.isNativeTrayMenuOpen=!1,this.handleNativeTrayMenuClosed()}),this.tray.popUpContextMenu(e)}";
   if (patchedSource.includes("if(process.platform===`linux`)return;e.once(`menu-will-show`")) {
     // Already patched.
-  } else if (patchedSource.includes(badLinuxPopupPatch)) {
-    patchedSource = patchedSource.replace(badLinuxPopupPatch, trayContextMenuPatch);
-  } else if (patchedSource.includes(oldLinuxPopupPatch)) {
-    patchedSource = patchedSource.replace(oldLinuxPopupPatch, trayContextMenuPatch);
   } else if (patchedSource.includes(trayContextMenuNeedle)) {
     patchedSource = patchedSource.replace(trayContextMenuNeedle, trayContextMenuPatch);
   } else {
@@ -237,50 +234,31 @@ function applyLinuxTrayPatch(currentSource, iconPathExpression) {
 
   const trayMenuThreadsNeedle =
     "case`tray-menu-threads-changed`:this.trayMenuThreads=e.trayMenuThreads;return";
-  const trayMenuThreadsExistingPatch =
-    "case`tray-menu-threads-changed`:this.trayMenuThreads=e.trayMenuThreads,process.platform===`linux`&&this.setLinuxTrayContextMenu?.();return";
   const trayMenuThreadsPatch =
     "case`tray-menu-threads-changed`:this.trayMenuThreads=e.trayMenuThreads,process.platform===`linux`&&!(typeof codexLinuxIsQuitInProgress===`function`&&codexLinuxIsQuitInProgress())&&this.setLinuxTrayContextMenu?.();return";
   if (patchedSource.includes("this.trayMenuThreads=e.trayMenuThreads,process.platform===`linux`&&!(typeof codexLinuxIsQuitInProgress===`function`&&codexLinuxIsQuitInProgress())&&this.setLinuxTrayContextMenu?.()")) {
     // Already patched.
-  } else if (patchedSource.includes(trayMenuThreadsExistingPatch)) {
-    patchedSource = patchedSource.replace(trayMenuThreadsExistingPatch, trayMenuThreadsPatch);
   } else if (patchedSource.includes(trayMenuThreadsNeedle)) {
     patchedSource = patchedSource.replace(trayMenuThreadsNeedle, trayMenuThreadsPatch);
   } else {
     console.warn("WARN: Could not find tray menu thread update handler — skipping Linux tray context refresh patch");
   }
 
-  const trayStartupNeedle = "E&&oe();";
-  const previousTrayStartupPatch = "(E||process.platform===`linux`)&&oe();";
   const trayEnabledExpression = "process.platform===`linux`&&(typeof codexLinuxIsTrayEnabled!==`function`||codexLinuxIsTrayEnabled())";
-  const trayStartupPatch = `(E||${trayEnabledExpression})&&oe();`;
-  patchedSource = patchedSource.replaceAll(
-    "process.platform===`linux`&&codexLinuxIsTrayEnabled())&&",
-    `${trayEnabledExpression})&&`,
-  );
-  if (patchedSource.includes(trayStartupPatch)) {
+  const traySetup = findDynamicTraySetup(patchedSource);
+  const dynamicTrayStartupMatch = traySetup == null
+    ? null
+    : findDynamicTrayStartupCall(patchedSource, traySetup.setupFn, traySetup.index);
+  if (
+    traySetup != null &&
+    patchedSource.includes(`${trayEnabledExpression})&&${traySetup.setupFn}();`)
+  ) {
     // Already patched.
-  } else if (patchedSource.includes(previousTrayStartupPatch)) {
-    patchedSource = patchedSource.replace(previousTrayStartupPatch, trayStartupPatch);
-  } else if (patchedSource.includes(trayStartupNeedle)) {
-    patchedSource = patchedSource.replace(trayStartupNeedle, trayStartupPatch);
+  } else if (dynamicTrayStartupMatch != null) {
+    const isWindowsVar = dynamicTrayStartupMatch[1];
+    patchedSource = `${patchedSource.slice(0, dynamicTrayStartupMatch.index)}(${isWindowsVar}||${trayEnabledExpression})&&${traySetup.setupFn}();${patchedSource.slice(dynamicTrayStartupMatch.index + dynamicTrayStartupMatch[0].length)}`;
   } else {
-    const traySetup = findDynamicTraySetup(patchedSource);
-    const dynamicTrayStartupMatch = traySetup == null
-      ? null
-      : findDynamicTrayStartupCall(patchedSource, traySetup.setupFn, traySetup.index);
-    if (
-      traySetup != null &&
-      patchedSource.includes(`${trayEnabledExpression})&&${traySetup.setupFn}();`)
-    ) {
-      // Already patched with a newer minifier's tray setup identifier.
-    } else if (dynamicTrayStartupMatch != null) {
-      const isWindowsVar = dynamicTrayStartupMatch[1];
-      patchedSource = `${patchedSource.slice(0, dynamicTrayStartupMatch.index)}(${isWindowsVar}||${trayEnabledExpression})&&${traySetup.setupFn}();${patchedSource.slice(dynamicTrayStartupMatch.index + dynamicTrayStartupMatch[0].length)}`;
-    } else {
-      console.warn("WARN: Could not find tray startup call — skipping Linux tray startup patch");
-    }
+    console.warn("WARN: Could not find tray startup call — skipping Linux tray startup patch");
   }
 
   const traySetupForDiagnostics = findDynamicTraySetup(patchedSource);
