@@ -8,7 +8,9 @@ use crate::{
 use anyhow::{anyhow, Context, Result};
 use chrono::{Duration, Utc};
 use semver::Version;
+use serde::Deserialize;
 use std::{
+    collections::BTreeMap,
     ffi::{OsStr, OsString},
     fs,
     io::Write,
@@ -49,10 +51,57 @@ pub fn preflight(
     };
     let path_env = command_path_env();
     let managed_cli = cli_management::detect_system_package_managed_cli(&cli_path, &path_env);
+    let mut repaired_npm_install = None;
+    let installed_version = match read_installed_version(&cli_path) {
+        Ok(version) => version,
+        Err(probe_error) => {
+            let Some(missing_dependency) = missing_platform_optional_dependency(&probe_error)
+            else {
+                return Err(probe_error);
+            };
+            if managed_cli.is_some() {
+                return Err(probe_error);
+            }
+            let Some(npm_install) = npm_cli_install(&cli_path, &missing_dependency) else {
+                return Err(probe_error);
+            };
+
+            warn!(
+                ?probe_error,
+                "repairing Codex CLI with missing platform optional dependency"
+            );
+            state.cli_path = Some(cli_path.clone());
+            state.cli_installed_version = None;
+            state.cli_package_manager_latest_version = None;
+            state.cli_last_verified_at = None;
+            state.cli_status = CliStatus::Updating;
+            state.cli_error_message = None;
+            persist_state(paths, state)?;
+
+            let repaired_version = repair_npm_optional_dependency(&npm_install)
+                .and_then(|()| read_installed_version(&cli_path))
+                .with_context(|| {
+                    format!(
+                        "Failed to repair npm-managed Codex CLI at {} after its version probe failed: {probe_error}",
+                        cli_path.display()
+                    )
+                });
+            match repaired_version {
+                Ok(version) => {
+                    repaired_npm_install = Some(npm_install);
+                    version
+                }
+                Err(error) => {
+                    persist_cli_failure(state, paths, &error)?;
+                    return Err(error);
+                }
+            }
+        }
+    };
+    let repaired = repaired_npm_install.is_some();
     let package_manager_version_status =
         current_package_manager_version_status(managed_cli.as_ref(), &path_env);
     let cached_installed_version = state.cli_installed_version.clone();
-    let installed_version = read_installed_version(&cli_path)?;
     state.cli_path = Some(cli_path.clone());
     state.cli_installed_version = Some(installed_version.clone());
     state.cli_package_manager_latest_version = package_manager_version_status
@@ -82,7 +131,7 @@ pub fn preflight(
             cli_path,
             installed_version,
             state,
-            false,
+            repaired,
         ));
     }
 
@@ -91,7 +140,12 @@ pub fn preflight(
     state.cli_status = CliStatus::Checking;
     persist_state(paths, state)?;
 
-    let official_latest_version = match read_latest_version() {
+    let latest_version_result = repaired_npm_install
+        .as_ref()
+        .map_or_else(read_latest_version, |install| {
+            read_latest_version_with_npm(&install.npm_program, &install.command_path_env())
+        });
+    let official_latest_version = match latest_version_result {
         Ok(version) => Some(version),
         Err(error) => {
             state.cli_official_latest_version = None;
@@ -106,7 +160,7 @@ pub fn preflight(
                     cli_path,
                     installed_version,
                     state,
-                    false,
+                    repaired,
                 ));
             }
             warn!(?error, "unable to check latest official Codex CLI version");
@@ -130,7 +184,7 @@ pub fn preflight(
             cli_path,
             installed_version,
             state,
-            false,
+            repaired,
         ));
     }
 
@@ -147,7 +201,7 @@ pub fn preflight(
                 cli_path,
                 installed_version,
                 state,
-                false,
+                repaired,
             ));
         }
     };
@@ -157,7 +211,16 @@ pub fn preflight(
             cli_path,
             installed_version,
             state,
-            false,
+            repaired,
+        ));
+    }
+    if repaired {
+        persist_state(paths, state)?;
+        return Ok(preflight_outcome_from_state(
+            cli_path,
+            installed_version,
+            state,
+            true,
         ));
     }
 
@@ -169,7 +232,10 @@ pub fn preflight(
 
     state.cli_status = CliStatus::Updating;
     persist_state(paths, state)?;
-    update_existing_cli(&cli_path, &latest_version)?;
+    if let Err(error) = update_existing_cli(&cli_path, &latest_version) {
+        persist_cli_failure(state, paths, &error)?;
+        return Err(error);
+    }
 
     let (refreshed_path, refreshed_version) = if let Some(updated_cli) =
         resolve_cli_path_with_version(requested_path, &latest_version)
@@ -369,6 +435,16 @@ pub fn reconcile_if_present(state: &mut PersistedState, paths: &RuntimePaths) ->
 
 fn persist_state(paths: &RuntimePaths, state: &PersistedState) -> Result<()> {
     state.save(&paths.state_file)
+}
+
+fn persist_cli_failure(
+    state: &mut PersistedState,
+    paths: &RuntimePaths,
+    error: &anyhow::Error,
+) -> Result<()> {
+    state.cli_status = CliStatus::Failed;
+    state.cli_error_message = Some(format!("{error:#}"));
+    persist_state(paths, state)
 }
 
 #[cfg(test)]
@@ -669,10 +745,29 @@ fn read_installed_version(cli_path: &Path) -> Result<String> {
     })
 }
 
+fn missing_platform_optional_dependency(error: &anyhow::Error) -> Option<String> {
+    const ERROR_PREFIX: &str = "Missing optional dependency ";
+    let message = error.to_string();
+    let dependency = message
+        .split_once(ERROR_PREFIX)?
+        .1
+        .split_whitespace()
+        .next()?
+        .trim_end_matches('.');
+    match dependency {
+        "@openai/codex-linux-x64" | "@openai/codex-linux-arm64" => Some(dependency.to_string()),
+        _ => None,
+    }
+}
+
 fn read_latest_version() -> Result<String> {
     let npm = npm_program();
-    let output = Command::new(&npm)
-        .env("PATH", command_path_env())
+    read_latest_version_with_npm(&npm, &command_path_env())
+}
+
+fn read_latest_version_with_npm(npm: &Path, path_env: &OsString) -> Result<String> {
+    let output = Command::new(npm)
+        .env("PATH", path_env)
         .args(["view", CLI_PACKAGE_NAME, "version"])
         .output()
         .with_context(|| format!("Failed to spawn {}", npm.display()))?;
@@ -699,6 +794,133 @@ fn read_latest_version() -> Result<String> {
             CLI_PACKAGE_NAME
         )
     })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct NpmCliInstall {
+    package_root: PathBuf,
+    npm_program: PathBuf,
+}
+
+impl NpmCliInstall {
+    fn command_path_env(&self) -> OsString {
+        let fallback = command_path_env();
+        let Some(toolchain_bin) = self.npm_program.parent() else {
+            return fallback;
+        };
+        let mut entries = vec![toolchain_bin.to_path_buf()];
+        entries.extend(std::env::split_paths(&fallback).filter(|entry| entry != toolchain_bin));
+        std::env::join_paths(entries).unwrap_or(fallback)
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CodexNpmPackageManifest {
+    name: String,
+    bin: CodexNpmPackageBins,
+    optional_dependencies: BTreeMap<String, String>,
+}
+
+#[derive(Deserialize)]
+struct CodexNpmPackageBins {
+    codex: String,
+}
+
+fn npm_cli_install(cli_path: &Path, missing_dependency: &str) -> Option<NpmCliInstall> {
+    if cli_path.file_name()? != OsStr::new("codex")
+        || !fs::symlink_metadata(cli_path)
+            .ok()?
+            .file_type()
+            .is_symlink()
+    {
+        return None;
+    }
+
+    let entrypoint = fs::canonicalize(cli_path).ok()?;
+    if entrypoint.file_name()? != OsStr::new("codex.js") {
+        return None;
+    }
+    let entrypoint_bin = entrypoint.parent()?;
+    if entrypoint_bin.file_name()? != OsStr::new("bin") {
+        return None;
+    }
+    let package_root = entrypoint_bin.parent()?;
+    let scope_dir = package_root.parent()?;
+    let node_modules_dir = scope_dir.parent()?;
+    let lib_dir = node_modules_dir.parent()?;
+    if package_root.file_name()? != OsStr::new("codex")
+        || scope_dir.file_name()? != OsStr::new("@openai")
+        || node_modules_dir.file_name()? != OsStr::new("node_modules")
+        || lib_dir.file_name()? != OsStr::new("lib")
+    {
+        return None;
+    }
+
+    let prefix = lib_dir.parent()?;
+    if path_is_system_managed_location(prefix)
+        || lib_dir.join("bun.lock").exists()
+        || lib_dir.join("pnpm-lock.yaml").exists()
+        || node_modules_dir.join(".modules.yaml").exists()
+    {
+        return None;
+    }
+    let toolchain_bin = prefix.join("bin");
+    if fs::canonicalize(cli_path.parent()?).ok()? != fs::canonicalize(&toolchain_bin).ok()? {
+        return None;
+    }
+    let npm_program = toolchain_bin.join("npm");
+    if !is_executable(&npm_program) {
+        return None;
+    }
+
+    let manifest = fs::read(package_root.join("package.json"))
+        .ok()
+        .and_then(|contents| serde_json::from_slice::<CodexNpmPackageManifest>(&contents).ok())?;
+    if manifest.name != CLI_PACKAGE_NAME
+        || manifest.bin.codex != "bin/codex.js"
+        || !manifest
+            .optional_dependencies
+            .contains_key(missing_dependency)
+    {
+        return None;
+    }
+
+    Some(NpmCliInstall {
+        package_root: package_root.to_path_buf(),
+        npm_program,
+    })
+}
+
+fn path_is_system_managed_location(path: &Path) -> bool {
+    path == Path::new("/")
+        || ["/usr", "/bin", "/sbin", "/opt", "/nix", "/snap"]
+            .into_iter()
+            .any(|root| path.starts_with(root))
+}
+
+fn repair_npm_optional_dependency(install: &NpmCliInstall) -> Result<()> {
+    let args = [
+        OsString::from("install"),
+        OsString::from("--include=optional"),
+    ];
+    let output = Command::new(&install.npm_program)
+        .current_dir(&install.package_root)
+        .env("PATH", install.command_path_env())
+        .args(&args)
+        .output()
+        .with_context(|| format!("Failed to spawn {}", install.npm_program.display()))?;
+
+    anyhow::ensure!(
+        output.status.success(),
+        "{} {} failed with {}{}",
+        install.npm_program.display(),
+        format_command_args(&args),
+        output.status,
+        format_command_output(&output)
+    );
+
+    Ok(())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1174,6 +1396,76 @@ mod tests {
         permissions.set_mode(0o755);
         fs::set_permissions(path, permissions)?;
         Ok(())
+    }
+
+    #[derive(Debug)]
+    struct NpmCliFixture {
+        visible_cli: PathBuf,
+        package_root: PathBuf,
+        entrypoint: PathBuf,
+        npm_program: PathBuf,
+    }
+
+    fn write_npm_cli_install(prefix: &Path, entrypoint_contents: &str) -> Result<NpmCliFixture> {
+        let package_root = prefix.join("lib/node_modules/@openai/codex");
+        let entrypoint = package_root.join("bin/codex.js");
+        let toolchain_bin = prefix.join("bin");
+        let visible_cli = toolchain_bin.join("codex");
+        let npm_program = toolchain_bin.join("npm");
+
+        fs::create_dir_all(
+            entrypoint
+                .parent()
+                .context("npm CLI entrypoint has no parent")?,
+        )?;
+        fs::create_dir_all(&toolchain_bin)?;
+        write_executable_script(&entrypoint, entrypoint_contents)?;
+        fs::write(
+            package_root.join("package.json"),
+            r#"{
+  "name": "@openai/codex",
+  "bin": { "codex": "bin/codex.js" },
+  "optionalDependencies": {
+    "@openai/codex-linux-x64": "0.42.1-linux-x64",
+    "@openai/codex-linux-arm64": "0.42.1-linux-arm64"
+  }
+}
+"#,
+        )?;
+        std::os::unix::fs::symlink(
+            Path::new("../lib/node_modules/@openai/codex/bin/codex.js"),
+            &visible_cli,
+        )?;
+
+        Ok(NpmCliFixture {
+            visible_cli,
+            package_root,
+            entrypoint,
+            npm_program,
+        })
+    }
+
+    fn configure_cli_test_env<I>(home: &Path, path_entries: I) -> Result<EnvRestoreGuard>
+    where
+        I: IntoIterator<Item = PathBuf>,
+    {
+        let restore = EnvRestoreGuard::capture(&[
+            "HOME",
+            "PATH",
+            "NVM_DIR",
+            "CODEX_CLI_PATH",
+            "CODEX_UPDATE_MANAGER_SKIP_SYSTEM_CLI_LOOKUP",
+            "DECOY_NPM_LOG",
+            "FAKE_CODEX_ENTRYPOINT",
+            "NPM_LOG",
+            "NPM_REPAIR_LOG",
+        ]);
+        std::env::set_var("HOME", home);
+        std::env::set_var("PATH", std::env::join_paths(path_entries)?);
+        std::env::remove_var("NVM_DIR");
+        std::env::remove_var("CODEX_CLI_PATH");
+        std::env::set_var("CODEX_UPDATE_MANAGER_SKIP_SYSTEM_CLI_LOOKUP", "1");
+        Ok(restore)
     }
 
     fn test_runtime_paths(root: &Path) -> RuntimePaths {
@@ -2137,6 +2429,182 @@ exit 1
             .contains("standalone Codex CLI installer failed"));
         assert!(curl_call_log.exists());
         assert!(!npm_install_log.exists());
+        Ok(())
+    }
+
+    #[test]
+    fn preflight_repairs_verified_npm_cli_without_missing_install_permission() -> Result<()> {
+        let _env_guard = env_lock();
+        let temp = tempdir()?;
+        let paths = test_runtime_paths(temp.path());
+        paths.ensure_dirs()?;
+
+        let prefix = temp.path().join("npm-prefix");
+        let fixture = write_npm_cli_install(
+            &prefix,
+            "#!/bin/sh\necho 'Missing optional dependency @openai/codex-linux-x64. Reinstall Codex: npm install -g @openai/codex' >&2\nexit 1\n",
+        )?;
+        let repair_log = temp.path().join("npm-repair.log");
+        write_executable_script(
+            &fixture.npm_program,
+            r#"#!/bin/sh
+if [ "$1" = "view" ] && [ "$2" = "@openai/codex" ] && [ "$3" = "version" ]; then
+  echo '0.42.1'
+  exit 0
+fi
+if [ "$1" = "install" ] && [ "$2" = "--include=optional" ] && [ "$#" = "2" ]; then
+  printf 'cwd=%s\n' "$PWD" > "$NPM_REPAIR_LOG"
+  for arg in "$@"; do printf 'arg=%s\n' "$arg" >> "$NPM_REPAIR_LOG"; done
+  printf '%s\n' '#!/bin/sh' 'echo "codex-cli v0.42.1"' > "$FAKE_CODEX_ENTRYPOINT"
+  exit 0
+fi
+exit 1
+"#,
+        )?;
+        let decoy_bin = temp.path().join("decoy-bin");
+        fs::create_dir_all(&decoy_bin)?;
+        write_executable_script(
+            &decoy_bin.join("codex"),
+            "#!/bin/sh\necho 'codex-cli v0.42.1'\n",
+        )?;
+        let decoy_npm_log = temp.path().join("decoy-npm.log");
+        write_executable_script(
+            &decoy_bin.join("npm"),
+            "#!/bin/sh\necho called > \"$DECOY_NPM_LOG\"\nexit 91\n",
+        )?;
+
+        let _restore_env = configure_cli_test_env(temp.path(), [decoy_bin, prefix.join("bin")])?;
+        std::env::set_var("DECOY_NPM_LOG", &decoy_npm_log);
+        std::env::set_var("FAKE_CODEX_ENTRYPOINT", &fixture.entrypoint);
+        std::env::set_var("NPM_REPAIR_LOG", &repair_log);
+
+        let mut state = PersistedState::new(true);
+        state.cli_path = Some(fixture.visible_cli.clone());
+        let outcome = preflight(&mut state, &paths, Some(fixture.visible_cli.clone()), false)?;
+
+        assert!(outcome.updated);
+        assert_eq!(outcome.cli_path, fixture.visible_cli);
+        assert_eq!(outcome.installed_version, "0.42.1");
+        assert_eq!(state.cli_status, CliStatus::UpToDate);
+        assert_eq!(state.cli_error_message, None);
+        assert_eq!(
+            fs::read_to_string(repair_log)?,
+            format!(
+                "cwd={}\narg=install\narg=--include=optional\n",
+                fixture.package_root.display()
+            )
+        );
+        assert!(!decoy_npm_log.exists());
+        Ok(())
+    }
+
+    #[test]
+    fn optional_dependency_repair_match_is_specific_to_linux_platform_packages() {
+        let linux_error = anyhow::anyhow!(
+            "Error: Missing optional dependency @openai/codex-linux-x64. Reinstall Codex: npm install -g @openai/codex"
+        );
+        assert_eq!(
+            missing_platform_optional_dependency(&linux_error).as_deref(),
+            Some("@openai/codex-linux-x64")
+        );
+        for message in [
+            "Codex CLI configuration is invalid",
+            "Missing optional dependency @openai/codex-darwin-arm64",
+        ] {
+            assert_eq!(
+                missing_platform_optional_dependency(&anyhow::anyhow!(message)),
+                None
+            );
+        }
+    }
+
+    #[test]
+    fn preflight_does_not_repair_unknown_executable() -> Result<()> {
+        let _env_guard = env_lock();
+        let temp = tempdir()?;
+        let paths = test_runtime_paths(temp.path());
+        paths.ensure_dirs()?;
+
+        let bin_dir = temp.path().join("bin");
+        fs::create_dir_all(&bin_dir)?;
+        let codex_path = bin_dir.join("codex");
+        write_executable_script(
+            &codex_path,
+            "#!/bin/sh\necho 'Missing optional dependency @openai/codex-linux-x64. Reinstall Codex: npm install -g @openai/codex' >&2\nexit 1\n",
+        )?;
+        let npm_log = temp.path().join("npm.log");
+        write_executable_script(
+            &bin_dir.join("npm"),
+            "#!/bin/sh\necho called > \"$NPM_LOG\"\nexit 0\n",
+        )?;
+
+        let _restore_env = configure_cli_test_env(temp.path(), [bin_dir])?;
+        std::env::set_var("NPM_LOG", &npm_log);
+
+        let mut state = PersistedState::new(true);
+        let error = preflight(&mut state, &paths, Some(codex_path.clone()), true)
+            .expect_err("an unknown executable must not trigger npm repair");
+
+        assert!(error.to_string().contains("Missing optional dependency"));
+        assert_eq!(
+            npm_cli_install(&codex_path, "@openai/codex-linux-x64"),
+            None
+        );
+        assert!(!npm_log.exists());
+        Ok(())
+    }
+
+    #[test]
+    fn failed_npm_repair_persists_failed_status() -> Result<()> {
+        let _env_guard = env_lock();
+        let temp = tempdir()?;
+        let paths = test_runtime_paths(temp.path());
+        paths.ensure_dirs()?;
+
+        let prefix = temp.path().join("npm-prefix");
+        let fixture = write_npm_cli_install(
+            &prefix,
+            "#!/bin/sh\necho 'Missing optional dependency @openai/codex-linux-x64. Reinstall Codex: npm install -g @openai/codex' >&2\nexit 1\n",
+        )?;
+        write_executable_script(
+            &fixture.npm_program,
+            "#!/bin/sh\necho 'repair failed' >&2\nexit 42\n",
+        )?;
+
+        let _restore_env = configure_cli_test_env(temp.path(), [prefix.join("bin")])?;
+
+        let mut state = PersistedState::new(true);
+        let error = preflight(&mut state, &paths, Some(fixture.visible_cli.clone()), false)
+            .expect_err("a failed in-place npm repair should bubble up");
+
+        assert!(format!("{error:#}").contains("repair failed"));
+        assert_eq!(state.cli_status, CliStatus::Failed);
+        assert!(state
+            .cli_error_message
+            .as_deref()
+            .is_some_and(|message| message.contains("repair failed")));
+        let persisted = PersistedState::load_or_default(&paths.state_file, true)?;
+        assert_eq!(persisted.cli_status, CliStatus::Failed);
+        assert_eq!(persisted.cli_error_message, state.cli_error_message);
+        Ok(())
+    }
+
+    #[test]
+    fn npm_cli_detection_rejects_bun_and_pnpm_metadata() -> Result<()> {
+        let temp = tempdir()?;
+        assert!(path_is_system_managed_location(Path::new("/")));
+        for (index, marker) in ["lib/bun.lock", "lib/node_modules/.modules.yaml"]
+            .into_iter()
+            .enumerate()
+        {
+            let prefix = temp.path().join(format!("non-npm-prefix-{index}"));
+            let fixture = write_npm_cli_install(&prefix, "#!/bin/sh\nexit 1\n")?;
+            fs::write(prefix.join(marker), "")?;
+            assert_eq!(
+                npm_cli_install(&fixture.visible_cli, "@openai/codex-linux-x64"),
+                None
+            );
+        }
         Ok(())
     }
 

@@ -3617,7 +3617,11 @@ mod tests {
         }
 
         assert!(result.is_err());
-        assert_eq!(state.cli_status, CliStatus::Updating);
+        assert_eq!(state.cli_status, CliStatus::Failed);
+        assert!(state
+            .cli_error_message
+            .as_deref()
+            .is_some_and(|message| message.contains("npm")));
         Ok(())
     }
 
