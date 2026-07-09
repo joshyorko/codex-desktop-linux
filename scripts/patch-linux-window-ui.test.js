@@ -6538,7 +6538,7 @@ test("shows object-helper Computer Use plugin UI on Linux", () => {
   assert.match(patched, /function m\(e\)\{return e===`macOS`\|\|e===`windows`\|\|e===`linux`\}/);
   assert.match(
     patched,
-    /v=g\(\{enabled:a,isComputerUseFeatureEnabled:s===`linux`\|\|_\.enabled,isComputerUseFeatureLoading:s!==`linux`&&_\.isLoading,isComputerUseGateEnabled:s===`linux`\|\|d,isHostCompatiblePlatform:s===`linux`\|\|m\(s\),isHostLocal:c,isPlatformLoading:o,windowType:`electron`\}\)/,
+    /v=g\(\{enabled:s===`linux`\|\|a,isComputerUseFeatureEnabled:s===`linux`\|\|_\.enabled,isComputerUseFeatureLoading:s!==`linux`&&_\.isLoading,isComputerUseGateEnabled:s===`linux`\|\|d,isHostCompatiblePlatform:s===`linux`\|\|m\(s\),isHostLocal:c,isPlatformLoading:o,windowType:`electron`\}\)/,
   );
 });
 
@@ -6552,7 +6552,7 @@ test("shows object-helper Computer Use plugin UI on Linux without host-local fie
   assert.match(patched, /function d\(e\)\{return e===`macOS`\|\|e===`windows`\|\|e===`linux`\}/);
   assert.match(
     patched,
-    /g=p\(\{enabled:i,isComputerUseFeatureEnabled:c===`linux`\|\|h\.enabled,isComputerUseFeatureLoading:c!==`linux`&&h\.isLoading,isComputerUseGateEnabled:c===`linux`\|\|f,isHostCompatiblePlatform:c===`linux`\|\|d\(c\),isPlatformLoading:o,windowType:`electron`\}\)/,
+    /g=p\(\{enabled:c===`linux`\|\|i,isComputerUseFeatureEnabled:c===`linux`\|\|h\.enabled,isComputerUseFeatureLoading:c!==`linux`&&h\.isLoading,isComputerUseGateEnabled:c===`linux`\|\|f,isHostCompatiblePlatform:c===`linux`\|\|d\(c\),isPlatformLoading:o,windowType:`electron`\}\)/,
   );
   assert.doesNotMatch(patched, /isHostLocal:/);
 });
@@ -6567,7 +6567,7 @@ test("shows required-features Computer Use plugin UI on Linux", () => {
   assert.match(patched, /function d\(e\)\{return e===`macOS`\|\|e===`windows`\|\|e===`linux`\}/);
   assert.match(
     patched,
-    /x=p\(\{areRequiredFeaturesEnabled:c===`linux`\|\|b,enabled:i,isAnyFeatureLoading:c===`linux`\?!1:y,isComputerUseGateEnabled:c===`linux`\|\|f,isHostCompatiblePlatform:c===`linux`\|\|d\(c\),isPlatformLoading:o,windowType:`electron`\}\)/,
+    /x=p\(\{areRequiredFeaturesEnabled:c===`linux`\|\|b,enabled:c===`linux`\|\|i,isAnyFeatureLoading:c===`linux`\?!1:y,isComputerUseGateEnabled:c===`linux`\|\|f,isHostCompatiblePlatform:c===`linux`\|\|d\(c\),isPlatformLoading:o,windowType:`electron`\}\)/,
   );
   assert.match(patched, /featureName:`windows_computer_use`/);
 });
@@ -6582,7 +6582,7 @@ test("keeps object-helper Computer Use host compatibility on Linux when platform
   assert.match(patched, /function m\(e\)\{return e===`macOS`\|\|e===`windows`\|\|q\(e\)\}/);
   assert.match(
     patched,
-    /v=g\(\{enabled:a,isComputerUseFeatureEnabled:s===`linux`\|\|_\.enabled,isComputerUseFeatureLoading:s!==`linux`&&_\.isLoading,isComputerUseGateEnabled:s===`linux`\|\|d,isHostCompatiblePlatform:s===`linux`\|\|m\(s\),isHostLocal:c,isPlatformLoading:o,windowType:`electron`\}\)/,
+    /v=g\(\{enabled:s===`linux`\|\|a,isComputerUseFeatureEnabled:s===`linux`\|\|_\.enabled,isComputerUseFeatureLoading:s!==`linux`&&_\.isLoading,isComputerUseGateEnabled:s===`linux`\|\|d,isHostCompatiblePlatform:s===`linux`\|\|m\(s\),isHostLocal:c,isPlatformLoading:o,windowType:`electron`\}\)/,
   );
 });
 
@@ -6673,6 +6673,24 @@ test("enables the current composer Computer Use native-app mention section on Li
   assert.match(patched, /T=s===`macOS`\|\|s===`windows`\|\|s===`linux`/);
 });
 
+test("renders Computer Use settings native app cards on Linux", () => {
+  const source =
+    "function Rt(){let b=flag,r=platform,O=[getApp()],F=[];if(b&&(r===`macOS`||r===`windows`))for(let e of O){if(e.plugin==null)continue;let t=e.plugin;F.push({id:e.appControlId,label:e.toggleAriaLabel,installed:t.plugin.installed,enabled:t.plugin.enabled})}return F}";
+
+  const patched = applyPatchTwice(applyLinuxComputerUseRendererAvailabilityPatch, source);
+
+  assert.match(patched, /if\(b&&\(r===`macOS`\|\|r===`windows`\|\|r===`linux`\)\)for\(let e of O\)\{/);
+});
+
+test("enables Computer Use native desktop app icons on Linux", () => {
+  const source =
+    "function nI(e){let t=(0,rI.c)(10),{appPath:n}=e,{platform:r,isLoading:i}=pi(),a=(r===`macOS`||r===`windows`)&&n!=null&&n!==``,o=n??``;let u=Ne(`computer-use-native-desktop-app-icon`,l),d=a?u.data?.iconSmall??null:null;return d}";
+
+  const patched = applyPatchTwice(applyLinuxComputerUseRendererAvailabilityPatch, source);
+
+  assert.match(patched, /a=\(r===`macOS`\|\|r===`windows`\|\|r===`linux`\)&&n!=null&&n!==``/);
+});
+
 test("does not enable unrelated native desktop app queries on Linux", () => {
   const source =
     "function useNativeApps(e){let{enabled:n}=e,{platform:r,isLoading:i}=yt(),a=n&&(r===`macOS`||r===`windows`),o={params:{order:`usage`},queryConfig:{enabled:a}};return Ce(`native-desktop-apps`,o)}";
@@ -6689,7 +6707,7 @@ test("allows current required-feature Computer Use gate on Linux", () => {
 
   assert.match(
     patched,
-    /g=Hj\(\{areRequiredFeaturesEnabled:o===`linux`\|\|h,enabled:i,isAnyFeatureLoading:o===`linux`\?!1:m,isComputerUseGateEnabled:o===`linux`\|\|s,isHostCompatiblePlatform:o===`linux`\|\|Rj\(o\),isPlatformLoading:a,windowType:`electron`\}\)/,
+    /g=Hj\(\{areRequiredFeaturesEnabled:o===`linux`\|\|h,enabled:o===`linux`\|\|i,isAnyFeatureLoading:o===`linux`\?!1:m,isComputerUseGateEnabled:o===`linux`\|\|s,isHostCompatiblePlatform:o===`linux`\|\|Rj\(o\),isPlatformLoading:a,windowType:`electron`\}\)/,
   );
 });
 
@@ -7692,7 +7710,7 @@ test("patchExtractedApp scans apps bundles for Computer Use availability when UI
       );
       assert.match(
         fs.readFileSync(path.join(assetsDir, "use-is-plugins-enabled-current.js"), "utf8"),
-        /v=g\(\{enabled:a,isComputerUseFeatureEnabled:s===`linux`\|\|_\.enabled,isComputerUseFeatureLoading:s!==`linux`&&_\.isLoading,isComputerUseGateEnabled:s===`linux`\|\|d,isHostCompatiblePlatform:s===`linux`\|\|p\(s\),isHostLocal:c,isPlatformLoading:o,windowType:`electron`\}\)/,
+        /v=g\(\{enabled:s===`linux`\|\|a,isComputerUseFeatureEnabled:s===`linux`\|\|_\.enabled,isComputerUseFeatureLoading:s!==`linux`&&_\.isLoading,isComputerUseGateEnabled:s===`linux`\|\|d,isHostCompatiblePlatform:s===`linux`\|\|p\(s\),isHostLocal:c,isPlatformLoading:o,windowType:`electron`\}\)/,
       );
       assert.doesNotMatch(
         fs.readFileSync(
@@ -7726,7 +7744,7 @@ test("patchExtractedApp scans apps bundles for Computer Use availability when UI
           ),
           "utf8",
         ),
-        /g=xp\(\{areRequiredFeaturesEnabled:o===`linux`\|\|h,enabled:i,isAnyFeatureLoading:o===`linux`\?!1:m,isComputerUseGateEnabled:o===`linux`\|\|s,isHostCompatiblePlatform:o===`linux`\|\|_p\(o\),isPlatformLoading:a,windowType:`electron`\}\)/,
+        /g=xp\(\{areRequiredFeaturesEnabled:o===`linux`\|\|h,enabled:o===`linux`\|\|i,isAnyFeatureLoading:o===`linux`\?!1:m,isComputerUseGateEnabled:o===`linux`\|\|s,isHostCompatiblePlatform:o===`linux`\|\|_p\(o\),isPlatformLoading:a,windowType:`electron`\}\)/,
       );
     } finally {
       fs.rmSync(tempRoot, { recursive: true, force: true });

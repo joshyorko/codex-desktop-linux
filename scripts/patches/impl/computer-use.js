@@ -351,7 +351,7 @@ function applyLinuxComputerUseRendererAvailabilityPatch(currentSource) {
   const availabilityAlreadyPatched = () =>
     /featureName:`computer_use`[\s\S]{0,1200}?let ([A-Za-z_$][\w$]*)=[A-Za-z_$][\w$]*&&[A-Za-z_$][\w$]*&&\([A-Za-z_$][\w$]*===`linux`\|\|[A-Za-z_$][\w$]*&&\([A-Za-z_$][\w$]*\|\|[A-Za-z_$][\w$]*\)\),[A-Za-z_$][\w$]*=\1&&![A-Za-z_$][\w$]*&&\([A-Za-z_$][\w$]*===`linux`\|\|[A-Za-z_$][\w$]*\.enabled\)&&![A-Za-z_$][\w$]*\.isLoading/.test(patchedSource) ||
     /featureName:`computer_use`[\s\S]{0,1800}?isComputerUseFeatureEnabled:([A-Za-z_$][\w$]*)===`linux`\|\|[A-Za-z_$][\w$]*\.enabled,isComputerUseFeatureLoading:\1!==`linux`&&[A-Za-z_$][\w$]*\.isLoading,isComputerUseGateEnabled:\1===`linux`\|\|[A-Za-z_$][\w$]*,isHostCompatiblePlatform:\1===`linux`\|\|[A-Za-z_$][\w$]*\(\1\)(?:,isHostLocal:[A-Za-z_$][\w$]*)?,isPlatformLoading:/.test(patchedSource) ||
-    /featureName:`computer_use`[\s\S]{0,2200}?areRequiredFeaturesEnabled:([A-Za-z_$][\w$]*)===`linux`\|\|[A-Za-z_$][\w$]*,enabled:[A-Za-z_$][\w$]*,isAnyFeatureLoading:\1===`linux`\?!1:[A-Za-z_$][\w$]*,isComputerUseGateEnabled:\1===`linux`\|\|[A-Za-z_$][\w$]*,isHostCompatiblePlatform:\1===`linux`\|\|[A-Za-z_$][\w$]*\(\1\),isPlatformLoading:/.test(patchedSource) ||
+    /featureName:`computer_use`[\s\S]{0,2200}?areRequiredFeaturesEnabled:([A-Za-z_$][\w$]*)===`linux`\|\|[A-Za-z_$][\w$]*,enabled:(?:\1===`linux`\|\|)?[A-Za-z_$][\w$]*,isAnyFeatureLoading:\1===`linux`\?!1:[A-Za-z_$][\w$]*,isComputerUseGateEnabled:\1===`linux`\|\|[A-Za-z_$][\w$]*,isHostCompatiblePlatform:\1===`linux`\|\|[A-Za-z_$][\w$]*\(\1\),isPlatformLoading:/.test(patchedSource) ||
     patchedSource.includes(availabilityPatch) ||
     patchedSource.includes(currentAvailabilityPatch);
 
@@ -460,7 +460,7 @@ function applyLinuxComputerUseRendererAvailabilityPatch(currentSource) {
       availabilityGateFound = true;
       availabilityChanged = true;
       const hostLocalSegment = isHostLocalVar == null ? "" : `,isHostLocal:${isHostLocalVar}`;
-      return `${resultVar}=${helperVar}({enabled:${enabledVar},isComputerUseFeatureEnabled:${platformVar}===\`linux\`||${featureQueryVar}.enabled,isComputerUseFeatureLoading:${platformVar}!==\`linux\`&&${featureQueryVar}.isLoading,isComputerUseGateEnabled:${platformVar}===\`linux\`||${rolloutVar},isHostCompatiblePlatform:${platformVar}===\`linux\`||${platformPredicateVar}(${platformVar})${hostLocalSegment},isPlatformLoading:${platformLoadingVar},windowType:\`electron\`})`;
+      return `${resultVar}=${helperVar}({enabled:${platformVar}===\`linux\`||${enabledVar},isComputerUseFeatureEnabled:${platformVar}===\`linux\`||${featureQueryVar}.enabled,isComputerUseFeatureLoading:${platformVar}!==\`linux\`&&${featureQueryVar}.isLoading,isComputerUseGateEnabled:${platformVar}===\`linux\`||${rolloutVar},isHostCompatiblePlatform:${platformVar}===\`linux\`||${platformPredicateVar}(${platformVar})${hostLocalSegment},isPlatformLoading:${platformLoadingVar},windowType:\`electron\`})`;
     },
   );
 
@@ -488,7 +488,7 @@ function applyLinuxComputerUseRendererAvailabilityPatch(currentSource) {
       }
       availabilityGateFound = true;
       availabilityChanged = true;
-      return `${resultVar}=${helperVar}({areRequiredFeaturesEnabled:${platformVar}===\`linux\`||${requiredFeaturesVar},enabled:${enabledVar},isAnyFeatureLoading:${platformVar}===\`linux\`?!1:${featureLoadingVar},isComputerUseGateEnabled:${platformVar}===\`linux\`||${rolloutVar},isHostCompatiblePlatform:${platformVar}===\`linux\`||${platformPredicateVar}(${platformVar}),isPlatformLoading:${platformLoadingVar},windowType:\`electron\`})`;
+      return `${resultVar}=${helperVar}({areRequiredFeaturesEnabled:${platformVar}===\`linux\`||${requiredFeaturesVar},enabled:${platformVar}===\`linux\`||${enabledVar},isAnyFeatureLoading:${platformVar}===\`linux\`?!1:${featureLoadingVar},isComputerUseGateEnabled:${platformVar}===\`linux\`||${rolloutVar},isHostCompatiblePlatform:${platformVar}===\`linux\`||${platformPredicateVar}(${platformVar}),isPlatformLoading:${platformLoadingVar},windowType:\`electron\`})`;
     },
   );
 
@@ -620,6 +620,38 @@ function applyLinuxComputerUseRendererAvailabilityPatch(currentSource) {
     },
   );
 
+  const nativeAppSettingsCardPattern =
+    /if\(([A-Za-z_$][\w$]*)&&\(([A-Za-z_$][\w$]*)===`macOS`\|\|\2===`windows`(?!\|\|\2===`linux`)\)\)for\(let ([A-Za-z_$][\w$]*) of ([A-Za-z_$][\w$]*)\)\{/g;
+  patchedSource = patchedSource.replace(
+    nativeAppSettingsCardPattern,
+    (match, enabledVar, platformVar, itemVar, appsVar, offset) => {
+      const nextSource = patchedSource.slice(offset + match.length, offset + match.length + 1800);
+      if (
+        !nextSource.includes("appControlId") ||
+        !nextSource.includes("toggleAriaLabel") ||
+        !nextSource.includes("plugin.installed")
+      ) {
+        return match;
+      }
+      nativeAppsGateChanged = true;
+      return `if(${enabledVar}&&(${platformVar}===\`macOS\`||${platformVar}===\`windows\`||${platformVar}===\`linux\`))for(let ${itemVar} of ${appsVar}){`;
+    },
+  );
+
+  const nativeAppIconQueryGatePattern =
+    /([A-Za-z_$][\w$]*)=\(([A-Za-z_$][\w$]*)===`macOS`\|\|\2===`windows`(?!\|\|\2===`linux`)\)&&([A-Za-z_$][\w$]*)!=null&&\3!==``/g;
+  patchedSource = patchedSource.replace(
+    nativeAppIconQueryGatePattern,
+    (match, availableVar, platformVar, appPathVar, offset) => {
+      const nextSource = patchedSource.slice(offset + match.length, offset + match.length + 1200);
+      if (!nextSource.includes("`computer-use-native-desktop-app-icon`")) {
+        return match;
+      }
+      nativeAppsGateChanged = true;
+      return `${availableVar}=(${platformVar}===\`macOS\`||${platformVar}===\`windows\`||${platformVar}===\`linux\`)&&${appPathVar}!=null&&${appPathVar}!==\`\``;
+    },
+  );
+
   if (availabilityChanged || nativeAppsGateChanged || availabilityAlreadyPatched()) {
     return patchedSource;
   }
@@ -665,7 +697,7 @@ function applyLinuxComputerUseInstallFlowPatch(currentSource) {
         return match;
       }
       changed = true;
-      return `${resultVar}=${helperVar}({areRequiredFeaturesEnabled:${platformVar}===\`linux\`||${requiredFeaturesVar},enabled:${enabledVar},isAnyFeatureLoading:${platformVar}===\`linux\`?!1:${featureLoadingVar},isComputerUseGateEnabled:${platformVar}===\`linux\`||${rolloutVar},isHostCompatiblePlatform:${platformVar}===\`linux\`||${platformPredicateVar}(${platformVar}),isPlatformLoading:${platformLoadingVar},windowType:\`electron\`})`;
+      return `${resultVar}=${helperVar}({areRequiredFeaturesEnabled:${platformVar}===\`linux\`||${requiredFeaturesVar},enabled:${platformVar}===\`linux\`||${enabledVar},isAnyFeatureLoading:${platformVar}===\`linux\`?!1:${featureLoadingVar},isComputerUseGateEnabled:${platformVar}===\`linux\`||${rolloutVar},isHostCompatiblePlatform:${platformVar}===\`linux\`||${platformPredicateVar}(${platformVar}),isPlatformLoading:${platformLoadingVar},windowType:\`electron\`})`;
     },
   );
 
@@ -674,7 +706,7 @@ function applyLinuxComputerUseInstallFlowPatch(currentSource) {
   }
 
   if (
-    /featureName:`(?:computer_use|windows_computer_use)`[\s\S]{0,2200}?areRequiredFeaturesEnabled:([A-Za-z_$][\w$]*)===`linux`\|\|[A-Za-z_$][\w$]*,enabled:[A-Za-z_$][\w$]*,isAnyFeatureLoading:\1===`linux`\?!1:[A-Za-z_$][\w$]*,isComputerUseGateEnabled:\1===`linux`\|\|[A-Za-z_$][\w$]*,isHostCompatiblePlatform:\1===`linux`\|\|[A-Za-z_$][\w$]*\(\1\),isPlatformLoading:/.test(currentSource)
+    /featureName:`(?:computer_use|windows_computer_use)`[\s\S]{0,2200}?areRequiredFeaturesEnabled:([A-Za-z_$][\w$]*)===`linux`\|\|[A-Za-z_$][\w$]*,enabled:(?:\1===`linux`\|\|)?[A-Za-z_$][\w$]*,isAnyFeatureLoading:\1===`linux`\?!1:[A-Za-z_$][\w$]*,isComputerUseGateEnabled:\1===`linux`\|\|[A-Za-z_$][\w$]*,isHostCompatiblePlatform:\1===`linux`\|\|[A-Za-z_$][\w$]*\(\1\),isPlatformLoading:/.test(currentSource)
   ) {
     return currentSource;
   }
