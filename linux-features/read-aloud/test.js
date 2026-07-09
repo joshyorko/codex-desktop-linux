@@ -6,6 +6,7 @@ const { spawnSync } = require("node:child_process");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const vm = require("node:vm");
 const test = require("node:test");
 const {
   applyAppMainRoutePatch,
@@ -37,6 +38,47 @@ function captureWarnings(fn) {
   } finally {
     console.warn = originalWarn;
   }
+}
+
+function runtimeHarness(sendMessageFromView) {
+  const messages = [];
+  const customEvents = [];
+  const context = {
+    console: { log() {}, info: (...args) => messages.push(args), warn: (...args) => messages.push(args) },
+    setTimeout,
+    clearTimeout,
+    MessageEvent: class MessageEvent {
+      constructor(type, init) {
+        this.type = type;
+        this.data = init.data;
+      }
+    },
+    document: {
+      head: { appendChild() {} },
+      getElementById() { return null; },
+      createElement() { return { style: {}, setAttribute() {} }; },
+    },
+    window: {
+      addEventListener(type, handler) {
+        if (type === "message") context.onMessage = handler;
+      },
+      dispatchEvent(event) {
+        customEvents.push(event);
+      },
+    },
+  };
+  if (sendMessageFromView !== undefined) {
+    context.window.electronBridge = { sendMessageFromView };
+  }
+  context.globalThis = context;
+  vm.createContext(context);
+  vm.runInContext(applyIndexRuntimePatch("console.log(`index`);"), context);
+  return {
+    context,
+    messages,
+    customEvents,
+    button: { dataset: {}, setAttribute() {}, blur() {} },
+  };
 }
 
 test("main bundle patch adds a Linux read aloud handler", () => {
@@ -82,12 +124,80 @@ test("main bundle patch adds a Linux read aloud handler", () => {
   assert.doesNotThrow(() => new Function("require", "process", patched));
 });
 
+test("main bundle patch owns child_process when an earlier helper has a local alias", () => {
+  const source = [
+    "function earlierHelper(){let __codexChild=require(`node:child_process`);return __codexChild}",
+    "let e=require(`node:child_process`),f=require(`node:fs`),p=require(`node:path`),o=require(`node:os`);",
+    "var h={handlers:{\"set-vs-context\":async()=>{},\"native-desktop-apps\":async()=>({apps:[]})}};",
+  ].join("");
+
+  const patched = twice(applyMainBundlePatch, source);
+
+  assert.match(
+    patched,
+    /const codexLinuxReadAloudChildProcess=require\(`node:child_process`\);/,
+  );
+  assert.match(patched, /codexLinuxReadAloudChildProcess\.spawn/);
+});
+
+test("main bundle patch reports synchronous speech spawn failures", async () => {
+  const source = [
+    "let e=require(`node:child_process`),f=require(`node:fs`),p=require(`node:path`),o=require(`node:os`);",
+    "var h={handlers:{\"set-vs-context\":async()=>{},\"native-desktop-apps\":async()=>({apps:[]})}};",
+  ].join("");
+
+  const patched = applyMainBundlePatch(source);
+  const messages = [];
+  const handler = new Function(
+    "require",
+    "process",
+    "console",
+    `${patched};return h.handlers["linux-read-aloud"]`,
+  )(
+    (id) =>
+      id === "node:child_process"
+        ? {
+            spawn() {
+              throw new Error("synthetic spawn failure");
+            },
+            spawnSync() {
+              return { status: 0 };
+            },
+          }
+        : require(id),
+    {
+      platform: "linux",
+      resourcesPath: "/tmp",
+      env: {
+        CODEX_LINUX_READ_ALOUD_COMMAND: "/bin/true",
+        CODEX_LINUX_READ_ALOUD_NATIVE_FALLBACK: "0",
+        HOME: "/nonexistent",
+        XDG_RUNTIME_DIR: "/tmp",
+      },
+    },
+    { info: (message) => messages.push(message) },
+  );
+
+  await handler({ action: "speak", source: "button", text: "hello" });
+
+  assert.match(patched, /function codexLinuxReadAloudSpawnFailure\(command,error\)/);
+  assert.ok(
+    messages.some(
+      (message) =>
+        message.includes('"reason":"spawn-error"') &&
+        message.includes('"command":"/bin/true"') &&
+        message.includes("synthetic spawn failure"),
+    ),
+  );
+});
+
 test("webview runtime appends only once", () => {
   const patched = twice(applyIndexRuntimePatch, "console.log(`index`);");
   assert.match(patched, /codexLinuxReadAloudClick/);
   assert.match(patched, /vscode:\/\/codex\/"\+METHOD/);
-  assert.match(patched, /codex-message-from-view/);
-  assert.match(patched, /__codexForwardedViaBridge/);
+  assert.match(patched, /bridge-entry/);
+  assert.match(patched, /bridge-response/);
+  assert.doesNotMatch(patched, /codex-message-from-view/);
   assert.match(patched, /Starting voice/);
   assert.match(patched, /kokoro-explicit-v5/);
   assert.match(patched, /codexLinuxConversationIsSpeaking/);
@@ -103,6 +213,118 @@ test("webview runtime appends only once", () => {
   assert.doesNotMatch(patched, /no-voices/);
   assert.doesNotMatch(patched, /completed===false/);
   assert.doesNotThrow(() => new Function("window", "localStorage", patched));
+});
+
+test("current DMG bridge carries a button click to the main handler and response", async () => {
+  const patched = applyIndexRuntimePatch("console.log(`index`);");
+  const messages = [];
+  const customEvents = [];
+  const context = {
+    console: { log() {}, info: (...args) => messages.push(args), warn: (...args) => messages.push(args) },
+    setTimeout,
+    clearTimeout,
+    CustomEvent: class CustomEvent {},
+    MessageEvent: class MessageEvent {
+      constructor(type, init) {
+        this.type = type;
+        this.data = init.data;
+      }
+    },
+    document: {
+      head: { appendChild() {} },
+      getElementById() { return null; },
+      createElement() { return { style: {}, setAttribute() {} }; },
+    },
+    window: {
+      addEventListener(type, handler) {
+        if (type === "message") context.onMessage = handler;
+      },
+      dispatchEvent(event) {
+        customEvents.push(event);
+      },
+      electronBridge: {
+        async sendMessageFromView(payload) {
+          messages.push(["bridge-entry", payload.type, payload.url]);
+          const body = JSON.parse(payload.body);
+          assert.deepEqual(body, { action: "speak", source: "button", text: "Hello from current DMG" });
+          context.onMessage({
+            data: {
+              type: "fetch-response",
+              responseType: "success",
+              requestId: payload.requestId,
+              status: 200,
+              bodyJsonString: JSON.stringify({ started: true, backend: "kokoro" }),
+            },
+          });
+        },
+      },
+    },
+  };
+  context.globalThis = context;
+  vm.createContext(context);
+  vm.runInContext(patched, context);
+
+  const button = {
+    dataset: {},
+    setAttribute() {},
+    blur() {},
+  };
+  await context.codexLinuxReadAloudClick({ content: "ignored" }, "Hello from current DMG", "conversation-1", button);
+  assert.ok(messages.some(([kind]) => kind === "bridge-entry"));
+  assert.equal(customEvents.length, 0, "current DMG uses preload bridge, not the legacy DOM fallback");
+});
+
+test("missing current bridge fails boundedly without a DOM fallback", async () => {
+  const harness = runtimeHarness();
+  await harness.context.codexLinuxReadAloudClick({}, "bridge missing", "conversation-2", harness.button);
+  assert.equal(harness.customEvents.length, 0);
+  assert.ok(harness.messages.some(([kind]) => kind === "[linux-read-aloud] bridge-unavailable"));
+  assert.equal(harness.button.dataset.codexLinuxReadAloudState, "error");
+});
+
+test("rejected current bridge fails boundedly and reports bridge-error", async () => {
+  const harness = runtimeHarness(() => Promise.reject(new Error("ipc unavailable")));
+  await harness.context.codexLinuxReadAloudClick({}, "bridge rejected", "conversation-3", harness.button);
+  assert.equal(harness.customEvents.length, 0);
+  assert.ok(harness.messages.some(([kind]) => kind === "[linux-read-aloud] bridge-error"));
+  assert.equal(harness.button.dataset.codexLinuxReadAloudState, "error");
+});
+
+test("successful fetch-response consumes the response and enters speaking state", async () => {
+  let requestId;
+  const harness = runtimeHarness(async (payload) => {
+    if (payload.type === "fetch") requestId = payload.requestId;
+    harness.context.onMessage({
+      data: {
+        type: "fetch-response",
+        responseType: "success",
+        requestId,
+        status: 200,
+        bodyJsonString: JSON.stringify({ spoken: true, backend: "kokoro" }),
+      },
+    });
+  });
+  await harness.context.codexLinuxReadAloudClick({}, "response success", "conversation-4", harness.button);
+  assert.match(requestId, /^codex-linux-read-aloud-/);
+  assert.equal(harness.button.dataset.codexLinuxReadAloudState, "speaking");
+  assert.ok(harness.messages.some(([kind]) => kind === "[linux-read-aloud] bridge-response"));
+});
+
+test("error fetch-response clears the pending request and enters error state", async () => {
+  const harness = runtimeHarness(async (payload) => {
+    harness.context.onMessage({
+      data: {
+        type: "fetch-response",
+        responseType: "error",
+        requestId: payload.requestId,
+        status: 432,
+        error: "handler unavailable",
+      },
+    });
+  });
+  await harness.context.codexLinuxReadAloudClick({}, "response error", "conversation-5", harness.button);
+  assert.equal(harness.button.dataset.codexLinuxReadAloudState, "error");
+  assert.ok(harness.messages.some(([kind]) => kind === "[linux-read-aloud] bridge-response"));
 });
 
 test("kokoro stdin runner compiles and makes a bounded first streaming chunk", (t) => {
