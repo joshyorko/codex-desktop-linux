@@ -6586,33 +6586,158 @@ test("keeps object-helper Computer Use host compatibility on Linux when platform
   );
 });
 
-test("does not give synthetic Computer Use plugin cards an invalid marketplace directory path", () => {
-  const source =
-    "let {computerUseAvailability:availability,platform:platform}=state;" +
-    "let pluginsQuery=usePlugins(selectedHost,emptyPlugins),marketplacePath=useMarketplacePath(selectedHost),featureFlag=useFeatureFlag(featureFlagArg),computerUsePlugin;" +
-    "computerUsePlugin=selectPlugin(pluginsQuery.availablePlugins,pluginName,marketplacePath);";
+test("uses only the real installed bundled Computer Use entry in settings", () => {
+  const source = [
+    "let currentPluginsQuery;",
+    "function usePlugins(){return currentPluginsQuery}",
+    "function useMarketplacePath(){return null}",
+    "function useFeatureFlag(){return!0}",
+    "function selectPlugin(e,t){return e.find(e=>(e.plugin?.name===t||e.plugin?.id?.split(`@`)[0]===t)&&e.plugin?.installed===!0&&e.plugin?.enabled===!0)??null}",
+    "function resolveSettings(state,query){currentPluginsQuery=query;let selectedHost=`local`,emptyPlugins=[],pluginName=`computer-use`,featureFlagArg=!0;let {computerUseAvailability:availability,platform:platform}=state;let pluginsQuery=usePlugins(selectedHost,emptyPlugins),marketplacePath=useMarketplacePath(selectedHost),featureFlag=useFeatureFlag(featureFlagArg),computerUsePlugin;computerUsePlugin=selectPlugin(pluginsQuery.availablePlugins,pluginName,marketplacePath);return computerUsePlugin}",
+  ].join("");
 
   const patched = applyPatchTwice(applyLinuxComputerUseRendererAvailabilityPatch, source);
+  const executablePatched = patched.replaceAll("import.meta.url", "`file:///test.js`");
+  const resolveSettings = new Function(`${executablePatched};return resolveSettings`)();
+  const installedPlugin = {
+    marketplaceName: "openai-bundled",
+    marketplacePath: null,
+    plugin: {
+      id: "computer-use@openai-bundled",
+      name: "computer-use",
+      installed: true,
+      enabled: true,
+    },
+  };
 
-  assert.match(patched, /marketplacePath:marketplacePath/);
-  assert.doesNotMatch(patched, /marketplacePath:`openai-bundled\/plugins\/computer-use`/);
+  assert.match(patched, /installedPlugins\?\.some\(e=>/);
+  assert.match(patched, /installedPlugins\.find\(e=>/);
+  assert.doesNotMatch(patched, /plugin:\{id:pluginName\+`@openai-bundled`/);
+  assert.strictEqual(
+    resolveSettings(
+      { computerUseAvailability: { available: true }, platform: "linux" },
+      { availablePlugins: [], installedPlugins: [installedPlugin] },
+    ),
+    installedPlugin,
+  );
+  assert.equal(
+    resolveSettings(
+      { computerUseAvailability: { available: true }, platform: "linux" },
+      { availablePlugins: [], installedPlugins: [] },
+    ),
+    null,
+  );
+  assert.equal(
+    resolveSettings(
+      { computerUseAvailability: { available: true }, platform: "linux" },
+      {
+        availablePlugins: [],
+        installedPlugins: [
+          { ...installedPlugin, plugin: { ...installedPlugin.plugin, enabled: false } },
+        ],
+      },
+    ),
+    null,
+  );
 });
 
-test("prefers the synthetic Linux Computer Use plugin over unavailable upstream entries", () => {
-  const source =
-    "let {computerUseAvailability:availability,platform:platform}=state;" +
-    "let pluginsQuery=usePlugins(selectedHost,emptyPlugins),marketplacePath=useMarketplacePath(selectedHost),featureFlag=useFeatureFlag(featureFlagArg),computerUsePlugin;" +
-    "computerUsePlugin=selectPlugin(pluginsQuery.availablePlugins,pluginName,marketplacePath);";
+test("preserves upstream Computer Use availability filtering on Linux", () => {
+  const source = [
+    "const dg=`computer-use`;",
+    "function Nh({plugins:e,...t}){return e.filter(e=>Lh(e.plugin.id,t))}",
+    "function Lh(e,{isComputerUseAvailable:t,isExternalBrowserUseAvailable:n,isInAppBrowserUseAvailable:r}){return!(!r&&Rh(e)||!n&&zh(e)||!t&&Bh(e))}",
+    "function Rh(e){let t=Vh(e);return t===`browser`||t===`browser-use`}",
+    "function zh(e){let t=Vh(e);return t===`chrome`||t===`chrome-dev`||t===`chrome-internal`}",
+    "function Bh(e){return Vh(e)===dg}",
+    "function Vh(e){return e.split(`@`)[0]}",
+  ].join("");
 
   const patched = applyPatchTwice(applyLinuxComputerUseRendererAvailabilityPatch, source);
-
-  assert.match(
-    patched,
-    /availablePlugins:\[\{marketplaceName:`openai-curated`,marketplacePath:marketplacePath,[^}]+plugin:\{id:pluginName,name:pluginName,installed:!0,enabled:!0\}\},\.\.\.pluginsQuery\.availablePlugins\]/,
+  const plugins = [
+    { plugin: { id: "computer-use@openai-bundled" } },
+    { plugin: { id: "browser@openai-bundled" } },
+    { plugin: { id: "github@openai-curated" } },
+  ];
+  const unavailable = {
+    isComputerUseAvailable: false,
+    isExternalBrowserUseAvailable: false,
+    isInAppBrowserUseAvailable: false,
+  };
+  const linuxQuery = new Function("navigator", `${patched};return Nh`)(
+    { userAgent: "Mozilla/5.0 (X11; Linux x86_64)" },
   );
-  assert.match(
-    patched,
-    /some\(e=>\(e\.plugin\?\.name===pluginName\|\|e\.plugin\?\.id\?\.split\(`@`\)\[0\]===pluginName\)&&e\.plugin\?\.installed===!0&&e\.plugin\?\.enabled===!0\)/,
+  const macQuery = new Function("navigator", `${patched};return Nh`)(
+    { userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X)" },
+  );
+
+  assert.doesNotMatch(patched, /navigator\.userAgent\.includes\(`Linux`\)/);
+  assert.deepEqual(
+    linuxQuery({ plugins, ...unavailable }).map((entry) => entry.plugin.id),
+    ["github@openai-curated"],
+  );
+  assert.deepEqual(
+    macQuery({ plugins, ...unavailable }).map((entry) => entry.plugin.id),
+    ["github@openai-curated"],
+  );
+});
+
+test("resolves @Computer only from a real current-bundle installed plugin", () => {
+  const source = [
+    "const Z2e=`DISABLED_BY_ADMIN`;",
+    "function Ud(e,t,n){return n.enabled?{availablePlugins:t.installedPlugins}:{availablePlugins:t.availablePlugins}}",
+    "function z2e(e){let{hostId:n,query:r,roots:i}=e,c=!1,u=[`computer-use`],{availablePlugins:f}=Ud(n,i,{installSuggestionPluginNames:u}),{availablePlugins:g}=Ud(n,i,{enabled:!c}),v=[...f];if(!c){let e=new Set(f.map(V2e));for(let t of g){let n=V2e(t);t.plugin.installed&&!e.has(n)&&(v.push(t),e.add(n))}}let C=v.filter(e=>B2e(e,u)),w=cie(C),N=D2e({computerUsePlugin:w,query:r,onPluginMentionInserted:M});return N}",
+    "function B2e(e,t){return e.plugin.availability===Z2e?!1:e.plugin.enabled?!0:!e.plugin.installed&&!t.includes(e.plugin.name)}",
+    "function V2e(e){return e.plugin.name.toLowerCase()}",
+    "function cie(e){return e.find(e=>e.plugin.name===`computer-use`)??null}",
+    "function M(e){return e}",
+    "function D2e({computerUsePlugin:e,query:t,onPluginMentionInserted:n}){return e!=null&&t.trim().toLowerCase()===`@computer`?[{type:`mention`,plugin:e.plugin,insertMention:()=>n(e)}]:[]}",
+    "function x2e(){return[{type:`mention`,insertMention:()=>composerController.insertAtMention()}]}",
+  ].join("");
+
+  const patched = applyPatchTwice(applyLinuxComputerUseRendererAvailabilityPatch, source);
+  const resolveComputerMention = new Function(`${patched};return z2e`)();
+  const installedPlugin = {
+    marketplaceName: "openai-bundled",
+    marketplacePath: null,
+    plugin: {
+      id: "computer-use@openai-bundled",
+      name: "computer-use",
+      installed: true,
+      enabled: true,
+    },
+  };
+
+  assert.doesNotMatch(patched, /computer-use@openai-bundled/);
+  assert.match(patched, /insertMention/);
+  assert.match(patched, /insertAtMention/);
+  assert.strictEqual(
+    resolveComputerMention({
+      hostId: "local",
+      query: "@Computer",
+      roots: { availablePlugins: [], installedPlugins: [installedPlugin] },
+    })[0].plugin,
+    installedPlugin.plugin,
+  );
+  assert.deepEqual(
+    resolveComputerMention({
+      hostId: "local",
+      query: "@Computer",
+      roots: { availablePlugins: [], installedPlugins: [] },
+    }),
+    [],
+  );
+  assert.deepEqual(
+    resolveComputerMention({
+      hostId: "local",
+      query: "@Computer",
+      roots: {
+        availablePlugins: [],
+        installedPlugins: [
+          { ...installedPlugin, plugin: { ...installedPlugin.plugin, availability: "DISABLED_BY_ADMIN" } },
+        ],
+      },
+    }),
+    [],
   );
 });
 

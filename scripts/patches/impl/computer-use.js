@@ -547,30 +547,11 @@ function applyLinuxComputerUseRendererAvailabilityPatch(currentSource) {
         return match;
       }
       availabilityChanged = true;
-      return `let ${pluginsQueryVar}=${pluginsHookVar}(${selectedHostVar},${emptyPluginsVar}),${marketplacePathVar}=${marketplacePathHookVar}(${selectedHostVar}),${featureFlagVar}=${featureFlagHookVar}(${featureFlagArgVar});${platformVar}===\`linux\`&&!${pluginsQueryVar}.availablePlugins.some(e=>(e.plugin?.name===${pluginNameVar}||e.plugin?.id?.split(\`@\`)[0]===${pluginNameVar})&&e.plugin?.installed===!0&&e.plugin?.enabled===!0)&&(${pluginsQueryVar}={...${pluginsQueryVar},availablePlugins:[{marketplaceName:\`openai-curated\`,marketplacePath:${marketplacePathVar},logoPath:new URL(\`computer-use-plugin-icon-linux.png\`,import.meta.url).href,logoDarkPath:new URL(\`computer-use-plugin-icon-linux.png\`,import.meta.url).href,plugin:{id:${pluginNameVar},name:${pluginNameVar},installed:!0,enabled:!0}},...${pluginsQueryVar}.availablePlugins]});let ${computerUsePluginVar};`;
+      const installedPluginPredicate =
+        `(e.plugin?.name===${pluginNameVar}||e.plugin?.id?.split(\`@\`)[0]===${pluginNameVar})&&e.plugin?.installed===!0&&e.plugin?.enabled===!0`;
+      return `let ${pluginsQueryVar}=${pluginsHookVar}(${selectedHostVar},${emptyPluginsVar}),${marketplacePathVar}=${marketplacePathHookVar}(${selectedHostVar}),${featureFlagVar}=${featureFlagHookVar}(${featureFlagArgVar});${platformVar}===\`linux\`&&!${pluginsQueryVar}.availablePlugins.some(e=>${installedPluginPredicate})&&${pluginsQueryVar}.installedPlugins?.some(e=>${installedPluginPredicate})&&(${pluginsQueryVar}={...${pluginsQueryVar},availablePlugins:[${pluginsQueryVar}.installedPlugins.find(e=>${installedPluginPredicate}),...${pluginsQueryVar}.availablePlugins]});let ${computerUsePluginVar};`;
     },
   );
-
-  const linuxComputerUseSyntheticPluginNeedle =
-    "{marketplaceName:`openai-curated`,marketplacePath:`openai-bundled/plugins/computer-use`,plugin:{";
-  if (
-    patchedSource.includes(linuxComputerUseSyntheticPluginNeedle) &&
-    !patchedSource.includes("computer-use-plugin-icon-linux.png")
-  ) {
-    availabilityChanged = true;
-    patchedSource = patchedSource.replace(
-      linuxComputerUseSyntheticPluginNeedle,
-      "{marketplaceName:`openai-curated`,marketplacePath:`openai-bundled/plugins/computer-use`,logoPath:new URL(`computer-use-plugin-icon-linux.png`,import.meta.url).href,logoDarkPath:new URL(`computer-use-plugin-icon-linux.png`,import.meta.url).href,plugin:{",
-    );
-  }
-
-  const invalidSyntheticComputerUseMarketplacePath = "marketplacePath:`openai-bundled/plugins/computer-use`";
-  if (patchedSource.includes(invalidSyntheticComputerUseMarketplacePath)) {
-    availabilityChanged = true;
-    patchedSource = patchedSource
-      .split(invalidSyntheticComputerUseMarketplacePath)
-      .join("marketplacePath:null");
-  }
 
   const nativeAppMentionSectionPattern =
     /([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)===`macOS`\|\|\2===`windows`(?!\|\|\2===`linux`)/g;

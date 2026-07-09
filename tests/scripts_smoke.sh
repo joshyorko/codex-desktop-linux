@@ -5176,6 +5176,67 @@ function getOpenChromeCommand(profileDirectory) {
 JS
 }
 
+make_fake_sites_upstream_app() {
+    local app_dir="$1"
+    local resources_dir="$app_dir/Contents/Resources"
+    local sites_dir="$resources_dir/plugins/openai-bundled/plugins/sites"
+
+    mkdir -p \
+        "$resources_dir/plugins/openai-bundled/.agents/plugins" \
+        "$sites_dir/.codex-plugin" \
+        "$sites_dir/assets" \
+        "$sites_dir/skills/build-sites"
+
+    cat > "$resources_dir/plugins/openai-bundled/.agents/plugins/marketplace.json" <<'JSON'
+{"plugins":[{"name":"sites","source":{"source":"local","path":"./plugins/sites"},"policy":{"installation":"AVAILABLE","authentication":"ON_INSTALL"},"category":"Productivity"}]}
+JSON
+    cat > "$sites_dir/.codex-plugin/plugin.json" <<'JSON'
+{"name":"sites","version":"0.1.21","apps":"./.app.json","skills":"./skills/","interface":{"displayName":"Sites","category":"Productivity"}}
+JSON
+    cat > "$sites_dir/.app.json" <<'JSON'
+{"apps":{"sites":{"id":"connector_20205bf7d4e99a89d7154bb849718324"}}}
+JSON
+    printf '%s\n' '# Sites' > "$sites_dir/skills/build-sites/SKILL.md"
+    printf '%s\n' '<svg></svg>' > "$sites_dir/assets/logo.svg"
+}
+
+test_sites_plugin_staging() {
+    info "Checking platform-neutral Sites plugin staging"
+    local workspace="$TMP_DIR/sites-plugin"
+    local app_dir="$workspace/Codex.app"
+    local install_dir="$workspace/install"
+    local output_log="$workspace/output.log"
+    local sites_dir="$install_dir/resources/plugins/openai-bundled/plugins/sites"
+    local marketplace="$install_dir/resources/plugins/openai-bundled/.agents/plugins/marketplace.json"
+
+    mkdir -p "$workspace" "$install_dir/resources"
+    make_fake_sites_upstream_app "$app_dir"
+
+    (
+        SCRIPT_DIR="$REPO_DIR"
+        INSTALL_DIR="$install_dir"
+        WORK_DIR="$workspace/work"
+        ARCH="x86_64"
+        ICON_SOURCE="$workspace/missing-icon.png"
+        CODEX_APP_ID="codex-desktop"
+        mkdir -p "$WORK_DIR"
+        warn() { echo "[WARN] $*" >&2; }
+        info() { echo "[INFO] $*" >&2; }
+        # shellcheck disable=SC1091
+        source "$REPO_DIR/scripts/lib/bundled-plugins.sh"
+        stage_linux_computer_use_plugin() { return 1; }
+        install_bundled_plugin_resources "$app_dir"
+    ) >"$output_log" 2>&1
+
+    assert_file_exists "$sites_dir/.codex-plugin/plugin.json"
+    assert_file_exists "$sites_dir/.app.json"
+    assert_file_exists "$sites_dir/skills/build-sites/SKILL.md"
+    assert_contains "$sites_dir/.app.json" "connector_20205bf7d4e99a89d7154bb849718324"
+    assert_contains "$marketplace" '"name": "sites"'
+    assert_contains "$marketplace" '"installation": "AVAILABLE"'
+    assert_contains "$output_log" "Sites plugin staged from upstream DMG"
+}
+
 test_chrome_plugin_staging() {
     info "Checking Chrome plugin staging"
     local workspace="$TMP_DIR/chrome-plugin"
@@ -6438,7 +6499,7 @@ test_linux_computer_use_ui_opt_in_smoke() {
     local main_bundle="$extracted/.vite/build/main-test.js"
     local renderer_asset="$extracted/webview/assets/use-model-settings-test.js"
     local current_renderer_asset="$extracted/webview/assets/use-is-plugins-enabled-current-test.js"
-    local install_flow_asset="$extracted/webview/assets/app-initial~app-main~worktree-init-v2-page~remote-conversation-page~pull-requests-page~plug~test.js"
+    local install_flow_asset="$extracted/webview/assets/app-initial~app-main~remote-conversation-page~new-thread-panel-page~onboarding-page~appgen-~test.js"
     local native_apps_asset="$extracted/webview/assets/use-native-apps.electron-test.js"
     local bundle_body
     local renderer_body
@@ -7440,6 +7501,7 @@ main() {
     test_browser_plugin_renamed_upstream_staging
     test_browser_use_node_repl_glibc_pidfd_patch_static
     test_browser_use_node_repl_ldd_output_compatibility
+    test_sites_plugin_staging
     test_chrome_plugin_staging
     test_chrome_browser_client_profile_root_variants
     test_chrome_marketplace_fallback_synthesis

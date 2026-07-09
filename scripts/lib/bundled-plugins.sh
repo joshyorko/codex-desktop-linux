@@ -1,5 +1,5 @@
 #!/bin/bash
-# Bundled-plugin staging — Browser Use, Chrome, Linux Computer Use, manifests, marketplace.
+# Bundled-plugin staging — Browser Use, Chrome, Sites, Linux Computer Use, manifests, marketplace.
 #
 # Sourced by install.sh. Do not run directly.
 # shellcheck shell=bash
@@ -1090,14 +1090,39 @@ stage_browser_plugin_from_upstream() {
     return 0
 }
 
+stage_sites_plugin_from_upstream() {
+    local source_plugin="$1"
+    local target_plugins="$2"
+    local target_plugin="$target_plugins/sites"
+
+    if [ ! -d "$source_plugin" ]; then
+        info "Sites bundled plugin resources not present in upstream app; skipping Sites"
+        return 1
+    fi
+
+    if [ ! -f "$source_plugin/.codex-plugin/plugin.json" ] || [ ! -f "$source_plugin/.app.json" ]; then
+        warn "Sites plugin manifest or app connector metadata not found in upstream app; skipping Sites"
+        return 1
+    fi
+
+    rm -rf "$target_plugin"
+    cp -R "$source_plugin" "$target_plugin"
+    remove_macos_sidecar_files "$target_plugin"
+    normalize_plugin_script_executable_modes "$target_plugin"
+
+    info "Sites plugin staged from upstream DMG"
+    return 0
+}
+
 write_bundled_plugins_marketplace() {
     local source="$1"
     local destination="$2"
     local include_browser="$3"
     local include_chrome="$4"
     local include_computer_use="$5"
+    local include_sites="$6"
 
-    node - "$source" "$destination" "$include_browser" "$include_chrome" "$include_computer_use" <<'NODE'
+    node - "$source" "$destination" "$include_browser" "$include_chrome" "$include_computer_use" "$include_sites" <<'NODE'
 const fs = require("fs");
 const path = require("path");
 
@@ -1106,6 +1131,7 @@ const destinationPath = process.argv[3];
 const includeBrowser = process.argv[4] === "1";
 const includeChrome = process.argv[5] === "1";
 const includeComputerUse = process.argv[6] === "1";
+const includeSites = process.argv[7] === "1";
 const marketplace = JSON.parse(fs.readFileSync(sourcePath, "utf8"));
 const sourcePlugins = marketplace.plugins || [];
 const plugins = [];
@@ -1281,6 +1307,14 @@ if (includeComputerUse) {
   plugins.push(synthesizeLocalMarketplacePlugin("computer-use", "Productivity"));
 }
 
+if (includeSites) {
+  const sites = sourcePlugins.find((plugin) => plugin?.name === "sites");
+  if (sites == null) {
+    throw new Error("Bundled marketplace does not contain sites plugin");
+  }
+  plugins.push(sites);
+}
+
 marketplace.plugins = plugins;
 fs.mkdirSync(path.dirname(destinationPath), { recursive: true });
 fs.writeFileSync(destinationPath, `${JSON.stringify(marketplace, null, 2)}\n`);
@@ -1294,11 +1328,13 @@ install_bundled_plugin_resources() {
     local source_marketplace="$bundled_source_root/.agents/plugins/marketplace.json"
     local source_browser_plugin=""
     local source_chrome_plugin="$upstream_resources/plugins/openai-bundled/plugins/chrome"
+    local source_sites_plugin="$upstream_resources/plugins/openai-bundled/plugins/sites"
     local resources_dir="$INSTALL_DIR/resources"
     local bundled_plugins_dir="$resources_dir/plugins/openai-bundled"
     local include_browser=0
     local include_chrome=0
     local include_computer_use=0
+    local include_sites=0
 
     if [ ! -f "$source_marketplace" ]; then
         warn "Bundled plugin marketplace not found in upstream app; skipping bundled plugins"
@@ -1318,18 +1354,22 @@ install_bundled_plugin_resources() {
         include_chrome=1
     fi
 
+    if stage_sites_plugin_from_upstream "$source_sites_plugin" "$bundled_plugins_dir/plugins"; then
+        include_sites=1
+    fi
+
     if stage_linux_computer_use_plugin "$bundled_plugins_dir/plugins"; then
         include_computer_use=1
     else
         warn "Linux Computer Use plugin will be unavailable"
     fi
 
-    if [ "$include_browser" -eq 0 ] && [ "$include_chrome" -eq 0 ] && [ "$include_computer_use" -eq 0 ]; then
+    if [ "$include_browser" -eq 0 ] && [ "$include_chrome" -eq 0 ] && [ "$include_computer_use" -eq 0 ] && [ "$include_sites" -eq 0 ]; then
         warn "No Linux-safe bundled plugins were staged"
         return 0
     fi
 
-    write_bundled_plugins_marketplace "$source_marketplace" "$bundled_plugins_dir/.agents/plugins/marketplace.json" "$include_browser" "$include_chrome" "$include_computer_use"
+    write_bundled_plugins_marketplace "$source_marketplace" "$bundled_plugins_dir/.agents/plugins/marketplace.json" "$include_browser" "$include_chrome" "$include_computer_use" "$include_sites"
 
     install_linux_executable_resource "$upstream_resources/node" "$resources_dir/node" "node runtime" "info" || true
     install_browser_use_node_repl_resource "$upstream_resources" "$resources_dir/node_repl" || true
