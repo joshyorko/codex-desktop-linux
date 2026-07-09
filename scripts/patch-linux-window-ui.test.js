@@ -6612,6 +6612,10 @@ test("uses only the real installed bundled Computer Use entry in settings", () =
 
   assert.match(patched, /installedPlugins\?\.some\(e=>/);
   assert.match(patched, /installedPlugins\.find\(e=>/);
+  assert.match(patched, /e\.plugin\?\.id===pluginName\+`@openai-bundled`&&e\.plugin\?\.name===pluginName&&e\.marketplaceName===`openai-bundled`/);
+  assert.doesNotMatch(patched, /plugin\?\.id\?\.split\(`@`\)\[0\]/);
+  assert.doesNotMatch(patched, /openai-curated/);
+  assert.doesNotMatch(patched, /marketplacePath:`openai-bundled\/plugins\/computer-use`/);
   assert.doesNotMatch(patched, /plugin:\{id:pluginName\+`@openai-bundled`/);
   assert.strictEqual(
     resolveSettings(

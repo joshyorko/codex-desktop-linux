@@ -548,7 +548,7 @@ function applyLinuxComputerUseRendererAvailabilityPatch(currentSource) {
       }
       availabilityChanged = true;
       const installedPluginPredicate =
-        `(e.plugin?.name===${pluginNameVar}||e.plugin?.id?.split(\`@\`)[0]===${pluginNameVar})&&e.plugin?.installed===!0&&e.plugin?.enabled===!0`;
+        `e.plugin?.id===${pluginNameVar}+\`@openai-bundled\`&&e.plugin?.name===${pluginNameVar}&&e.marketplaceName===\`openai-bundled\`&&e.plugin?.installed===!0&&e.plugin?.enabled===!0`;
       return `let ${pluginsQueryVar}=${pluginsHookVar}(${selectedHostVar},${emptyPluginsVar}),${marketplacePathVar}=${marketplacePathHookVar}(${selectedHostVar}),${featureFlagVar}=${featureFlagHookVar}(${featureFlagArgVar});${platformVar}===\`linux\`&&!${pluginsQueryVar}.availablePlugins.some(e=>${installedPluginPredicate})&&${pluginsQueryVar}.installedPlugins?.some(e=>${installedPluginPredicate})&&(${pluginsQueryVar}={...${pluginsQueryVar},availablePlugins:[${pluginsQueryVar}.installedPlugins.find(e=>${installedPluginPredicate}),...${pluginsQueryVar}.availablePlugins]});let ${computerUsePluginVar};`;
     },
   );
