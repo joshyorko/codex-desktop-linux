@@ -1194,6 +1194,19 @@ function synthesizeLocalMarketplacePlugin(pluginName, fallbackCategory) {
   return entry;
 }
 
+function requireRealBundledPlugin(pluginName) {
+  const plugin = sourcePlugins.find((entry) => entry?.name === pluginName);
+  if (plugin == null || plugin.source?.source !== "local" || plugin.source.path !== `./plugins/${pluginName}`) {
+    throw new Error(`Bundled marketplace has no real ${pluginName} plugin entry`);
+  }
+  const manifestPath = path.resolve(path.dirname(destinationPath), "..", "..", plugin.source.path, ".codex-plugin", "plugin.json");
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+  if (manifest.name !== pluginName || typeof manifest.version !== "string" || manifest.version.length === 0) {
+    throw new Error(`Staged ${pluginName} manifest identity or version is invalid`);
+  }
+  return plugin;
+}
+
 if (includeBrowser) {
   const browser = sourcePlugins.find((plugin) => {
     if (plugin == null || typeof plugin !== "object") {
@@ -1304,15 +1317,11 @@ if (includeChrome) {
 }
 
 if (includeComputerUse) {
-  plugins.push(synthesizeLocalMarketplacePlugin("computer-use", "Productivity"));
+  plugins.push(requireRealBundledPlugin("computer-use"));
 }
 
 if (includeSites) {
-  const sites = sourcePlugins.find((plugin) => plugin?.name === "sites");
-  if (sites == null) {
-    throw new Error("Bundled marketplace does not contain sites plugin");
-  }
-  plugins.push(sites);
+  plugins.push(requireRealBundledPlugin("sites"));
 }
 
 marketplace.plugins = plugins;
