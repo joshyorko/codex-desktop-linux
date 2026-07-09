@@ -48,9 +48,14 @@ pub fn plan_reap(
         .values()
         .filter(|process| process.ppid == parent_pid)
         .collect::<Vec<_>>();
-    for process in &direct_children {
-        if let Some(signature) = helper_signature(process, server_specs, app_dir) {
-            groups.entry(signature).or_default().push(*process);
+    let parent_is_shared_app_server = processes
+        .get(&parent_pid)
+        .is_some_and(is_shared_codex_app_server);
+    if !parent_is_shared_app_server {
+        for process in &direct_children {
+            if let Some(signature) = helper_signature(process, server_specs, app_dir) {
+                groups.entry(signature).or_default().push(*process);
+            }
         }
     }
 
@@ -413,6 +418,11 @@ pub fn is_codex_process(process: &ProcInfo) -> bool {
         .and_then(OsStr::to_str)
         .unwrap_or(argv0);
     process.comm == "codex" || name == "codex" || name.starts_with("codex-")
+}
+
+fn is_shared_codex_app_server(process: &ProcInfo) -> bool {
+    process.argv.iter().skip(1).any(|arg| arg == "app-server")
+        || process_name(process) == "codex-app-server"
 }
 
 fn is_codex_non_owner_process(process: &ProcInfo) -> bool {
@@ -1175,6 +1185,137 @@ mod tests {
                     .to_string(),
             }]
         );
+    }
+
+    #[test]
+    fn keeps_duplicate_helpers_under_shared_desktop_app_server() {
+        let mut processes = BTreeMap::new();
+        processes.insert(
+            100,
+            proc(
+                100,
+                1,
+                10,
+                &["codex", "app-server", "--remote-control"],
+                "/app",
+            ),
+        );
+        processes.insert(
+            101,
+            proc(101, 100, 20, &["/tmp/example-helper", "serve"], "/repo"),
+        );
+        processes.insert(
+            102,
+            proc(102, 100, 30, &["/tmp/example-helper", "serve"], "/repo"),
+        );
+        let specs = vec![ServerSpec {
+            name: "code-index".to_string(),
+            command: "/tmp/example-helper".to_string(),
+            args: vec!["serve".to_string()],
+            cwd: None,
+        }];
+
+        assert!(plan_reap(100, &processes, &specs, None).is_empty());
+    }
+
+    #[test]
+    fn discovers_repo_config_from_direct_helper_children_under_desktop_app_server() {
+        let dir = tempdir().unwrap();
+        let home = dir.path().join("home");
+        let repo = home.join("repo");
+        let app = dir.path().join("app");
+        fs::create_dir_all(repo.join(".codex")).unwrap();
+        fs::create_dir_all(&app).unwrap();
+        fs::write(
+            repo.join(".codex/config.toml"),
+            r#"
+[mcp_servers.code_index]
+command = "/tmp/code-index"
+args = ["serve"]
+"#,
+        )
+        .unwrap();
+
+        let mut processes = BTreeMap::new();
+        processes.insert(
+            100,
+            proc(
+                100,
+                1,
+                10,
+                &["/usr/bin/codex", "app-server", "--remote-control"],
+                app.to_str().unwrap(),
+            ),
+        );
+        processes.insert(
+            101,
+            proc(
+                101,
+                100,
+                20,
+                &["/tmp/code-index", "serve"],
+                repo.to_str().unwrap(),
+            ),
+        );
+
+        let paths = discover_direct_child_config_paths(
+            processes.get(&100).unwrap(),
+            &processes,
+            Some(&home.join(".codex")),
+            &[],
+        );
+
+        assert!(paths.contains(&repo.join(".codex/config.toml")));
+    }
+
+    #[test]
+    fn direct_child_config_discovery_ignores_shell_tool_children() {
+        let dir = tempdir().unwrap();
+        let home = dir.path().join("home");
+        let repo = home.join("repo");
+        let app = dir.path().join("app");
+        fs::create_dir_all(repo.join(".codex")).unwrap();
+        fs::create_dir_all(&app).unwrap();
+        fs::write(
+            repo.join(".codex/config.toml"),
+            r#"
+[mcp_servers.not_a_helper]
+command = "echo"
+args = ["mcp-server", "--stdio"]
+"#,
+        )
+        .unwrap();
+
+        let mut processes = BTreeMap::new();
+        processes.insert(
+            100,
+            proc(
+                100,
+                1,
+                10,
+                &["/usr/bin/codex", "app-server", "--remote-control"],
+                app.to_str().unwrap(),
+            ),
+        );
+        processes.insert(
+            101,
+            proc(
+                101,
+                100,
+                20,
+                &["bash", "-lc", "echo mcp-server --stdio"],
+                repo.to_str().unwrap(),
+            ),
+        );
+
+        let paths = discover_direct_child_config_paths(
+            processes.get(&100).unwrap(),
+            &processes,
+            Some(&home.join(".codex")),
+            &[],
+        );
+
+        assert!(!paths.contains(&repo.join(".codex/config.toml")));
     }
 
     #[test]
