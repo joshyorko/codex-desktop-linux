@@ -25,6 +25,7 @@ Build an upstream DMG intelligence report without mutating codex-app/.
 Options:
   --candidate PATH       Candidate Codex.dmg, extracted .app, or extracted app resources directory
   --candidate-url URL    Provenance URL for the candidate DMG
+  --patch-preflight      Run required Linux patch viability against a temporary extracted copy
   --baseline PATH        Optional known-good baseline DMG or extracted .app; defaults to ./Codex.dmg when different
   --no-baseline          Do a candidate-only scan even when ./Codex.dmg exists
   --patch-report PATH    Optional patch-report.json to fold patch blockers/review items into drift-report.json
@@ -42,6 +43,7 @@ function parseArgs(argv) {
     baselinePath: null,
     candidatePath: null,
     candidateUrl: null,
+    patchPreflight: false,
     outputDir: null,
     failOnBlockers: false,
     patchReportPath: null,
@@ -55,6 +57,8 @@ function parseArgs(argv) {
       args.candidatePath = argv[++index];
     } else if (arg === "--candidate-url") {
       args.candidateUrl = argv[++index];
+    } else if (arg === "--patch-preflight") {
+      args.patchPreflight = true;
     } else if (arg === "--baseline") {
       args.baselinePath = argv[++index];
     } else if (arg === "--no-baseline") {
@@ -155,6 +159,7 @@ function main(argv = process.argv.slice(2)) {
     repoRoot,
     timestamp: args.timestamp,
     provenance: args.candidateUrl ? { candidate: { url: args.candidateUrl } } : null,
+    runPatchPreflight: args.patchPreflight,
   });
   const decision = buildDecision({
     driftReport: reports.driftReport,

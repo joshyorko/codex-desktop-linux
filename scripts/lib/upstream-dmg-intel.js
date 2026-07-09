@@ -74,6 +74,55 @@ function writeJson(filePath, value) {
   fs.writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 }
 
+const REQUIRED_PATCH_PREFLIGHTS = new Set([
+  "linux-window-options",
+  "linux-native-titlebar",
+  "linux-avatar-overlay-mouse-passthrough",
+  "linux-tray",
+  "main-process-ui",
+]);
+
+function runRequiredPatchPreflight({ inventory, repoRoot, workDir } = {}) {
+  const result = {
+    status: "not-run",
+    evidenceType: "safe-extracted-candidate-patch-preflight",
+    sourcePath: inventory?.source?.appDir ?? null,
+    findings: [],
+  };
+  if (!inventory?.source?.appDir || !fs.existsSync(path.join(repoRoot, "scripts/patch-linux-window-ui.js"))) {
+    result.status = "unknown";
+    result.reason = "patch preflight entrypoint unavailable";
+    return result;
+  }
+  const extractedCopy = path.join(workDir, "required-patch-preflight-app");
+  fs.cpSync(inventory.source.appDir, extractedCopy, { recursive: true });
+  const reportPath = path.join(workDir, "required-patch-preflight.json");
+  const command = spawnSync(process.execPath, [
+    path.join(repoRoot, "scripts/patch-linux-window-ui.js"),
+    "--report-json", reportPath,
+    "--enforce-critical",
+    extractedCopy,
+  ], { encoding: "utf8", maxBuffer: 4 * 1024 * 1024 });
+  const report = fs.existsSync(reportPath) ? readJson(reportPath) : { patches: [] };
+  const patches = (report.patches ?? []).filter((entry) => REQUIRED_PATCH_PREFLIGHTS.has(entry.name));
+  result.status = command.status === 0 && patches.every((entry) => ["applied", "already-applied"].includes(entry.status)) ? "pass" : "blocked";
+  result.exitCode = command.status;
+  result.findings = patches.map((entry) => ({
+    name: entry.name,
+    status: entry.status,
+    severity: ["applied", "already-applied"].includes(entry.status) ? "none" : "blocker",
+    ownerPath: entry.name === "main-process-ui" ? "scripts/patches/runner.js" : "scripts/patches/core/all-linux/main-process/window-shell/patch.js",
+    recommendation: ["applied", "already-applied"].includes(entry.status) ? "No action." : "Restore the exact current-bundle patch contract before package build.",
+    reason: entry.reason ?? null,
+  }));
+  for (const name of REQUIRED_PATCH_PREFLIGHTS) {
+    if (!patches.some((entry) => entry.name === name)) {
+      result.findings.push({ name, status: "not-recorded", severity: "blocker", ownerPath: "scripts/patches/runner.js", recommendation: "Record and resolve this required patch before package build." });
+    }
+  }
+  return result;
+}
+
 function normalizePath(value) {
   return String(value).replace(/\\/g, "/").replace(/^\/+/, "");
 }
@@ -2303,6 +2352,13 @@ function renderDriftMarkdown(report) {
     platformGateRows(report.platformGates, ["linux-parity-drift"]),
   ).trimEnd());
   lines.push("");
+  lines.push("## Required patch preflight");
+  lines.push("");
+  lines.push(markdownTable(
+    ["Patch", "Status", "Severity", "Owner", "Recommendation"],
+    (report.requiredPatchPreflight?.findings ?? []).map((finding) => [finding.name, finding.status, finding.severity, finding.ownerPath, finding.recommendation]),
+  ).trimEnd());
+  lines.push("");
   lines.push("## New Capability Candidates");
   lines.push("");
   lines.push(markdownTable(
@@ -2585,6 +2641,7 @@ function buildIntelReports({
   repoRoot = process.cwd(),
   timestamp = null,
   provenance = null,
+  runPatchPreflight = false,
 } = {}) {
   if (candidatePath == null) {
     throw new Error("candidatePath is required");
@@ -2628,10 +2685,24 @@ function buildIntelReports({
           });
     const patchReport =
       patchReportPath != null && fs.existsSync(patchReportPath) ? readJson(patchReportPath) : null;
+    const requiredPatchPreflight = runPatchPreflight
+      ? runRequiredPatchPreflight({ inventory: candidateInventory, repoRoot, workDir: scratchRoot })
+      : { status: "not-run", findings: [] };
+    const effectivePatchReport = patchReport == null && requiredPatchPreflight.status === "not-run"
+      ? null
+      : {
+          ...(patchReport ?? { patches: [] }),
+          patches: [...(patchReport?.patches ?? []), ...requiredPatchPreflight.findings.map((finding) => ({
+            name: finding.name,
+            status: finding.severity === "none" ? "already-applied" : "failed-required",
+            ciPolicy: "required-upstream",
+            reason: finding.reason ?? finding.recommendation,
+          }))],
+        };
     const driftReport = compareProtectedSurfaces({
       baseline: baselineProtected,
       candidate: candidateProtected,
-      patchReport,
+      patchReport: effectivePatchReport,
     });
     const baselineVersions = baselineInventory?.versionMetadata ?? {};
     const candidateVersions = candidateInventory.versionMetadata ?? {};
@@ -2686,6 +2757,7 @@ function buildIntelReports({
         ownerPath: "linux-features/mcp-helper-reaper/reaper/src/lib.rs",
       },
     };
+    driftReport.requiredPatchPreflight = requiredPatchPreflight;
     const mapDrift = compareMaps({ baselineProtected, candidateProtected });
     const platformGateMap = createPlatformGateMap({ inventory: candidateInventory });
     const newCapabilityMap = createNewCapabilityMap({ mapDrift, platformGateMap, candidatePluginMap: candidateProtected.pluginMap });
@@ -2705,6 +2777,7 @@ function buildIntelReports({
     fs.mkdirSync(reportDir, { recursive: true });
     writeJson(path.join(reportDir, "inventory.json"), publicInventory(candidateInventory));
     writeJson(path.join(reportDir, "feature-staging.json"), featureStaging);
+    writeJson(path.join(reportDir, "required-patch-preflight.json"), requiredPatchPreflight);
     writeJson(path.join(reportDir, "protected-surfaces.json"), candidateProtected);
     writeJson(path.join(reportDir, "bridge-map.json"), candidateProtected.bridgeMap);
     writeJson(path.join(reportDir, "plugin-map.json"), candidateProtected.pluginMap);
@@ -2752,6 +2825,7 @@ module.exports = {
   compareProtectedSurfaces,
   createBridgeMap,
   createInventory,
+  runRequiredPatchPreflight,
   extractVersionMetadata,
   createNewCapabilityMap,
   createNativeBinaryMap,
