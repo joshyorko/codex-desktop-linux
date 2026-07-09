@@ -13,8 +13,10 @@ const {
   createInventory,
   createNewCapabilityMap,
   createPlatformGateMap,
+  extractVersionMetadata,
   extractProtectedSurfaces,
   findPostPatchIntegrityFindings,
+  mergeProvenance,
   renderActionPlanMarkdown,
   resolveBaselinePath,
 } = require("../lib/upstream-dmg-intel.js");
@@ -258,6 +260,37 @@ function createFixtureApp(root, variant = "baseline") {
   );
 
   return appDir;
+}
+
+function addSitesPlugin(appDir) {
+  const sitesPlugin = path.join(
+    appDir,
+    "Contents/Resources/plugins/openai-bundled/plugins/sites",
+  );
+  writeJson(path.join(sitesPlugin, ".app.json"), {
+    apps: {
+      sites: {
+        id: "connector_20205bf7d4e99a89d7154bb849718324",
+      },
+    },
+  });
+  writeJson(path.join(sitesPlugin, ".codex-plugin/plugin.json"), {
+    name: "sites",
+    version: "0.1.21",
+    description: "Build and deploy websites with Sites.",
+    skills: "./skills/",
+    apps: "./.app.json",
+    interface: {
+      displayName: "Sites",
+      shortDescription: "Build and deploy websites with Sites",
+      termsOfServiceURL: "https://openai.com/policies/chatgpt-sites-terms/",
+      category: "Productivity",
+    },
+  });
+  writeFile(
+    path.join(sitesPlugin, "skills/sites-building/SKILL.md"),
+    "Use Sites to build and deploy websites.",
+  );
 }
 
 function writeBundledPlugin(appDir, pluginId, manifest = {}) {
@@ -631,6 +664,63 @@ test("categorizes platform gates for Linux parity, unsupported features, and rev
     assert.equal(platformGateMap.blockingCount, 3);
   }));
 
+test("does not treat generic Computer Use mentions as Linux parity drift without exact contracts", () =>
+  withTempDir((workspace) => {
+    const candidateApp = createFixtureApp(workspace, "candidate");
+    const assetsDir = path.join(candidateApp, "Contents/Resources/webview/assets");
+    writeFile(
+      path.join(assetsDir, "computer-use-marketing-current.js"),
+      "function teaser(){let allowed=p===`macOS`||p===`windows`;return allowed?`computer use desktop preview`:null}",
+    );
+
+    const platformGateMap = createPlatformGateMap({
+      inventory: createInventory({ registry, sourcePath: candidateApp }),
+    });
+    const gate = platformGateMap.gates.find((entry) =>
+      entry.path.endsWith("computer-use-marketing-current.js"),
+    );
+
+    assert.ok(gate);
+    assert.equal(gate.category, "needs-review");
+  }));
+
+test("maps Chronicle and Skysight platform gates to the record-and-replay Linux owners", () =>
+  withTempDir((workspace) => {
+    const candidateApp = createFixtureApp(workspace, "candidate");
+    const assetsDir = path.join(candidateApp, "Contents/Resources/webview/assets");
+    writeFile(
+      path.join(assetsDir, "chronicle-settings-current.js"),
+      "function chronicle(){let allowed=p===`macOS`||p===`windows`;return allowed&&chronicleSidecarPresent&&chronicleSidecarProcessState&&rememberConsentAccepted?o.mutateAsync({enabled:!0}):chronicleDisable?.()}",
+    );
+    writeFile(
+      path.join(assetsDir, "skysight-controls-current.js"),
+      "function skysight(){return process.platform===`darwin`||process.platform===`win32`?{status:`linux-record-replay-skysight-status`,snapshot:`skysight_snapshot`,tool:`event_stream_start`}:null}",
+    );
+
+    const platformGateMap = createPlatformGateMap({
+      inventory: createInventory({ registry, sourcePath: candidateApp }),
+    });
+    const chronicleGate = platformGateMap.gates.find((entry) =>
+      entry.path.endsWith("chronicle-settings-current.js"),
+    );
+    const skysightGate = platformGateMap.gates.find((entry) =>
+      entry.path.endsWith("skysight-controls-current.js"),
+    );
+
+    assert.ok(chronicleGate);
+    assert.equal(chronicleGate.category, "linux-parity-drift");
+    assert.equal(chronicleGate.feature, "Chronicle settings toggle paths");
+    assert.equal(chronicleGate.patchTarget, "linux-features/record-and-replay/patch.js");
+
+    assert.ok(skysightGate);
+    assert.equal(skysightGate.category, "linux-parity-drift");
+    assert.equal(skysightGate.feature, "Skysight controls and bridge");
+    assert.equal(
+      skysightGate.patchTarget,
+      "linux-features/record-and-replay/patch.js and record-replay-linux/src/mcp.rs",
+    );
+  }));
+
 test("keeps review-only platform gates out of new capability candidates", () => {
   const capabilityMap = createNewCapabilityMap({
     mapDrift: { mode: "baselineComparison" },
@@ -664,6 +754,147 @@ test("keeps review-only platform gates out of new capability candidates", () => 
 
   assert.ok(capabilityMap.capabilities.some((capability) => capability.id === "platform-gate:new-gate"));
   assert.ok(!capabilityMap.capabilities.some((capability) => capability.id === "platform-gate:review-gate"));
+});
+
+test("keeps framework, app-shell, plugin, and dependency binaries out of feature candidates", () => {
+  const capabilityMap = createNewCapabilityMap({
+    mapDrift: {
+      mode: "baselineComparison",
+      nativeBinaryDrift: {
+        added: [
+          "Contents/Frameworks/Codex Framework.framework/Versions/150.0.7871.101/Helpers/browser_crashpad_handler",
+          "Contents/MacOS/Codex",
+          "Contents/Resources/plugins/openai-bundled/plugins/chrome/extension-host/macos/arm64/ChatGPT for Chrome",
+          "Contents/Resources/app.asar.unpacked/node_modules/example/build/Release/example.node",
+          "Contents/Resources/codex-code-mode-host",
+        ],
+      },
+    },
+    platformGateMap: { gates: [] },
+  });
+
+  assert.deepEqual(
+    capabilityMap.capabilities.filter((capability) => capability.type === "native-binary").map((capability) => capability.path),
+    ["Contents/Resources/codex-code-mode-host"],
+  );
+});
+
+test("reports Sites as a cross-platform entitlement-gated capability with a staging recommendation", () =>
+  withTempDir((workspace) => {
+    const baselineApp = createFixtureApp(workspace, "baseline");
+    const candidateApp = createFixtureApp(workspace, "candidate");
+    const outputDir = path.join(workspace, "sites-report");
+    addSitesPlugin(candidateApp);
+
+    const reports = buildIntelReports({
+      baselinePath: baselineApp,
+      candidatePath: candidateApp,
+      outputDir,
+      registry,
+      repoRoot: process.cwd(),
+    });
+    const sitesCapability = reports.newCapabilityMap.capabilities.find(
+      (capability) => capability.name === "Sites",
+    );
+    const driftMarkdown = fs.readFileSync(path.join(outputDir, "drift-report.md"), "utf8");
+
+    assert.ok(sitesCapability);
+    assert.equal(sitesCapability.category, "cross-platform-entitlement-gated");
+    assert.equal(sitesCapability.version, "0.1.21");
+    assert.equal(sitesCapability.platformLabel, "cross-platform");
+    assert.match(
+      sitesCapability.entitlementLabel,
+      /connector_20205bf7d4e99a89d7154bb849718324/,
+    );
+    assert.equal(sitesCapability.patchTarget, "scripts/lib/bundled-plugins.sh");
+    assert.match(sitesCapability.recommendation, /staging issue/i);
+    assert.match(driftMarkdown, /\| Sites \| 0\.1\.21 \| plugin \| cross-platform-entitlement-gated \|/);
+    assert.match(
+      driftMarkdown,
+      /connector_20205bf7d4e99a89d7154bb849718324/,
+    );
+    assert.doesNotMatch(driftMarkdown, /\[object Object\]/);
+    assert.match(driftMarkdown, /\| --- \| --- \| --- \| --- \|/);
+  }));
+
+test("emits app, Electron, CLI, and bundled-plugin version deltas", () => {
+  const metadata = extractVersionMetadata([
+    {
+      relativePath: "Contents/Resources/vendor/Info.plist",
+      text: "CFBundleShortVersionString 3.2.1 CFBundleVersion 99",
+    },
+    {
+      relativePath: "Contents/Resources/node_modules/canvas/package.json",
+      text: '{"version":"3.2.1","dependencies":{"electron":"40.0.0"}}',
+    },
+    {
+      relativePath: "Contents/Resources/codex",
+      nativeStrings: ["unrelated protocol version 2.0"],
+    },
+    {
+      relativePath: "Contents/Info.plist",
+      text: "CFBundleShortVersionString 1.2.3 CFBundleVersion 456",
+    },
+    {
+      relativePath: "package.json",
+      source: "asar",
+      text: '{"name":"openai-codex-electron","version":"26.623.141536","devDependencies":{"electron":"42.1.0"}}',
+    },
+    {
+      relativePath: "Contents/Resources/codex",
+      nativeStrings: ["codex-cli version 0.99.1"],
+    },
+    {
+      relativePath: "Contents/Resources/plugins/openai-bundled/plugins/sites/.codex-plugin/plugin.json",
+      text: '{"version":"0.1.21"}',
+    },
+  ]);
+
+  assert.equal(metadata.cfBundleShortVersionString, "1.2.3");
+  assert.equal(metadata.cfBundleVersion, "456");
+  assert.equal(metadata.appPackageVersion, "26.623.141536");
+  assert.equal(metadata.electronVersion, "42.1.0");
+  assert.equal(metadata.codexCliVersion, "0.99.1");
+  assert.equal(metadata.bundledPluginVersions.sites, "0.1.21");
+});
+
+test("candidate URL augments detected DMG provenance without dropping hashes", () => {
+  assert.deepEqual(
+    mergeProvenance(
+      {
+        candidate: { bytes: 123, sha256: "candidate-sha", etag: "etag", lastModified: "today", url: null },
+        baseline: { bytes: 100, sha256: "baseline-sha", etag: null, lastModified: null, url: null },
+      },
+      { candidate: { url: "https://example.test/Codex.dmg" } },
+    ),
+    {
+      candidate: {
+        bytes: 123,
+        sha256: "candidate-sha",
+        etag: "etag",
+        lastModified: "today",
+        url: "https://example.test/Codex.dmg",
+      },
+      baseline: { bytes: 100, sha256: "baseline-sha", etag: null, lastModified: null, url: null },
+    },
+  );
+});
+
+test("production registry protects Sites and exact remote-mobile contracts", () => {
+  const productionRegistry = JSON.parse(
+    fs.readFileSync(path.join(process.cwd(), "scripts/dev/upstream-dmg-protected-surfaces.json"), "utf8"),
+  );
+  const sites = productionRegistry.surfaces.find((surface) => surface.id === "sites_plugin");
+  const remoteMobile = productionRegistry.surfaces.find((surface) => surface.id === "remote_mobile_control");
+
+  assert.ok(sites);
+  assert.deepEqual(sites.pluginIds, ["sites"]);
+  assert.ok(sites.linuxSubstrate.requiredPaths.includes("scripts/lib/bundled-plugins.sh"));
+  assert.ok(remoteMobile);
+  assert.ok(remoteMobile.contentNeedles.includes("set-remote-control-connections-enabled"));
+  assert.ok(remoteMobile.contentNeedles.includes("remote_control_connections"));
+  assert.ok(!remoteMobile.contentNeedles.includes("mobile"));
+  assert.ok(!remoteMobile.contentNeedles.includes("control"));
 });
 
 test("keeps drift report evidence compact and marks hashed asset churn", () => {

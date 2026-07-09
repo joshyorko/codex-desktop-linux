@@ -24,6 +24,7 @@ Build an upstream DMG intelligence report without mutating codex-app/.
 
 Options:
   --candidate PATH       Candidate Codex.dmg, extracted .app, or extracted app resources directory
+  --candidate-url URL    Provenance URL for the candidate DMG
   --baseline PATH        Optional known-good baseline DMG or extracted .app; defaults to ./Codex.dmg when different
   --no-baseline          Do a candidate-only scan even when ./Codex.dmg exists
   --patch-report PATH    Optional patch-report.json to fold patch blockers/review items into drift-report.json
@@ -40,6 +41,7 @@ function parseArgs(argv) {
     autoBaseline: true,
     baselinePath: null,
     candidatePath: null,
+    candidateUrl: null,
     outputDir: null,
     failOnBlockers: false,
     patchReportPath: null,
@@ -51,6 +53,8 @@ function parseArgs(argv) {
     const arg = argv[index];
     if (arg === "--candidate") {
       args.candidatePath = argv[++index];
+    } else if (arg === "--candidate-url") {
+      args.candidateUrl = argv[++index];
     } else if (arg === "--baseline") {
       args.baselinePath = argv[++index];
     } else if (arg === "--no-baseline") {
@@ -150,6 +154,7 @@ function main(argv = process.argv.slice(2)) {
     registry,
     repoRoot,
     timestamp: args.timestamp,
+    provenance: args.candidateUrl ? { candidate: { url: args.candidateUrl } } : null,
   });
   const decision = buildDecision({
     driftReport: reports.driftReport,

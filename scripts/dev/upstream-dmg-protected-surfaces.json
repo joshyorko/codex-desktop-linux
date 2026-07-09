@@ -3,6 +3,50 @@
   "description": "Protected upstream Codex Desktop macOS DMG surfaces that Linux packaging mirrors, patches, stages, or must explicitly classify before accepting a new upstream build.",
   "surfaces": [
     {
+      "id": "read_aloud_capability",
+      "title": "Read Aloud capability and staging contract",
+      "category": "feature",
+      "pathPatterns": ["read-aloud", "read aloud"],
+      "contentNeedles": ["read-aloud", "kokoro", "codexLinuxReadAloud"],
+      "patchNamePatterns": ["read.*aloud"],
+      "linuxSubstrate": {"requiredPaths": ["linux-features/read-aloud", "linux-features/read-aloud/patch.js"]}
+    },
+    {
+      "id": "sites_plugin",
+      "title": "Sites plugin manifest, connector registration, and Linux staging",
+      "category": "plugin",
+      "pathPatterns": ["plugins/openai-bundled/plugins/sites/"],
+      "contentNeedles": ["connector_20205bf7d4e99a89d7154bb849718324", "chatgpt-sites-terms"],
+      "pluginIds": ["sites"],
+      "patchNamePatterns": ["sites", "bundled.*plugin"],
+      "requiredEvidence": [
+        {
+          "id": "sites-plugin-manifest",
+          "pathPatterns": ["plugins/openai-bundled/plugins/sites/\\.codex-plugin/plugin\\.json$"],
+          "pluginIds": ["sites"]
+        },
+        {
+          "id": "sites-connector-registration",
+          "pathPatterns": ["plugins/openai-bundled/plugins/sites/\\.app\\.json$"],
+          "contentNeedles": ["connector_20205bf7d4e99a89d7154bb849718324"]
+        }
+      ],
+      "linuxSubstrate": {"requiredPaths": ["scripts/lib/bundled-plugins.sh"]}
+    },
+    {
+      "id": "remote_mobile_control",
+      "title": "Remote mobile control UI, bridge, and staging contract",
+      "category": "feature",
+      "pathPatterns": ["remote-mobile-control", "remote-control-connections", "remote-connections-settings"],
+      "contentNeedles": [
+        "remote_control_connections",
+        "set-remote-control-connections-enabled",
+        "shouldLoadRemoteControlConnections"
+      ],
+      "patchNamePatterns": ["remote.*mobile", "mobile.*control"],
+      "linuxSubstrate": {"requiredPaths": ["linux-features/remote-mobile-control", "linux-features/remote-mobile-control/stage.sh"]}
+    },
+    {
       "id": "codex_chronicle",
       "title": "Chronicle sidecar binary and event bundle schema",
       "category": "native",

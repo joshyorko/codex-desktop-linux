@@ -6,7 +6,7 @@ const os = require("node:os");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 
-const TEXT_FILE_PATTERN = /\.(cjs|css|html|js|json|mjs|md|text|ts|tsx|txt|xml|yml|yaml)$/i;
+const TEXT_FILE_PATTERN = /\.(cjs|css|html|js|json|mjs|md|plist|text|ts|tsx|txt|xml|yml|yaml)$/i;
 const NATIVE_FILE_PATTERN = /(^|\/)(codex_chronicle|SkyComputerUseClient|sky\.node|node_repl|node|[^/]+\.(node|dylib))$/i;
 const DEFAULT_MAX_TEXT_BYTES = 2_500_000;
 const DEFAULT_MAX_INVENTORY_HASH_BYTES = 10_000_000;
@@ -47,6 +47,22 @@ const commandPathCache = new Map();
 
 function sha256(buffer) {
   return crypto.createHash("sha256").update(buffer).digest("hex");
+}
+
+function sha256File(filePath) {
+  const hash = crypto.createHash("sha256");
+  const buffer = Buffer.allocUnsafe(1024 * 1024);
+  const fd = fs.openSync(filePath, "r");
+  try {
+    let bytesRead;
+    do {
+      bytesRead = fs.readSync(fd, buffer, 0, buffer.length, null);
+      if (bytesRead > 0) hash.update(buffer.subarray(0, bytesRead));
+    } while (bytesRead > 0);
+  } finally {
+    fs.closeSync(fd);
+  }
+  return hash.digest("hex");
 }
 
 function readJson(filePath) {
@@ -401,6 +417,7 @@ function createInventory({ registry = null, sourcePath, workDir = null } = {}) {
         textFiles: files.filter((file) => file.type === "text" || file.type === "json").length,
       },
       files,
+      versionMetadata: extractVersionMetadata(files),
     };
   } finally {
     if (cleanupScratch && scratchDir != null) {
@@ -409,9 +426,117 @@ function createInventory({ registry = null, sourcePath, workDir = null } = {}) {
   }
 }
 
+function firstVersion(value) {
+  const match = String(value ?? "").match(/\b\d+\.\d+(?:\.\d+){0,2}(?:[-+][0-9A-Za-z.-]+)?\b/);
+  return match?.[0] ?? null;
+}
+
+function parseJsonObject(text) {
+  try {
+    const parsed = JSON.parse(text);
+    return parsed != null && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function canonicalPlistVersions(file) {
+  const values = {
+    cfBundleShortVersionString: null,
+    cfBundleVersion: null,
+  };
+  const text = file.text ?? "";
+  for (const [field, key] of Object.entries({
+    cfBundleShortVersionString: "CFBundleShortVersionString",
+    cfBundleVersion: "CFBundleVersion",
+  })) {
+    values[field] =
+      text.match(new RegExp(`<key>\\s*${key}\\s*</key>\\s*<string>\\s*([^<]+)`, "i"))?.[1]?.trim() ??
+      text.match(new RegExp(`${key}[^0-9]{0,20}([0-9][0-9A-Za-z.+-]*)`, "i"))?.[1] ??
+      null;
+  }
+  if ((values.cfBundleShortVersionString != null && values.cfBundleVersion != null) || file.absolutePath == null) {
+    return values;
+  }
+  const script = [
+    "import json, plistlib, sys",
+    "with open(sys.argv[1], 'rb') as handle:",
+    "    data = plistlib.load(handle)",
+    "print(json.dumps({key: data.get(key) for key in ('CFBundleShortVersionString', 'CFBundleVersion')}))",
+  ].join("\n");
+  const parsed = spawnSync("python3", ["-c", script, file.absolutePath], {
+    encoding: "utf8",
+    maxBuffer: 1024 * 1024,
+  });
+  if (parsed.status === 0) {
+    const plist = parseJsonObject(parsed.stdout);
+    values.cfBundleShortVersionString ??= firstVersion(plist?.CFBundleShortVersionString);
+    values.cfBundleVersion ??= String(plist?.CFBundleVersion ?? "").trim() || null;
+  }
+  return values;
+}
+
+function extractVersionMetadata(files = []) {
+  const result = {
+    cfBundleShortVersionString: null,
+    cfBundleVersion: null,
+    appPackageVersion: null,
+    electronVersion: null,
+    codexCliVersion: null,
+    bundledPluginVersions: {},
+    evidence: [],
+  };
+  const record = (key, value, evidencePath) => {
+    if (value != null && result[key] == null) {
+      result[key] = value;
+      result.evidence.push({ field: key, path: evidencePath });
+    }
+  };
+  for (const file of files) {
+    const relativePath = normalizePath(file.relativePath);
+    const pathLower = relativePath.toLowerCase();
+    const text = file.text ?? (file.nativeStrings ?? []).join(" ");
+    if (!text) continue;
+    if (pathLower === "contents/info.plist") {
+      const plistVersions = canonicalPlistVersions(file);
+      record("cfBundleShortVersionString", plistVersions.cfBundleShortVersionString, relativePath);
+      record("cfBundleVersion", plistVersions.cfBundleVersion, relativePath);
+    }
+    if (
+      pathLower === "contents/resources/app.asar/package.json" ||
+      (pathLower === "package.json" && file.source === "asar")
+    ) {
+      const manifest = parseJsonObject(text);
+      if (manifest?.name === "openai-codex-electron" || manifest?.productName === "Codex") {
+        record("appPackageVersion", firstVersion(manifest.version), relativePath);
+        record(
+          "electronVersion",
+          firstVersion(manifest.devDependencies?.electron ?? manifest.dependencies?.electron),
+          relativePath,
+        );
+      }
+    }
+    if (pathLower === "contents/resources/codex" || pathLower === "contents/resources/codex.exe") {
+      const cliVersion = text.match(
+        /\bcodex-cli(?:\s+version)?\s*[:=]?\s*v?(\d+\.\d+(?:\.\d+){0,2}(?:[-+][0-9A-Za-z.-]+)?)/i,
+      )?.[1];
+      record("codexCliVersion", firstVersion(cliVersion), relativePath);
+    }
+    const pluginMatch = relativePath.match(/plugins\/openai-bundled\/plugins\/([^/]+)\/\.codex-plugin\/plugin\.json$/);
+    if (pluginMatch) {
+      const version = firstVersion(parseJsonObject(text)?.version);
+      if (version != null) result.bundledPluginVersions[pluginMatch[1]] = version;
+    }
+  }
+  return result;
+}
+
 function fileEvidenceForSurface(inventory, surface) {
   const evidence = [];
   for (const file of inventory.files) {
+    if (/(^|\/)(legacy|fallback|previous-bundle)(\/|$)/i.test(file.relativePath)) {
+      continue;
+    }
     const pathHit = matchAny(surface.pathPatterns, file.relativePath);
     const contentHits = [];
     const nativeHits = [];
@@ -1153,13 +1278,13 @@ function compactSnippet(value) {
 
 function isComputerUsePlatformGateContext(lower, pathLower) {
   return (
-    pathLower.includes("computer-use") ||
-    lower.includes("computer-use") ||
-    lower.includes("computeruse") ||
-    lower.includes("computer use") ||
-    lower.includes("native-desktop-apps") ||
-    lower.includes("accessibility_snapshot") ||
-    lower.includes("computer-use-plugin-icon-linux")
+    (pathLower.includes("computer-use") && !pathLower.includes("marketing")) ||
+    lower.includes("computer-use-native-desktop-app-icon") ||
+    lower.includes("computer-use-plugin-icon-linux") ||
+    (lower.includes("native-desktop-apps") &&
+      (lower.includes("availableplugins") || lower.includes("plugin.installed") || lower.includes("appcontrolid") ||
+        lower.includes("queryconfig") || lower.includes("computeruseplugin"))) ||
+    (lower.includes("accessibility_snapshot") && lower.includes("event_stream"))
   );
 }
 
@@ -1179,6 +1304,28 @@ function classifyPlatformGate({ file, gate, context }) {
     };
   }
 
+  const chronicleContract =
+    (lower.includes("chroniclesidecarpresent") && lower.includes("chroniclesidecarprocessstate") &&
+      lower.includes("rememberconsentaccepted")) ||
+    (lower.includes("skysight_snapshot") && lower.includes("event_stream_start")) ||
+    (lower.includes("linux-record-replay-skysight-status") && lower.includes("skysight"));
+  if (chronicleContract) {
+    const skysight = lower.includes("skysight") && !lower.includes("chroniclesidecar");
+    return {
+      category: "linux-parity-drift",
+      confidence: "high",
+      confidenceRationale: "Exact Chronicle/Skysight status, consent, or bridge contract matched.",
+      feature: skysight ? "Skysight controls and bridge" : "Chronicle settings toggle paths",
+      issueCandidate: false,
+      linuxSurfaceId: skysight ? "skysight_bridge" : "chronicle_settings_toggles",
+      patchTarget: skysight
+        ? "linux-features/record-and-replay/patch.js and record-replay-linux/src/mcp.rs"
+        : "linux-features/record-and-replay/patch.js",
+      linuxStatus: "existing-linux-substrate",
+      recommendation: "Expose and test the explicit stopped/not-started state, consent, enable/disable, and bridge status semantics on Linux.",
+    };
+  }
+
   if (
     lower.includes("appcontrolid") &&
     lower.includes("togglearialabel") &&
@@ -1187,11 +1334,13 @@ function classifyPlatformGate({ file, gate, context }) {
     return {
       category: "linux-parity-drift",
       confidence: "high",
+      confidenceRationale: "Exact Computer Use settings card contract matched.",
       feature: "Computer Use settings native app cards",
       issueCandidate: false,
       linuxSurfaceId: "computer_use_plugin",
       patchTarget: "scripts/patches/impl/computer-use.js",
       recommendation: "Patch the settings native app card loop so Linux renders the existing Computer Use Any App/native app controls.",
+      linuxStatus: "existing-linux-substrate",
     };
   }
 
@@ -1199,11 +1348,13 @@ function classifyPlatformGate({ file, gate, context }) {
     return {
       category: "linux-parity-drift",
       confidence: "high",
+      confidenceRationale: "Exact Computer Use native icon contract matched.",
       feature: "Computer Use native app icons",
       issueCandidate: false,
       linuxSurfaceId: "computer_use_plugin",
       patchTarget: "scripts/patches/impl/computer-use.js",
       recommendation: "Patch the native desktop app icon query gate so Linux can request native app icons for Computer Use cards and mentions.",
+      linuxStatus: "existing-linux-substrate",
     };
   }
 
@@ -1211,11 +1362,27 @@ function classifyPlatformGate({ file, gate, context }) {
     return {
       category: "linux-parity-drift",
       confidence: "high",
+      confidenceRationale: "Exact Computer Use renderer contract matched.",
       feature: "Computer Use native app UI",
       issueCandidate: false,
       linuxSurfaceId: "computer_use_plugin",
       patchTarget: "scripts/patches/impl/computer-use.js",
       recommendation: "Patch the renderer availability gate so Linux exposes the existing Computer Use backend in settings and @ mentions.",
+      linuxStatus: "existing-linux-substrate",
+    };
+  }
+
+  if (pathLower.includes("computer-use") || lower.includes("computer use") || lower.includes("computer-use")) {
+    return {
+      category: "needs-review",
+      confidence: "medium",
+      confidenceRationale: "Computer Use mention is present without an exact Linux parity contract.",
+      feature: "Computer Use generic platform mention",
+      issueCandidate: false,
+      linuxSurfaceId: "computer_use_plugin",
+      patchTarget: "scripts/patches/impl/computer-use.js",
+      linuxStatus: "existing-linux-substrate",
+      recommendation: "Review the current-bundle context before treating this generic mention as a Linux parity blocker.",
     };
   }
 
@@ -1223,11 +1390,13 @@ function classifyPlatformGate({ file, gate, context }) {
     return {
       category: "platform-specific-unsupported",
       confidence: "high",
+      confidenceRationale: "Exact Office native-app marker matched.",
       feature: "Office live-control app mentions",
       issueCandidate: true,
       linuxSurfaceId: null,
       patchTarget: "new issue or optional linux-features/<office-live-control>/",
       recommendation: "Label as macOS/Windows-only until a Linux native app bridge exists; create a feature issue if parity is desired.",
+      linuxStatus: "unsupported-no-substrate",
     };
   }
 
@@ -1240,11 +1409,13 @@ function classifyPlatformGate({ file, gate, context }) {
     return {
       category: "platform-specific-unsupported",
       confidence: "high",
+      confidenceRationale: "Exact global-hotkey marker matched.",
       feature: "Global hotkey/keybinding integration",
       issueCandidate: true,
       linuxSurfaceId: null,
       patchTarget: "new issue or optional linux-features/<global-hotkeys>/",
       recommendation: "Label as macOS/Windows-only until a Linux global shortcut backend exists; create a feature issue if parity is desired.",
+      linuxStatus: "unsupported-no-substrate",
     };
   }
 
@@ -1269,6 +1440,7 @@ function classifyPlatformGate({ file, gate, context }) {
       linuxSurfaceId: lower.includes("chronicle") ? "chronicle_settings_toggles" : "record_and_replay_plugin",
       patchTarget: "linux-features/record-and-replay and record-replay-linux",
       recommendation: "Review whether this gate hides an existing Linux-backed feature or a new upstream desktop capability.",
+      confidenceRationale: "Generic Chronicle/Skysight text without an exact contract.",
     };
   }
 
@@ -1331,6 +1503,13 @@ function createPlatformGateEntry({ file, gate, index, patternName }) {
     platforms: gate.includes("darwin") || gate.includes("win32") ? ["darwin", "win32"] : ["macOS", "windows"],
     pattern: patternName,
     snippet: compactSnippet(context),
+    evidenceType: "platform-gate-context",
+    platformLabel: classification.platformLabel ?? (gate.includes("darwin") || gate.includes("win32") ? "macOS/windows" : "unknown"),
+    entitlement: classification.entitlement ?? "unknown",
+    rollout: classification.rollout ?? "unknown",
+    linuxStatus: classification.linuxStatus ?? "unknown",
+    ownerPath: classification.patchTarget ?? "manual review",
+    recommendedAction: classification.recommendation,
     ...classification,
   };
 }
@@ -1881,10 +2060,29 @@ function capabilityFromPlatformGate(gate) {
     recommendation: gate.recommendation,
     patchTarget: gate.patchTarget,
     evidence: gate.gate,
+    platformLabel: gate.platformLabel,
+    entitlement: gate.entitlement,
+    rollout: gate.rollout,
+    evidenceType: gate.evidenceType,
+    confidenceRationale: gate.confidenceRationale ?? "Classifier default; manual review required.",
+    linuxStatus: gate.linuxStatus,
+    ownerPath: gate.ownerPath,
+    recommendedAction: gate.recommendation,
   };
 }
 
-function createNewCapabilityMap({ mapDrift, platformGateMap } = {}) {
+function nativeBinaryIsFeatureCandidate(binaryPath) {
+  const normalized = normalizePath(binaryPath);
+  return !(
+    normalized.startsWith("Contents/Frameworks/") ||
+    normalized.startsWith("Contents/MacOS/") ||
+    normalized.startsWith("Contents/Resources/cua_node/") ||
+    normalized.includes("/plugins/") ||
+    normalized.includes("/node_modules/")
+  );
+}
+
+function createNewCapabilityMap({ mapDrift, platformGateMap, candidatePluginMap } = {}) {
   const capabilities = [];
   const addCapability = (capability) => {
     if (capability == null) {
@@ -1895,6 +2093,18 @@ function createNewCapabilityMap({ mapDrift, platformGateMap } = {}) {
       issueCandidate: true,
       patchTarget: "scripts/dev/upstream-dmg-protected-surfaces.json",
       recommendation: "Create an issue, classify Linux support, and add a protected surface if this capability needs parity.",
+      platformLabel: "unknown",
+      entitlement: "unknown",
+      rollout: "unknown",
+      evidenceType: "bundle-drift",
+      confidenceRationale: "Capability discovered from current-bundle structural drift.",
+      linuxStatus: "unknown",
+      ownerPath: "scripts/dev/upstream-dmg-protected-surfaces.json",
+      recommendedAction: "Create an issue and classify Linux support.",
+      bundlePresent: true,
+      uiExposed: null,
+      serverGateObserved: false,
+      entitlementProven: false,
       ...capability,
     });
   };
@@ -1924,6 +2134,7 @@ function createNewCapabilityMap({ mapDrift, platformGateMap } = {}) {
     }
 
     for (const binaryPath of mapDrift?.nativeBinaryDrift?.added ?? []) {
+      if (!nativeBinaryIsFeatureCandidate(binaryPath)) continue;
       addCapability({
         id: `native:${binaryPath}`,
         type: "native-binary",
@@ -1947,6 +2158,35 @@ function createNewCapabilityMap({ mapDrift, platformGateMap } = {}) {
         patchTarget: "scripts/patches/core/all-linux or matching linux-features owner",
       });
     }
+  }
+
+  const sites = (candidatePluginMap?.plugins ?? []).find((plugin) => plugin.id === "sites");
+  if (sites != null && (mapDrift?.pluginDrift?.added ?? []).includes("sites")) {
+    const manifest = sites.manifests?.[0] ?? {};
+    addCapability({
+      id: "plugin:sites",
+      type: "plugin",
+      name: "Sites",
+      version: manifest.version ?? "unknown",
+      category: "cross-platform-entitlement-gated",
+      platformLabel: "cross-platform",
+      entitlement: "connector_20205bf7d4e99a89d7154bb849718324",
+      entitlementLabel: "connector_20205bf7d4e99a89d7154bb849718324 (server entitlement not proven)",
+      rollout: "unknown",
+      evidenceType: "plugin-manifest-and-app-registration",
+      confidence: "high",
+      confidenceRationale: "Current bundle contains the Sites manifest and connector registration; server entitlement is not proven.",
+      bundlePresent: true,
+      uiExposed: Boolean(manifest.displayName),
+      serverGateObserved: false,
+      entitlementProven: false,
+      linuxStatus: "staging-ownership-needed",
+      patchTarget: "scripts/lib/bundled-plugins.sh",
+      ownerPath: "scripts/lib/bundled-plugins.sh",
+      recommendation: "Create a staging issue for Sites and keep entitlement unknown until server evidence is available.",
+      recommendedAction: "Create a staging issue; do not infer entitlement from bundle presence.",
+      evidence: sites.files,
+    });
   }
 
   for (const gate of platformGateMap?.gates ?? []) {
@@ -1979,7 +2219,8 @@ function markdownList(items) {
 }
 
 function markdownCell(value) {
-  return String(value ?? "")
+  const normalized = value != null && typeof value === "object" ? JSON.stringify(value) : String(value ?? "");
+  return normalized
     .replace(/\s+/g, " ")
     .replace(/\|/g, "\\|")
     .trim();
@@ -1989,9 +2230,9 @@ function markdownTable(headers, rows) {
   if (rows.length === 0) {
     return "None.\n";
   }
-  const headerLine = `| ${headers.map(markdownCell).join(" |")} |`;
-  const dividerLine = `| ${headers.map(() => "---").join(" |")} |`;
-  const rowLines = rows.map((row) => `| ${row.map(markdownCell).join(" |")} |`);
+  const headerLine = `| ${headers.map(markdownCell).join(" | ")} |`;
+  const dividerLine = `| ${headers.map(() => "---").join(" | ")} |`;
+  const rowLines = rows.map((row) => `| ${row.map(markdownCell).join(" | ")} |`);
   return `${[headerLine, dividerLine, ...rowLines].join("\n")}\n`;
 }
 
@@ -2013,9 +2254,10 @@ function capabilityRows(capabilities, limit = NEW_CAPABILITY_MARKDOWN_LIMIT) {
     .slice(0, limit)
     .map((capability) => [
       capability.name,
+      capability.version ?? "",
       capability.type,
       capability.category,
-      capability.path ?? capability.evidence ?? "",
+      `${capability.path ?? capability.evidence ?? ""}${capability.entitlementLabel ? `; ${capability.entitlementLabel}` : capability.entitlement ? `; entitlement=${capability.entitlement}` : ""}`,
       capability.patchTarget,
       capability.recommendation,
     ]);
@@ -2029,6 +2271,31 @@ function renderDriftMarkdown(report) {
     lines.push(`Baseline: ${report.baselineSource.path}`);
   }
   lines.push("");
+  lines.push("## App and bundle versions");
+  lines.push("");
+  lines.push(markdownTable(
+    ["Field", "Baseline", "Candidate", "Evidence"],
+    Object.keys(report.versionDelta ?? {}).map((field) => [
+      field,
+      report.versionDelta[field]?.baseline ?? "unknown",
+      report.versionDelta[field]?.candidate ?? "unknown",
+      report.versionDelta[field]?.evidence ?? "unknown",
+    ]),
+  ).trimEnd());
+  lines.push("");
+  lines.push("## Feature staging and runtime health");
+  lines.push("");
+  lines.push(markdownTable(
+    ["Feature", "Owner", "Staging", "Runtime status", "Action"],
+    (report.featureStaging?.features ?? []).map((feature) => [
+      feature.id,
+      feature.targetOwnership,
+      feature.stagingPresent ? "present" : "missing",
+      feature.id === "mcp-helper-reaper" ? (report.runtimeHealth?.mcpHelperReaper?.status ?? "unknown") : "not-run",
+      feature.id === "mcp-helper-reaper" ? "Supply a runtime snapshot before claiming health." : "Compare current-bundle staging against this owner.",
+    ]),
+  ).trimEnd());
+  lines.push("");
   lines.push("## Linux Parity Drift");
   lines.push("");
   lines.push(markdownTable(
@@ -2039,7 +2306,7 @@ function renderDriftMarkdown(report) {
   lines.push("## New Capability Candidates");
   lines.push("");
   lines.push(markdownTable(
-    ["Name", "Type", "Category", "Evidence", "Owner", "Recommendation"],
+    ["Name", "Version", "Type", "Category", "Evidence", "Owner", "Recommendation"],
     capabilityRows(report.newCapabilities),
   ).trimEnd());
   lines.push("");
@@ -2245,6 +2512,31 @@ function publicInventory(inventory) {
   };
 }
 
+function createFeatureStagingInventory(repoRoot) {
+  const root = path.join(repoRoot, "linux-features");
+  const features = [];
+  if (!fs.existsSync(root)) return { generatedAt: new Date().toISOString(), features };
+  for (const id of fs.readdirSync(root).sort()) {
+    const featureRoot = path.join(root, id);
+    if (!fs.statSync(featureRoot).isDirectory()) continue;
+    const featureJson = path.join(featureRoot, "feature.json");
+    let manifest = null;
+    if (fs.existsSync(featureJson)) {
+      try { manifest = readJson(featureJson); } catch { manifest = null; }
+    }
+    const files = fs.readdirSync(featureRoot).filter((name) => !name.startsWith("."));
+    features.push({
+      id,
+      manifestPath: fs.existsSync(featureJson) ? `linux-features/${id}/feature.json` : null,
+      entrypoints: manifest?.entrypoints ?? {},
+      sourcePaths: files.map((name) => `linux-features/${id}/${name}`),
+      targetOwnership: manifest?.targetOwnership ?? `linux-features/${id}`,
+      stagingPresent: files.some((name) => /stage|patch|plugin|cleanup/i.test(name)),
+    });
+  }
+  return { generatedAt: new Date().toISOString(), features };
+}
+
 function sameResolvedPath(left, right) {
   try {
     return fs.realpathSync(left) === fs.realpathSync(right);
@@ -2267,6 +2559,22 @@ function resolveBaselinePath({ autoBaseline = false, baselinePath = null, candid
   return defaultBaselinePath;
 }
 
+function mergeProvenance(detected = {}, supplied = null) {
+  if (supplied == null) return detected;
+  const merged = { ...detected, ...supplied };
+  for (const key of ["candidate", "baseline"]) {
+    const detectedEntry = detected?.[key] ?? null;
+    const suppliedEntry = supplied?.[key] ?? null;
+    merged[key] =
+      detectedEntry == null
+        ? suppliedEntry
+        : suppliedEntry == null
+          ? detectedEntry
+          : { ...detectedEntry, ...suppliedEntry };
+  }
+  return merged;
+}
+
 function buildIntelReports({
   autoBaseline = false,
   baselinePath = null,
@@ -2276,6 +2584,7 @@ function buildIntelReports({
   registry,
   repoRoot = process.cwd(),
   timestamp = null,
+  provenance = null,
 } = {}) {
   if (candidatePath == null) {
     throw new Error("candidatePath is required");
@@ -2324,9 +2633,62 @@ function buildIntelReports({
       candidate: candidateProtected,
       patchReport,
     });
+    const baselineVersions = baselineInventory?.versionMetadata ?? {};
+    const candidateVersions = candidateInventory.versionMetadata ?? {};
+    const versionDelta = {};
+    const versionFields = [
+      "cfBundleShortVersionString",
+      "cfBundleVersion",
+      "appPackageVersion",
+      "electronVersion",
+      "codexCliVersion",
+    ];
+    for (const field of versionFields) {
+      versionDelta[field] = {
+        baseline: baselineVersions[field] ?? null,
+        candidate: candidateVersions[field] ?? null,
+        changed: (baselineVersions[field] ?? null) !== (candidateVersions[field] ?? null),
+        evidence: [...(baselineVersions.evidence ?? []), ...(candidateVersions.evidence ?? [])]
+          .filter((entry) => entry.field === field).map((entry) => entry.path).join(", ") || null,
+      };
+    }
+    versionDelta.bundledPluginVersions = {
+      baseline: baselineVersions.bundledPluginVersions ?? {},
+      candidate: candidateVersions.bundledPluginVersions ?? {},
+      changed: JSON.stringify(baselineVersions.bundledPluginVersions ?? {}) !== JSON.stringify(candidateVersions.bundledPluginVersions ?? {}),
+      evidence: "plugin manifests",
+    };
+    driftReport.versionDelta = versionDelta;
+    const detectedProvenance = {
+      candidate: candidatePath.endsWith(".dmg") && fs.statSync(candidatePath).isFile() ? {
+        url: process.env.CODEX_UPSTREAM_DMG_URL ?? null,
+        bytes: fs.statSync(candidatePath).size,
+        sha256: sha256File(candidatePath),
+        etag: process.env.CODEX_UPSTREAM_DMG_ETAG ?? null,
+        lastModified: process.env.CODEX_UPSTREAM_DMG_LAST_MODIFIED ?? null,
+      } : null,
+      baseline: resolvedBaselinePath?.endsWith(".dmg") && fs.statSync(resolvedBaselinePath).isFile() ? {
+        url: null,
+        bytes: fs.statSync(resolvedBaselinePath).size,
+        sha256: sha256File(resolvedBaselinePath),
+        etag: null,
+        lastModified: null,
+      } : null,
+    };
+    driftReport.provenance = mergeProvenance(detectedProvenance, provenance);
+    const featureStaging = createFeatureStagingInventory(repoRoot);
+    driftReport.featureStaging = featureStaging;
+    driftReport.runtimeHealth = {
+      mcpHelperReaper: {
+        status: "UNKNOWN",
+        evidenceType: "static-source-only",
+        message: "No runtime snapshot supplied; helper liveness, ownership, duplicate state, and cleanup were not run.",
+        ownerPath: "linux-features/mcp-helper-reaper/reaper/src/lib.rs",
+      },
+    };
     const mapDrift = compareMaps({ baselineProtected, candidateProtected });
     const platformGateMap = createPlatformGateMap({ inventory: candidateInventory });
-    const newCapabilityMap = createNewCapabilityMap({ mapDrift, platformGateMap });
+    const newCapabilityMap = createNewCapabilityMap({ mapDrift, platformGateMap, candidatePluginMap: candidateProtected.pluginMap });
     driftReport.structuralDriftSummary = summarizeMapDrift(mapDrift);
     driftReport.platformGateSummary = {
       categoryCounts: platformGateMap.categoryCounts,
@@ -2342,6 +2704,7 @@ function buildIntelReports({
 
     fs.mkdirSync(reportDir, { recursive: true });
     writeJson(path.join(reportDir, "inventory.json"), publicInventory(candidateInventory));
+    writeJson(path.join(reportDir, "feature-staging.json"), featureStaging);
     writeJson(path.join(reportDir, "protected-surfaces.json"), candidateProtected);
     writeJson(path.join(reportDir, "bridge-map.json"), candidateProtected.bridgeMap);
     writeJson(path.join(reportDir, "plugin-map.json"), candidateProtected.pluginMap);
@@ -2389,6 +2752,7 @@ module.exports = {
   compareProtectedSurfaces,
   createBridgeMap,
   createInventory,
+  extractVersionMetadata,
   createNewCapabilityMap,
   createNativeBinaryMap,
   createPlatformGateMap,
@@ -2396,6 +2760,7 @@ module.exports = {
   compareMaps,
   extractProtectedSurfaces,
   findPostPatchIntegrityFindings,
+  mergeProvenance,
   renderActionPlanMarkdown,
   renderDriftMarkdown,
   resolveBaselinePath,
