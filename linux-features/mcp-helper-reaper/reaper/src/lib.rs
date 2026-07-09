@@ -49,9 +49,14 @@ pub fn plan_reap(
         .values()
         .filter(|process| process.ppid == parent_pid)
         .collect::<Vec<_>>();
-    for process in &direct_children {
-        if let Some(signature) = helper_signature(process, server_specs, app_dir) {
-            groups.entry(signature).or_default().push(*process);
+    let parent_is_shared_app_server = processes
+        .get(&parent_pid)
+        .is_some_and(is_shared_codex_app_server);
+    if !parent_is_shared_app_server {
+        for process in &direct_children {
+            if let Some(signature) = helper_signature(process, server_specs, app_dir) {
+                groups.entry(signature).or_default().push(*process);
+            }
         }
     }
 
@@ -465,6 +470,11 @@ pub fn is_codex_process(process: &ProcInfo) -> bool {
         .and_then(OsStr::to_str)
         .unwrap_or(argv0);
     process.comm == "codex" || name == "codex" || name.starts_with("codex-")
+}
+
+fn is_shared_codex_app_server(process: &ProcInfo) -> bool {
+    process.argv.iter().skip(1).any(|arg| arg == "app-server")
+        || process_name(process) == "codex-app-server"
 }
 
 fn is_codex_non_owner_process(process: &ProcInfo) -> bool {
@@ -1324,6 +1334,37 @@ mod tests {
                     .to_string(),
             }]
         );
+    }
+
+    #[test]
+    fn keeps_duplicate_helpers_under_shared_desktop_app_server() {
+        let mut processes = BTreeMap::new();
+        processes.insert(
+            100,
+            proc(
+                100,
+                1,
+                10,
+                &["codex", "app-server", "--remote-control"],
+                "/app",
+            ),
+        );
+        processes.insert(
+            101,
+            proc(101, 100, 20, &["/tmp/example-helper", "serve"], "/repo"),
+        );
+        processes.insert(
+            102,
+            proc(102, 100, 30, &["/tmp/example-helper", "serve"], "/repo"),
+        );
+        let specs = vec![ServerSpec {
+            name: "code-index".to_string(),
+            command: "/tmp/example-helper".to_string(),
+            args: vec!["serve".to_string()],
+            cwd: None,
+        }];
+
+        assert!(plan_reap(100, &processes, &specs, None).is_empty());
     }
 
     #[test]
