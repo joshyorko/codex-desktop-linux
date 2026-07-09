@@ -6521,7 +6521,7 @@ test("shows object-helper Computer Use plugin UI on Linux", () => {
   assert.match(patched, /function m\(e\)\{return e===`macOS`\|\|e===`windows`\|\|e===`linux`\}/);
   assert.match(
     patched,
-    /v=g\(\{enabled:s===`linux`\|\|a,isComputerUseFeatureEnabled:s===`linux`\|\|_\.enabled,isComputerUseFeatureLoading:s!==`linux`&&_\.isLoading,isComputerUseGateEnabled:s===`linux`\|\|d,isHostCompatiblePlatform:s===`linux`\|\|m\(s\),isHostLocal:c,isPlatformLoading:o,windowType:`electron`\}\)/,
+    /v=g\(\{enabled:a,isComputerUseFeatureEnabled:s===`linux`\|\|_\.enabled,isComputerUseFeatureLoading:s!==`linux`&&_\.isLoading,isComputerUseGateEnabled:s===`linux`\|\|d,isHostCompatiblePlatform:s===`linux`\|\|m\(s\),isHostLocal:c,isPlatformLoading:o,windowType:`electron`\}\)/,
   );
 });
 
@@ -6535,7 +6535,7 @@ test("shows object-helper Computer Use plugin UI on Linux without host-local fie
   assert.match(patched, /function d\(e\)\{return e===`macOS`\|\|e===`windows`\|\|e===`linux`\}/);
   assert.match(
     patched,
-    /g=p\(\{enabled:c===`linux`\|\|i,isComputerUseFeatureEnabled:c===`linux`\|\|h\.enabled,isComputerUseFeatureLoading:c!==`linux`&&h\.isLoading,isComputerUseGateEnabled:c===`linux`\|\|f,isHostCompatiblePlatform:c===`linux`\|\|d\(c\),isPlatformLoading:o,windowType:`electron`\}\)/,
+    /g=p\(\{enabled:i,isComputerUseFeatureEnabled:c===`linux`\|\|h\.enabled,isComputerUseFeatureLoading:c!==`linux`&&h\.isLoading,isComputerUseGateEnabled:c===`linux`\|\|f,isHostCompatiblePlatform:c===`linux`\|\|d\(c\),isPlatformLoading:o,windowType:`electron`\}\)/,
   );
   assert.doesNotMatch(patched, /isHostLocal:/);
 });
@@ -6550,7 +6550,7 @@ test("shows required-features Computer Use plugin UI on Linux", () => {
   assert.match(patched, /function d\(e\)\{return e===`macOS`\|\|e===`windows`\|\|e===`linux`\}/);
   assert.match(
     patched,
-    /x=p\(\{areRequiredFeaturesEnabled:c===`linux`\|\|b,enabled:c===`linux`\|\|i,isAnyFeatureLoading:c===`linux`\?!1:y,isComputerUseGateEnabled:c===`linux`\|\|f,isHostCompatiblePlatform:c===`linux`\|\|d\(c\),isPlatformLoading:o,windowType:`electron`\}\)/,
+    /x=p\(\{areRequiredFeaturesEnabled:c===`linux`\|\|b,enabled:i,isAnyFeatureLoading:c===`linux`\?!1:y,isComputerUseGateEnabled:c===`linux`\|\|f,isHostCompatiblePlatform:c===`linux`\|\|d\(c\),isPlatformLoading:o,windowType:`electron`\}\)/,
   );
   assert.match(patched, /featureName:`windows_computer_use`/);
 });
@@ -6565,7 +6565,7 @@ test("keeps object-helper Computer Use host compatibility on Linux when platform
   assert.match(patched, /function m\(e\)\{return e===`macOS`\|\|e===`windows`\|\|q\(e\)\}/);
   assert.match(
     patched,
-    /v=g\(\{enabled:s===`linux`\|\|a,isComputerUseFeatureEnabled:s===`linux`\|\|_\.enabled,isComputerUseFeatureLoading:s!==`linux`&&_\.isLoading,isComputerUseGateEnabled:s===`linux`\|\|d,isHostCompatiblePlatform:s===`linux`\|\|m\(s\),isHostLocal:c,isPlatformLoading:o,windowType:`electron`\}\)/,
+    /v=g\(\{enabled:a,isComputerUseFeatureEnabled:s===`linux`\|\|_\.enabled,isComputerUseFeatureLoading:s!==`linux`&&_\.isLoading,isComputerUseGateEnabled:s===`linux`\|\|d,isHostCompatiblePlatform:s===`linux`\|\|m\(s\),isHostLocal:c,isPlatformLoading:o,windowType:`electron`\}\)/,
   );
 });
 
@@ -6623,7 +6623,6 @@ test("uses only the real installed bundled Computer Use entry in settings", () =
   assert.match(patched, /installedPlugins\?\.some\(e=>/);
   assert.match(patched, /installedPlugins\.find\(e=>/);
   assert.match(patched, /e\.plugin\?\.id===pluginName\+`@openai-bundled`&&e\.plugin\?\.name===pluginName&&e\.marketplaceName===`openai-bundled`/);
-  assert.doesNotMatch(patched, /plugin\?\.id\?\.split\(`@`\)\[0\]/);
   assert.doesNotMatch(patched, /openai-curated/);
   assert.doesNotMatch(patched, /marketplacePath:`openai-bundled\/plugins\/computer-use`/);
   assert.doesNotMatch(patched, /plugin:\{id:pluginName\+`@openai-bundled`/);
@@ -6631,6 +6630,41 @@ test("uses only the real installed bundled Computer Use entry in settings", () =
     resolveSettings(
       { computerUseAvailability: { available: true }, platform: "linux" },
       { availablePlugins: [], installedPlugins: [installedPlugin] },
+    ),
+    installedPlugin,
+  );
+  assert.strictEqual(
+    resolveSettings(
+      { computerUseAvailability: { available: true }, platform: "linux" },
+      { availablePlugins: [installedPlugin], installedPlugins: [] },
+    ),
+    installedPlugin,
+  );
+  const invalidComputerUseEntries = [
+    {
+      ...installedPlugin,
+      plugin: { ...installedPlugin.plugin, id: "computer-use" },
+    },
+    { ...installedPlugin, marketplaceName: "openai-curated" },
+    { ...installedPlugin, marketplaceName: "third-party" },
+    {
+      ...installedPlugin,
+      plugin: { ...installedPlugin.plugin, name: "other-computer-use" },
+    },
+  ];
+  for (const invalidEntry of invalidComputerUseEntries) {
+    assert.equal(
+      resolveSettings(
+        { computerUseAvailability: { available: true }, platform: "linux" },
+        { availablePlugins: [invalidEntry], installedPlugins: [] },
+      ),
+      null,
+    );
+  }
+  assert.strictEqual(
+    resolveSettings(
+      { computerUseAvailability: { available: true }, platform: "linux" },
+      { availablePlugins: invalidComputerUseEntries, installedPlugins: [installedPlugin] },
     ),
     installedPlugin,
   );
@@ -6846,7 +6880,7 @@ test("allows current required-feature Computer Use gate on Linux", () => {
 
   assert.match(
     patched,
-    /g=Hj\(\{areRequiredFeaturesEnabled:o===`linux`\|\|h,enabled:o===`linux`\|\|i,isAnyFeatureLoading:o===`linux`\?!1:m,isComputerUseGateEnabled:o===`linux`\|\|s,isHostCompatiblePlatform:o===`linux`\|\|Rj\(o\),isPlatformLoading:a,windowType:`electron`\}\)/,
+    /g=Hj\(\{areRequiredFeaturesEnabled:o===`linux`\|\|h,enabled:i,isAnyFeatureLoading:o===`linux`\?!1:m,isComputerUseGateEnabled:o===`linux`\|\|s,isHostCompatiblePlatform:o===`linux`\|\|Rj\(o\),isPlatformLoading:a,windowType:`electron`\}\)/,
   );
 });
 
@@ -7776,7 +7810,7 @@ test("missing icon asset skips only icon patches", () => {
   }
 });
 
-test("patchExtractedApp scans apps bundles for Computer Use availability when UI is enabled", () => {
+test("patchExtractedApp scans current Computer Use settings bundles when UI is enabled", () => {
   withIsolatedHome(() => {
     process.env[COMPUTER_USE_UI_ENV_VAR] = "1";
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "codex-computer-use-apps-assets-test-"));
@@ -7797,33 +7831,22 @@ test("patchExtractedApp scans apps bundles for Computer Use availability when UI
         ].join(""),
       );
       fs.writeFileSync(
-        path.join(assetsDir, "apps-current.js"),
+        path.join(assetsDir, "computer-use-settings-apps-current.js"),
         "function g(e){return e===`macOS`||e===`windows`}" +
           "function _(e){let t=(0,d.c)(8),{enabled:n,hostId:r,isHostLocal:i}=e,a=n===void 0?!0:n,{isLoading:o,platform:c}=u(),l=s(`1506311413`),f;t[0]===r?f=t[1]:(f={featureName:`computer_use`,hostId:r},t[0]=r,t[1]=f);let p=h(f),m;t[2]===c?m=t[3]:(m=g(c),t[2]=c,t[3]=m);let _=a&&i&&l&&(o||m),v=_&&!o&&p.enabled&&!p.isLoading,y=_&&p.isLoading,b=_&&(o||p.isLoading),x;return x}",
       );
       fs.writeFileSync(
-        path.join(assetsDir, "use-is-plugins-enabled-current.js"),
+        path.join(assetsDir, "computer-use-settings-plugins-current.js"),
         "function p(e){return e===`macOS`||e===`windows`}" +
           "function m(e){let n=(0,f.c)(15),{enabled:r,hostId:i}=e,a=r===void 0?!0:r,{isLoading:o,platform:s}=u(),c=t(i).kind===`local`,d=l(`1506311413`),h;n[0]===i?h=n[1]:(h={featureName:`computer_use`,hostId:i},n[0]=i,n[1]=h);let _=p(h),v;n[2]!==_.enabled||n[3]!==_.isLoading||n[4]!==a||n[5]!==d||n[6]!==c||n[7]!==o||n[8]!==s?(v=g({enabled:a,isComputerUseFeatureEnabled:_.enabled,isComputerUseFeatureLoading:_.isLoading,isComputerUseGateEnabled:d,isHostCompatiblePlatform:p(s),isHostLocal:c,isPlatformLoading:o,windowType:`electron`}),n[2]=_.enabled,n[3]=_.isLoading,n[4]=a,n[5]=d,n[6]=c,n[7]=o,n[8]=s,n[9]=v):v=n[9];return v}",
       );
       fs.writeFileSync(
         path.join(
           assetsDir,
-          "app-initial~app-main~remote-conversation-page~pull-requests-page~onboarding-page~hotkey-win~current.js",
+          "computer-use-settings-native-apps-current.js",
         ),
         "function Iz(e){let t=(0,Lz.c)(9),{enabled:n}=e,{platform:r,isLoading:i}=yt(),a=n&&(r===`macOS`||r===`windows`),o;t[0]===Symbol.for(`react.memo_cache_sentinel`)?(o={order:`usage`},t[0]=o):o=t[0];let s;t[1]===a?s=t[2]:(s={params:o,queryConfig:{enabled:a,staleTime:fe.FIVE_MINUTES,refetchOnWindowFocus:!1}},t[1]=a,t[2]=s);let c=Ce(`native-desktop-apps`,s),l;t[3]!==c||t[4]!==a?(l=a?c.data?.apps??[]:[],t[3]=c,t[4]=a,t[5]=l):l=t[5];let u=i||a&&c.isLoading,d;return t[6]!==l||t[7]!==u?(d={nativeApps:l,isLoading:u},t[6]=l,t[7]=u,t[8]=d):d=t[8],d}" +
           "function Ope(e){let{platform:u}=yt(),v=l.formatMessage({id:`computerUse.label`,defaultMessage:`Computer use`}),y=n[0]??null,b=[{description:l.formatMessage({id:`computerUse.nativeApps.microsoftExcel.detail`,defaultMessage:`Live workbook control`})}],D;t[4]===r?D=t[5]:(D=e=>({queryKey:ve(`computer-use-native-desktop-app-icon`,{appPath:e.appPath}),queryFn:()=>ie(`computer-use-native-desktop-app-icon`,{params:{appPath:e.appPath}}),enabled:r!=null,staleTime:fe.INFINITE,refetchOnWindowFocus:!1}),t[4]=r,t[5]=D);return v}",
-      );
-      fs.writeFileSync(
-        path.join(assetsDir, "app-initial~app-main~onboarding-page-current.js"),
-        "function z2e(e){let t=(0,q2e.c)(11),{hostId:n,query:r,roots:i}=e,a=Hn(Ve),o=Yu(),{platform:s}=Fp(),c=Wo(Q2e),l=Wo(mie),u=l?X2e:Y2e,d;t[0]===u?d=t[1]:(d={installSuggestionPluginNames:u},t[0]=u,t[1]=d);let{availablePlugins:f,isLoading:p}=Ud(n,i,d),m=!c,h;t[2]===m?h=t[3]:(h={enabled:m},t[2]=m,t[3]=h);let{availablePlugins:g,isLoading:_}=Ud(n,i,h),v=[...f];let y=p||!c&&_,{openPluginInstall:b}=_ne(),x=Sne(o),S=r.trim(),C=v.filter(e=>B2e(e,u)),w=cie(C),T=s===`macOS`||s===`windows`,E=T?U2e(C):[],D=T&&l?C.filter(Tie):[],O=T&&l?C.filter(lae):[],N=D2e({chromeAppPlugins:E,computerUsePlugin:w,microsoftExcelAppPlugins:D,microsoftPowerPointAppPlugins:O,onPluginMentionInserted:M,pluginMentionLabels:x,query:r});return N}",
-      );
-      fs.writeFileSync(
-        path.join(
-          assetsDir,
-          "app-initial~app-main~worktree-init-v2-page~remote-conversation-page~pull-requests-page~new-~current.js",
-        ),
-        "function zN(e){let t=(0,BN.c)(9),{enabled:n}=e,{platform:r,isLoading:i}=pi(),a=n&&(r===`macOS`||r===`windows`),o;t[0]===Symbol.for(`react.memo_cache_sentinel`)?(o={order:`usage`},t[0]=o):o=t[0];let s;t[1]===a?s=t[2]:(s={params:o,queryConfig:{enabled:a,staleTime:m.FIVE_MINUTES,refetchOnWindowFocus:!1}},t[1]=a,t[2]=s);let c=Ne(`native-desktop-apps`,s),l;t[3]!==c||t[4]!==a?(l=a?c.data?.apps??[]:[],t[3]=c,t[4]=a,t[5]=l):l=t[5];let u=i||a&&c.isLoading,d;return t[6]!==l||t[7]!==u?(d={nativeApps:l,isLoading:u},t[6]=l,t[7]=u,t[8]=d):d=t[8],d}",
       );
       fs.writeFileSync(
         path.join(
@@ -7838,32 +7861,18 @@ test("patchExtractedApp scans apps bundles for Computer Use availability when UI
       patchExtractedApp(tempRoot);
 
       assert.match(
-        fs.readFileSync(path.join(assetsDir, "apps-current.js"), "utf8"),
+        fs.readFileSync(path.join(assetsDir, "computer-use-settings-apps-current.js"), "utf8"),
         /let _=a&&i&&\(c===`linux`\|\|l&&\(o\|\|m\)\),v=_&&!o&&\(c===`linux`\|\|p\.enabled\)&&!p\.isLoading/,
       );
       assert.match(
-        fs.readFileSync(path.join(assetsDir, "use-is-plugins-enabled-current.js"), "utf8"),
-        /v=g\(\{enabled:s===`linux`\|\|a,isComputerUseFeatureEnabled:s===`linux`\|\|_\.enabled,isComputerUseFeatureLoading:s!==`linux`&&_\.isLoading,isComputerUseGateEnabled:s===`linux`\|\|d,isHostCompatiblePlatform:s===`linux`\|\|p\(s\),isHostLocal:c,isPlatformLoading:o,windowType:`electron`\}\)/,
-      );
-      assert.doesNotMatch(
-        fs.readFileSync(
-          path.join(
-            assetsDir,
-            "app-initial~app-main~remote-conversation-page~pull-requests-page~onboarding-page~hotkey-win~current.js",
-          ),
-          "utf8",
-        ),
-        /a=n&&\(r===`macOS`\|\|r===`windows`\|\|r===`linux`\)/,
-      );
-      assert.match(
-        fs.readFileSync(path.join(assetsDir, "app-initial~app-main~onboarding-page-current.js"), "utf8"),
-        /T=s===`macOS`\|\|s===`windows`\|\|s===`linux`/,
+        fs.readFileSync(path.join(assetsDir, "computer-use-settings-plugins-current.js"), "utf8"),
+        /v=g\(\{enabled:a,isComputerUseFeatureEnabled:s===`linux`\|\|_\.enabled,isComputerUseFeatureLoading:s!==`linux`&&_\.isLoading,isComputerUseGateEnabled:s===`linux`\|\|d,isHostCompatiblePlatform:s===`linux`\|\|p\(s\),isHostLocal:c,isPlatformLoading:o,windowType:`electron`\}\)/,
       );
       assert.match(
         fs.readFileSync(
           path.join(
             assetsDir,
-            "app-initial~app-main~worktree-init-v2-page~remote-conversation-page~pull-requests-page~new-~current.js",
+            "computer-use-settings-native-apps-current.js",
           ),
           "utf8",
         ),
@@ -7877,7 +7886,7 @@ test("patchExtractedApp scans apps bundles for Computer Use availability when UI
           ),
           "utf8",
         ),
-        /g=xp\(\{areRequiredFeaturesEnabled:o===`linux`\|\|h,enabled:o===`linux`\|\|i,isAnyFeatureLoading:o===`linux`\?!1:m,isComputerUseGateEnabled:o===`linux`\|\|s,isHostCompatiblePlatform:o===`linux`\|\|_p\(o\),isPlatformLoading:a,windowType:`electron`\}\)/,
+        /g=xp\(\{areRequiredFeaturesEnabled:o===`linux`\|\|h,enabled:i,isAnyFeatureLoading:o===`linux`\?!1:m,isComputerUseGateEnabled:o===`linux`\|\|s,isHostCompatiblePlatform:o===`linux`\|\|_p\(o\),isPlatformLoading:a,windowType:`electron`\}\)/,
       );
     } finally {
       fs.rmSync(tempRoot, { recursive: true, force: true });
