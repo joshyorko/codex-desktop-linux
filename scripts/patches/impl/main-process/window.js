@@ -409,10 +409,39 @@ function applyLinuxResizeRepaintPatch(currentSource) {
 }
 
 function applyLinuxOpaqueBackgroundPatch(currentSource) {
-  let patchedSource = currentSource;
   const shouldAlwaysOpaqueSurfaceRegex =
     /shouldAlwaysUseOpaqueWindowSurface\(([A-Za-z_$][\w$]*)\)\{return\s*([A-Za-z_$][\w$]*)\(\{appearance:\1,opaqueWindowsEnabled:this\.isOpaqueWindowsEnabled\(\),platform:process\.platform\}\)\|\|!([A-Za-z_$][\w$]*)\(\)&&!([A-Za-z_$][\w$]*)\(\1\)\}/u;
-  const shouldAlwaysOpaqueSurfaceMatch = patchedSource.match(shouldAlwaysOpaqueSurfaceRegex);
+  const patchedShouldAlwaysOpaqueSurfaceRegex =
+    /shouldAlwaysUseOpaqueWindowSurface\(([A-Za-z_$][\w$]*)\)\{return\s*process\.platform===`linux`&&!([A-Za-z_$][\w$]*)\(\1\)\|\|([A-Za-z_$][\w$]*)\(\{appearance:\1,opaqueWindowsEnabled:this\.isOpaqueWindowsEnabled\(\),platform:process\.platform\}\)\|\|!([A-Za-z_$][\w$]*)\(\)&&!\2\(\1\)\}/u;
+  const shouldAlwaysOpaqueSurfaceMatch = currentSource.match(shouldAlwaysOpaqueSurfaceRegex);
+  const shouldAlwaysOpaqueSurfaceReady =
+    shouldAlwaysOpaqueSurfaceMatch != null ||
+    patchedShouldAlwaysOpaqueSurfaceRegex.test(currentSource);
+
+  if (!shouldAlwaysOpaqueSurfaceReady) {
+    console.warn("WARN: Could not find opaque surface mode predicate — skipping Linux opaque surface patch");
+  }
+
+  const opaqueWindowSurfaceFunctionRegex =
+    /function\s+[A-Za-z_$][\w$]*\(\{platform:([A-Za-z_$][\w$]*),appearance:([A-Za-z_$][\w$]*),opaqueWindowSurfaceEnabled:([A-Za-z_$][\w$]*),prefersDarkColors:([A-Za-z_$][\w$]*)\}\)\{return\s*\3\?\{backgroundColor:\4\?([A-Za-z_$][\w$]*):([A-Za-z_$][\w$]*),backgroundMaterial:\1===`win32`\?`none`:null\}:\1===`win32`&&!([A-Za-z_$][\w$]*)\(\2\)\?/;
+  const patchedOpaqueWindowSurfaceFunctionRegex =
+    /function\s+[A-Za-z_$][\w$]*\(\{platform:([A-Za-z_$][\w$]*),appearance:([A-Za-z_$][\w$]*),opaqueWindowSurfaceEnabled:([A-Za-z_$][\w$]*),prefersDarkColors:([A-Za-z_$][\w$]*)\}\)\{return\s*\3\?\{backgroundColor:\4\?([A-Za-z_$][\w$]*):([A-Za-z_$][\w$]*),backgroundMaterial:\1===`win32`\?`none`:null\}:\1===`linux`&&!([A-Za-z_$][\w$]*)\(\2\)\?\{backgroundColor:\4\?\5:\6,backgroundMaterial:null\}:\1===`win32`&&!\7\(\2\)\?/;
+  const opaqueWindowSurfaceFunctionMatch = currentSource.match(
+    opaqueWindowSurfaceFunctionRegex,
+  );
+  const opaqueWindowSurfaceFunctionReady =
+    opaqueWindowSurfaceFunctionMatch != null ||
+    patchedOpaqueWindowSurfaceFunctionRegex.test(currentSource);
+
+  if (!opaqueWindowSurfaceFunctionReady) {
+    console.warn("WARN: Could not find BrowserWindow background function signature — skipping background patch");
+  }
+
+  if (!shouldAlwaysOpaqueSurfaceReady || !opaqueWindowSurfaceFunctionReady) {
+    return currentSource;
+  }
+
+  let patchedSource = currentSource;
   if (shouldAlwaysOpaqueSurfaceMatch != null) {
     const [
       match,
@@ -424,105 +453,35 @@ function applyLinuxOpaqueBackgroundPatch(currentSource) {
     const replacement =
       `shouldAlwaysUseOpaqueWindowSurface(${appearanceParam}){return process.platform===\`linux\`&&!${transparentAppearancePredicate}(${appearanceParam})||${opaqueSurfaceHelper}({appearance:${appearanceParam},opaqueWindowsEnabled:this.isOpaqueWindowsEnabled(),platform:process.platform})||!${nativeSurfaceCapabilityHelper}()&&!${transparentAppearancePredicate}(${appearanceParam})}`;
     patchedSource = patchedSource.replace(match, replacement);
-  } else if (
-    /shouldAlwaysUseOpaqueWindowSurface\([A-Za-z_$][\w$]*\)\{return\s*process\.platform===`linux`&&!/.test(patchedSource)
-  ) {
-    // Already patched.
-  } else if (patchedSource.includes("shouldAlwaysUseOpaqueWindowSurface(")) {
-    console.warn("WARN: Could not find opaque surface mode predicate — skipping Linux opaque surface patch");
   }
 
-  if (
-    patchedSource.includes("===`linux`&&!OM(") ||
-    /===`linux`&&![A-Za-z_$][\w$]*\([A-Za-z_$][\w$]*\)\?\{backgroundColor:[^{}]+,backgroundMaterial:null\}/.test(patchedSource)
-  ) {
+  if (opaqueWindowSurfaceFunctionMatch == null) {
     return patchedSource;
   }
 
-  const colorConstRegex =
-    /([A-Za-z_$][\w$]*)=`#00000000`,([A-Za-z_$][\w$]*)=`#000000`,([A-Za-z_$][\w$]*)=`#f9f9f9`/;
-  const colorMatch = patchedSource.match(colorConstRegex);
+  const [
+    ,
+    platformParam,
+    appearanceParam,
+    ,
+    darkColorsParam,
+    darkBackground,
+    lightBackground,
+    transparentAppearancePredicate,
+  ] = opaqueWindowSurfaceFunctionMatch;
+  const win32Needle =
+    `:${platformParam}===\`win32\`&&!${transparentAppearancePredicate}(${appearanceParam})?`;
+  const linuxBackground =
+    `:${platformParam}===\`linux\`&&!${transparentAppearancePredicate}(${appearanceParam})?{backgroundColor:${darkColorsParam}?${darkBackground}:${lightBackground},backgroundMaterial:null}:`;
 
-  if (!colorMatch) {
-    console.warn(
-      "WARN: Could not find color constants (#00000000, #000000, #f9f9f9) — skipping background patch",
-    );
-    return patchedSource;
-  }
-
-  const [, transparentVar, darkVar, lightVar] = colorMatch;
-
-  const currentFuncParamRegex =
-    /function\s+[A-Za-z_$][\w$]*\(\{platform:([A-Za-z_$][\w$]*),appearance:([A-Za-z_$][\w$]*),opaqueWindowsEnabled:([A-Za-z_$][\w$]*),prefersDarkColors:([A-Za-z_$][\w$]*)\}\)\{return\s*\3&&!([A-Za-z_$][\w$]*)\(\2\)&&\(\1===`darwin`\|\|\1===`win32`\)\?/;
-  const currentFuncMatch = patchedSource.match(currentFuncParamRegex);
-  if (currentFuncMatch != null) {
-    const [, platformParam, appearanceParam, , darkColorsParam, transparentAppearancePredicate] =
-      currentFuncMatch;
-    const win32Needle =
-      `:${platformParam}===\`win32\`&&!${transparentAppearancePredicate}(${appearanceParam})?`;
-    const linuxBgPrefix =
-      `:${platformParam}===\`linux\`&&!${transparentAppearancePredicate}(${appearanceParam})?{backgroundColor:${darkColorsParam}?${darkVar}:${lightVar},backgroundMaterial:null}:`;
-
-    if (patchedSource.includes(linuxBgPrefix)) {
-      return patchedSource;
-    }
-    if (patchedSource.includes(win32Needle)) {
-      return patchedSource.replace(win32Needle, `${linuxBgPrefix}${win32Needle.slice(1)}`);
-    }
-
+  if (!patchedSource.includes(win32Needle)) {
     console.warn("WARN: Could not find BrowserWindow background color needle — skipping background patch");
     return patchedSource;
   }
-
-  const currentSurfaceFuncParamRegex =
-    /function\s+[A-Za-z_$][\w$]*\(\{platform:([A-Za-z_$][\w$]*),appearance:([A-Za-z_$][\w$]*),opaqueWindowSurfaceEnabled:([A-Za-z_$][\w$]*),prefersDarkColors:([A-Za-z_$][\w$]*)\}\)\{return\s*\3\?\{backgroundColor:\4\?([A-Za-z_$][\w$]*):([A-Za-z_$][\w$]*),backgroundMaterial:\1===`win32`\?`none`:null\}:\1===`win32`&&!([A-Za-z_$][\w$]*)\(\2\)\?/;
-  const currentSurfaceFuncMatch = patchedSource.match(currentSurfaceFuncParamRegex);
-  if (currentSurfaceFuncMatch != null) {
-    const [, platformParam, appearanceParam, , darkColorsParam, darkVarFromReturn, lightVarFromReturn, transparentAppearancePredicate] =
-      currentSurfaceFuncMatch;
-    const win32Needle =
-      `:${platformParam}===\`win32\`&&!${transparentAppearancePredicate}(${appearanceParam})?`;
-    const linuxBgPrefix =
-      `:${platformParam}===\`linux\`&&!${transparentAppearancePredicate}(${appearanceParam})?{backgroundColor:${darkColorsParam}?${darkVarFromReturn}:${lightVarFromReturn},backgroundMaterial:null}:`;
-
-    if (patchedSource.includes(linuxBgPrefix)) {
-      return patchedSource;
-    }
-    if (patchedSource.includes(win32Needle)) {
-      return patchedSource.replace(win32Needle, `${linuxBgPrefix}${win32Needle.slice(1)}`);
-    }
-
-    console.warn("WARN: Could not find BrowserWindow background color needle — skipping background patch");
-    return patchedSource;
-  }
-
-  const funcParamRegex =
-    /function\s+[A-Za-z_$][\w$]*\(\{platform:([A-Za-z_$][\w$]*),appearance:([A-Za-z_$][\w$]*),opaqueWindowsEnabled:[A-Za-z_$][\w$]*,prefersDarkColors:([A-Za-z_$][\w$]*)\}\)\{return\s*\1===`win32`&&!([A-Za-z_$][\w$]*)\(\2\)/;
-  const funcMatch = patchedSource.match(funcParamRegex);
-
-  if (funcMatch == null) {
-    console.warn("WARN: Could not find BrowserWindow background function signature — skipping background patch");
-    return patchedSource;
-  }
-
-  const [, platformParam, appearanceParam, darkColorsParam, transparentAppearancePredicate] =
-    funcMatch;
-  const bgNeedle =
-    `backgroundMaterial:\`mica\`}:{backgroundColor:${transparentVar},backgroundMaterial:null}}`;
-  const oldLinuxBgPatch =
-    `backgroundMaterial:\`mica\`}:process.platform===\`linux\`?{backgroundColor:${darkColorsParam}?${darkVar}:${lightVar},backgroundMaterial:null}:{backgroundColor:${transparentVar},backgroundMaterial:null}}`;
-  const bgReplacement =
-    `backgroundMaterial:\`mica\`}:${platformParam}===\`linux\`&&!${transparentAppearancePredicate}(${appearanceParam})?{backgroundColor:${darkColorsParam}?${darkVar}:${lightVar},backgroundMaterial:null}:{backgroundColor:${transparentVar},backgroundMaterial:null}}`;
-
-  if (patchedSource.includes(bgNeedle)) {
-    return patchedSource.replace(bgNeedle, bgReplacement);
-  }
-  if (patchedSource.includes(oldLinuxBgPatch)) {
-    return patchedSource.replace(oldLinuxBgPatch, bgReplacement);
-  }
-
-  console.warn("WARN: Could not find BrowserWindow background color needle — skipping background patch");
-  return patchedSource;
+  return patchedSource.replace(
+    win32Needle,
+    `${linuxBackground}${win32Needle.slice(1)}`,
+  );
 }
 
 function applyLinuxAboutDialogPatch(currentSource, iconPathExpression) {
@@ -530,84 +489,68 @@ function applyLinuxAboutDialogPatch(currentSource, iconPathExpression) {
     return currentSource;
   }
 
-  const alreadyUsesBundledIcon =
-    iconPathExpression != null &&
-    currentSource.includes(`nativeImage.createFromPath(${iconPathExpression})`);
   const aboutHtmlIconNullSafeRegex =
-    /[A-Za-z_$][\w$]*==null\|\|([A-Za-z_$][\w$]*)\.isEmpty\(\)\?null:\1\.resize\(/;
+    /htmlIconDataUrl:[A-Za-z_$][\w$]*\?\?\(([A-Za-z_$][\w$]*)==null\|\|\1\.isEmpty\(\)\?null:\1\.resize\([^)]*\)\.toDataURL\(\)\),windowIcon:\1\?\?null\}/;
   const aboutWindowIconNullSafeRegex =
     /\.\.\.([A-Za-z_$][\w$]*)\.windowIcon==null\|\|\1\.windowIcon\.isEmpty\(\)\?\{\}:\{icon:\1\.windowIcon\}/;
-  const alreadyNullSafe =
-    aboutWindowIconNullSafeRegex.test(currentSource) &&
+  const aboutHtmlIconUnsafeRegex =
+    /htmlIconDataUrl:([A-Za-z_$][\w$]*)\?\?\(([A-Za-z_$][\w$]*)\.isEmpty\(\)\?null:\2\.resize\(([^)]*)\)\.toDataURL\(\)\),windowIcon:\2\}/;
+  const aboutWindowIconUnsafeRegex =
+    /\.\.\.([A-Za-z_$][\w$]*)\.windowIcon\.isEmpty\(\)\?\{\}:\{icon:\1\.windowIcon\}/;
+  const safeCurrentFileIconRegex =
+    /\[[A-Za-z_$][\w$]*\?[A-Za-z_$][\w$]*\([^()]+\):null,[A-Za-z_$][\w$]*\?[A-Za-z_$][\w$]*\.nativeImage\.createFromPath\([^()]+\):[A-Za-z_$][\w$]*\.app\.getFileIcon\([^()]+,\{size:`normal`\}\)\.catch\(\(\)=>null\)\]/;
+  const safeBundledIconRegex =
+    iconPathExpression == null
+      ? null
+      : new RegExp(
+          `\\[\\s*process\\.platform===\`linux\`\\?null:[A-Za-z_$][\\w$]*\\?[A-Za-z_$][\\w$]*\\([^()]+\\):null,\\s*process\\.platform===\`linux\`\\?Promise\\.resolve\\(\\(\\(\\)=>\\{let __codexLinuxAboutIcon=[A-Za-z_$][\\w$]*\\.nativeImage\\.createFromPath\\(${escapeRegExp(iconPathExpression)}\\);return __codexLinuxAboutIcon\\.isEmpty\\(\\)\\?null:__codexLinuxAboutIcon\\}\\)\\(\\)\\):[A-Za-z_$][\\w$]*\\?[A-Za-z_$][\\w$]*\\.nativeImage\\.createFromPath\\([^()]+\\):[A-Za-z_$][\\w$]*\\.app\\.getFileIcon\\([^()]+,\\{size:\`normal\`\\}\\)\\.catch\\(\\(\\)=>null\\)\\s*\\]`,
+        );
+  const iconSourceReady =
+    iconPathExpression == null
+      ? safeCurrentFileIconRegex.test(currentSource)
+      : safeBundledIconRegex.test(currentSource);
+  if (
+    iconSourceReady &&
     aboutHtmlIconNullSafeRegex.test(currentSource) &&
-    /windowIcon:[A-Za-z_$][\w$]*\?\?null\}/.test(currentSource);
-  if (alreadyUsesBundledIcon && alreadyNullSafe) {
+    aboutWindowIconNullSafeRegex.test(currentSource)
+  ) {
+    return currentSource;
+  }
+
+  const currentAboutIconPromiseRegex =
+    /\[([A-Za-z_$][\w$]*)\?([A-Za-z_$][\w$]*)\(([^()]+)\):null,([A-Za-z_$][\w$]*)\?([A-Za-z_$][\w$]*)\.nativeImage\.createFromPath\(([^()]+)\):([A-Za-z_$][\w$]*)\.app\.getFileIcon\(([^()]+),\{size:`normal`\}\)\]/;
+  if (
+    !currentAboutIconPromiseRegex.test(currentSource) ||
+    !aboutHtmlIconUnsafeRegex.test(currentSource) ||
+    !aboutWindowIconUnsafeRegex.test(currentSource)
+  ) {
+    console.warn("WARN: Could not patch About dialog icon fallback for Linux");
     return currentSource;
   }
 
   let patchedSource = currentSource;
   if (iconPathExpression != null) {
-    const aboutIconPromiseRegex =
-      /\[([A-Za-z_$][\w$]*)\?([A-Za-z_$][\w$]*)\(([^()]+)\):null,([A-Za-z_$][\w$]*)\.app\.getFileIcon\(([^()]+),\{size:process\.platform===`win32`\?`large`:`normal`\}\)\]/;
     patchedSource = patchedSource.replace(
-      aboutIconPromiseRegex,
+      currentAboutIconPromiseRegex,
       `[
-process.platform===\`linux\`?null:$1?$2($3):null,
-process.platform===\`linux\`?Promise.resolve((()=>{let __codexLinuxAboutIcon=$4.nativeImage.createFromPath(${iconPathExpression});return __codexLinuxAboutIcon.isEmpty()?null:__codexLinuxAboutIcon})()):$4.app.getFileIcon($5,{size:process.platform===\`win32\`?\`large\`:\`normal\`}).catch(()=>null)
-]`,
-    );
-    if (patchedSource === currentSource) {
-      // 26.623 reshaped the about icon promise array: the non-win32 size
-      // ternary collapsed to {size:`normal`} and a win32 nativeImage branch was
-      // added — [t?k_(i):null,n?a.nativeImage.createFromPath(i):a.app.getFileIcon(i,{size:`normal`})].
-      // Without this branch the Linux-safe icon (and the .catch on getFileIcon)
-      // never apply, so a getFileIcon rejection on Linux makes the About window
-      // builder throw before its try/catch and the dialog never opens.
-      const aboutIconPromiseRegex26623 =
-        /\[([A-Za-z_$][\w$]*)\?([A-Za-z_$][\w$]*)\(([^()]+)\):null,([A-Za-z_$][\w$]*)\?([A-Za-z_$][\w$]*)\.nativeImage\.createFromPath\(([^()]+)\):([A-Za-z_$][\w$]*)\.app\.getFileIcon\(([^()]+),\{size:`normal`\}\)\]/;
-      patchedSource = patchedSource.replace(
-        aboutIconPromiseRegex26623,
-        `[
 process.platform===\`linux\`?null:$1?$2($3):null,
 process.platform===\`linux\`?Promise.resolve((()=>{let __codexLinuxAboutIcon=$5.nativeImage.createFromPath(${iconPathExpression});return __codexLinuxAboutIcon.isEmpty()?null:__codexLinuxAboutIcon})()):$4?$5.nativeImage.createFromPath($6):$7.app.getFileIcon($8,{size:\`normal\`}).catch(()=>null)
 ]`,
-      );
-    }
+    );
   } else {
-    const patchedGetFileIconRegex =
-      /([A-Za-z_$][\w$]*)\.app\.getFileIcon\(([^()]+),\{size:process\.platform===`win32`\?`large`:`normal`\}\)\.catch\(\(\)=>null\)/;
-    if (!patchedGetFileIconRegex.test(patchedSource)) {
-      const getFileIconRegex =
-        /([A-Za-z_$][\w$]*)\.app\.getFileIcon\(([^()]+),\{size:process\.platform===`win32`\?`large`:`normal`\}\)/;
-      patchedSource = patchedSource.replace(
-        getFileIconRegex,
-        "$1.app.getFileIcon($2,{size:process.platform===`win32`?`large`:`normal`}).catch(()=>null)",
-      );
-    }
-    if (patchedSource === currentSource) {
-      // 26.623 fallback (no bundled icon): just make the reshaped getFileIcon
-      // call rejection-proof so the About window builder cannot throw on Linux.
-      const patchedGetFileIconRegex26623 =
-        /([A-Za-z_$][\w$]*)\.app\.getFileIcon\(([^()]+),\{size:`normal`\}\)\.catch\(\(\)=>null\)/;
-      if (!patchedGetFileIconRegex26623.test(patchedSource)) {
-        const getFileIconRegex26623 =
-          /([A-Za-z_$][\w$]*)\.app\.getFileIcon\(([^()]+),\{size:`normal`\}\)/;
-        patchedSource = patchedSource.replace(
-          getFileIconRegex26623,
-          "$1.app.getFileIcon($2,{size:`normal`}).catch(()=>null)",
-        );
-      }
-    }
+    patchedSource = patchedSource.replace(
+      currentAboutIconPromiseRegex,
+      "[$1?$2($3):null,$4?$5.nativeImage.createFromPath($6):$7.app.getFileIcon($8,{size:`normal`}).catch(()=>null)]",
+    );
   }
 
   patchedSource = patchedSource
     .replace(
-      /([A-Za-z_$][\w$]*)\.isEmpty\(\)\?null:\1\.resize\(/g,
-      "$1==null||$1.isEmpty()?null:$1.resize(",
+      aboutHtmlIconUnsafeRegex,
+      "htmlIconDataUrl:$1??($2==null||$2.isEmpty()?null:$2.resize($3).toDataURL()),windowIcon:$2??null}",
     )
-    .replace(/windowIcon:([A-Za-z_$][\w$]*)\}/g, "windowIcon:$1??null}")
     .replace(
-      /\.\.\.([A-Za-z_$][\w$]*)\.windowIcon\.isEmpty\(\)\?\{\}:\{icon:\1\.windowIcon\}/g,
+      aboutWindowIconUnsafeRegex,
       "...$1.windowIcon==null||$1.windowIcon.isEmpty()?{}:{icon:$1.windowIcon}",
     );
 

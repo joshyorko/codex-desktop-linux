@@ -184,14 +184,10 @@ const fileManagerBundle =
   "var lu=jl({id:`fileManager`,label:`Finder`,icon:`apps/finder.png`,kind:`fileManager`,darwin:{detect:()=>`open`,args:e=>il(e)},win32:{label:`File Explorer`,icon:`apps/file-explorer.png`,detect:uu,args:e=>il(e),open:async({path:e})=>du(e)}});function uu(){}";
 const terminalEnvBundle =
   "var Q0=`xterm-256color`;var t={ $r(e){return e} };var Backend=class{isLocalTerminalSession(e){return e?.type===`local`}async getWorktreeShellEnvironmentForCwd(e){return null}async buildTerminalEnv(e,n,r){let i={...process.env};if(n!=null&&(i.CODEX_APP_TITLE=n),this.isLocalTerminalSession(r)){let t=await this.getWorktreeShellEnvironmentForCwd(e);if(t!=null){for(let e of t.exclude)delete i[e];Object.assign(i,t.set)}}return process.platform!==`win32`&&(i.TERM=Q0,delete i.TERMINFO,delete i.TERMINFO_DIRS),t.$r(i)}};";
-const alreadyOpaqueBackgroundBundle =
-  "process.platform===`linux`?{backgroundColor:e?t:n,backgroundMaterial:null}:{backgroundColor:r,backgroundMaterial:null}";
-const opaqueBackgroundBundleWithDriftingGw =
-  "var cM=`#00000000`,lM=`#000000`,uM=`#f9f9f9`;function OM(e){return e===`avatarOverlay`||e===`browserCommentPopup`}function jM({platform:e,appearance:t,opaqueWindowsEnabled:n,prefersDarkColors:r}){return e===`win32`&&!OM(t)?n?{backgroundColor:r?lM:uM,backgroundMaterial:`none`}:{backgroundColor:cM,backgroundMaterial:`mica`}:{backgroundColor:cM,backgroundMaterial:null}}function gw(e){return e.page==null?e.snapshot.url:mw(e.page)}";
-const currentOpaqueBackgroundBundle =
-  "var QK=`#00000000`,$K=`#000000`,eq=`#f9f9f9`;function vq(e){return e===`avatarOverlay`||e===`browserCommentPopup`||e===`globalDictation`||e===`hotkeyWindowHome`||e===`hotkeyWindowThread`}function xq({platform:e,appearance:t,opaqueWindowsEnabled:n,prefersDarkColors:r}){return n&&!vq(t)&&(e===`darwin`||e===`win32`)?{backgroundColor:r?$K:eq,backgroundMaterial:e===`win32`?`none`:null}:e===`win32`&&!vq(t)?{backgroundColor:QK,backgroundMaterial:`mica`}:{backgroundColor:QK,backgroundMaterial:null}}";
+const currentOpaqueWindowSurfaceBackgroundHelper =
+  "var W4=`#00000000`,G4=`#000000`,K4=`#f9f9f9`;function g3(e){return e===`avatarOverlay`||e===`browserCommentPopup`||e===`globalDictation`||e===`hotkeyWindowHome`||e===`hotkeyWindowThread`||e===`hud`}function v3({appearance:e,opaqueWindowsEnabled:t,platform:n}){return t&&!g3(e)&&(n===`darwin`||n===`win32`)}function S3({platform:e,appearance:t,opaqueWindowSurfaceEnabled:n,prefersDarkColors:r}){return n?{backgroundColor:r?G4:K4,backgroundMaterial:e===`win32`?`none`:null}:e===`win32`&&!g3(t)?{backgroundColor:W4,backgroundMaterial:`mica`}:{backgroundColor:W4,backgroundMaterial:null}}";
 const currentOpaqueWindowSurfaceBackgroundBundle =
-  "var W4=`#00000000`,G4=`#000000`,K4=`#f9f9f9`;function g3(e){return e===`avatarOverlay`||e===`browserCommentPopup`||e===`globalDictation`||e===`hotkeyWindowHome`||e===`hotkeyWindowThread`||e===`hud`}function v3({appearance:e,opaqueWindowsEnabled:t,platform:n}){return t&&!g3(e)&&(n===`darwin`||n===`win32`)}function S3({platform:e,appearance:t,opaqueWindowSurfaceEnabled:n,prefersDarkColors:r}){return n?{backgroundColor:r?G4:K4,backgroundMaterial:e===`win32`?`none`:null}:e===`win32`&&!g3(t)?{backgroundColor:W4,backgroundMaterial:`mica`}:{backgroundColor:W4,backgroundMaterial:null}}class k3{isOpaqueWindowsEnabled(){return theme?.opaqueWindows===!0}shouldUseOpaqueWindowSurface(e,t,n){return this.shouldAlwaysUseOpaqueWindowSurface(e)}shouldAlwaysUseOpaqueWindowSurface(e){return v3({appearance:e,opaqueWindowsEnabled:this.isOpaqueWindowsEnabled(),platform:process.platform})||!BA()&&!g3(e)}}";
+  `${currentOpaqueWindowSurfaceBackgroundHelper}class k3{isOpaqueWindowsEnabled(){return theme?.opaqueWindows===!0}shouldUseOpaqueWindowSurface(e,t,n){return this.shouldAlwaysUseOpaqueWindowSurface(e)}shouldAlwaysUseOpaqueWindowSurface(e){return v3({appearance:e,opaqueWindowsEnabled:this.isOpaqueWindowsEnabled(),platform:process.platform})||!BA()&&!g3(e)}}`;
 function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -1666,7 +1662,7 @@ test("patchExtractedApp patches worker file manager support", () => {
       [
         mainBundlePrefix,
         "process.platform===`win32`&&k.removeMenu(),",
-        alreadyOpaqueBackgroundBundle,
+        currentOpaqueWindowSurfaceBackgroundBundle,
         fileManagerBundle,
         trayBundleFixture(),
         singleInstanceBundleFixture(),
@@ -1705,7 +1701,7 @@ test("patchExtractedApp reports worker file manager patch drift", () => {
       [
         mainBundlePrefix,
         "process.platform===`win32`&&k.removeMenu(),",
-        alreadyOpaqueBackgroundBundle,
+        currentOpaqueWindowSurfaceBackgroundBundle,
         fileManagerBundle,
         trayBundleFixture(),
         singleInstanceBundleFixture(),
@@ -2334,31 +2330,6 @@ test("migrates a Linux-suppressed application menu back to the real menu", () =>
   assert.equal(patched, "let et=n.Menu.buildFromTemplate($e);n.Menu.setApplicationMenu(et);");
 });
 
-test("recognizes already-applied Linux opaque background patch", () => {
-  const patched = applyPatchTwice(applyLinuxOpaqueBackgroundPatch, alreadyOpaqueBackgroundBundle);
-  assert.equal(patched, alreadyOpaqueBackgroundBundle);
-});
-
-test("uses the local transparent appearance predicate for Linux opaque backgrounds", () => {
-  const patched = applyPatchTwice(
-    applyLinuxOpaqueBackgroundPatch,
-    opaqueBackgroundBundleWithDriftingGw,
-  );
-
-  assert.match(patched, /e===`linux`&&!OM\(t\)\?\{backgroundColor:r\?lM:uM/);
-  assert.doesNotMatch(patched, /process\.platform===`linux`&&!gw\(t\)/);
-});
-
-test("patches current BrowserWindow background helper shape for Linux opaque backgrounds", () => {
-  const patched = applyPatchTwice(applyLinuxOpaqueBackgroundPatch, currentOpaqueBackgroundBundle);
-
-  assert.match(
-    patched,
-    /:e===`linux`&&!vq\(t\)\?\{backgroundColor:r\?\$K:eq,backgroundMaterial:null\}:e===`win32`&&!vq\(t\)\?/,
-  );
-  assert.match(patched, /vq\(e\).*hotkeyWindowThread/);
-});
-
 test("patches current opaque window surface background helper shape for Linux", () => {
   const patched = applyPatchTwice(applyLinuxOpaqueBackgroundPatch, currentOpaqueWindowSurfaceBackgroundBundle);
 
@@ -2371,6 +2342,32 @@ test("patches current opaque window surface background helper shape for Linux", 
     /shouldAlwaysUseOpaqueWindowSurface\(e\)\{return process\.platform===`linux`&&!g3\(e\)\|\|v3\(\{appearance:e,opaqueWindowsEnabled:this\.isOpaqueWindowsEnabled\(\),platform:process\.platform\}\)\|\|!BA\(\)&&!g3\(e\)\}/,
   );
   assert.match(patched, /opaqueWindowSurfaceEnabled:n/);
+});
+
+test("does not mistake an unrelated Linux background branch for the current patched helper", () => {
+  const unrelatedLinuxBackground =
+    "function legacy({platform:e,appearance:t,prefersDarkColors:r}){return e===`linux`&&!x(t)?{backgroundColor:r?D:L,backgroundMaterial:null}:null}";
+  const patched = applyPatchTwice(
+    applyLinuxOpaqueBackgroundPatch,
+    `${unrelatedLinuxBackground}${currentOpaqueWindowSurfaceBackgroundBundle}`,
+  );
+
+  assert.match(
+    patched,
+    /function S3\([^}]+\}\)\{return n\?[^;]+:e===`linux`&&!g3\(t\)\?\{backgroundColor:r\?G4:K4,backgroundMaterial:null\}:e===`win32`&&!g3\(t\)\?/,
+  );
+  assert.match(patched, new RegExp(escapeRegExp(unrelatedLinuxBackground)));
+});
+
+test("reports drift when the current opaque background helper has no surface predicate", () => {
+  const { value: patched, warnings } = captureWarns(() =>
+    applyLinuxOpaqueBackgroundPatch(currentOpaqueWindowSurfaceBackgroundHelper),
+  );
+
+  assert.equal(patched, currentOpaqueWindowSurfaceBackgroundHelper);
+  assert.deepEqual(warnings, [
+    "WARN: Could not find opaque surface mode predicate — skipping Linux opaque surface patch",
+  ]);
 });
 
 test("patches current webview opaque window default bundle shapes", () => {
@@ -2871,7 +2868,7 @@ test("adds Linux window icon handling when an icon asset is available", () => {
       windowOptionsSource,
       "process.platform===`win32`&&k.removeMenu(),",
       readyToShowSource,
-      alreadyOpaqueBackgroundBundle,
+      currentOpaqueWindowSurfaceBackgroundBundle,
       fileManagerBundle,
       trayBundleFixture(),
       singleInstanceBundleFixture(),
@@ -3277,47 +3274,88 @@ test("adds Linux build information to the app Help menu", () => {
   );
 });
 
-test("makes About dialog prefer the bundled Linux icon asset", () => {
-  const iconPathExpression = "process.resourcesPath+`/../content/webview/assets/app-test.png`";
-  const source = [
-    "let a=require(`electron`),r={T:()=>null,V:()=>({formatMessage:({defaultMessage:e})=>e})},t={dt:()=>null,Kr:()=>null};",
-    "var $X=`codex.aboutDialog.title`,eZ=`About {appName}`,tZ=`codex.aboutDialog.ok`,nZ=`codex.aboutDialog.versionLine`,rZ=`Version {version}`,iZ=`codex.aboutDialog.versionLineWithDate`,aZ=`Version {version} • Released {releaseDate}`,oZ=`codex.aboutDialog.buildInfoLabel`,sZ=`Build information`,cZ=380,lZ=360,uZ=72,pZ=null;",
-    "async function bZ(){let e=process.platform===`darwin`,t=e?r.T():process.execPath,[n,i]=await Promise.all([e?Fw(t):null,a.app.getFileIcon(t,{size:process.platform===`win32`?`large`:`normal`})]);return{htmlIconDataUrl:n??(i.isEmpty()?null:i.resize({width:uZ,height:uZ,quality:`best`}).toDataURL()),windowIcon:i}}",
-    "let d={windowIcon:null},q={...d.windowIcon.isEmpty()?{}:{icon:d.windowIcon}};",
+function currentAboutDialogBundleFixture() {
+  return [
+    "let c=require(`electron`),a={s:()=>null};",
+    "var q6=`codex.aboutDialog.title`,i8=72;",
+    "async function h8(e){let t=process.platform===`darwin`,n=process.platform===`win32`,r=process.execPath;t?r=a.s():n&&(r=`icon`);let[i,o]=await Promise.all([t?GD(r):null,n?c.nativeImage.createFromPath(r):c.app.getFileIcon(r,{size:`normal`})]);return{htmlIconDataUrl:i??(o.isEmpty()?null:o.resize({width:i8,height:i8,quality:`best`}).toDataURL()),windowIcon:o}}",
+    "let p={windowIcon:null},S={...p.windowIcon.isEmpty()?{}:{icon:p.windowIcon}};",
   ].join("");
+}
 
-  const patched = applyPatchTwice(applyLinuxAboutDialogPatch, source, iconPathExpression);
+test("makes the current About dialog prefer the bundled Linux icon asset", () => {
+  const iconPathExpression = "process.resourcesPath+`/../content/webview/assets/app-test.png`";
+  const patched = applyPatchTwice(
+    applyLinuxAboutDialogPatch,
+    currentAboutDialogBundleFixture(),
+    iconPathExpression,
+  );
 
   assert.match(
     patched,
     new RegExp(`nativeImage\\.createFromPath\\(${escapeRegExp(iconPathExpression)}\\)`),
   );
-  assert.match(patched, /process\.platform===`linux`\?null:e\?Fw\(t\):null/);
-  assert.match(patched, /windowIcon==null\|\|d\.windowIcon\.isEmpty\(\)\?\{\}:\{icon:d\.windowIcon\}/);
-  assert.match(patched, /i==null\|\|i\.isEmpty\(\)\?null:i\.resize\(/);
-  assert.match(patched, /windowIcon:i\?\?null/);
+  assert.match(patched, /process\.platform===`linux`\?null:t\?GD\(r\):null/);
+  assert.match(patched, /:n\?c\.nativeImage\.createFromPath\(r\):c\.app\.getFileIcon/);
+  assert.match(patched, /p\.windowIcon==null\|\|p\.windowIcon\.isEmpty\(\)\?\{\}:\{icon:p\.windowIcon\}/);
+  assert.match(patched, /o==null\|\|o\.isEmpty\(\)\?null:o\.resize\(/);
+  assert.match(patched, /windowIcon:o\?\?null/);
+  assert.match(patched, /let p=\{windowIcon:null\}/);
+  assert.doesNotMatch(patched, /null\?\?null/);
   assert.doesNotThrow(() => new Function(patched));
 });
 
-test("upgrades partially patched About dialog icon fallbacks after alias drift", () => {
-  const iconPathExpression = "process.resourcesPath+`/../content/webview/assets/app-test.png`";
-  const source = [
-    "let r=require(`electron`),n={T:()=>null};",
-    "var UZ=`codex.aboutDialog.title`,eQ=72;",
-    "async function dQ(){let e=process.platform===`darwin`,t=e?n.T():process.execPath,[i,a]=await Promise.all([",
-    "process.platform===`linux`?null:e?tT(t):null,",
-    "process.platform===`linux`?Promise.resolve((()=>{let __codexLinuxAboutIcon=r.nativeImage.createFromPath(process.resourcesPath+`/../content/webview/assets/app-test.png`);return __codexLinuxAboutIcon.isEmpty()?null:__codexLinuxAboutIcon})()):r.app.getFileIcon(t,{size:process.platform===`win32`?`large`:`normal`}).catch(()=>null)",
-    "]);return{htmlIconDataUrl:i??(a.isEmpty()?null:a.resize({width:eQ,height:eQ,quality:`best`}).toDataURL()),windowIcon:a}}",
-    "let f={windowIcon:null},x={...f.windowIcon.isEmpty()?{}:{icon:f.windowIcon}};",
-  ].join("");
+test("keeps the current no-icon About dialog patch idempotent", () => {
   const { value: patched, warnings } = captureWarns(() =>
-    applyPatchTwice(applyLinuxAboutDialogPatch, source, iconPathExpression),
+    applyPatchTwice(
+      applyLinuxAboutDialogPatch,
+      currentAboutDialogBundleFixture(),
+      null,
+    ),
   );
 
   assert.deepEqual(warnings, []);
-  assert.match(patched, /a==null\|\|a\.isEmpty\(\)\?null:a\.resize\(/);
-  assert.match(patched, /windowIcon:a\?\?null/);
-  assert.match(patched, /f\.windowIcon==null\|\|f\.windowIcon\.isEmpty\(\)\?\{\}:\{icon:f\.windowIcon\}/);
+  assert.match(
+    patched,
+    /:c\.app\.getFileIcon\(r,\{size:`normal`\}\)\.catch\(\(\)=>null\)\]/,
+  );
+  assert.match(patched, /o==null\|\|o\.isEmpty\(\)\?null:o\.resize\(/);
+  assert.equal((patched.match(/o==null\|\|/g) ?? []).length, 1);
+  assert.match(patched, /windowIcon:o\?\?null/);
+  assert.match(patched, /p\.windowIcon==null\|\|p\.windowIcon\.isEmpty\(\)\?\{\}:\{icon:p\.windowIcon\}/);
+  assert.match(patched, /let p=\{windowIcon:null\}/);
+  assert.doesNotMatch(patched, /null\?\?null/);
+  assert.doesNotThrow(() => new Function(patched));
+});
+
+test("rejects the obsolete pre-26.623 About dialog shape", () => {
+  const source = [
+    "let a=require(`electron`);",
+    "var $X=`codex.aboutDialog.title`,uZ=72;",
+    "async function bZ(){let e=process.platform===`darwin`,t=e?`icon`:process.execPath,[n,i]=await Promise.all([e?Fw(t):null,a.app.getFileIcon(t,{size:process.platform===`win32`?`large`:`normal`})]);return{htmlIconDataUrl:n??(i.isEmpty()?null:i.resize({width:uZ,height:uZ,quality:`best`}).toDataURL()),windowIcon:i}}",
+    "let d={windowIcon:null},q={...d.windowIcon.isEmpty()?{}:{icon:d.windowIcon}};",
+  ].join("");
+  const { value: patched, warnings } = captureWarns(() =>
+    applyLinuxAboutDialogPatch(source, null),
+  );
+
+  assert.equal(patched, source);
+  assert.deepEqual(warnings, ["WARN: Could not patch About dialog icon fallback for Linux"]);
+});
+
+test("does not partially patch current About shapes with mismatched result aliases", () => {
+  const malformedSources = [
+    currentAboutDialogBundleFixture().replace("windowIcon:o}", "windowIcon:z}"),
+    currentAboutDialogBundleFixture().replace("{icon:p.windowIcon}", "{icon:q.windowIcon}"),
+  ];
+
+  for (const source of malformedSources) {
+    const { value: patched, warnings } = captureWarns(() =>
+      applyLinuxAboutDialogPatch(source, null),
+    );
+    assert.equal(patched, source);
+    assert.deepEqual(warnings, ["WARN: Could not patch About dialog icon fallback for Linux"]);
+  }
 });
 
 test("adds Linux tray support for current minified window and startup identifiers", () => {
@@ -7576,7 +7614,7 @@ test("patchMainBundleSource keeps non-icon patches active without an icon asset"
     mainBundlePrefix,
     currentMainBundlePrefix,
     "process.platform===`win32`&&k.removeMenu(),",
-    alreadyOpaqueBackgroundBundle,
+    currentOpaqueWindowSurfaceBackgroundBundle,
     fileManagerBundle,
     trayBundleFixture(),
     singleInstanceBundleFixture(),
@@ -7727,7 +7765,7 @@ test("missing icon asset skips only icon patches", () => {
       [
         mainBundlePrefix,
         "process.platform===`win32`&&k.removeMenu(),",
-        alreadyOpaqueBackgroundBundle,
+        currentOpaqueWindowSurfaceBackgroundBundle,
         fileManagerBundle,
         trayBundleFixture(),
         singleInstanceBundleFixture(),
@@ -7783,7 +7821,7 @@ test("patchExtractedApp scans current Computer Use settings bundles when UI is e
         [
           mainBundlePrefix,
           "process.platform===`win32`&&k.removeMenu(),",
-          alreadyOpaqueBackgroundBundle,
+          currentOpaqueWindowSurfaceBackgroundBundle,
           fileManagerBundle,
           trayBundleFixture(),
           singleInstanceBundleFixture(),
@@ -7865,7 +7903,7 @@ test("patchExtractedApp records a structured patch report", () => {
       [
         mainBundlePrefix,
         "process.platform===`win32`&&k.removeMenu(),",
-        alreadyOpaqueBackgroundBundle,
+        currentOpaqueWindowSurfaceBackgroundBundle,
         fileManagerBundle,
         trayBundleFixture(),
         singleInstanceBundleFixture(),
@@ -8490,7 +8528,7 @@ test("patcher CLI writes --report-json output", () => {
       [
         mainBundlePrefix,
         "process.platform===`win32`&&k.removeMenu(),",
-        alreadyOpaqueBackgroundBundle,
+        currentOpaqueWindowSurfaceBackgroundBundle,
         fileManagerBundle,
         trayBundleFixture(),
         singleInstanceBundleFixture(),
@@ -8769,7 +8807,7 @@ test("patcher CLI --enforce-critical exits non-zero with an aggregated message",
       [
         mainBundlePrefix,
         "process.platform===`win32`&&k.removeMenu(),",
-        alreadyOpaqueBackgroundBundle,
+        currentOpaqueWindowSurfaceBackgroundBundle,
         fileManagerBundle,
         trayBundleFixture(),
         singleInstanceBundleFixture(),
