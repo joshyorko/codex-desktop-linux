@@ -1170,10 +1170,20 @@ test("assistant render patch covers the current shared assistant message call", 
 test("assistant runtime descriptor targets current shared assistant bundles", () => {
   const descriptor = featurePatches.find((patch) => patch.id === "assistant-runtime");
   assert.ok(descriptor);
-  assert.equal(descriptor.pattern.test("index-current.js"), true);
-  assert.equal(descriptor.pattern.test("local-conversation-thread-current.js"), true);
-  assert.equal(descriptor.pattern.test("local-conversation-turn-current.js"), true);
-  assert.equal(descriptor.pattern.test("app-initial~app-main~onboarding-page-current.js"), true);
+  assert.equal(
+    descriptor.pattern.test(
+      "app-initial~app-main~onboarding-page~hotkey-window-thread-page~editor-diff-page~thread-app-~current.js",
+    ),
+    true,
+  );
+  for (const legacyName of [
+    "index-current.js",
+    "local-conversation-thread-current.js",
+    "local-conversation-turn-current.js",
+    "app-initial~app-main~onboarding-page-current.js",
+  ]) {
+    assert.equal(descriptor.pattern.test(legacyName), false, legacyName);
+  }
 });
 
 test("settings patch does not add the legacy normal settings toggle", () => {
