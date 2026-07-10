@@ -352,14 +352,18 @@ test("reports runtime regressions as evidence-bound diagnostics without inventin
   assert.ok(diagnostics.every((entry) => entry.ownerPath && entry.hypothesis && entry.evidenceGap && entry.observedEvidence));
   assert.ok(createRuntimeRegressionDiagnostics({ runtimeSnapshot: { computerUse: { mentionAvailable: false } } })
     .every((entry) => entry.status === "evidence-required"));
+  assert.ok(createRuntimeRegressionDiagnostics({ runtimeSnapshot: {
+    release: "26.707.31428", provenance: {},
+    computerUse: { pluginId: "computer-use@openai-bundled", installed: true, enabled: true, mentionAvailable: false, rollout: "unknown", entitlement: "unproven" },
+  } }).every((entry) => entry.status === "evidence-required"));
   const partial = createRuntimeRegressionDiagnostics({ runtimeSnapshot: {
-    release: "26.707.31428", provenance: { source: "partial fixture" },
+    release: "26.707.31428", provenance: { source: "partial fixture", capturedAt: "2026-07-10T00:00:00Z" },
     computerUse: { pluginId: "computer-use@openai-bundled", installed: true, enabled: true, mentionAvailable: true, rollout: "unknown", entitlement: "unproven" },
   } });
   assert.equal(partial.find((entry) => entry.id === "computer-use-mention").status, "observed");
   assert.equal(partial.find((entry) => entry.id === "browser-settings-reconciliation").status, "evidence-required");
   const observed = createRuntimeRegressionDiagnostics({ runtimeSnapshot: {
-    release: "26.707.31428", provenance: { source: "control fixture" },
+    release: "26.707.31428", provenance: { source: "control fixture", capturedAt: "2026-07-10T00:00:00Z" },
     computerUse: { pluginId: "computer-use@openai-bundled", installed: true, enabled: true, mentionAvailable: true, rollout: "unknown", entitlement: "unproven" },
     browser: { registryInstalled: true, registryEnabled: true, settingsAvailable: true, initiallyOmitted: false, queueReconciled: false },
     dictation: { supported: true }, chronicle: { enabled: true, backendState: "stopped", uiState: "Stopped" },

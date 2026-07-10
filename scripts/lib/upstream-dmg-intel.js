@@ -2886,7 +2886,8 @@ function resolveBaselinePath({ autoBaseline = false, baselinePath = null, candid
 
 function createRuntimeRegressionDiagnostics({ runtimeSnapshot = null } = {}) {
   const snapshotAccepted = runtimeSnapshot?.release === "26.707.31428" &&
-    runtimeSnapshot?.provenance != null && typeof runtimeSnapshot.provenance === "object";
+    typeof runtimeSnapshot?.provenance?.source === "string" && runtimeSnapshot.provenance.source.trim().length > 0 &&
+    typeof runtimeSnapshot?.provenance?.capturedAt === "string" && runtimeSnapshot.provenance.capturedAt.trim().length > 0;
   const checks = [
     ["computer-use-mention", "computerUse", "scripts/patches/impl/computer-use.js", "A real installed bundled identity must still be filtered by upstream rollout/entitlement before @Computer is absent.", "Live catalog/entitlement response and @Computer insertion trace are required.", (value) => value?.pluginId === "computer-use@openai-bundled" && value?.installed === true && value?.enabled === true && value?.mentionAvailable === false && ["unknown", "unproven"].includes(value?.rollout) && ["unknown", "unproven"].includes(value?.entitlement)],
     ["browser-settings-reconciliation", "browser", "scripts/lib/bundled-plugins.sh, launcher/start.sh.template, and tests/scripts_smoke.sh", "The launcher can initially omit or uninstall a registered browser before queued reconciliation restores it.", "Initial omission/uninstall and queued-restoration event trace are required.", (value) => value?.registryInstalled === true && value?.registryEnabled === true && value?.settingsAvailable === false && value?.initiallyOmitted === true && value?.queueReconciled === true],
