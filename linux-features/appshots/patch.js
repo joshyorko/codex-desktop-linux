@@ -281,8 +281,8 @@ if(!n.existsSync(d)){codexLinuxAppshotWarn(\`screenshot-output-missing\`,{source
 let e=n.statSync(d);if(e.size<=0){codexLinuxAppshotWarn(\`screenshot-output-empty\`,{source:c.source,program:l});continue}
 let t=await codexLinuxAppshotCropWithImageMagick({childProcess:a,fs:n,sourcePath:d,tmpPath:f,cropRects:s});
 if(t!=null)return{dataURL:t.dataURL,width:t.width,height:t.height,source:\`\${c.source}:imagemagick-window-crop\`};
-let r=codexLinuxAppshotCropNativeImage(o,d,s);
-if(r!=null)return{dataURL:r.image.toDataURL(),width:r.width,height:r.height,source:\`\${c.source}:feature-window-crop\`}
+let h=codexLinuxAppshotCropNativeImage(o,d,s);
+if(h!=null)return{dataURL:h.image.toDataURL(),width:h.width,height:h.height,source:\`\${c.source}:feature-window-crop\`}
 }catch(e){codexLinuxAppshotWarn(\`screenshot-command-failed\`,{source:c.source,program:l,message:e instanceof Error?e.message:String(e),stderr:typeof e?.codexStderr===\`string\`?e.codexStderr.slice(0,200):\`\`})}
 finally{if(u!=null)try{n.rmSync(u,{recursive:true,force:true})}catch{}}
 }

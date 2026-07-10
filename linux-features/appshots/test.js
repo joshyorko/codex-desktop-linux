@@ -270,6 +270,102 @@ test("routes AppShots capture through the self-contained Linux feature", () => {
   assert.match(patched, /type:`completed`,transitionSnapshotDataURL:s\.dataURL/);
 });
 
+test("AppShots capture uses and removes its private temporary directory", async () => {
+  const patched = applyLinuxAppshotMainProcessPatch(appshotMainProcessBundleFixture());
+  const helperStart = patched.lastIndexOf(";function codexLinuxAppshotRequire");
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "appshots-private-capture-"));
+  const captureDirs = [];
+  const chmodModes = [];
+  let failCaptures = false;
+
+  assert.ok(helperStart >= 0);
+
+  const fakeFs = {
+    ...fs,
+    mkdtempSync(prefix) {
+      const captureDir = fs.mkdtempSync(prefix);
+      captureDirs.push(captureDir);
+      return captureDir;
+    },
+    chmodSync(target, mode) {
+      chmodModes.push(mode);
+      fs.chmodSync(target, mode);
+    },
+  };
+  const fakeChildProcess = {
+    execFile(program, args, options, callback) {
+      if (failCaptures) {
+        callback(new Error("Expected capture failure"), "", "expected failure");
+        return;
+      }
+      if (program.endsWith("grim")) {
+        fs.writeFileSync(args.at(-1), "source");
+        callback(null, "", "");
+        return;
+      }
+      if (program.endsWith("identify")) {
+        callback(null, "100 100", "");
+        return;
+      }
+      if (program.endsWith("convert")) {
+        fs.writeFileSync(args.at(-1), "crop");
+        callback(null, "", "");
+        return;
+      }
+      callback(new Error(`Unexpected program: ${program}`), "", "unexpected program");
+    },
+  };
+  const context = vm.createContext({
+    Buffer,
+    console: { warn() {} },
+    process: { env: {}, pid: process.pid, platform: "linux", resourcesPath: "" },
+    require(moduleName) {
+      if (moduleName === "node:fs") return fakeFs;
+      if (moduleName === "node:os") return { tmpdir: () => tempRoot };
+      if (moduleName === "node:path") return path;
+      if (moduleName === "node:child_process") return fakeChildProcess;
+      if (moduleName === "electron") {
+        return {
+          nativeImage: {
+            createFromPath: () => ({
+              getSize: () => ({ width: 0, height: 0 }),
+            }),
+          },
+        };
+      }
+      throw new Error(`Unexpected module: ${moduleName}`);
+    },
+    setTimeout,
+  });
+
+  try {
+    vm.runInContext(patched.slice(helperStart), context, { timeout: 1_000 });
+    const result = await context.codexLinuxAppshotScreenshot(
+      { bounds: { height: 40, width: 50, x: 0, y: 0 } },
+      [],
+    );
+
+    assert.equal(result?.width, 50);
+    assert.equal(result?.height, 40);
+    assert.match(result?.dataURL ?? "", /^data:image\/png;base64,/);
+    assert.equal(captureDirs.length, 1);
+    assert.equal(fs.existsSync(captureDirs[0]), false);
+
+    failCaptures = true;
+    const failedResult = await context.codexLinuxAppshotScreenshot(
+      { bounds: { height: 40, width: 50, x: 0, y: 0 } },
+      [],
+    );
+
+    assert.equal(failedResult, null);
+    assert.ok(captureDirs.length > 1);
+    assert.deepEqual(chmodModes, captureDirs.map(() => 0o700));
+    assert.ok(captureDirs.every((captureDir) => !fs.existsSync(captureDir)));
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
 test("enables the current AppShots hotkey class and bare modifiers on Linux", () => {
   const patched = applyPatchTwice(
     applyLinuxAppshotHotkeyPatch,
