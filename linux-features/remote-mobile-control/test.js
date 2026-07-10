@@ -289,6 +289,19 @@ function syntheticAppServerManagerStatusBundle() {
   ].join("");
 }
 
+function syntheticCurrentAppServerManagerStatusBundle() {
+  return [
+    "var q={error(){}};var SP={},CP={},xP=new WeakMap;",
+    "function j5t(e,t){let n=xP.get(e);n??(n=new Map,xP.set(e,n));let r=(n.get(t)??0)+1;return n.set(t,r),r}",
+    "function M5t(e,t,n){return xP.get(e)?.get(t)===n}",
+    "function O5t(e,t,n){n?.status===`connected`&&e.set(CP,t,!1),e.set(SP,t,n)}",
+    "function D5t(e,t){let n=t.getHostId(),r=j5t(e,n),i=e.get(SP,n);t.addNotificationCallback(`remoteControl/status/changed`,({params:t})=>{M5t(e,n,r)&&O5t(e,n,t)}),t.sendRequest(`remoteControl/status/read`,void 0).then(t=>{e.get(SP,n)===i&&M5t(e,n,r)&&O5t(e,n,t)}).catch(t=>{M5t(e,n,r)&&q.error(`Failed to read remote-control status`,{safe:{},sensitive:{error:t}})})}",
+    "function A5t(e,t,{ignoreCurrentError:n=!1}={}){return new Promise((n,r)=>{let a=!1,o,s=e=>{a||(a=!0,clearTimeout(c),o?.(),e instanceof Error?r(e):n(e))},c=setTimeout(()=>{s(Error(`Timed out waiting for remote control to connect`))},F5t);o=e.watch(()=>{})})}",
+    "function V5t(e){return e.subscribe(`remoteControl/status/changed`,()=>{})}",
+    "var F5t,SP,CP,wP;F5t=5e3,SP=va(G,e=>null),CP=va(G,e=>!1),wP=ya(G,(e,{get:t})=>t(SP,e));",
+  ].join("");
+}
+
 function syntheticAppMainActiveStatusBundle() {
   return [
     "function pS({latestTurnStatus:e,resumeState:t,streamRole:n,threadRuntimeStatus:r}){return n==null?t===`needs_resume`?`needs-resume`:`read-only`:n.role===`follower`?`follower`:r?.type===`active`||e===`inProgress`?`active`:`inactive`}",
@@ -904,6 +917,15 @@ test("remote mobile control feature exposes opt-in main-bundle and webview patch
       ),
       true,
     );
+
+    const currentStatusBundle =
+      "app-initial~app-main~pull-request-code-review~onboarding-page~hotkey-window-thread-page~cha~b76hmflu-y0KJWbm3.js";
+    assert.equal(statusGuardDescriptor.pattern.test(currentStatusBundle), true);
+    const statusWaitDescriptor = descriptors.find((descriptor) =>
+      descriptor.id === "feature:remote-mobile-control:linux-remote-control-status-wait"
+    );
+    assert.ok(statusWaitDescriptor);
+    assert.equal(statusWaitDescriptor.pattern.test(currentStatusBundle), true);
 
     const hydrationDescriptor = descriptors.find((descriptor) =>
       descriptor.id === "feature:remote-mobile-control:linux-remote-mobile-conversation-hydration"
@@ -2157,6 +2179,17 @@ test("Linux remote-control status guard skips remote-control environment status 
   assert.equal(codexLinuxRemoteControlShouldReadStatus("remote-control:env_test"), false);
   assert.equal(codexLinuxRemoteControlShouldReadStatus("remote-ssh-discovered:dev"), false);
   assert.equal(codexLinuxRemoteControlShouldReadStatus("local"), true);
+});
+
+test("Linux remote-control status patches support the current 26.707 app bundle", () => {
+  const source = syntheticCurrentAppServerManagerStatusBundle();
+  const guarded = applyLinuxRemoteControlStatusReadGuardPatch(source);
+  const waited = applyLinuxRemoteControlStatusWaitPatch(source);
+
+  assert.notEqual(guarded, source);
+  assert.match(guarded, /codexLinuxRemoteControlShouldReadStatus/);
+  assert.notEqual(waited, source);
+  assert.match(waited, /codexLinuxRemoteControlStatusWaitMs/);
 });
 
 test("Linux remote-control status wait is extended for local mobile setup", () => {

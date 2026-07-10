@@ -1431,7 +1431,7 @@ function applyLinuxRemoteControlStatusWaitPatch(source) {
   }
 
   const statusWaitRegex =
-    /\b([A-Za-z_$][\w$]*)=5e3(?=,[A-Za-z_$][\w$]*=Xi\(Z,e=>null\),[A-Za-z_$][\w$]*=Xi\(Z,e=>!1\),[A-Za-z_$][\w$]*=Zi\(Z,)/u;
+    /\b([A-Za-z_$][\w$]*)=5e3(?=,[A-Za-z_$][\w$]*=([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*),e=>null\),[A-Za-z_$][\w$]*=\2\(\3,e=>!1\),[A-Za-z_$][\w$]*=[A-Za-z_$][\w$]*\(\3,)/u;
   if (!statusWaitRegex.test(source)) {
     console.warn("WARN: Could not find remote-control status wait needle - skipping Linux remote-control status wait patch");
     return source;
@@ -1734,7 +1734,7 @@ module.exports = [
   {
     id: "linux-remote-control-status-read-guard",
     phase: "webview-asset",
-    pattern: /^(?:app-server-manager-signals|thread-context-inputs|app-initial~app-main~worktree-init-v2-page~remote-conversation-page~(?:new-thread-panel-page~o~|pull-requests-page~plug~)).*\.js$/,
+    pattern: /^(?:app-server-manager-signals|thread-context-inputs|app-initial~app-main~worktree-init-v2-page~remote-conversation-page~(?:new-thread-panel-page~o~|pull-requests-page~plug~)|app-initial~app-main~pull-request-code-review~onboarding-page~hotkey-window-thread-page~cha~b76hmflu-).*\.js$/,
     order: 20_151,
     ciPolicy: "optional",
     missingDescription: "app-server manager signals bundle",
@@ -1744,7 +1744,7 @@ module.exports = [
   {
     id: "linux-remote-control-status-wait",
     phase: "webview-asset",
-    pattern: /^(?:app-server-manager-signals|thread-context-inputs|app-initial~app-main~worktree-init-v2-page~remote-conversation-page~).*\.js$/,
+    pattern: /^(?:app-server-manager-signals|thread-context-inputs|app-initial~app-main~worktree-init-v2-page~remote-conversation-page~|app-initial~app-main~pull-request-code-review~onboarding-page~hotkey-window-thread-page~cha~b76hmflu-).*\.js$/,
     order: 20_152,
     ciPolicy: "optional",
     missingDescription: "app-server manager signals bundle",
