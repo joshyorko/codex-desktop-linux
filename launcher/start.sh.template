@@ -561,13 +561,33 @@ export_packaged_runtime_env() {
     fi
 }
 
+path_without_entry() {
+    local path_value="$1"
+    local entry_to_remove="$2"
+    local remaining
+    local entry
+    local result=""
+    local separator=""
+
+    remaining="$path_value:"
+    while [ -n "$remaining" ]; do
+        entry="${remaining%%:*}"
+        remaining="${remaining#*:}"
+        if [ "$entry" != "$entry_to_remove" ]; then
+            result="$result$separator$entry"
+            separator=:
+        fi
+    done
+
+    printf '%s\n' "$result"
+}
+
 prepend_managed_node_runtime_to_path() {
     [ -x "$MANAGED_NODE_BIN_DIR/node" ] || return 0
 
     local current_path="${PATH:-}"
-    if [ -z "${CODEX_LINUX_USER_PATH+x}" ]; then
-        export CODEX_LINUX_USER_PATH="$current_path"
-    fi
+    CODEX_LINUX_USER_PATH="$(path_without_entry "${CODEX_LINUX_USER_PATH-$current_path}" "$MANAGED_NODE_BIN_DIR")"
+    export CODEX_LINUX_USER_PATH
 
     case "$current_path" in
         "$MANAGED_NODE_BIN_DIR"|"$MANAGED_NODE_BIN_DIR":*) ;;

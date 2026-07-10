@@ -3864,10 +3864,11 @@ test_launcher_managed_node_handles_unset_path() {
     info "Checking managed Node PATH setup without an inherited PATH"
     local workspace="$TMP_DIR/launcher-unset-path"
     local probe="$workspace/probe.sh"
-    local managed_node_bin_dir
+    local managed_node_bin_dir="$workspace/managed-node/bin"
 
-    managed_node_bin_dir="$(dirname "$(command -v node)")"
-    mkdir -p "$workspace"
+    mkdir -p "$managed_node_bin_dir"
+    printf '#!/bin/sh\nexit 0\n' > "$managed_node_bin_dir/node"
+    chmod +x "$managed_node_bin_dir/node"
 
     cat > "$probe" <<EOF
 #!/usr/bin/env bash
@@ -3875,6 +3876,11 @@ set -u
 SCRIPT_DIR=$(printf '%q' "$workspace")
 MANAGED_NODE_BIN_DIR=$(printf '%q' "$managed_node_bin_dir")
 EOF
+    awk '
+        /^path_without_entry\(\) \{/ { capture = 1 }
+        capture { print }
+        capture && /^}/ { exit }
+    ' "$REPO_DIR/launcher/start.sh.template" >> "$probe"
     awk '
         /^prepend_managed_node_runtime_to_path\(\) \{/ { capture = 1 }
         capture { print }
@@ -3896,10 +3902,79 @@ case "$PATH" in
     "$MANAGED_NODE_BIN_DIR":*) ;;
     *) exit 6 ;;
 esac
-[ "$CODEX_LINUX_USER_PATH" = "/tmp/untrusted:$MANAGED_NODE_BIN_DIR:/usr/bin" ] || exit 7
+[ "$CODEX_LINUX_USER_PATH" = "/tmp/untrusted:/usr/bin" ] || exit 7
+
+PATH="$MANAGED_NODE_BIN_DIR:/usr/bin"
+CODEX_LINUX_USER_PATH=":/tmp/tools::$MANAGED_NODE_BIN_DIR:/usr/bin:"
+prepend_managed_node_runtime_to_path
+[ "$CODEX_LINUX_USER_PATH" = ":/tmp/tools::/usr/bin:" ] || exit 8
+/usr/bin/bash -c '[ "$CODEX_LINUX_USER_PATH" = ":/tmp/tools::/usr/bin:" ]' || exit 9
 EOF
 
     /usr/bin/bash "$probe" || fail "Expected managed Node PATH setup to tolerate an unset PATH"
+}
+
+test_packaged_runtime_keeps_managed_node_out_of_user_service_path() {
+    info "Checking packaged runtime exports the user PATH to user services"
+    local workspace="$TMP_DIR/packaged-runtime-user-path"
+    local fake_bin="$workspace/bin"
+    local runtime_dir="$workspace/runtime"
+    local capture_log="$workspace/path-captures"
+    local managed_node_bin="$workspace/managed-node/bin"
+    local user_path="$fake_bin:/usr/bin"
+    local fallback_path="$fake_bin:/fallback/bin"
+    local import_args="PATH DISPLAY WAYLAND_DISPLAY DBUS_SESSION_BUS_ADDRESS XAUTHORITY XDG_RUNTIME_DIR HYPRLAND_INSTANCE_SIGNATURE YDOTOOL_SOCKET"
+    local -a captures
+
+    mkdir -p "$fake_bin" "$runtime_dir" "$managed_node_bin"
+    cat > "$fake_bin/systemctl" <<'EOF'
+#!/bin/bash
+case "$*" in
+    "--user show-environment") exit 0 ;;
+    "--user import-environment "*) printf 'systemctl|%s|%s\n' "${PATH-}" "$*" >> "$CAPTURE_LOG"; exit 0 ;;
+    "--user is-enabled "*) exit 1 ;;
+    *) exit 0 ;;
+esac
+EOF
+    cat > "$fake_bin/dbus-update-activation-environment" <<'EOF'
+#!/bin/bash
+printf 'dbus|%s|%s\n' "${PATH-}" "$*" >> "$CAPTURE_LOG"
+EOF
+    chmod +x "$fake_bin/systemctl" "$fake_bin/dbus-update-activation-environment"
+
+    (
+        export CAPTURE_LOG="$capture_log"
+        export XDG_RUNTIME_DIR="$runtime_dir"
+        export CODEX_LINUX_USER_PATH="$user_path"
+        export PATH="$managed_node_bin:$user_path"
+        # shellcheck disable=SC1091
+        source "$REPO_DIR/packaging/linux/codex-packaged-runtime.sh"
+
+        codex_packaged_runtime_prelaunch_background
+        [ "$PATH" = "$managed_node_bin:$user_path" ] \
+            || fail "Expected the packaged runtime to preserve the app PATH"
+        mapfile -t captures < "$capture_log"
+        [ "${captures[0]:-}" = "systemctl|$user_path|--user import-environment $import_args" ] \
+            || fail "Expected systemd to import the user PATH"
+        [ "${captures[1]:-}" = "dbus|$user_path|--systemd $import_args" ] \
+            || fail "Expected D-Bus activation to import the user PATH"
+        [ "${#captures[@]}" -eq 2 ] \
+            || fail "Expected one PATH export for systemd and D-Bus"
+
+        : > "$capture_log"
+        unset CODEX_LINUX_USER_PATH
+        export PATH="$fallback_path"
+        codex_packaged_runtime_prelaunch_background
+        [ "$PATH" = "$fallback_path" ] \
+            || fail "Expected the packaged runtime to preserve the fallback PATH"
+        mapfile -t captures < "$capture_log"
+        [ "${captures[0]:-}" = "systemctl|$fallback_path|--user import-environment $import_args" ] \
+            || fail "Expected systemd to import PATH when CODEX_LINUX_USER_PATH is unset"
+        [ "${captures[1]:-}" = "dbus|$fallback_path|--systemd $import_args" ] \
+            || fail "Expected D-Bus activation to import PATH when CODEX_LINUX_USER_PATH is unset"
+        [ "${#captures[@]}" -eq 2 ] \
+            || fail "Expected fallback PATH exports only for systemd and D-Bus"
+    )
 }
 
 test_launcher_rejects_missing_webview_entrypoint() {
@@ -4366,10 +4441,6 @@ if "if needs_cold_start;" not in runtime_body:
     raise SystemExit("second-instance handoff must skip CLI preflight")
 if 'run_cold_start_hooks' not in runtime_body:
     raise SystemExit("cold start must run feature-staged hooks before Electron launches")
-if 'local current_path="${PATH:-}"' not in source or 'export CODEX_LINUX_USER_PATH="$current_path"' not in source:
-    raise SystemExit("launcher must capture the user PATH before prepending the managed Node runtime")
-if source.index('export CODEX_LINUX_USER_PATH="$current_path"') > source.index('export PATH="$MANAGED_NODE_BIN_DIR${current_path:+:$current_path}"'):
-    raise SystemExit("launcher must capture CODEX_LINUX_USER_PATH before mutating PATH for Electron")
 for name, body in (("prelaunch", prelaunch_hooks_body), ("cold-start", cold_start_hooks_body), ("launcher", launcher_hooks_body)):
     if 'CODEX_HOME="$CODEX_HOME"' not in body:
         raise SystemExit(f"launcher {name} hooks must receive resolved CODEX_HOME")
@@ -8380,6 +8451,7 @@ main() {
     test_chrome_marketplace_fallback_synthesis
     test_chrome_native_host_manifest_writer
     test_launcher_managed_node_handles_unset_path
+    test_packaged_runtime_keeps_managed_node_out_of_user_service_path
     test_launcher_extra_bundled_plugin_cache_rollback
     test_launcher_extra_bundled_plugin_cache_concurrent_destination
     test_launcher_rejects_missing_webview_entrypoint
