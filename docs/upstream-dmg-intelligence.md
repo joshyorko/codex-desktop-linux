@@ -48,6 +48,12 @@ scripts/dev/upstream-dmg-intel.js \
   --fail-on-blockers
 ```
 
+Add `--patch-preflight` to extract `app.asar` into an isolated temporary root
+and prove the required window patches plus the protected Computer Use and Read
+Aloud parity patches against the candidate. Raw upstream platform gates remain
+visible, but become non-blocking `patched-linux-parity` entries only when every
+exact owner patch reports `applied` or `already-applied`.
+
 Explicit baseline comparison remains available for older known-good builds:
 
 ```bash
@@ -179,6 +185,9 @@ It classifies gates separately from protected-surface drift:
 - `linux-parity-drift`: Linux already has a substrate or patch owner, but
   upstream still gates the UI or query to macOS/Windows. This is a release
   blocker; Computer Use belongs here.
+- `patched-linux-parity`: the raw upstream gate still exists, but every exact
+  candidate preflight patch for its Linux surface applied. The gate remains in
+  the report as evidence without blocking acceptance.
 - `existing-linux-feature-drift`: protected-surface movement or patch failures
   for features this repo already mirrors. This remains represented by the
   protected-surface classifications above.

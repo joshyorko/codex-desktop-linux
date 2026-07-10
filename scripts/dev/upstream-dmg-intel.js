@@ -25,7 +25,7 @@ Build an upstream DMG intelligence report without mutating codex-app/.
 Options:
   --candidate PATH       Candidate Codex.dmg, extracted .app, or extracted app resources directory
   --candidate-url URL    Provenance URL for the candidate DMG
-  --patch-preflight      Run required Linux patch viability against a temporary extracted copy
+  --patch-preflight      Run required and protected Linux parity patches against a temporary extracted copy
   --baseline PATH        Optional known-good baseline DMG or extracted .app; defaults to ./Codex.dmg when different
   --no-baseline          Do a candidate-only scan even when ./Codex.dmg exists
   --patch-report PATH    Optional patch-report.json to fold patch blockers/review items into drift-report.json

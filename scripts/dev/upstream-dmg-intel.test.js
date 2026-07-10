@@ -17,6 +17,7 @@ const {
   extractProtectedSurfaces,
   findPostPatchIntegrityFindings,
   mergeProvenance,
+  prepareRequiredPatchPreflightApp,
   renderActionPlanMarkdown,
   resolveBaselinePath,
 } = require("../lib/upstream-dmg-intel.js");
@@ -155,6 +156,112 @@ function writeFile(filePath, content, mode) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.writeFileSync(filePath, content, mode == null ? undefined : { mode });
 }
+
+function writeAsar(filePath, fileContents) {
+  const root = { files: {} };
+  const payloads = [];
+  let offset = 0;
+  for (const [relativePath, content] of Object.entries(fileContents).sort(([left], [right]) => left.localeCompare(right))) {
+    const payload = Buffer.from(content);
+    const parts = relativePath.split("/");
+    let files = root.files;
+    for (const part of parts.slice(0, -1)) {
+      files[part] ??= { files: {} };
+      files = files[part].files;
+    }
+    files[parts.at(-1)] = { offset: String(offset), size: payload.length };
+    payloads.push(payload);
+    offset += payload.length;
+  }
+
+  const headerJson = Buffer.from(JSON.stringify(root));
+  const picklePayloadSize = Math.ceil((4 + headerJson.length + 1) / 4) * 4;
+  const headerSize = 4 + picklePayloadSize;
+  const archive = Buffer.alloc(8 + headerSize + offset);
+  archive.writeUInt32LE(4, 0);
+  archive.writeUInt32LE(headerSize, 4);
+  archive.writeUInt32LE(picklePayloadSize, 8);
+  archive.writeUInt32LE(headerJson.length, 12);
+  headerJson.copy(archive, 16);
+  let payloadOffset = 8 + headerSize;
+  for (const payload of payloads) {
+    payload.copy(archive, payloadOffset);
+    payloadOffset += payload.length;
+  }
+  writeFile(filePath, archive);
+}
+
+test("prepares raw app.asar contents for required patch preflight", () =>
+  withTempDir((workspace) => {
+    const appDir = path.join(workspace, "Codex.app");
+    const resourcesDir = path.join(appDir, "Contents/Resources");
+    const asarPath = path.join(resourcesDir, "app.asar");
+    const targetDir = path.join(workspace, "preflight");
+    const mainSource = "let marker=`current-main-bundle`;";
+    writeAsar(asarPath, {
+      ".vite/build/main-test.js": mainSource,
+      "package.json": JSON.stringify({ name: "codex-desktop" }),
+    });
+
+    prepareRequiredPatchPreflightApp({ appDir, targetDir });
+
+    assert.equal(
+      fs.readFileSync(path.join(targetDir, ".vite/build/main-test.js"), "utf8"),
+      mainSource,
+    );
+    assert.equal(fs.existsSync(path.join(resourcesDir, "app.asar.extracted")), false);
+    assert.equal(fs.existsSync(asarPath), true);
+  }));
+
+test("inventories raw app.asar entries with normalized archive paths", () =>
+  withTempDir((workspace) => {
+    const appDir = path.join(workspace, "Codex.app");
+    writeAsar(path.join(appDir, "Contents/Resources/app.asar"), {
+      ".vite/build/main-test.js": "let marker=`current-main-bundle`;",
+    });
+
+    const inventory = createInventory({ sourcePath: appDir });
+
+    assert.ok(
+      inventory.files.some(
+        (file) => file.relativePath === "Contents/Resources/app.asar/.vite/build/main-test.js",
+      ),
+    );
+    assert.equal(
+      inventory.files.some((file) => file.relativePath.includes(".vite/build/.vite/build")),
+      false,
+    );
+  }));
+
+test("default Read Aloud surface protects the current assistant render contract", () =>
+  withTempDir((workspace) => {
+    const appDir = path.join(workspace, "Codex.app");
+    const assetPath = path.join(
+      appDir,
+      "Contents/Resources/app.asar.extracted/webview/assets",
+      "app-initial~app-main~onboarding-page~hotkey-window-thread-page~editor-diff-page~thread-app-~current.js",
+    );
+    writeFile(
+      assetPath,
+      "return (0,Z.jsx)(Xa,{item:a,assistantCopyText:i,conversationId:l,renderCodeBlocksAsWritingBlocks:ge})",
+    );
+    const defaultRegistry = JSON.parse(
+      fs.readFileSync(path.join(__dirname, "upstream-dmg-protected-surfaces.json"), "utf8"),
+    );
+    const inventory = createInventory({ registry: defaultRegistry, sourcePath: appDir });
+
+    const protectedSurfaces = extractProtectedSurfaces({
+      inventory,
+      registry: defaultRegistry,
+      repoRoot: path.resolve(__dirname, "../.."),
+    });
+    const readAloud = protectedSurfaces.surfaces.find(
+      (surface) => surface.id === "read_aloud_capability",
+    );
+
+    assert.equal(readAloud.status, "PRESENT");
+    assert.deepEqual(readAloud.missingAnchors, []);
+  }));
 
 function createFixtureApp(root, variant = "baseline") {
   const appDir = path.join(root, `${variant}.app`);
@@ -682,6 +789,50 @@ test("does not treat generic Computer Use mentions as Linux parity drift without
 
     assert.ok(gate);
     assert.equal(gate.category, "needs-review");
+  }));
+
+test("marks Computer Use platform gates covered only after exact parity patches apply", () =>
+  withTempDir((workspace) => {
+    const candidateApp = createFixtureApp(workspace, "candidate");
+    const assetsDir = path.join(candidateApp, "Contents/Resources/webview/assets");
+    writeFile(
+      path.join(assetsDir, "computer-use-current.js"),
+      "function zN(e){let {enabled:n}=e,{platform:r}=pi(),a=n&&(r===`macOS`||r===`windows`);let c=Ne(`native-desktop-apps`,{queryConfig:{enabled:a}});return {nativeApps:c.data?.apps??[],computerUsePlugin:w}}",
+    );
+    const patchFindings = [
+      "linux-computer-use-ui-feature",
+      "linux-computer-use-plugin-gate",
+      "linux-computer-use-native-desktop-apps",
+      "linux-computer-use-ui-availability",
+      "linux-computer-use-install-flow",
+    ].map((name) => ({ name, status: "applied" }));
+    const inventory = createInventory({ registry, sourcePath: candidateApp });
+
+    const covered = createPlatformGateMap({ inventory, patchFindings });
+    const computerUseGates = covered.gates.filter(
+      (gate) => gate.linuxSurfaceId === "computer_use_plugin",
+    );
+
+    assert.ok(computerUseGates.length > 0);
+    assert.ok(computerUseGates.every((gate) => gate.category === "patched-linux-parity"));
+    assert.equal(covered.blockingCount, 0);
+
+    const failed = createPlatformGateMap({
+      inventory,
+      patchFindings: patchFindings.map((finding) =>
+        finding.name === "linux-computer-use-install-flow"
+          ? { ...finding, status: "skipped-optional" }
+          : finding,
+      ),
+    });
+    assert.ok(
+      failed.gates.some(
+        (gate) =>
+          gate.linuxSurfaceId === "computer_use_plugin" &&
+          gate.category === "linux-parity-drift",
+      ),
+    );
+    assert.ok(failed.blockingCount > 0);
   }));
 
 test("maps Chronicle and Skysight platform gates to the record-and-replay Linux owners", () =>

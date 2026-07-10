@@ -35,6 +35,15 @@ const PLATFORM_GATE_REVIEW_CATEGORIES = new Set([
   "platform-specific-unsupported",
   "needs-review",
 ]);
+const LINUX_PARITY_SURFACE_PATCHES = {
+  computer_use_plugin: [
+    "linux-computer-use-ui-feature",
+    "linux-computer-use-plugin-gate",
+    "linux-computer-use-native-desktop-apps",
+    "linux-computer-use-ui-availability",
+    "linux-computer-use-install-flow",
+  ],
+};
 const PLATFORM_GATE_MARKDOWN_LIMIT = 20;
 const NEW_CAPABILITY_MARKDOWN_LIMIT = 20;
 const STRING_LITERAL_PATTERN = /`([^`\\]*(?:\\.[^`\\]*)*)`|"([^"\\]*(?:\\.[^"\\]*)*)"|'([^'\\]*(?:\\.[^'\\]*)*)'/g;
@@ -81,6 +90,46 @@ const REQUIRED_PATCH_PREFLIGHTS = new Set([
   "linux-tray",
   "main-process-ui",
 ]);
+const LINUX_PARITY_PATCH_PREFLIGHTS = new Set([
+  "linux-computer-use-ui-feature",
+  "linux-computer-use-plugin-gate",
+  "linux-computer-use-native-desktop-apps",
+  "linux-computer-use-ui-availability",
+  "linux-computer-use-install-flow",
+  "feature:read-aloud:main-handler",
+  "feature:read-aloud:assistant-runtime",
+  "feature:read-aloud:settings-toggle",
+  "feature:read-aloud-mcp:linux-read-aloud-plugin-gate",
+]);
+const PATCH_PREFLIGHTS = new Set([
+  ...REQUIRED_PATCH_PREFLIGHTS,
+  ...LINUX_PARITY_PATCH_PREFLIGHTS,
+]);
+
+function patchPreflightOwner(name) {
+  if (name === "main-process-ui") {
+    return "scripts/patches/runner.js";
+  }
+  if (name.startsWith("linux-computer-use")) {
+    return "scripts/patches/impl/computer-use.js";
+  }
+  if (name.includes("read-aloud")) {
+    return name.startsWith("feature:read-aloud-mcp")
+      ? "linux-features/read-aloud-mcp/patches.js"
+      : "linux-features/read-aloud/patch.js";
+  }
+  return "scripts/patches/core/all-linux/main-process/window-shell/patch.js";
+}
+
+function patchPreflightSurfaceId(name) {
+  if (name.startsWith("linux-computer-use")) {
+    return "computer_use_plugin";
+  }
+  if (name.includes("read-aloud")) {
+    return "read_aloud_capability";
+  }
+  return null;
+}
 
 function runRequiredPatchPreflight({ inventory, repoRoot, workDir } = {}) {
   const result = {
@@ -95,29 +144,70 @@ function runRequiredPatchPreflight({ inventory, repoRoot, workDir } = {}) {
     return result;
   }
   const extractedCopy = path.join(workDir, "required-patch-preflight-app");
-  fs.cpSync(inventory.source.appDir, extractedCopy, { recursive: true });
+  try {
+    prepareRequiredPatchPreflightApp({
+      appDir: inventory.source.appDir,
+      targetDir: extractedCopy,
+    });
+  } catch (error) {
+    result.status = "blocked";
+    result.reason = error.message;
+    result.findings = [...PATCH_PREFLIGHTS].map((name) => ({
+      name,
+      status: "failed-required",
+      severity: "blocker",
+      ownerPath: patchPreflightOwner(name),
+      surfaceId: patchPreflightSurfaceId(name),
+      recommendation: "Restore candidate extraction before package build.",
+      reason: error.message,
+    }));
+    return result;
+  }
+  const featuresConfigPath = path.join(workDir, "required-patch-preflight-features.json");
+  writeJson(featuresConfigPath, { enabled: ["read-aloud", "read-aloud-mcp"] });
   const reportPath = path.join(workDir, "required-patch-preflight.json");
   const command = spawnSync(process.execPath, [
     path.join(repoRoot, "scripts/patch-linux-window-ui.js"),
     "--report-json", reportPath,
     "--enforce-critical",
     extractedCopy,
-  ], { encoding: "utf8", maxBuffer: 4 * 1024 * 1024 });
+  ], {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      CODEX_LINUX_ENABLE_COMPUTER_USE_UI: "1",
+      CODEX_LINUX_FEATURES_CONFIG: featuresConfigPath,
+      CODEX_LINUX_FEATURES_ROOT: path.join(repoRoot, "linux-features"),
+      HOME: path.join(workDir, "home"),
+    },
+    maxBuffer: 4 * 1024 * 1024,
+  });
   const report = fs.existsSync(reportPath) ? readJson(reportPath) : { patches: [] };
-  const patches = (report.patches ?? []).filter((entry) => REQUIRED_PATCH_PREFLIGHTS.has(entry.name));
-  result.status = command.status === 0 && patches.every((entry) => ["applied", "already-applied"].includes(entry.status)) ? "pass" : "blocked";
+  const patches = (report.patches ?? []).filter((entry) => PATCH_PREFLIGHTS.has(entry.name));
+  result.status = command.status === 0 && [...PATCH_PREFLIGHTS].every((name) =>
+    patches.some((entry) => entry.name === name && ["applied", "already-applied"].includes(entry.status)))
+    ? "pass"
+    : "blocked";
   result.exitCode = command.status;
   result.findings = patches.map((entry) => ({
     name: entry.name,
     status: entry.status,
     severity: ["applied", "already-applied"].includes(entry.status) ? "none" : "blocker",
-    ownerPath: entry.name === "main-process-ui" ? "scripts/patches/runner.js" : "scripts/patches/core/all-linux/main-process/window-shell/patch.js",
+    ownerPath: patchPreflightOwner(entry.name),
+    surfaceId: patchPreflightSurfaceId(entry.name),
     recommendation: ["applied", "already-applied"].includes(entry.status) ? "No action." : "Restore the exact current-bundle patch contract before package build.",
     reason: entry.reason ?? null,
   }));
-  for (const name of REQUIRED_PATCH_PREFLIGHTS) {
+  for (const name of PATCH_PREFLIGHTS) {
     if (!patches.some((entry) => entry.name === name)) {
-      result.findings.push({ name, status: "not-recorded", severity: "blocker", ownerPath: "scripts/patches/runner.js", recommendation: "Record and resolve this required patch before package build." });
+      result.findings.push({
+        name,
+        status: "not-recorded",
+        severity: "blocker",
+        ownerPath: patchPreflightOwner(name),
+        surfaceId: patchPreflightSurfaceId(name),
+        recommendation: "Record and resolve this required patch before package build.",
+      });
     }
   }
   return result;
@@ -179,6 +269,7 @@ function printableStrings(buffer, minLength = 4) {
 }
 
 function asarEntries(asarPath, prefix = "app.asar") {
+  const archivePrefix = prefix;
   const archive = fs.readFileSync(asarPath);
   if (archive.length < 16) {
     throw new Error(`Invalid ASAR archive: ${asarPath}`);
@@ -190,9 +281,9 @@ function asarEntries(asarPath, prefix = "app.asar") {
   const dataStart = 8 + headerSize;
   const entries = [];
 
-  function walk(prefix, files) {
+  function walk(directory, files) {
     for (const [name, entry] of Object.entries(files ?? {})) {
-      const fullPath = prefix ? `${prefix}/${name}` : name;
+      const fullPath = directory ? `${directory}/${name}` : name;
       if (entry.files) {
         walk(fullPath, entry.files);
       } else {
@@ -201,8 +292,11 @@ function asarEntries(asarPath, prefix = "app.asar") {
         const unpacked = Boolean(entry.unpacked);
         const buffer = unpacked ? null : archive.subarray(dataStart + offset, dataStart + offset + size);
         entries.push({
+          archivePath: fullPath,
           buffer,
-          relativePath: `${prefix}/${fullPath}`,
+          executable: Boolean(entry.executable),
+          link: entry.link ?? null,
+          relativePath: normalizePath(path.posix.join(archivePrefix, fullPath)),
           size,
           source: "asar",
           unpacked,
@@ -213,6 +307,70 @@ function asarEntries(asarPath, prefix = "app.asar") {
 
   walk("", header.files);
   return entries;
+}
+
+function asarDestinationPath(targetDir, archivePath) {
+  const normalized = normalizePath(archivePath);
+  if (normalized.length === 0 || normalized === ".." || normalized.startsWith("../")) {
+    throw new Error(`Unsafe ASAR entry path: ${archivePath}`);
+  }
+  const targetRoot = path.resolve(targetDir);
+  const destination = path.resolve(targetRoot, ...normalized.split("/"));
+  if (destination !== targetRoot && !destination.startsWith(`${targetRoot}${path.sep}`)) {
+    throw new Error(`Unsafe ASAR entry path: ${archivePath}`);
+  }
+  return destination;
+}
+
+function extractAsarToDirectory(asarPath, targetDir) {
+  fs.mkdirSync(targetDir, { recursive: true });
+  for (const entry of asarEntries(asarPath, "")) {
+    if (entry.link != null) {
+      continue;
+    }
+    const destination = asarDestinationPath(targetDir, entry.archivePath);
+    fs.mkdirSync(path.dirname(destination), { recursive: true });
+    if (entry.unpacked) {
+      const unpackedSource = path.join(`${asarPath}.unpacked`, ...entry.archivePath.split("/"));
+      if (fs.existsSync(unpackedSource)) {
+        fs.copyFileSync(unpackedSource, destination);
+      }
+    } else if (entry.buffer != null) {
+      fs.writeFileSync(destination, entry.buffer, entry.executable ? { mode: 0o755 } : undefined);
+    }
+  }
+}
+
+function copyDirectoryContents(sourceDir, targetDir) {
+  fs.mkdirSync(targetDir, { recursive: true });
+  for (const entry of fs.readdirSync(sourceDir)) {
+    fs.cpSync(path.join(sourceDir, entry), path.join(targetDir, entry), { recursive: true });
+  }
+}
+
+function prepareRequiredPatchPreflightApp({ appDir, targetDir } = {}) {
+  if (appDir == null || targetDir == null) {
+    throw new Error("appDir and targetDir are required for patch preflight");
+  }
+  fs.rmSync(targetDir, { force: true, recursive: true });
+  const resourcesDir = fs.existsSync(path.join(appDir, "Contents/Resources"))
+    ? path.join(appDir, "Contents/Resources")
+    : appDir;
+  const extractedAsarDir = path.join(resourcesDir, "app.asar.extracted");
+  const asarPath = path.join(resourcesDir, "app.asar");
+  if (fs.existsSync(extractedAsarDir)) {
+    copyDirectoryContents(extractedAsarDir, targetDir);
+    return targetDir;
+  }
+  if (fs.existsSync(asarPath)) {
+    extractAsarToDirectory(asarPath, targetDir);
+    return targetDir;
+  }
+  if (fs.existsSync(path.join(appDir, ".vite/build"))) {
+    copyDirectoryContents(appDir, targetDir);
+    return targetDir;
+  }
+  throw new Error(`Could not find app.asar or extracted app contents under ${appDir}`);
 }
 
 function walkFiles(rootDir, source = "filesystem", prefix = "") {
@@ -1563,7 +1721,7 @@ function createPlatformGateEntry({ file, gate, index, patternName }) {
   };
 }
 
-function createPlatformGateMap({ inventory } = {}) {
+function createPlatformGateMap({ inventory, patchFindings = [] } = {}) {
   const gates = [];
   const seen = new Set();
   const gatePatterns = [
@@ -1623,6 +1781,26 @@ function createPlatformGateMap({ inventory } = {}) {
         seen.add(key);
         gates.push(entry);
       }
+    }
+  }
+
+  const findingsByName = new Map(patchFindings.map((finding) => [finding.name, finding]));
+  for (const gate of gates) {
+    if (gate.category !== "linux-parity-drift") {
+      continue;
+    }
+    const requiredPatches = LINUX_PARITY_SURFACE_PATCHES[gate.linuxSurfaceId] ?? [];
+    if (requiredPatches.length === 0) {
+      continue;
+    }
+    const coverage = requiredPatches.map((name) => findingsByName.get(name) ?? { name, status: "not-recorded" });
+    gate.patchPreflight = coverage.map(({ name, status }) => ({ name, status }));
+    if (coverage.every((finding) => ["applied", "already-applied"].includes(finding.status))) {
+      gate.rawCategory = gate.category;
+      gate.category = "patched-linux-parity";
+      gate.linuxStatus = "patched-for-candidate";
+      gate.recommendedAction = "No action; every exact Linux parity patch applied to this candidate.";
+      gate.recommendation = gate.recommendedAction;
     }
   }
 
@@ -2759,7 +2937,10 @@ function buildIntelReports({
     };
     driftReport.requiredPatchPreflight = requiredPatchPreflight;
     const mapDrift = compareMaps({ baselineProtected, candidateProtected });
-    const platformGateMap = createPlatformGateMap({ inventory: candidateInventory });
+    const platformGateMap = createPlatformGateMap({
+      inventory: candidateInventory,
+      patchFindings: requiredPatchPreflight.findings,
+    });
     const newCapabilityMap = createNewCapabilityMap({ mapDrift, platformGateMap, candidatePluginMap: candidateProtected.pluginMap });
     driftReport.structuralDriftSummary = summarizeMapDrift(mapDrift);
     driftReport.platformGateSummary = {
@@ -2835,6 +3016,7 @@ module.exports = {
   extractProtectedSurfaces,
   findPostPatchIntegrityFindings,
   mergeProvenance,
+  prepareRequiredPatchPreflightApp,
   renderActionPlanMarkdown,
   renderDriftMarkdown,
   resolveBaselinePath,

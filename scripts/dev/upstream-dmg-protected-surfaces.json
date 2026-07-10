@@ -6,9 +6,16 @@
       "id": "read_aloud_capability",
       "title": "Read Aloud capability and staging contract",
       "category": "feature",
-      "pathPatterns": ["read-aloud", "read aloud"],
-      "contentNeedles": ["read-aloud", "kokoro", "codexLinuxReadAloud"],
+      "pathPatterns": ["webview/assets/app-initial~app-main~onboarding-page~hotkey-window-thread-page~editor-diff-page~thread-app-~.*\\.js$"],
+      "contentNeedles": ["assistantCopyText", "conversationId", "renderCodeBlocksAsWritingBlocks"],
       "patchNamePatterns": ["read.*aloud"],
+      "requiredEvidence": [
+        {
+          "id": "current-assistant-render-contract",
+          "pathPatterns": ["webview/assets/app-initial~app-main~onboarding-page~hotkey-window-thread-page~editor-diff-page~thread-app-~.*\\.js$"],
+          "contentNeedles": ["assistantCopyText", "conversationId", "renderCodeBlocksAsWritingBlocks"]
+        }
+      ],
       "linuxSubstrate": {"requiredPaths": ["linux-features/read-aloud", "linux-features/read-aloud/patch.js"]}
     },
     {
