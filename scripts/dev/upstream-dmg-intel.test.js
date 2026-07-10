@@ -14,6 +14,7 @@ const {
   createInventory,
   createNewCapabilityMap,
   createPlatformGateMap,
+  createRuntimeRegressionDiagnostics,
   extractVersionMetadata,
   extractProtectedSurfaces,
   findPostPatchIntegrityFindings,
@@ -328,6 +329,44 @@ test("surfaces an unselected required patch failure from the preflight child", (
     assert.ok(result.findings.some((finding) => finding.name === "unexpected-required-patch"));
     assert.ok(result.findings.some((finding) => finding.name === "unscoped-failed-required"));
   }));
+
+test("reports runtime regressions as evidence-bound diagnostics without inventing fixes", () => {
+  const diagnostics = createRuntimeRegressionDiagnostics({
+    runtimeSnapshot: {
+      release: "26.707.31428",
+      provenance: { source: "Luna fixture", capturedAt: "2026-07-10T00:00:00Z" },
+      computerUse: { pluginId: "computer-use@openai-bundled", installed: true, enabled: true, mentionAvailable: false, rollout: "unknown", entitlement: "unproven" },
+      browser: { registryInstalled: true, registryEnabled: true, settingsAvailable: false, initiallyOmitted: true, queueReconciled: true },
+      dictation: { supported: false },
+      chronicle: { enabled: true, backendState: "stopped", uiState: "Paused" },
+      linuxFeatures: { settingsRouteAvailable: false },
+      reaper: { resumeSucceeded: false },
+    },
+  });
+
+  assert.deepEqual(diagnostics.map((entry) => entry.id), [
+    "computer-use-mention", "browser-settings-reconciliation", "dictation-availability",
+    "chronicle-runtime-state", "linux-features-settings-route", "reaper-cli-resume",
+  ]);
+  assert.ok(diagnostics.every((entry) => entry.status === "runtime-regression"));
+  assert.ok(diagnostics.every((entry) => entry.ownerPath && entry.hypothesis && entry.evidenceGap && entry.observedEvidence));
+  assert.ok(createRuntimeRegressionDiagnostics({ runtimeSnapshot: { computerUse: { mentionAvailable: false } } })
+    .every((entry) => entry.status === "evidence-required"));
+  const partial = createRuntimeRegressionDiagnostics({ runtimeSnapshot: {
+    release: "26.707.31428", provenance: { source: "partial fixture" },
+    computerUse: { pluginId: "computer-use@openai-bundled", installed: true, enabled: true, mentionAvailable: true, rollout: "unknown", entitlement: "unproven" },
+  } });
+  assert.equal(partial.find((entry) => entry.id === "computer-use-mention").status, "observed");
+  assert.equal(partial.find((entry) => entry.id === "browser-settings-reconciliation").status, "evidence-required");
+  const observed = createRuntimeRegressionDiagnostics({ runtimeSnapshot: {
+    release: "26.707.31428", provenance: { source: "control fixture" },
+    computerUse: { pluginId: "computer-use@openai-bundled", installed: true, enabled: true, mentionAvailable: true, rollout: "unknown", entitlement: "unproven" },
+    browser: { registryInstalled: true, registryEnabled: true, settingsAvailable: true, initiallyOmitted: false, queueReconciled: false },
+    dictation: { supported: true }, chronicle: { enabled: true, backendState: "stopped", uiState: "Stopped" },
+    linuxFeatures: { settingsRouteAvailable: true }, reaper: { resumeSucceeded: true },
+  } });
+  assert.ok(observed.every((entry) => entry.status === "observed"));
+});
 
 test("inventories raw app.asar entries with normalized archive paths", () =>
   withTempDir((workspace) => {
@@ -1553,6 +1592,37 @@ test("CLI exits nonzero with --fail-on-blockers when acceptance blockers are pre
     assert.ok(summary.decision.blockersCount > 0);
     assert.match(result.stderr, /Linux acceptance blocker/);
     assert.ok(fs.existsSync(path.join(outputDir, "drift-report.json")));
+  }));
+
+test("CLI writes release-bound runtime diagnostics and action-plan evidence", () =>
+  withTempDir((workspace) => {
+    const candidateApp = createFixtureApp(workspace, "candidate");
+    const outputDir = path.join(workspace, "runtime-report");
+    const snapshotPath = path.join(workspace, "runtime-snapshot.json");
+    writeJson(snapshotPath, {
+      release: "26.707.31428",
+      provenance: { source: "focused fixture", capturedAt: "2026-07-10T00:00:00Z" },
+      computerUse: { pluginId: "computer-use@openai-bundled", installed: true, enabled: true, mentionAvailable: false, rollout: "unknown", entitlement: "unproven" },
+      browser: { registryInstalled: true, registryEnabled: true, settingsAvailable: false, initiallyOmitted: true, queueReconciled: true },
+      dictation: { supported: false },
+      chronicle: { enabled: true, backendState: "not-started", uiState: "Paused" },
+      linuxFeatures: { settingsRouteAvailable: false },
+      reaper: { resumeSucceeded: false },
+    });
+    const result = spawnSync(process.execPath, [
+      path.join(process.cwd(), "scripts/dev/upstream-dmg-intel.js"), "--candidate", candidateApp,
+      "--output-dir", outputDir, "--runtime-snapshot", snapshotPath,
+    ], { encoding: "utf8" });
+
+    assert.equal(result.status, 0, result.stderr);
+    const summary = JSON.parse(result.stdout);
+    assert.equal(summary.decision.acceptance, "blocked");
+    assert.equal(summary.decision.runtimeRegressionCount, 6);
+    const diagnostics = JSON.parse(fs.readFileSync(path.join(outputDir, "runtime-diagnostics.json"), "utf8"));
+    assert.equal(diagnostics.length, 6);
+    assert.ok(diagnostics.every((entry) => entry.release === "26.707.31428" && entry.status === "runtime-regression"));
+    assert.match(fs.readFileSync(path.join(outputDir, "substrate-action-plan.md"), "utf8"), /Runtime diagnostics \(release 26\.707\.31428\)/);
+    assert.equal(JSON.parse(fs.readFileSync(path.join(outputDir, "drift-report.json"), "utf8")).runtimeHealth.mcpHelperReaper.status, "REGRESSION");
   }));
 
 test("CLI keeps optional patch-report skips review-only under --fail-on-blockers", () =>

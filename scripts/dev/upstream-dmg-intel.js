@@ -29,6 +29,7 @@ Options:
   --baseline PATH        Optional known-good baseline DMG or extracted .app; defaults to ./Codex.dmg when different
   --no-baseline          Do a candidate-only scan even when ./Codex.dmg exists
   --patch-report PATH    Optional patch-report.json to fold patch blockers/review items into drift-report.json
+  --runtime-snapshot PATH JSON runtime evidence for release 26.707.31428 diagnostics
   --registry PATH        Protected surface registry (default: scripts/dev/upstream-dmg-protected-surfaces.json)
   --output-dir DIR       Exact output directory (default: reports/upstream-dmg/<timestamp>)
   --timestamp VALUE      Timestamp slug used when --output-dir is omitted
@@ -47,6 +48,7 @@ function parseArgs(argv) {
     outputDir: null,
     failOnBlockers: false,
     patchReportPath: null,
+    runtimeSnapshotPath: null,
     registryPath: defaultRegistryPath,
     timestamp: null,
   };
@@ -66,6 +68,8 @@ function parseArgs(argv) {
       args.baselinePath = null;
     } else if (arg === "--patch-report") {
       args.patchReportPath = argv[++index];
+    } else if (arg === "--runtime-snapshot") {
+      args.runtimeSnapshotPath = argv[++index];
     } else if (arg === "--registry") {
       args.registryPath = argv[++index];
     } else if (arg === "--output-dir") {
@@ -114,11 +118,14 @@ function buildDecision({ driftReport, protectedSurfaces }) {
   const requiredPatchPreflightBlocked = requiredPatchPreflight?.status === "blocked" ||
     (Number.isInteger(requiredPatchPreflight?.exitCode) && requiredPatchPreflight.exitCode !== 0);
   const protectedSurfaceStatusCounts = statusCounts(protectedSurfaces.surfaces ?? []);
+  const runtimeRegressionCount = (driftReport.runtimeDiagnostics ?? []).filter((entry) => entry.status === "runtime-regression").length;
+  const runtimeEvidenceRequiredCount = (driftReport.runtimeDiagnostics ?? []).filter((entry) =>
+    entry.status === "evidence-required" && entry.snapshotProvided === true).length;
   const allProtectedSurfacesPresent =
     (protectedSurfaces.surfaces ?? []).length > 0 &&
     (protectedSurfaces.surfaces ?? []).every((surface) => surface.status === "PRESENT");
-  const blockerCount = blockers.length + linuxParityGateBlockers + (requiredPatchPreflightBlocked ? 1 : 0);
-  const reviewCount = reviewItems.length + platformGateReviewItems + newCapabilityIssueCandidates;
+  const blockerCount = blockers.length + linuxParityGateBlockers + runtimeRegressionCount + (requiredPatchPreflightBlocked ? 1 : 0);
+  const reviewCount = reviewItems.length + platformGateReviewItems + newCapabilityIssueCandidates + runtimeEvidenceRequiredCount;
   const acceptance = blockerCount > 0 ? "blocked" : (reviewCount > 0 ? "review" : "accepted");
 
   return {
@@ -129,6 +136,8 @@ function buildDecision({ driftReport, protectedSurfaces }) {
     linuxParityGateBlockersCount: linuxParityGateBlockers,
     requiredPatchPreflightBlocked,
     requiredPatchPreflightExitCode: requiredPatchPreflight?.exitCode ?? null,
+    runtimeRegressionCount,
+    runtimeEvidenceRequiredCount,
     platformGateReviewItemsCount: platformGateReviewItems,
     newCapabilityIssueCandidatesCount: newCapabilityIssueCandidates,
     allProtectedSurfacesPresent,
@@ -152,6 +161,9 @@ function main(argv = process.argv.slice(2)) {
   if (args.patchReportPath != null) {
     requireReadable("Patch report", args.patchReportPath);
   }
+  if (args.runtimeSnapshotPath != null) {
+    requireReadable("Runtime snapshot", args.runtimeSnapshotPath);
+  }
 
   const registry = JSON.parse(fs.readFileSync(args.registryPath, "utf8"));
   const reports = buildIntelReports({
@@ -165,6 +177,7 @@ function main(argv = process.argv.slice(2)) {
     timestamp: args.timestamp,
     provenance: args.candidateUrl ? { candidate: { url: args.candidateUrl } } : null,
     runPatchPreflight: args.patchPreflight,
+    runtimeSnapshot: args.runtimeSnapshotPath == null ? null : JSON.parse(fs.readFileSync(args.runtimeSnapshotPath, "utf8")),
   });
   const decision = buildDecision({
     driftReport: reports.driftReport,
@@ -180,6 +193,7 @@ function main(argv = process.argv.slice(2)) {
     driftReport: path.join(reports.outputDir, "drift-report.json"),
     driftMarkdown: path.join(reports.outputDir, "drift-report.md"),
     substrateActionPlan: path.join(reports.outputDir, "substrate-action-plan.md"),
+    runtimeDiagnostics: path.join(reports.outputDir, "runtime-diagnostics.json"),
     baselineSource: reports.driftReport.baselineSource,
     classificationCounts: reports.driftReport.classificationCounts,
     decision,

@@ -2733,6 +2733,7 @@ function renderActionPlanMarkdown(driftReport, candidateProtected, mapDrift = nu
     PLATFORM_GATE_BLOCKING_CATEGORIES.has(gate.category),
   );
   const capabilityCandidates = driftReport.newCapabilities ?? [];
+  const runtimeDiagnostics = driftReport.runtimeDiagnostics ?? [];
   const structuralSummary = driftReport.structuralDriftSummary ?? summarizeMapDrift(mapDrift);
   const lines = ["# Linux Substrate Action Plan", ""];
   lines.push(`Candidate: ${candidateProtected.source?.path ?? "unknown"}`);
@@ -2741,9 +2742,18 @@ function renderActionPlanMarkdown(driftReport, candidateProtected, mapDrift = nu
     lines.push(`Structural maps: ${summaryLine}`);
   }
   lines.push("");
-  if (actionable.length === 0 && platformBlockers.length === 0 && capabilityCandidates.length === 0) {
+  if (actionable.length === 0 && platformBlockers.length === 0 && capabilityCandidates.length === 0 && runtimeDiagnostics.length === 0) {
     lines.push("No protected-surface action required by this report.");
     return `${lines.join("\n")}\n`;
+  }
+  if (runtimeDiagnostics.length > 0) {
+    lines.push("## Runtime diagnostics (release 26.707.31428)");
+    for (const diagnostic of runtimeDiagnostics) {
+      lines.push(`- ${diagnostic.id}: ${diagnostic.status}; owner ${diagnostic.ownerPath}`);
+      lines.push(`  Hypothesis: ${diagnostic.hypothesis}`);
+      lines.push(`  Evidence gap: ${diagnostic.evidenceGap}`);
+    }
+    lines.push("");
   }
   if (platformBlockers.length > 0) {
     lines.push("## Linux parity blockers");
@@ -2874,6 +2884,34 @@ function resolveBaselinePath({ autoBaseline = false, baselinePath = null, candid
   return defaultBaselinePath;
 }
 
+function createRuntimeRegressionDiagnostics({ runtimeSnapshot = null } = {}) {
+  const snapshotAccepted = runtimeSnapshot?.release === "26.707.31428" &&
+    runtimeSnapshot?.provenance != null && typeof runtimeSnapshot.provenance === "object";
+  const checks = [
+    ["computer-use-mention", "computerUse", "scripts/patches/impl/computer-use.js", "A real installed bundled identity must still be filtered by upstream rollout/entitlement before @Computer is absent.", "Live catalog/entitlement response and @Computer insertion trace are required.", (value) => value?.pluginId === "computer-use@openai-bundled" && value?.installed === true && value?.enabled === true && value?.mentionAvailable === false && ["unknown", "unproven"].includes(value?.rollout) && ["unknown", "unproven"].includes(value?.entitlement)],
+    ["browser-settings-reconciliation", "browser", "scripts/lib/bundled-plugins.sh, launcher/start.sh.template, and tests/scripts_smoke.sh", "The launcher can initially omit or uninstall a registered browser before queued reconciliation restores it.", "Initial omission/uninstall and queued-restoration event trace are required.", (value) => value?.registryInstalled === true && value?.registryEnabled === true && value?.settingsAvailable === false && value?.initiallyOmitted === true && value?.queueReconciled === true],
+    ["dictation-availability", "dictation", "candidate owner: linux-features/conversation-mode/patch.js", "The current upstream dictation contract may have moved or be unavailable independently of Linux conversation mode.", "Current dictation bundle contract, microphone permission, and upstream capability evidence are required.", (value) => value?.supported === false],
+    ["chronicle-runtime-state", "chronicle", "linux-features/record-and-replay/patch.js and record-replay-linux/src/skysight.rs", "A stopped/not-started sidecar must not be rendered as Paused.", "Live sidecar status plus rendered UI state are required.", (value) => value?.enabled === true && ["stopped", "not-started"].includes(value?.backendState) && value?.uiState === "Paused"],
+    ["linux-features-settings-route", "linuxFeatures", "scripts/patches/impl/keybinds-settings.js and scripts/patch-linux-window-ui.test.js", "The Linux Features route may be absent from the current settings bundle despite feature resources being installed.", "Current settings-route bundle and navigation trace are required.", (value) => value?.settingsRouteAvailable === false],
+    ["reaper-cli-resume", "reaper", "linux-features/mcp-helper-reaper/reaper/src/lib.rs", "CLI resume can fail when the reaper hook and configured helper lifecycle disagree.", "Live CLI resume invocation, reaper hook/configuration, and child lifecycle trace are required.", (value) => value?.resumeSucceeded === false],
+  ];
+  return checks.map(([id, key, ownerPath, hypothesis, evidenceGap, regressed]) => ({
+    id,
+    ownerPath,
+    hypothesis,
+    evidenceGap,
+    release: "26.707.31428",
+    snapshotRelease: runtimeSnapshot?.release ?? null,
+    provenance: runtimeSnapshot?.provenance ?? null,
+    snapshotProvided: runtimeSnapshot != null,
+    evidenceType: snapshotAccepted ? "runtime-snapshot" : "evidence-required",
+    observedEvidence: runtimeSnapshot?.[key] ?? null,
+    status: !snapshotAccepted || runtimeSnapshot[key] == null
+      ? "evidence-required"
+      : (regressed(runtimeSnapshot[key]) ? "runtime-regression" : "observed"),
+  }));
+}
+
 function mergeProvenance(detected = {}, supplied = null) {
   if (supplied == null) return detected;
   const merged = { ...detected, ...supplied };
@@ -2901,6 +2939,7 @@ function buildIntelReports({
   timestamp = null,
   provenance = null,
   runPatchPreflight = false,
+  runtimeSnapshot = null,
 } = {}) {
   if (candidatePath == null) {
     throw new Error("candidatePath is required");
@@ -3017,12 +3056,16 @@ function buildIntelReports({
     driftReport.provenance = mergeProvenance(detectedProvenance, provenance);
     const featureStaging = createFeatureStagingInventory(repoRoot);
     driftReport.featureStaging = featureStaging;
+    const runtimeDiagnostics = createRuntimeRegressionDiagnostics({ runtimeSnapshot });
+    driftReport.runtimeDiagnostics = runtimeDiagnostics;
+    const reaperDiagnostic = runtimeDiagnostics.find((entry) => entry.id === "reaper-cli-resume");
     driftReport.runtimeHealth = {
       mcpHelperReaper: {
-        status: "UNKNOWN",
-        evidenceType: "static-source-only",
-        message: "No runtime snapshot supplied; helper liveness, ownership, duplicate state, and cleanup were not run.",
-        ownerPath: "linux-features/mcp-helper-reaper/reaper/src/lib.rs",
+        status: reaperDiagnostic?.status === "runtime-regression" ? "REGRESSION" :
+          (reaperDiagnostic?.status === "observed" ? "OBSERVED" : "UNKNOWN"),
+        evidenceType: reaperDiagnostic?.evidenceType ?? "static-source-only",
+        message: reaperDiagnostic?.evidenceGap ?? "No runtime snapshot supplied; helper liveness, ownership, duplicate state, and cleanup were not run.",
+        ownerPath: reaperDiagnostic?.ownerPath ?? "linux-features/mcp-helper-reaper/reaper/src/lib.rs",
       },
     };
     driftReport.requiredPatchPreflight = requiredPatchPreflight;
@@ -3050,6 +3093,7 @@ function buildIntelReports({
     writeJson(path.join(reportDir, "inventory.json"), publicInventory(candidateInventory));
     writeJson(path.join(reportDir, "feature-staging.json"), featureStaging);
     writeJson(path.join(reportDir, "required-patch-preflight.json"), requiredPatchPreflight);
+    writeJson(path.join(reportDir, "runtime-diagnostics.json"), runtimeDiagnostics);
     writeJson(path.join(reportDir, "protected-surfaces.json"), candidateProtected);
     writeJson(path.join(reportDir, "bridge-map.json"), candidateProtected.bridgeMap);
     writeJson(path.join(reportDir, "plugin-map.json"), candidateProtected.pluginMap);
@@ -3086,6 +3130,7 @@ function buildIntelReports({
       mapDrift,
       platformGateMap,
       newCapabilityMap,
+      runtimeDiagnostics,
     };
   } finally {
     fs.rmSync(scratchRoot, { force: true, recursive: true });
@@ -3102,6 +3147,7 @@ module.exports = {
   createNewCapabilityMap,
   createNativeBinaryMap,
   createPlatformGateMap,
+  createRuntimeRegressionDiagnostics,
   createPluginMap,
   compareMaps,
   extractProtectedSurfaces,
