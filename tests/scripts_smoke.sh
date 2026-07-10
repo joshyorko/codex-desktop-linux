@@ -1629,6 +1629,12 @@ printf '%s' "${TEST_DOWNLOAD_CONTENT:-new}" >"$out"
 SCRIPT
     chmod +x "$bin_dir/curl"
 
+    cat >"$bin_dir/aria2c" <<'SCRIPT'
+#!/usr/bin/env bash
+exit 127
+SCRIPT
+    chmod +x "$bin_dir/aria2c"
+
     run_dmg_cache_case() {
         local source_dir="$1"
         local output_log="$2"
@@ -1818,6 +1824,67 @@ EOF
     assert_not_contains "$secret_url/output.log" "fragsecret"
     assert_not_contains "$secret_url/Codex.dmg.metadata" "topsecret"
     assert_not_contains "$secret_url/Codex.dmg.metadata" "fragsecret"
+
+    cat >"$bin_dir/aria2c" <<'SCRIPT'
+#!/usr/bin/env bash
+set -eu
+
+download_dir=""
+download_name=""
+for arg in "$@"; do
+    printf '%s\n' "$arg" >>"$TEST_ARIA2_LOG"
+    case "$arg" in
+        --dir=*)
+            download_dir="${arg#--dir=}"
+            ;;
+        --out=*)
+            download_name="${arg#--out=}"
+            ;;
+    esac
+done
+
+[ -n "$download_dir" ] || exit 2
+[ -n "$download_name" ] || exit 2
+
+if [ "${TEST_ARIA2_MODE:-success}" = "fail" ]; then
+    printf '%s' "partial" >"$download_dir/$download_name"
+    printf '%s' "control" >"$download_dir/$download_name.aria2"
+    exit 1
+fi
+
+printf '%s' "aria2-download" >"$download_dir/$download_name"
+SCRIPT
+    chmod +x "$bin_dir/aria2c"
+
+    local aria2_success="$workspace/aria2-success"
+    mkdir -p "$aria2_success"
+    : >"$aria2_success/aria2.log"
+    run_dmg_cache_case "$aria2_success" "$aria2_success/output.log" \
+        TEST_ARIA2_LOG="$aria2_success/aria2.log" \
+        TEST_ETAG=aria2-etag \
+        TEST_CONTENT_LENGTH=14
+    [ "$(cat "$aria2_success/Codex.dmg")" = "aria2-download" ] || fail "Expected aria2c to download the DMG"
+    assert_not_contains "$aria2_success/curl.log" "GET"
+    assert_contains "$aria2_success/aria2.log" "--max-connection-per-server=16"
+    assert_contains "$aria2_success/aria2.log" "--split=16"
+    assert_contains "$aria2_success/aria2.log" "--dir=$aria2_success"
+    assert_contains "$aria2_success/aria2.log" "--out=Codex.dmg.part"
+    assert_contains "$aria2_success/output.log" "Using aria2c for parallel DMG download"
+
+    local aria2_fallback="$workspace/aria2-fallback"
+    mkdir -p "$aria2_fallback"
+    : >"$aria2_fallback/aria2.log"
+    run_dmg_cache_case "$aria2_fallback" "$aria2_fallback/output.log" \
+        TEST_ARIA2_LOG="$aria2_fallback/aria2.log" \
+        TEST_ARIA2_MODE=fail \
+        TEST_ETAG=fallback-etag \
+        TEST_CONTENT_LENGTH=13 \
+        TEST_DOWNLOAD_CONTENT=curl-fallback
+    [ "$(cat "$aria2_fallback/Codex.dmg")" = "curl-fallback" ] || fail "Expected curl fallback after aria2c failure"
+    assert_contains "$aria2_fallback/curl.log" "GET"
+    assert_contains "$aria2_fallback/output.log" "aria2c download failed; falling back to curl"
+    assert_file_not_exists "$aria2_fallback/Codex.dmg.part"
+    assert_file_not_exists "$aria2_fallback/Codex.dmg.part.aria2"
 
     local invalid_url="$workspace/invalid-url"
     mkdir -p "$invalid_url"
