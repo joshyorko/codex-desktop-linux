@@ -223,6 +223,39 @@ test("lockPosition true pins the mascot to the configured display gravity", () =
   });
 });
 
+test("locked gravity supports every corner on a negative-origin display", () => {
+  const expected = {
+    "top-left": { x: -1248, y: -168 },
+    "top-right": { x: -72, y: -168 },
+    "bottom-left": { x: -1248, y: 752 },
+    "bottom-right": { x: -72, y: 752 },
+  };
+  const layout = {
+    anchor: { x: 10, y: 10, width: 40, height: 40 },
+    mascot: { left: 10, top: 10, width: 40, height: 40 },
+    placement: "top-end",
+    tray: { left: 10, top: 54, width: 276, height: 131 },
+    windowBounds: { x: 0, y: 0, width: 356, height: 320 },
+  };
+
+  for (const [gravity, position] of Object.entries(expected)) {
+    const patched = applyPetOverlayPatch(currentAvatarOverlayBundleFixture(), {
+      feature: { manifest: { petOverlay: { gravity, lockPosition: true, margin: 32 } }, settings: {} },
+    });
+    const { controller } = controllerFromPatchedSource(patched);
+    const result = controller.codexPetOverlayLayoutForDisplay(
+      { workArea: { x: -1280, y: -200, width: 1280, height: 1024 } },
+      layout,
+      { isDestroyed: () => false },
+    );
+    assert.deepEqual(
+      { x: result.anchor.x, y: result.anchor.y },
+      position,
+      gravity,
+    );
+  }
+});
+
 test("unlocked mode preserves a visible manual window position when no tray needs re-anchoring", () => {
   const patched = applyPetOverlayPatch(currentAvatarOverlayBundleFixture(), {
     feature: { manifest: { petOverlay: { lockPosition: false } }, settings: {} },
@@ -254,6 +287,35 @@ test("unlocked mode preserves a visible manual window position when no tray need
   assert.equal(controller.codexPetOverlayManualPosition, true);
 });
 
+test("unlocked layout does not re-anchor while a drag is active", () => {
+  const patched = applyPetOverlayPatch(currentAvatarOverlayBundleFixture());
+  const { controller } = controllerFromPatchedSource(patched);
+  let boundsReads = 0;
+  controller.dragState = { active: true };
+  const layout = {
+    anchor: { x: 10, y: 10, width: 40, height: 40 },
+    mascot: { left: 10, top: 10, width: 40, height: 40 },
+    placement: "top-end",
+    tray: null,
+    windowBounds: { x: 0, y: 0, width: 356, height: 320 },
+  };
+
+  const result = controller.codexPetOverlayLayoutForDisplay(
+    { workArea: { x: 0, y: 0, width: 1920, height: 1080 } },
+    layout,
+    {
+      getBounds() {
+        boundsReads += 1;
+        return { x: 930, y: 410, width: 356, height: 320 };
+      },
+      isVisible: () => true,
+    },
+  );
+
+  assert.equal(boundsReads, 0);
+  assert.deepEqual(JSON.parse(JSON.stringify(result.windowBounds)), layout.windowBounds);
+});
+
 test("syncs overlay window hints without requiring Hyprland", () => {
   const patched = applyPetOverlayPatch(currentAvatarOverlayBundleFixture());
   const calls = [];
@@ -267,6 +329,7 @@ test("syncs overlay window hints without requiring Hyprland", () => {
     setFocusable: (value) => calls.push(["focusable", value]),
     setOpacity: (value) => calls.push(["opacity", value]),
     setSkipTaskbar: (value) => calls.push(["skip", value]),
+    setTitle: (value) => calls.push(["title", value]),
     setVisibleOnAllWorkspaces: (value, options) => calls.push(["workspaces", value, options.visibleOnFullScreen]),
     showInactive: () => calls.push("showInactive"),
     webContents: {
@@ -275,20 +338,19 @@ test("syncs overlay window hints without requiring Hyprland", () => {
     },
   });
 
-  assert.equal(calls[0], "moveTop");
-  assert.equal(calls[1], "showInactive");
-  assert.deepEqual(calls.slice(2, 6), [
+  assert.deepEqual(calls.slice(0, 5), [
+    ["title", "Codex Pet Overlay"],
     ["focusable", true],
     ["skip", true],
     ["always", true],
     ["background", "#00000000"],
   ]);
-  assert.equal(calls[6][0], "css");
-  assert.equal(calls[6][2].cssOrigin, "author");
-  assert.equal(calls[7][0], "js");
-  assert.match(calls[6][1], /background:transparent!important/);
-  assert.match(calls[7][1], /document\.documentElement\.style\.background/);
-  assert.deepEqual(calls.slice(8), [["opacity", 1], ["workspaces", true, true], "moveTop"]);
+  assert.equal(calls[5][0], "css");
+  assert.equal(calls[5][2].cssOrigin, "author");
+  assert.equal(calls[6][0], "js");
+  assert.match(calls[5][1], /background:transparent!important/);
+  assert.match(calls[6][1], /document\.documentElement\.style\.background/);
+  assert.deepEqual(calls.slice(7), [["opacity", 1], ["workspaces", true, true], "moveTop", "showInactive"]);
 });
 
 test("passive mode makes the overlay non-focusable", () => {
@@ -300,6 +362,98 @@ test("passive mode makes the overlay non-focusable", () => {
     patched,
     /appearance:`avatarOverlay`,alwaysOnTop:process\.platform===`linux`,skipTaskbar:process\.platform===`linux`,focusable:!1/,
   );
+});
+
+test("disabled window hints are actively applied as false", () => {
+  const patched = applyPetOverlayPatch(currentAvatarOverlayBundleFixture(), {
+    feature: {
+      manifest: {
+        petOverlay: {
+          allWorkspaces: false,
+          alwaysOnTop: false,
+          mode: "passive",
+          skipTaskbar: false,
+        },
+      },
+      settings: {},
+    },
+  });
+  const calls = [];
+  const { controller } = controllerFromPatchedSource(patched);
+  const window = {
+    isDestroyed: () => false,
+    moveTop: () => calls.push("moveTop"),
+    setAlwaysOnTop: (value) => calls.push(["always", value]),
+    setFocusable: (value) => calls.push(["focusable", value]),
+    setSkipTaskbar: (value) => calls.push(["skip", value]),
+    setVisibleOnAllWorkspaces: (value, options) => calls.push(["workspaces", value, options.visibleOnFullScreen]),
+  };
+  controller.window = window;
+
+  controller.codexPetOverlaySyncWindow(window);
+
+  assert.deepEqual(calls, [
+    ["focusable", false],
+    ["skip", false],
+    ["always", false],
+    ["workspaces", false, false],
+  ]);
+});
+
+test("runtime lock override blocks drag start", () => {
+  const patched = applyPetOverlayPatch(currentAvatarOverlayBundleFixture());
+  const { controller } = controllerFromPatchedSource(patched, {
+    process: { env: { CODEX_PET_OVERLAY_LOCK_POSITION: "1" } },
+  });
+  controller.dragState = { preserved: true };
+
+  controller.startDrag(1, {});
+
+  assert.deepEqual(JSON.parse(JSON.stringify(controller.dragState)), { preserved: true });
+});
+
+test("runtime unlock override permits drag on a locked build", () => {
+  const patched = applyPetOverlayPatch(currentAvatarOverlayBundleFixture(), {
+    feature: { manifest: { petOverlay: { lockPosition: true } }, settings: {} },
+  });
+  const { controller } = controllerFromPatchedSource(patched, {
+    process: { env: { CODEX_PET_OVERLAY_LOCK_POSITION: "0" } },
+  });
+  controller.window = { isDestroyed: () => false, webContents: { id: 1 } };
+  controller.getLayout = () => ({ mascot: { left: 0, top: 0 } });
+
+  controller.startDrag(1, {
+    pointerScreenX: 100,
+    pointerScreenY: 100,
+    pointerWindowX: 20,
+    pointerWindowY: 20,
+  });
+
+  assert.notEqual(controller.dragState, null);
+});
+
+test("changed locked bounds reschedule Hyprland hints once per change", () => {
+  const patched = applyPetOverlayPatch(currentAvatarOverlayBundleFixture(), {
+    feature: { manifest: { petOverlay: { lockPosition: true } }, settings: {} },
+  });
+  const { controller } = controllerFromPatchedSource(patched);
+  const window = { isDestroyed: () => false };
+  const scheduled = [];
+  const layout = {
+    anchor: { x: 10, y: 10, width: 40, height: 40 },
+    mascot: { left: 10, top: 10, width: 40, height: 40 },
+    placement: "top-end",
+    tray: { left: 10, top: 54, width: 276, height: 131 },
+    windowBounds: { x: 0, y: 0, width: 356, height: 320 },
+  };
+  controller.window = window;
+  controller.codexPetOverlayScheduleHyprlandHints = (target) => scheduled.push(target);
+
+  controller.codexPetOverlayLayoutForDisplay({ workArea: { x: 0, y: 0, width: 1200, height: 800 } }, layout, window);
+  controller.codexPetOverlayLayoutForDisplay({ workArea: { x: 0, y: 0, width: 1200, height: 800 } }, layout, window);
+  controller.codexPetOverlayLayoutForDisplay({ workArea: { x: 1200, y: 0, width: 1200, height: 800 } }, layout, window);
+
+  assert.deepEqual(scheduled, [window, window]);
 });
 
 function runHyprlandHintScenario({ clientsJson, execError = null, settings = {}, env = { XDG_CURRENT_DESKTOP: "Hyprland" } }) {
@@ -322,10 +476,12 @@ function runHyprlandHintScenario({ clientsJson, execError = null, settings = {},
     },
   });
 
-  controller.codexPetOverlayApplyHyprlandHints({
+  const window = {
     getBounds: () => ({ x: 1540, y: 736, width: 356, height: 320 }),
     isDestroyed: () => false,
-  });
+  };
+  controller.window = window;
+  controller.codexPetOverlayApplyHyprlandHints(window);
 
   return calls;
 }
@@ -353,17 +509,199 @@ test("targets only the unambiguous Hyprland pet window address", () => {
         pid: 4242,
         pinned: false,
         size: [356, 320],
-        title: "Codex Pet",
+        title: "Codex Pet Overlay",
       },
     ]),
   });
 
   assert.equal(JSON.stringify(calls[0]), JSON.stringify(["clients", "-j"]));
-  assert.ok(calls.some((args) => args.join(" ").includes('hl.dsp.window.pin({ action = "on", window = "address:0x200" })')));
+  assert.ok(calls.some((args) => args.join(" ").includes('hl.dsp.window.pin({ window = "address:0x200" })')));
   assert.ok(calls.some((args) => args.join(" ").includes('prop = "decorate", value = "0", window = "address:0x200"')));
   assert.ok(calls.some((args) => args.join(" ").includes('prop = "no_shadow", value = "1", window = "address:0x200"')));
   assert.ok(calls.some((args) => args.join(" ").includes('hl.dsp.window.alter_zorder({ mode = "top", window = "address:0x200" })')));
   assert.ok(calls.every((args) => !args.join(" ").includes("0x100")));
+});
+
+test("Hyprland matching rejects foreign processes and malformed addresses", () => {
+  const calls = runHyprlandHintScenario({
+    clientsJson: JSON.stringify([
+      {
+        address: "0x999",
+        at: [1540, 736],
+        floating: true,
+        fullscreen: 0,
+        pid: 9999,
+        size: [356, 320],
+        title: "Codex Pet Overlay",
+      },
+      {
+        address: "$(not-safe)",
+        at: [1540, 736],
+        floating: true,
+        fullscreen: 0,
+        pid: 4242,
+        size: [356, 320],
+        title: "Codex Pet Overlay",
+      },
+    ]),
+  });
+
+  assert.equal(JSON.stringify(calls), JSON.stringify([["clients", "-j"]]));
+});
+
+test("Hyprland matching uses a unique size when coordinate systems disagree", () => {
+  const calls = runHyprlandHintScenario({
+    clientsJson: JSON.stringify([
+      {
+        address: "0x201",
+        at: [1540, 736],
+        floating: true,
+        fullscreen: 0,
+        pid: 4242,
+        size: [640, 480],
+        title: "Codex Pet Overlay",
+      },
+      {
+        address: "0x202",
+        at: [-900, -700],
+        floating: true,
+        fullscreen: 0,
+        pid: 4242,
+        size: [356, 320],
+        title: "Codex Pet Overlay",
+      },
+    ]),
+  });
+
+  assert.ok(calls.some((args) => args.join(" ").includes("address:0x202")));
+  assert.ok(calls.every((args) => !args.join(" ").includes("address:0x201")));
+});
+
+test("locked Hyprland overlays move to the final desired bounds", () => {
+  const calls = [];
+  const patched = applyPetOverlayPatch(currentAvatarOverlayBundleFixture(), {
+    feature: { manifest: { petOverlay: { lockPosition: true } }, settings: {} },
+  });
+  const { controller } = controllerFromPatchedSource(patched, {
+    process: { env: { XDG_CURRENT_DESKTOP: "Hyprland" } },
+    childProcess: {
+      execFile(_command, args, _options, callback) {
+        calls.push(args);
+        if (args[0] === "clients") {
+          callback(null, JSON.stringify([{
+            address: "0xbee",
+            at: [0, 0],
+            floating: true,
+            fullscreen: 0,
+            pid: 4242,
+            size: [356, 320],
+            title: "Codex Pet Overlay",
+          }]));
+          return;
+        }
+        callback(null, "ok");
+      },
+    },
+  });
+  const window = {
+    getBounds: () => ({ x: 0, y: 0, width: 356, height: 320 }),
+    isDestroyed: () => false,
+  };
+  controller.window = window;
+  controller.codexPetOverlayDesiredWindowBounds = { x: -179, y: -134, width: 356, height: 320 };
+
+  controller.codexPetOverlayApplyHyprlandHints(window);
+
+  assert.ok(calls.some((args) =>
+    args[0] === "dispatch" &&
+    args[1].includes("hl.dsp.window.move") &&
+    args[1].includes("x = -179") &&
+    args[1].includes("y = -134") &&
+    args[1].includes("address:0xbee")
+  ));
+});
+
+test("Hyprland callbacks ignore stale overlay windows", () => {
+  const calls = [];
+  let clientsCallback;
+  const patched = applyPetOverlayPatch(currentAvatarOverlayBundleFixture());
+  const { controller } = controllerFromPatchedSource(patched, {
+    process: { env: { XDG_CURRENT_DESKTOP: "Hyprland" } },
+    childProcess: {
+      execFile(_command, args, _options, callback) {
+        calls.push(args);
+        if (args[0] === "clients") {
+          clientsCallback = callback;
+        }
+      },
+    },
+  });
+  const oldWindow = {
+    getBounds: () => ({ x: 100, y: 100, width: 356, height: 320 }),
+    isDestroyed: () => false,
+  };
+  controller.window = oldWindow;
+  controller.codexPetOverlayApplyHyprlandHints(oldWindow);
+  controller.window = { isDestroyed: () => false };
+
+  clientsCallback(null, JSON.stringify([{
+    address: "0x5a1e",
+    at: [100, 100],
+    floating: true,
+    fullscreen: 0,
+    pid: 4242,
+    size: [356, 320],
+    title: "Codex Pet Overlay",
+  }]));
+
+  assert.equal(JSON.stringify(calls), JSON.stringify([["clients", "-j"]]));
+});
+
+test("Hyprland workspace and top-order actions respect disabled settings", () => {
+  const calls = runHyprlandHintScenario({
+    clientsJson: JSON.stringify([{
+      address: "0x200",
+      at: [1540, 736],
+      floating: true,
+      fullscreen: 0,
+      pid: 4242,
+      pinned: false,
+      size: [356, 320],
+      title: "Codex Pet Overlay",
+    }]),
+    settings: { petOverlay: { allWorkspaces: false, alwaysOnTop: false } },
+  });
+  const dispatches = calls.filter((args) => args[0] === "dispatch").map((args) => args.join(" "));
+
+  assert.equal(dispatches.some((call) => call.includes("window.pin")), false);
+  assert.equal(dispatches.some((call) => call.includes("alter_zorder")), false);
+  assert.ok(dispatches.some((call) => call.includes("border_size")));
+});
+
+test("hyprctl stops retrying after ENOENT", () => {
+  const calls = [];
+  const patched = applyPetOverlayPatch(currentAvatarOverlayBundleFixture());
+  const { controller } = controllerFromPatchedSource(patched, {
+    process: { env: { XDG_CURRENT_DESKTOP: "Hyprland" } },
+    childProcess: {
+      execFile(_command, args, _options, callback) {
+        calls.push(args);
+        const error = new Error("missing hyprctl");
+        error.code = "ENOENT";
+        callback(error, "");
+      },
+    },
+  });
+  const window = {
+    getBounds: () => ({ x: 0, y: 0, width: 356, height: 320 }),
+    isDestroyed: () => false,
+  };
+  controller.window = window;
+
+  controller.codexPetOverlayApplyHyprlandHints(window);
+  controller.codexPetOverlayApplyHyprlandHints(window);
+
+  assert.equal(JSON.stringify(calls), JSON.stringify([["clients", "-j"]]));
 });
 
 test("missing hyprctl does not dispatch compositor mutations", () => {
@@ -394,7 +732,7 @@ test("multiple matching Hyprland clients are treated as ambiguous", () => {
         fullscreen: 0,
         pid: 4242,
         size: [356, 320],
-        title: "Codex Pet",
+        title: "Codex Pet Overlay",
       },
       {
         address: "0x202",
@@ -404,7 +742,7 @@ test("multiple matching Hyprland clients are treated as ambiguous", () => {
         fullscreen: 0,
         pid: 4242,
         size: [356, 320],
-        title: "Codex",
+        title: "Codex Pet Overlay",
       },
     ]),
   });
@@ -442,7 +780,7 @@ test("settings can turn Hyprland handling off", () => {
         fullscreen: 0,
         pid: 4242,
         size: [356, 320],
-        title: "Codex Pet",
+        title: "Codex Pet Overlay",
       },
     ]),
     settings: { petOverlay: { hyprland: false } },
@@ -462,7 +800,7 @@ test("environment overrides can turn Hyprland handling off", () => {
         fullscreen: 0,
         pid: 4242,
         size: [356, 320],
-        title: "Codex Pet",
+        title: "Codex Pet Overlay",
       },
     ]),
     env: { XDG_CURRENT_DESKTOP: "Hyprland", CODEX_PET_OVERLAY_HYPRLAND: "0" },

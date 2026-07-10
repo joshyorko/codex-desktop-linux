@@ -12,6 +12,7 @@ on:
       - scripts/patches/**
       - linux-features/remote-mobile-control/**
       - scripts/ci/validate-patch-report.js
+      - linux-features/pet-overlay/**
       - .github/workflows/upstream-build-app.yml
   push:
     branches:
@@ -24,6 +25,7 @@ on:
       - scripts/patches/**
       - linux-features/remote-mobile-control/**
       - scripts/ci/validate-patch-report.js
+      - linux-features/pet-overlay/**
       - .github/workflows/upstream-build-app.yml
   workflow_dispatch:
 
@@ -136,6 +138,11 @@ jobs:
           }
           JSON
 
+      - name: Enable pet overlay for the upstream build
+        run: |
+          printf '%s\n' '{"enabled":["pet-overlay"]}' > "$RUNNER_TEMP/pet-overlay-features.json"
+          echo "CODEX_LINUX_FEATURES_CONFIG=$RUNNER_TEMP/pet-overlay-features.json" >> "$GITHUB_ENV"
+
       - name: Build app from upstream DMG
         run: CODEX_PATCH_REPORT_JSON="$GITHUB_WORKSPACE/patch-report.json" make build-app DMG=/tmp/codex-upstream-ci/Codex.dmg
 
@@ -164,6 +171,24 @@ jobs:
             --require-success feature:remote-mobile-control:linux-remote-mobile-conversation-hydration \
             --require-applied feature:remote-mobile-control:linux-remote-control-status-read-guard \
             --require-applied feature:remote-mobile-control:linux-remote-control-status-wait
+
+      - name: Validate pet overlay integration
+        run: |
+          node - <<'NODE'
+          const fs = require("node:fs");
+          const report = JSON.parse(fs.readFileSync("patch-report.json", "utf8"));
+          if (!report.enabledFeatures?.includes("pet-overlay")) {
+            throw new Error("pet-overlay is missing from enabledFeatures");
+          }
+          const patch = report.patches?.find((entry) =>
+            entry.name === "feature:pet-overlay:pet-overlay-main"
+          );
+          if (!patch || !["applied", "already-applied"].includes(patch.status)) {
+            throw new Error(`pet overlay patch did not apply cleanly: ${JSON.stringify(patch)}`);
+          }
+          NODE
+          test "$(cat codex-app/.codex-linux/env.d/pet-overlay-gpu-compositing.env)" = \
+            "CODEX_ELECTRON_DISABLE_GPU_COMPOSITING=0"
 
       - name: Upload upstream DMG metadata artifact
         # The build step now aborts on critical patch failures; keep uploading

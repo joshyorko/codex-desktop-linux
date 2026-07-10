@@ -76,10 +76,15 @@ local compatibility.
 ## Hyprland Notes
 
 When `hyprland` is enabled, the feature reads `hyprctl clients -j`, selects
-only an unambiguous small floating avatar window by PID and geometry, then
-applies targeted `pin`, `set_prop`, and `alter_zorder` dispatches to the
-matched `address:0x...` selector. It does not apply class or title fallbacks
-when multiple Codex-like floating windows could match.
+only an unambiguous floating window with the exact `Codex Pet Overlay` title,
+the current process ID, and matching geometry, then applies targeted
+compositor actions to the matched `address:0x...` selector. When position
+locking is enabled, it also uses Hyprland's native window movement dispatch so
+the computed position is respected on Wayland.
+
+Workspace pinning and top-order changes follow `allWorkspaces` and
+`alwaysOnTop`; disabling either setting actively removes the corresponding
+Electron hint and stops issuing that Hyprland action.
 
 Hyprland command failures are ignored so launching Codex does not depend on
 `hyprctl` being present.
@@ -99,7 +104,7 @@ For a manual check, enable the feature, rebuild, and launch the app:
 - The pet should remain above normal windows and visible across workspaces where
   the compositor honors those hints.
 - With `lockPosition: false`, dragging the pet should not snap it back on the
-  next overlay layout update.
+  next click, tab switch, or overlay layout update.
 - With `lockPosition: true`, the mascot should stay at the configured corner.
 
 ## Known Risks
