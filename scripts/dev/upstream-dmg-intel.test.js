@@ -6,6 +6,7 @@ const os = require("node:os");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 const test = require("node:test");
+const { buildDecision } = require("./upstream-dmg-intel.js");
 
 const {
   buildIntelReports,
@@ -18,6 +19,7 @@ const {
   findPostPatchIntegrityFindings,
   mergeProvenance,
   prepareRequiredPatchPreflightApp,
+  runRequiredPatchPreflight,
   renderActionPlanMarkdown,
   resolveBaselinePath,
 } = require("../lib/upstream-dmg-intel.js");
@@ -211,6 +213,119 @@ test("prepares raw app.asar contents for required patch preflight", () =>
     );
     assert.equal(fs.existsSync(path.join(resourcesDir, "app.asar.extracted")), false);
     assert.equal(fs.existsSync(asarPath), true);
+  }));
+
+test("rejects extracted-app symlinks without writing through them during patch preflight", () =>
+  withTempDir((workspace) => {
+    const appDir = path.join(workspace, "Codex.app");
+    const extractedDir = path.join(appDir, "Contents/Resources/app.asar.extracted");
+    const targetDir = path.join(workspace, "preflight");
+    const victim = path.join(workspace, "outside-victim.js");
+    writeFile(victim, "outside content");
+    writeFile(path.join(extractedDir, ".vite/build/main.js"), "const safe = true;");
+    fs.symlinkSync(victim, path.join(extractedDir, ".vite/build/escaped.js"));
+    const originalVictim = fs.readFileSync(victim, "utf8");
+
+    assert.throws(
+      () => prepareRequiredPatchPreflightApp({ appDir, targetDir }),
+      /symlink/i,
+    );
+    assert.equal(fs.readFileSync(victim, "utf8"), originalVictim);
+  }));
+
+test("keeps Linux parity gates blocked when required patches look applied but preflight failed", () =>
+  withTempDir((workspace) => {
+    const candidateApp = createFixtureApp(workspace, "candidate");
+    writeFile(
+      path.join(candidateApp, "Contents/Resources/webview/assets/computer-use-current.js"),
+      "function zN(e){let {enabled:n}=e,{platform:r}=pi(),a=n&&(r===`macOS`||r===`windows`);return {computerUsePlugin:w}}",
+    );
+    const patchFindings = [
+      "linux-computer-use-ui-feature",
+      "linux-computer-use-plugin-gate",
+      "linux-computer-use-native-desktop-apps",
+      "linux-computer-use-ui-availability",
+      "linux-computer-use-install-flow",
+    ].map((name) => ({ name, status: "applied" }));
+
+    const platformGateMap = createPlatformGateMap({
+      inventory: createInventory({ registry, sourcePath: candidateApp }),
+      patchFindings,
+      requiredPatchPreflight: { status: "blocked", exitCode: 1 },
+    });
+
+    assert.ok(platformGateMap.gates.some((gate) =>
+      gate.linuxSurfaceId === "computer_use_plugin" && gate.category === "linux-parity-drift"));
+  }));
+
+test("requires production Computer Use inspection proof before marking a gate patched", () =>
+  withTempDir((workspace) => {
+    const candidateApp = createFixtureApp(workspace, "candidate");
+    writeFile(
+      path.join(candidateApp, "Contents/Resources/webview/assets/computer-use-current.js"),
+      "function zN(e){let {enabled:n}=e,{platform:r}=pi(),a=n&&(r===`macOS`||r===`windows`);return {computerUsePlugin:w}}",
+    );
+    const patchFindings = [
+      "linux-computer-use-ui-feature",
+      "linux-computer-use-plugin-gate",
+      "linux-computer-use-native-desktop-apps",
+      "linux-computer-use-ui-availability",
+      "linux-computer-use-install-flow",
+    ].map((name) => ({ name, status: "applied" }));
+    const platformGateMap = createPlatformGateMap({
+      inventory: createInventory({ registry, sourcePath: candidateApp }),
+      patchFindings,
+      requiredPatchPreflight: { status: "pass", exitCode: 0 },
+    });
+
+    assert.ok(platformGateMap.gates.some((gate) =>
+      gate.linuxSurfaceId === "computer_use_plugin" && gate.category === "linux-parity-drift"));
+  }));
+
+test("treats a nonzero required-patch child as an acceptance blocker even with applied findings", () => {
+  const decision = buildDecision({
+    driftReport: {
+      surfaceDrift: [],
+      platformGateSummary: { blockingCount: 0, reviewCount: 0 },
+      newCapabilitySummary: { issueCandidateCount: 0 },
+      requiredPatchPreflight: { status: "blocked", exitCode: 1, findings: [{ status: "applied" }] },
+    },
+    protectedSurfaces: { surfaces: [{ status: "PRESENT" }] },
+  });
+
+  assert.equal(decision.acceptance, "blocked");
+  assert.equal(decision.requiredPatchPreflightBlocked, true);
+  assert.equal(decision.requiredPatchPreflightExitCode, 1);
+});
+
+test("surfaces an unselected required patch failure from the preflight child", () =>
+  withTempDir((workspace) => {
+    const appDir = path.join(workspace, "Codex.app");
+    writeFile(path.join(appDir, ".vite/build/main.js"), "const candidate = true;");
+    const repoRoot = path.join(workspace, "repo");
+    const scriptPath = path.join(repoRoot, "scripts/patch-linux-window-ui.js");
+    const requiredNames = [
+      "linux-window-options", "linux-native-titlebar", "linux-avatar-overlay-mouse-passthrough",
+      "linux-tray", "main-process-ui", "linux-computer-use-ui-feature",
+      "linux-computer-use-plugin-gate", "linux-computer-use-native-desktop-apps",
+      "linux-computer-use-ui-availability", "linux-computer-use-install-flow",
+      "feature:read-aloud:main-handler", "feature:read-aloud:assistant-runtime",
+      "feature:read-aloud:settings-toggle", "feature:read-aloud-mcp:linux-read-aloud-plugin-gate",
+    ];
+    writeFile(scriptPath, [
+      "const fs=require('node:fs');",
+      "const reportPath=process.argv[process.argv.indexOf('--report-json')+1];",
+      `fs.writeFileSync(reportPath,JSON.stringify({patches:[...${JSON.stringify(requiredNames)}.map(name=>({name,status:'applied'})),{name:'unexpected-required-patch',status:'failed-required',ciPolicy:'required-upstream',reason:'drift'}]}));`,
+    ].join(""));
+
+    const result = runRequiredPatchPreflight({
+      inventory: { source: { appDir } },
+      repoRoot,
+      workDir: path.join(workspace, "work"),
+    });
+
+    assert.equal(result.status, "blocked");
+    assert.ok(result.findings.some((finding) => finding.name === "unexpected-required-patch"));
   }));
 
 test("inventories raw app.asar entries with normalized archive paths", () =>
@@ -796,6 +911,23 @@ test("does not treat generic Computer Use mentions as Linux parity drift without
     assert.equal(gate.category, "needs-review");
   }));
 
+test("records a negated Darwin/Linux predicate as excluding Linux", () =>
+  withTempDir((workspace) => {
+    const candidateApp = createFixtureApp(workspace, "candidate");
+    writeFile(
+      path.join(candidateApp, "Contents/Resources/webview/assets/darwin-linux-negation.js"),
+      "function nativeOnly(){return process.platform!==`linux`&&process.platform!==`darwin`?{setToggleHotkey:()=>true}:null}",
+    );
+
+    const gate = createPlatformGateMap({
+      inventory: createInventory({ registry, sourcePath: candidateApp }),
+    }).gates.find((entry) => entry.path.endsWith("darwin-linux-negation.js"));
+
+    assert.ok(gate);
+    assert.equal(gate.excludesLinux, true);
+    assert.deepEqual(gate.platforms, ["win32"]);
+  }));
+
 test("marks Computer Use platform gates covered only after exact parity patches apply", () =>
   withTempDir((workspace) => {
     const candidateApp = createFixtureApp(workspace, "candidate");
@@ -813,7 +945,18 @@ test("marks Computer Use platform gates covered only after exact parity patches 
     ].map((name) => ({ name, status: "applied" }));
     const inventory = createInventory({ registry, sourcePath: candidateApp });
 
-    const covered = createPlatformGateMap({ inventory, patchFindings });
+    const covered = createPlatformGateMap({
+      inventory,
+      patchFindings,
+      requiredPatchPreflight: {
+        status: "pass",
+        exitCode: 0,
+        computerUseInspection: {
+          status: "pass",
+          gateProofs: patchFindings.map(({ name }) => ({ name, status: "verified" })),
+        },
+      },
+    });
     const computerUseGates = covered.gates.filter(
       (gate) => gate.linuxSurfaceId === "computer_use_plugin",
     );

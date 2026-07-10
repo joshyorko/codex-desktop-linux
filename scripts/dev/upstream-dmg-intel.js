@@ -110,11 +110,14 @@ function buildDecision({ driftReport, protectedSurfaces }) {
   const linuxParityGateBlockers = driftReport.platformGateSummary?.blockingCount ?? 0;
   const platformGateReviewItems = driftReport.platformGateSummary?.reviewCount ?? 0;
   const newCapabilityIssueCandidates = driftReport.newCapabilitySummary?.issueCandidateCount ?? 0;
+  const requiredPatchPreflight = driftReport.requiredPatchPreflight ?? null;
+  const requiredPatchPreflightBlocked = requiredPatchPreflight?.status === "blocked" ||
+    (Number.isInteger(requiredPatchPreflight?.exitCode) && requiredPatchPreflight.exitCode !== 0);
   const protectedSurfaceStatusCounts = statusCounts(protectedSurfaces.surfaces ?? []);
   const allProtectedSurfacesPresent =
     (protectedSurfaces.surfaces ?? []).length > 0 &&
     (protectedSurfaces.surfaces ?? []).every((surface) => surface.status === "PRESENT");
-  const blockerCount = blockers.length + linuxParityGateBlockers;
+  const blockerCount = blockers.length + linuxParityGateBlockers + (requiredPatchPreflightBlocked ? 1 : 0);
   const reviewCount = reviewItems.length + platformGateReviewItems + newCapabilityIssueCandidates;
   const acceptance = blockerCount > 0 ? "blocked" : (reviewCount > 0 ? "review" : "accepted");
 
@@ -124,6 +127,8 @@ function buildDecision({ driftReport, protectedSurfaces }) {
     reviewItemsCount: reviewCount,
     protectedSurfaceBlockersCount: blockers.length,
     linuxParityGateBlockersCount: linuxParityGateBlockers,
+    requiredPatchPreflightBlocked,
+    requiredPatchPreflightExitCode: requiredPatchPreflight?.exitCode ?? null,
     platformGateReviewItemsCount: platformGateReviewItems,
     newCapabilityIssueCandidatesCount: newCapabilityIssueCandidates,
     allProtectedSurfacesPresent,

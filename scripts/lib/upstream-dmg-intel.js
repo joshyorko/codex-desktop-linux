@@ -184,8 +184,30 @@ function runRequiredPatchPreflight({ inventory, repoRoot, workDir } = {}) {
   });
   const report = fs.existsSync(reportPath) ? readJson(reportPath) : { patches: [] };
   const patches = (report.patches ?? []).filter((entry) => PATCH_PREFLIGHTS.has(entry.name));
-  result.status = command.status === 0 && [...PATCH_PREFLIGHTS].every((name) =>
-    patches.some((entry) => entry.name === name && ["applied", "already-applied"].includes(entry.status)))
+  const reportedRequiredFailures = (report.patches ?? []).filter((entry) =>
+    entry.ciPolicy === "required-upstream" &&
+    !["applied", "already-applied", "skipped-target", "skipped-disabled"].includes(entry.status),
+  );
+  const computerUseFindings = (report.postPatchIntegrity?.findings ?? [])
+    .filter((finding) => String(finding.symbol ?? "").startsWith("computer-use-"));
+  result.computerUseInspection = {
+    evidenceType: "production-post-patch-computer-use-inspection",
+    sourcePath: extractedCopy,
+    status: command.status === 0 && computerUseFindings.length === 0 ? "pass" : "blocked",
+    findings: computerUseFindings,
+    gateProofs: LINUX_PARITY_SURFACE_PATCHES.computer_use_plugin.map((name) => ({
+      name,
+      status: command.status === 0 && computerUseFindings.length === 0 &&
+        patches.some((entry) => entry.name === name && ["applied", "already-applied"].includes(entry.status))
+        ? "verified"
+        : "blocked",
+    })),
+  };
+  result.status = command.status === 0 &&
+    result.computerUseInspection.status === "pass" &&
+    reportedRequiredFailures.length === 0 &&
+    [...PATCH_PREFLIGHTS].every((name) =>
+      patches.some((entry) => entry.name === name && ["applied", "already-applied"].includes(entry.status)))
     ? "pass"
     : "blocked";
   result.exitCode = command.status;
@@ -198,6 +220,19 @@ function runRequiredPatchPreflight({ inventory, repoRoot, workDir } = {}) {
     recommendation: ["applied", "already-applied"].includes(entry.status) ? "No action." : "Restore the exact current-bundle patch contract before package build.",
     reason: entry.reason ?? null,
   }));
+  for (const entry of reportedRequiredFailures) {
+    if (!result.findings.some((finding) => finding.name === entry.name)) {
+      result.findings.push({
+        name: entry.name,
+        status: entry.status,
+        severity: "blocker",
+        ownerPath: entry.ownerPath ?? patchPreflightOwner(entry.name),
+        surfaceId: patchPreflightSurfaceId(entry.name),
+        recommendation: "Resolve this required patch failure before package build.",
+        reason: entry.reason ?? null,
+      });
+    }
+  }
   for (const name of PATCH_PREFLIGHTS) {
     if (!patches.some((entry) => entry.name === name)) {
       result.findings.push({
@@ -342,9 +377,23 @@ function extractAsarToDirectory(asarPath, targetDir) {
 }
 
 function copyDirectoryContents(sourceDir, targetDir) {
+  if (fs.lstatSync(sourceDir).isSymbolicLink()) {
+    throw new Error(`Refusing symlinked patch-preflight source: ${sourceDir}`);
+  }
   fs.mkdirSync(targetDir, { recursive: true });
-  for (const entry of fs.readdirSync(sourceDir)) {
-    fs.cpSync(path.join(sourceDir, entry), path.join(targetDir, entry), { recursive: true });
+  for (const entry of fs.readdirSync(sourceDir, { withFileTypes: true })) {
+    const sourcePath = path.join(sourceDir, entry.name);
+    const targetPath = path.join(targetDir, entry.name);
+    if (entry.isSymbolicLink()) {
+      throw new Error(`Refusing symlinked patch-preflight entry: ${sourcePath}`);
+    }
+    if (entry.isDirectory()) {
+      copyDirectoryContents(sourcePath, targetPath);
+    } else if (entry.isFile()) {
+      fs.copyFileSync(sourcePath, targetPath);
+    } else {
+      throw new Error(`Refusing non-file patch-preflight entry: ${sourcePath}`);
+    }
   }
 }
 
@@ -1719,7 +1768,10 @@ function createPlatformGateEntry({ file, gate, index, patternName }) {
     id: sha256(Buffer.from(`${file.relativePath}\0${gate}\0${compactSnippet(context)}`)).slice(0, 16),
     path: file.relativePath,
     gate,
-    platforms: gate.includes("darwin") || gate.includes("win32") ? ["darwin", "win32"] : ["macOS", "windows"],
+    platforms: gate.includes("!==`linux`") && gate.includes("!==`darwin`")
+      ? ["win32"]
+      : (gate.includes("darwin") || gate.includes("win32") ? ["darwin", "win32"] : ["macOS", "windows"]),
+    excludesLinux: gate.includes("!==`linux`"),
     pattern: patternName,
     snippet: compactSnippet(context),
     evidenceType: "platform-gate-context",
@@ -1733,7 +1785,7 @@ function createPlatformGateEntry({ file, gate, index, patternName }) {
   };
 }
 
-function createPlatformGateMap({ inventory, patchFindings = [] } = {}) {
+function createPlatformGateMap({ inventory, patchFindings = [], requiredPatchPreflight = null } = {}) {
   const gates = [];
   const seen = new Set();
   const gatePatterns = [
@@ -1807,7 +1859,17 @@ function createPlatformGateMap({ inventory, patchFindings = [] } = {}) {
     }
     const coverage = requiredPatches.map((name) => findingsByName.get(name) ?? { name, status: "not-recorded" });
     gate.patchPreflight = coverage.map(({ name, status }) => ({ name, status }));
-    if (coverage.every((finding) => ["applied", "already-applied"].includes(finding.status))) {
+    const gateProofs = new Map(
+      (requiredPatchPreflight?.computerUseInspection?.gateProofs ?? [])
+        .map((proof) => [proof.name, proof.status]),
+    );
+    if (
+      requiredPatchPreflight?.status === "pass" &&
+      requiredPatchPreflight?.exitCode === 0 &&
+      requiredPatchPreflight?.computerUseInspection?.status === "pass" &&
+      coverage.every((finding) => ["applied", "already-applied"].includes(finding.status)) &&
+      requiredPatches.every((name) => gateProofs.get(name) === "verified")
+    ) {
       gate.rawCategory = gate.category;
       gate.category = "patched-linux-parity";
       gate.linuxStatus = "patched-for-candidate";
@@ -2888,6 +2950,15 @@ function buildIntelReports({
             ciPolicy: "required-upstream",
             reason: finding.reason ?? finding.recommendation,
           }))],
+          postPatchIntegrity: requiredPatchPreflight.computerUseInspection == null
+            ? patchReport?.postPatchIntegrity
+            : {
+                ...(patchReport?.postPatchIntegrity ?? {}),
+                findings: [
+                  ...(patchReport?.postPatchIntegrity?.findings ?? []),
+                  ...requiredPatchPreflight.computerUseInspection.findings,
+                ],
+              },
         };
     const driftReport = compareProtectedSurfaces({
       baseline: baselineProtected,
@@ -2952,6 +3023,7 @@ function buildIntelReports({
     const platformGateMap = createPlatformGateMap({
       inventory: candidateInventory,
       patchFindings: requiredPatchPreflight.findings,
+      requiredPatchPreflight,
     });
     const newCapabilityMap = createNewCapabilityMap({ mapDrift, platformGateMap, candidatePluginMap: candidateProtected.pluginMap });
     driftReport.structuralDriftSummary = summarizeMapDrift(mapDrift);
