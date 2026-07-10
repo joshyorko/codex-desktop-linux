@@ -163,6 +163,9 @@ function runRequiredPatchPreflight({ inventory, repoRoot, workDir } = {}) {
     }));
     return result;
   }
+  const rawComputerUseGates = createPlatformGateMap({
+    inventory: createInventory({ sourcePath: extractedCopy }),
+  }).gates.filter((gate) => gate.linuxSurfaceId === "computer_use_plugin");
   const featuresConfigPath = path.join(workDir, "required-patch-preflight-features.json");
   writeJson(featuresConfigPath, { enabled: ["read-aloud", "read-aloud-mcp"] });
   const reportPath = path.join(workDir, "required-patch-preflight.json");
@@ -185,20 +188,26 @@ function runRequiredPatchPreflight({ inventory, repoRoot, workDir } = {}) {
   const report = fs.existsSync(reportPath) ? readJson(reportPath) : { patches: [] };
   const patches = (report.patches ?? []).filter((entry) => PATCH_PREFLIGHTS.has(entry.name));
   const reportedRequiredFailures = (report.patches ?? []).filter((entry) =>
-    entry.ciPolicy === "required-upstream" &&
+    (entry.ciPolicy === "required-upstream" || entry.status === "failed-required") &&
     !["applied", "already-applied", "skipped-target", "skipped-disabled"].includes(entry.status),
   );
   const computerUseFindings = (report.postPatchIntegrity?.findings ?? [])
     .filter((finding) => String(finding.symbol ?? "").startsWith("computer-use-"));
+  const remainingComputerUseGates = createPlatformGateMap({
+    inventory: createInventory({ sourcePath: extractedCopy }),
+  }).gates.filter((gate) => gate.linuxSurfaceId === "computer_use_plugin");
   result.computerUseInspection = {
     evidenceType: "production-post-patch-computer-use-inspection",
     sourcePath: extractedCopy,
     status: command.status === 0 && computerUseFindings.length === 0 ? "pass" : "blocked",
     findings: computerUseFindings,
-    gateProofs: LINUX_PARITY_SURFACE_PATCHES.computer_use_plugin.map((name) => ({
-      name,
+    gateProofs: rawComputerUseGates.map((gate) => ({
+      gateId: gate.id,
+      path: gate.path,
+      gate: gate.gate,
       status: command.status === 0 && computerUseFindings.length === 0 &&
-        patches.some((entry) => entry.name === name && ["applied", "already-applied"].includes(entry.status))
+        !remainingComputerUseGates.some((remaining) =>
+          remaining.path === gate.path && remaining.gate === gate.gate)
         ? "verified"
         : "blocked",
     })),
@@ -1560,7 +1569,7 @@ function classifyPlatformGate({ file, gate, context }) {
   const lower = context.toLowerCase();
   const pathLower = file.relativePath.toLowerCase();
 
-  if (gate.includes("`linux`")) {
+  if (gate.includes("===`linux`")) {
     return {
       category: "already-linux-enabled",
       confidence: "high",
@@ -1859,16 +1868,14 @@ function createPlatformGateMap({ inventory, patchFindings = [], requiredPatchPre
     }
     const coverage = requiredPatches.map((name) => findingsByName.get(name) ?? { name, status: "not-recorded" });
     gate.patchPreflight = coverage.map(({ name, status }) => ({ name, status }));
-    const gateProofs = new Map(
-      (requiredPatchPreflight?.computerUseInspection?.gateProofs ?? [])
-        .map((proof) => [proof.name, proof.status]),
-    );
+    const gateProof = (requiredPatchPreflight?.computerUseInspection?.gateProofs ?? [])
+      .find((proof) => proof.gateId === gate.id && proof.path === gate.path && proof.gate === gate.gate);
     if (
       requiredPatchPreflight?.status === "pass" &&
       requiredPatchPreflight?.exitCode === 0 &&
       requiredPatchPreflight?.computerUseInspection?.status === "pass" &&
       coverage.every((finding) => ["applied", "already-applied"].includes(finding.status)) &&
-      requiredPatches.every((name) => gateProofs.get(name) === "verified")
+      gateProof?.status === "verified"
     ) {
       gate.rawCategory = gate.category;
       gate.category = "patched-linux-parity";

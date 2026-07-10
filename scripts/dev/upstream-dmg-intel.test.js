@@ -315,7 +315,7 @@ test("surfaces an unselected required patch failure from the preflight child", (
     writeFile(scriptPath, [
       "const fs=require('node:fs');",
       "const reportPath=process.argv[process.argv.indexOf('--report-json')+1];",
-      `fs.writeFileSync(reportPath,JSON.stringify({patches:[...${JSON.stringify(requiredNames)}.map(name=>({name,status:'applied'})),{name:'unexpected-required-patch',status:'failed-required',ciPolicy:'required-upstream',reason:'drift'}]}));`,
+      `fs.writeFileSync(reportPath,JSON.stringify({patches:[...${JSON.stringify(requiredNames)}.map(name=>({name,status:'applied'})),{name:'unexpected-required-patch',status:'failed-required',ciPolicy:'required-upstream',reason:'drift'},{name:'unscoped-failed-required',status:'failed-required',reason:'drift'}]}));`,
     ].join(""));
 
     const result = runRequiredPatchPreflight({
@@ -326,6 +326,7 @@ test("surfaces an unselected required patch failure from the preflight child", (
 
     assert.equal(result.status, "blocked");
     assert.ok(result.findings.some((finding) => finding.name === "unexpected-required-patch"));
+    assert.ok(result.findings.some((finding) => finding.name === "unscoped-failed-required"));
   }));
 
 test("inventories raw app.asar entries with normalized archive paths", () =>
@@ -926,36 +927,52 @@ test("records a negated Darwin/Linux predicate as excluding Linux", () =>
     assert.ok(gate);
     assert.equal(gate.excludesLinux, true);
     assert.deepEqual(gate.platforms, ["win32"]);
+    assert.notEqual(gate.category, "already-linux-enabled");
+    assert.equal(gate.category, "platform-specific-unsupported");
   }));
 
-test("marks Computer Use platform gates covered only after exact parity patches apply", () =>
+test("marks Computer Use platform gates covered only after a production preflight proves each raw gate", () =>
   withTempDir((workspace) => {
-    const candidateApp = createFixtureApp(workspace, "candidate");
-    const assetsDir = path.join(candidateApp, "Contents/Resources/webview/assets");
+    const candidateApp = path.join(workspace, "candidate.app");
     writeFile(
-      path.join(assetsDir, "computer-use-current.js"),
+      path.join(candidateApp, ".vite/build/computer-use-current.js"),
       "function zN(e){let {enabled:n}=e,{platform:r}=pi(),a=n&&(r===`macOS`||r===`windows`);let c=Ne(`native-desktop-apps`,{queryConfig:{enabled:a}});return {nativeApps:c.data?.apps??[],computerUsePlugin:w}}",
     );
-    const patchFindings = [
+    const requiredNames = [
       "linux-computer-use-ui-feature",
       "linux-computer-use-plugin-gate",
       "linux-computer-use-native-desktop-apps",
       "linux-computer-use-ui-availability",
       "linux-computer-use-install-flow",
-    ].map((name) => ({ name, status: "applied" }));
+      "linux-window-options",
+      "linux-native-titlebar",
+      "linux-avatar-overlay-mouse-passthrough",
+      "linux-tray",
+      "main-process-ui",
+      "feature:read-aloud:main-handler",
+      "feature:read-aloud:assistant-runtime",
+      "feature:read-aloud:settings-toggle",
+      "feature:read-aloud-mcp:linux-read-aloud-plugin-gate",
+    ];
+    const repoRoot = path.join(workspace, "repo");
+    writeFile(path.join(repoRoot, "scripts/patch-linux-window-ui.js"), [
+      "const fs=require('node:fs'),path=require('node:path');",
+      "const target=process.argv.at(-1),reportPath=process.argv[process.argv.indexOf('--report-json')+1];",
+      "const file=path.join(target,'.vite/build/computer-use-current.js');",
+      "fs.writeFileSync(file,fs.readFileSync(file,'utf8').replace('r===`macOS`||r===`windows`','r===`macOS`||r===`windows`||r===`linux`'));",
+      `fs.writeFileSync(reportPath,JSON.stringify({patches:${JSON.stringify(requiredNames)}.map(name=>({name,status:'applied'})),postPatchIntegrity:{findings:[]}}));`,
+    ].join(""));
+    const preflight = runRequiredPatchPreflight({
+      inventory: { source: { appDir: candidateApp } },
+      repoRoot,
+      workDir: path.join(workspace, "work"),
+    });
     const inventory = createInventory({ registry, sourcePath: candidateApp });
 
     const covered = createPlatformGateMap({
       inventory,
-      patchFindings,
-      requiredPatchPreflight: {
-        status: "pass",
-        exitCode: 0,
-        computerUseInspection: {
-          status: "pass",
-          gateProofs: patchFindings.map(({ name }) => ({ name, status: "verified" })),
-        },
-      },
+      patchFindings: preflight.findings,
+      requiredPatchPreflight: preflight,
     });
     const computerUseGates = covered.gates.filter(
       (gate) => gate.linuxSurfaceId === "computer_use_plugin",
@@ -963,15 +980,18 @@ test("marks Computer Use platform gates covered only after exact parity patches 
 
     assert.ok(computerUseGates.length > 0);
     assert.ok(computerUseGates.every((gate) => gate.category === "patched-linux-parity"));
+    assert.ok(preflight.computerUseInspection.gateProofs.every((proof) =>
+      proof.gateId != null && proof.path != null && proof.gate != null && proof.status === "verified"));
     assert.equal(covered.blockingCount, 0);
 
     const failed = createPlatformGateMap({
       inventory,
-      patchFindings: patchFindings.map((finding) =>
+      patchFindings: preflight.findings.map((finding) =>
         finding.name === "linux-computer-use-install-flow"
           ? { ...finding, status: "skipped-optional" }
           : finding,
       ),
+      requiredPatchPreflight: preflight,
     });
     assert.ok(
       failed.gates.some(
