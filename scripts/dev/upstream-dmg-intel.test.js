@@ -239,7 +239,7 @@ test("default Read Aloud surface protects the current assistant render contract"
     const assetPath = path.join(
       appDir,
       "Contents/Resources/app.asar.extracted/webview/assets",
-      "app-initial~app-main~onboarding-page~hotkey-window-thread-page~editor-diff-page~thread-app-~current.js",
+      "app-initial~app-main~onboarding-page-zcfEkMl-.js",
     );
     writeFile(
       assetPath,
