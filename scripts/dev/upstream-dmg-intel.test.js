@@ -673,6 +673,10 @@ test("detects post-patch Computer Use gates left Darwin/Windows-only", () =>
       path.join(assetsDir, "computer-use-native-icon-current.js"),
       "function nI(e){let t=(0,rI.c)(10),{appPath:n}=e,{platform:r,isLoading:i}=pi(),a=(r===`macOS`||r===`windows`)&&n!=null&&n!==``,o=n??``;let u=Ne(`computer-use-native-desktop-app-icon`,l),d=a?u.data?.iconSmall??null:null;return d}",
     );
+    writeFile(
+      path.join(candidateApp, "Contents/Resources/app.asar.extracted/.vite/build/main-computer-use.js"),
+      "var bs=[{autoInstallOptOutKey:n.js(n.ws),installWhenMissing:!0,name:n.ws,isAvailable:({features:e,platform:t})=>(t===`darwin`||t===`linux`)&&e.computerUse,migrate:Ko}];",
+    );
 
     const inventory = createInventory({ registry, sourcePath: candidateApp });
 
@@ -691,6 +695,7 @@ test("detects post-patch Computer Use gates left Darwin/Windows-only", () =>
         "computer-use-composer-native-app-mentions-linux-gate",
         "computer-use-native-app-icon-linux-gate",
         "computer-use-native-apps-linux-gate",
+        "computer-use-plugin-registration-rollout-gate",
         "computer-use-settings-native-app-card-linux-gate",
         "computer-use-settings-synthetic-plugin-mask",
       ],

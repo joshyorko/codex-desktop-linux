@@ -1355,6 +1355,8 @@ function findComputerUsePlatformGateFindings(inventory) {
     /if\(([A-Za-z_$][\w$]*)&&\(([A-Za-z_$][\w$]*)===`macOS`\|\|\2===`windows`(?!\|\|\2===`linux`)\)\)for\(let ([A-Za-z_$][\w$]*) of ([A-Za-z_$][\w$]*)\)\{/g;
   const nativeAppIconQueryGatePattern =
     /([A-Za-z_$][\w$]*)=\(([A-Za-z_$][\w$]*)===`macOS`\|\|\2===`windows`(?!\|\|\2===`linux`)\)&&([A-Za-z_$][\w$]*)!=null&&\3!==``/g;
+  const pluginRegistrationRolloutGatePattern =
+    /(?:isEnabled|isAvailable):\(\{features:([A-Za-z_$][\w$]*),platform:([A-Za-z_$][\w$]*)\}\)=>\(\2===`darwin`\|\|\2===`linux`\)&&\1\.computerUse/g;
   for (const file of inventory.files) {
     if (file.text == null) {
       continue;
@@ -1428,6 +1430,16 @@ function findComputerUsePlatformGateFindings(inventory) {
           reason: "Computer Use native app icon query is still gated to macOS/Windows after Linux patching",
           snippet: textSnippet(file.text, match[0]),
           symbol: "computer-use-native-app-icon-linux-gate",
+        });
+      }
+    }
+    if (file.text.includes("installWhenMissing:!0")) {
+      for (const match of file.text.matchAll(pluginRegistrationRolloutGatePattern)) {
+        findings.push({
+          path: file.relativePath,
+          reason: "Linux Computer Use plugin registration still depends on the upstream rollout flag",
+          snippet: textSnippet(file.text, match[0]),
+          symbol: "computer-use-plugin-registration-rollout-gate",
         });
       }
     }
