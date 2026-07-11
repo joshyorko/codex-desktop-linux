@@ -98,7 +98,7 @@ pub async fn run_apply_wrapper_update(
         }
     };
 
-    match result {
+    let outcome = match result {
         Ok(()) => {
             state.installed_version = install::installed_package_version();
             state.candidate_version = None;
@@ -120,7 +120,14 @@ pub async fn run_apply_wrapper_update(
             warn!(?error, "wrapper update apply failed");
             Err(error)
         }
+    };
+    if let Err(error) = crate::cache_cleanup::prune_dmg_cache(&config.workspace_root, state) {
+        warn!(
+            ?error,
+            "failed to prune updater DMG cache after wrapper apply"
+        );
     }
+    outcome
 }
 
 fn refresh_installed_wrapper_state(config: &RuntimeConfig, state: &mut PersistedState) {
@@ -370,11 +377,12 @@ async fn apply_packaged(
     let wrapper_src = ensure_wrapper_source(config, paths, candidate_commit)?;
     let feature_config = effective_feature_config(config);
     stage_enabled_local_features(config, &wrapper_src, feature_config.as_deref())?;
-    let dmg_path = cached_or_downloaded_dmg(config, state, paths).await?;
+    let cached_dmg = cached_or_downloaded_dmg(config, state, paths).await?;
+    let dmg_path = &cached_dmg.path;
 
     // The package version must remain monotonic (timestamp+dmghash), so derive
     // it from the cached DMG the same way the DMG path does.
-    let candidate_version = derive_package_version(&dmg_path)?;
+    let candidate_version = derive_package_version(dmg_path)?;
 
     let artifacts = builder::build_update_from(
         &wrapper_src,
@@ -382,7 +390,7 @@ async fn apply_packaged(
         state,
         paths,
         &candidate_version,
-        &dmg_path,
+        dmg_path,
     )
     .await
     .context("wrapper package rebuild failed")?;
@@ -480,14 +488,27 @@ fn run_git(args: &[&str]) -> Result<()> {
 }
 
 /// Returns the cached DMG path, downloading it if no usable cache exists.
+struct CachedDmg {
+    path: PathBuf,
+    _lease: crate::cache_cleanup::DmgCacheLease,
+}
+
 async fn cached_or_downloaded_dmg(
     config: &RuntimeConfig,
     state: &mut PersistedState,
     paths: &RuntimePaths,
-) -> Result<PathBuf> {
+) -> Result<CachedDmg> {
     if let Some(dmg) = state.artifact_paths.dmg_path.clone() {
         if dmg.exists() {
-            return Ok(dmg);
+            let downloads_dir = config.workspace_root.join("downloads");
+            let lease = crate::cache_cleanup::acquire_dmg_cache_lease(&downloads_dir).await?;
+            if dmg.exists() {
+                return Ok(CachedDmg {
+                    path: dmg,
+                    _lease: lease,
+                });
+            }
+            drop(lease);
         }
     }
 
@@ -498,8 +519,11 @@ async fn cached_or_downloaded_dmg(
             .await
             .context("Failed to download upstream DMG for wrapper rebuild")?;
     state.artifact_paths.dmg_path = Some(downloaded.path.clone());
-    let _ = state.save(&paths.state_file);
-    Ok(downloaded.path)
+    state.save(&paths.state_file)?;
+    Ok(CachedDmg {
+        path: downloaded.path,
+        _lease: downloaded.lease,
+    })
 }
 
 /// Derives a monotonic package version (`YYYY.MM.DD.HHMMSS+<sha8>`) from the DMG

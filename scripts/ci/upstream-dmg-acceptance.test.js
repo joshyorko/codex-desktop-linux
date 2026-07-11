@@ -7,7 +7,7 @@ const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 const test = require("node:test");
 
-const { evaluateUpstreamDmg } = require("../lib/upstream-dmg-acceptance.js");
+const { evaluateUpstreamDmg, httpIdentity } = require("../lib/upstream-dmg-acceptance.js");
 
 function withFixture(fn) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "upstream-acceptance-"));
@@ -148,3 +148,22 @@ test("a structured rejection wins over incomplete checks", () => withFixture(({ 
   });
   assert.equal(decision.verdict, "rejected");
 }));
+
+test("HTTP identity requires an ETag or Last-Modified plus Content-Length", () => {
+  assert.equal(httpIdentity({ contentLength: 42 }), null);
+  assert.equal(httpIdentity({ lastModified: "today" }), null);
+  assert.ok(httpIdentity({ etag: "strong" })?.key);
+  assert.ok(httpIdentity({ lastModified: "today", contentLength: 42 })?.key);
+});
+
+test("upstream workflow concurrency is isolated per PR or ref", () => {
+  const workflow = fs.readFileSync(
+    path.resolve(__dirname, "../../.github/workflows/upstream-build-app.yml"),
+    "utf8",
+  );
+  assert.match(
+    workflow,
+    /group: upstream-dmg-acceptance-\$\{\{ github\.event_name \}\}-\$\{\{ github\.event\.pull_request\.number \|\| github\.ref \}\}/,
+  );
+  assert.doesNotMatch(workflow, /group: upstream-dmg-acceptance-\$\{\{ github\.event_name \}\}\s*$/m);
+});

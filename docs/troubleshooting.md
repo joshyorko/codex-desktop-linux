@@ -24,6 +24,8 @@
 | Stale install / cached DMG | `make build-app-fresh` refreshes the cached DMG and builds a clean candidate; the working app remains until acceptance succeeds |
 | `Candidate was not installed (verdict: rejected)` | Open `dist-next/rebuild/upstream-dmg-decision.json`. If the blocker is `enabled-feature-drift`, disable the named Linux Feature and retry; otherwise fix required current-DMG drift before retrying |
 | `Candidate was not installed (verdict: inconclusive)` | Check the build/inspect logs and missing report paths in `upstream-dmg-decision.json`; infrastructure failures intentionally preserve the working app |
+| `Atomic directory exchange is unsupported` | Keep the candidate and final app as sibling directories on a local Linux filesystem that supports `renameat2(RENAME_EXCHANGE)`; promotion deliberately does not use a non-atomic fallback |
+| Interrupted install left a promotion journal | Run the installer again. It recovers the previous app into the recorded backup before reusing the candidate path; the canonical app remains available throughout |
 | Computer Use plugin invisible in UI | Enable the Computer Use UI opt-in; upstream server/account rollout can still hide some controls |
 | Computer Use `doctor` reports no input backend | Grant `/dev/uinput`, enable XDG RemoteDesktop portal, or start `ydotoold` / `ydotool.service` |
 | Computer Use `doctor` reports `ydotool_socket: Permission denied` | Adjust the daemon socket so users in the `input` group can use it |

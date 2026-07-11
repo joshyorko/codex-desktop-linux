@@ -1,5 +1,6 @@
 //! Upstream DMG metadata and download helpers.
 
+use crate::cache_cleanup::{acquire_dmg_cache_lease, DmgCacheLease};
 use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, Utc};
 use futures_util::StreamExt;
@@ -44,12 +45,13 @@ pub struct RemoteMetadata {
     pub headers_fingerprint: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug)]
 /// Result of downloading the current upstream DMG snapshot.
 pub struct DownloadedDmg {
     pub path: PathBuf,
     pub sha256: String,
     pub candidate_version: String,
+    pub(crate) lease: DmgCacheLease,
 }
 
 /// Builds the HTTP client shared by upstream metadata and DMG requests.
@@ -115,6 +117,9 @@ pub async fn download_dmg(
     tokio::fs::create_dir_all(destination_dir)
         .await
         .with_context(|| format!("Failed to create {}", destination_dir.display()))?;
+    // Hold one updater-wide lease from the first temporary write until the
+    // caller finishes consuming the published DMG and persists its state path.
+    let lease = acquire_dmg_cache_lease(destination_dir).await?;
 
     let response = client
         .get(dmg_url)
@@ -171,6 +176,7 @@ pub async fn download_dmg(
         path: destination,
         sha256,
         candidate_version,
+        lease,
     })
 }
 
@@ -308,7 +314,11 @@ mod tests {
         .await;
 
         assert!(result.is_err());
-        assert!(std::fs::read_dir(temp.path())?.next().is_none());
+        assert!(std::fs::read_dir(temp.path())?.all(|entry| {
+            entry
+                .map(|entry| entry.file_name() == crate::cache_cleanup::DMG_CACHE_LOCK_NAME)
+                .unwrap_or(false)
+        }));
         assert_no_download_temps(temp.path())?;
         Ok(())
     }

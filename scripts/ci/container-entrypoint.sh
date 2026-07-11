@@ -277,6 +277,7 @@ run_deb_job() {
     assert_contains_file /tmp/deb-contents.txt './opt/codex-desktop/update-builder/scripts/lib/upstream-dmg-intel.js'
     assert_contains_file /tmp/deb-contents.txt './opt/codex-desktop/update-builder/scripts/lib/patch-browser-client-iab-socket-scope.js'
     assert_contains_file /tmp/deb-contents.txt './opt/codex-desktop/update-builder/scripts/lib/upstream-dmg-acceptance.js'
+    assert_contains_file /tmp/deb-contents.txt './opt/codex-desktop/update-builder/scripts/lib/candidate-promotion.py'
     assert_contains_file /tmp/deb-contents.txt './opt/codex-desktop/update-builder/scripts/validate-upstream-dmg.js'
     assert_contains_file /tmp/deb-contents.txt './opt/codex-desktop/.codex-linux/codex-packaged-runtime.sh'
 
@@ -336,6 +337,7 @@ run_rpm_job() {
     assert_contains_file /tmp/rpm-contents.txt '/opt/codex-desktop/update-builder/scripts/lib/upstream-dmg-intel.js'
     assert_contains_file /tmp/rpm-contents.txt '/opt/codex-desktop/update-builder/scripts/lib/patch-browser-client-iab-socket-scope.js'
     assert_contains_file /tmp/rpm-contents.txt '/opt/codex-desktop/update-builder/scripts/lib/upstream-dmg-acceptance.js'
+    assert_contains_file /tmp/rpm-contents.txt '/opt/codex-desktop/update-builder/scripts/lib/candidate-promotion.py'
     assert_contains_file /tmp/rpm-contents.txt '/opt/codex-desktop/update-builder/scripts/validate-upstream-dmg.js'
     assert_contains_file /tmp/rpm-contents.txt '/opt/codex-desktop/.codex-linux/codex-packaged-runtime.sh'
 
@@ -389,6 +391,7 @@ run_pacman_job() {
     assert_contains_file /tmp/pacman-contents.txt 'opt/codex-desktop/update-builder/scripts/lib/upstream-dmg-intel.js'
     assert_contains_file /tmp/pacman-contents.txt 'opt/codex-desktop/update-builder/scripts/lib/patch-browser-client-iab-socket-scope.js'
     assert_contains_file /tmp/pacman-contents.txt 'opt/codex-desktop/update-builder/scripts/lib/upstream-dmg-acceptance.js'
+    assert_contains_file /tmp/pacman-contents.txt 'opt/codex-desktop/update-builder/scripts/lib/candidate-promotion.py'
     assert_contains_file /tmp/pacman-contents.txt 'opt/codex-desktop/update-builder/scripts/validate-upstream-dmg.js'
     assert_contains_file /tmp/pacman-contents.txt 'opt/codex-desktop/.codex-linux/codex-packaged-runtime.sh'
 

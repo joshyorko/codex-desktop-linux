@@ -239,6 +239,20 @@ fn maybe_prune_generated_artifacts(config: &RuntimeConfig) {
 
 fn maybe_prune_caches(config: &RuntimeConfig, state: &PersistedState) {
     maybe_prune_workspace_cache(&config.workspace_root, state);
+    match cache_cleanup::prune_dmg_cache(&config.workspace_root, state) {
+        Ok(summary) if summary.pruned_dmgs > 0 || summary.pruned_temps > 0 => {
+            info!(
+                pruned_dmgs = summary.pruned_dmgs,
+                pruned_temps = summary.pruned_temps,
+                "pruned updater DMG cache"
+            );
+        }
+        Ok(summary) if summary.skipped_locked => {
+            info!("skipping DMG cache cleanup while another updater flow holds its lease");
+        }
+        Ok(_) => {}
+        Err(error) => warn!(?error, "failed to prune updater DMG cache"),
+    }
     maybe_prune_generated_artifacts(config);
 }
 
@@ -999,8 +1013,8 @@ async fn run_check_cycle(
 
         rollback::record_current_package_as_known_good(state);
         state.status = UpdateStatus::UpdateDetected;
-        state.candidate_version = Some(downloaded.candidate_version);
-        state.dmg_sha256 = Some(downloaded.sha256);
+        state.candidate_version = Some(downloaded.candidate_version.clone());
+        state.dmg_sha256 = Some(downloaded.sha256.clone());
         state.artifact_paths.dmg_path = Some(downloaded.path.clone());
         state.notified_events.clear();
         state.save(&paths.state_file)?;
@@ -1019,15 +1033,17 @@ async fn run_check_cycle(
             .clone()
             .expect("candidate version should be set before local build");
         builder::build_update(config, state, paths, &candidate_version, &downloaded.path).await?;
-        maybe_prune_caches(config, state);
+        drop(downloaded);
         maybe_notify_update_ready(state, paths, config.notifications)?;
         Ok(())
     }
     .await;
 
+    // Every check outcome, including an early no-update return, releases its
+    // DMG lease before bounded cache cleanup runs here.
+    maybe_prune_caches(config, state);
     if let Err(error) = result {
         mark_failed_and_persist(state, paths, error.to_string())?;
-        maybe_prune_caches(config, state);
         let _ = notify_failure(config, state, paths, &error);
         return Err(error);
     }

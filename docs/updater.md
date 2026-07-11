@@ -147,8 +147,11 @@ retaining it.
 Updater downloads are streamed to unique temporary files and published as
 `Codex-<sha256>.dmg` only after the file and parent directory are synced. The
 content-addressed path stays immutable while daemon and wrapper rebuild flows
-consume it, so concurrent checks cannot truncate or replace another build's
-DMG input.
+consume it under a shared lease, so cleanup and concurrent rebuilds cannot
+truncate or remove another build's DMG input. Startup and post-build cleanup
+retain the DMG referenced by updater state, remove older managed hash files,
+and delete strictly named download temporaries left by a killed process.
+Unrelated files and symlinks in `downloads/` are never removed.
 
 ## Service Controls
 

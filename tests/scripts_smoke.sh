@@ -626,6 +626,7 @@ SCRIPT
     assert_file_exists "$pkg_root/opt/codex-desktop/update-builder/scripts/lib/node-runtime.sh"
     assert_file_exists "$pkg_root/opt/codex-desktop/update-builder/scripts/lib/upstream-dmg-intel.js"
     assert_file_exists "$pkg_root/opt/codex-desktop/update-builder/scripts/lib/upstream-dmg-acceptance.js"
+    assert_file_exists "$pkg_root/opt/codex-desktop/update-builder/scripts/lib/candidate-promotion.py"
     assert_file_exists "$pkg_root/opt/codex-desktop/update-builder/scripts/validate-upstream-dmg.js"
     assert_file_exists "$pkg_root/opt/codex-desktop/update-builder/scripts/lib/linux-update-bridge-patch.js"
     assert_file_exists "$pkg_root/opt/codex-desktop/update-builder/scripts/lib/patch-report.js"
@@ -2419,7 +2420,7 @@ SCRIPT
 }
 
 test_candidate_install_is_transactional() {
-    info "Checking transactional candidate promotion and rollback"
+    info "Checking atomic candidate promotion, first install, and rollback"
     local workspace="$TMP_DIR/candidate-install"
     mkdir -p "$workspace/final" "$workspace/candidate"
     printf '%s' "old" >"$workspace/final/version"
@@ -2439,7 +2440,7 @@ test_candidate_install_is_transactional() {
         [ "$(cat "$PROMOTED_BACKUP_APP_DIR/version")" = "old" ] || fail "Expected backup to preserve previous app"
     )
 
-    rm -rf "$workspace/final" "$workspace/candidate" "$workspace"/final.backup-*
+    rm -rf "$workspace/final" "$workspace/candidate" "$workspace"/final.backup-* "$workspace"/.final.promotion.json
     mkdir -p "$workspace/final" "$workspace/candidate"
     printf '%s' "old" >"$workspace/final/version"
     printf '%s' "new" >"$workspace/candidate/version"
@@ -2451,17 +2452,95 @@ test_candidate_install_is_transactional() {
         INSTALL_DIR="$workspace/final"
         # shellcheck source=scripts/lib/candidate-install.sh
         . "$REPO_DIR/scripts/lib/candidate-install.sh"
-        mv() {
-            if [ "$1" = "$workspace/candidate" ] && [ "$2" = "$workspace/final" ]; then
-                return 1
-            fi
-            command mv "$@"
-        }
-        if promote_candidate_install "$workspace/candidate" "$workspace/final"; then
-            fail "Expected simulated candidate promotion failure"
+        if CODEX_PROMOTION_TEST_FAIL_BACKUP_MOVE=1 \
+            promote_candidate_install "$workspace/candidate" "$workspace/final"; then
+            fail "Expected simulated backup move failure"
         fi
-        [ "$(cat "$workspace/final/version")" = "old" ] || fail "Expected failed promotion to restore previous app"
+        [ "$(cat "$workspace/final/version")" = "old" ] || fail "Expected failed backup move to atomically restore previous app"
+        [ "$(cat "$workspace/candidate/version")" = "new" ] || fail "Expected rollback to preserve the accepted candidate"
+        [ ! -e "$workspace/.final.promotion.json" ] || fail "Expected rollback to remove the promotion journal"
     )
+
+    rm -rf "$workspace/final" "$workspace/candidate" "$workspace"/final.backup-* "$workspace"/.final.promotion.json
+    mkdir -p "$workspace/final" "$workspace/candidate"
+    printf '%s' "old" >"$workspace/final/version"
+    printf '%s' "new" >"$workspace/candidate/version"
+    (
+        info() { :; }
+        warn() { :; }
+        error() { echo "$*" >&2; return 1; }
+        assert_install_target_not_running() { :; }
+        # shellcheck source=scripts/lib/candidate-install.sh
+        . "$REPO_DIR/scripts/lib/candidate-install.sh"
+        if CODEX_PROMOTION_TEST_FAIL_EXCHANGE=1 \
+            promote_candidate_install "$workspace/candidate" "$workspace/final"; then
+            fail "Expected simulated unsupported atomic exchange"
+        fi
+        [ "$(cat "$workspace/final/version")" = "old" ] || fail "Unsupported exchange changed the current app"
+        [ "$(cat "$workspace/candidate/version")" = "new" ] || fail "Unsupported exchange changed the candidate"
+    )
+
+    rm -rf "$workspace/final" "$workspace/candidate" "$workspace"/final.backup-* "$workspace"/.final.promotion.json
+    mkdir -p "$workspace/candidate"
+    printf '%s' "new" >"$workspace/candidate/version"
+    (
+        info() { :; }
+        warn() { :; }
+        error() { echo "$*" >&2; return 1; }
+        assert_install_target_not_running() { :; }
+        # shellcheck source=scripts/lib/candidate-install.sh
+        . "$REPO_DIR/scripts/lib/candidate-install.sh"
+        promote_candidate_install "$workspace/candidate" "$workspace/final"
+        [ "$(cat "$workspace/final/version")" = "new" ] || fail "Expected first install to use an atomic rename"
+        [ -z "$PROMOTED_BACKUP_APP_DIR" ] || fail "First install must not report a backup"
+    )
+}
+
+test_candidate_promotion_recovers_after_sigkill() {
+    info "Checking interrupted candidate promotion keeps the app available and recovers its backup"
+    local workspace="$TMP_DIR/candidate-promotion-interruption"
+    local pause_file="$workspace/exchanged"
+    local promotion_pid
+    local recovered_backup
+    mkdir -p "$workspace/final" "$workspace/candidate"
+    printf '%s' "old" >"$workspace/final/version"
+    printf '%s' "new" >"$workspace/candidate/version"
+
+    (
+        info() { :; }
+        warn() { :; }
+        error() { echo "$*" >&2; exit 1; }
+        assert_install_target_not_running() { :; }
+        # shellcheck source=scripts/lib/candidate-install.sh
+        . "$REPO_DIR/scripts/lib/candidate-install.sh"
+        CODEX_PROMOTION_TEST_PAUSE_FILE="$pause_file" \
+            promote_candidate_install "$workspace/candidate" "$workspace/final"
+    ) &
+    promotion_pid=$!
+    while [ ! -e "$pause_file" ]; do
+        kill -0 "$promotion_pid" 2>/dev/null || fail "Promotion exited before the post-exchange pause"
+        sleep 0.01
+    done
+
+    [ "$(cat "$workspace/final/version")" = "new" ] || fail "Canonical app path disappeared or did not contain the accepted app"
+    kill -KILL "$promotion_pid"
+    wait "$promotion_pid" 2>/dev/null || true
+    [ "$(cat "$workspace/final/version")" = "new" ] || fail "SIGKILL left the canonical app unavailable"
+    [ -f "$workspace/.final.promotion.json" ] || fail "Expected durable recovery journal after SIGKILL"
+
+    (
+        info() { :; }
+        warn() { :; }
+        error() { echo "$*" >&2; exit 1; }
+        # shellcheck source=scripts/lib/candidate-install.sh
+        . "$REPO_DIR/scripts/lib/candidate-install.sh"
+        recover_pending_candidate_promotion "$workspace/final"
+    )
+    recovered_backup="$(find "$workspace" -maxdepth 1 -type d -name 'final.backup-*' -print -quit)"
+    [ -n "$recovered_backup" ] || fail "Expected interrupted promotion recovery to create the backup"
+    [ "$(cat "$recovered_backup/version")" = "old" ] || fail "Recovered backup did not preserve the previous app"
+    [ ! -e "$workspace/.final.promotion.json" ] || fail "Expected recovery to clear the promotion journal"
+    [ ! -e "$workspace/final/.codex-promotion-transaction" ] || fail "Expected recovery to clear the transaction marker"
 }
 
 test_candidate_promotion_is_serialized() {
@@ -8658,6 +8737,7 @@ main() {
     test_fresh_reuse_dmg_uses_cache_when_metadata_matches
     test_rebuild_candidate_uses_validated_default_dmg
     test_candidate_install_is_transactional
+    test_candidate_promotion_recovers_after_sigkill
     test_candidate_promotion_is_serialized
     test_transactional_install_reenters_with_current_bash
     test_transactional_install_uses_managed_node_and_isolated_reports

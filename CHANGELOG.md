@@ -34,7 +34,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 - Updater DMG downloads now publish crash-durable, content-addressed files only
   after a complete streamed download. Concurrent daemon and wrapper rebuilds
   cannot truncate or replace each other's input, and DMG hashing stays bounded
-  in memory in both the updater and acceptance engine.
+  in memory in both the updater and acceptance engine. A shared cache lease
+  now bounds retained downloads to the state-referenced DMG and safely removes
+  old hashes and temporary files abandoned by interrupted downloads.
 - Linux settings search no longer shows unavailable macOS Dock icon controls or
   Suggested prompts results that do not render in the generated Linux settings
   page.
@@ -56,8 +58,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 - Local app generation is transactional: `install.sh` builds and validates a
   sibling candidate before replacing `codex-app`, keeps the working app on
-  rejected or inconclusive candidates, and restores its backup if promotion
-  fails.
+  rejected or inconclusive candidates, and uses atomic directory exchange plus
+  a recovery journal so interruption cannot remove the canonical app path.
 - Cold starts overlap the webview server boot with the rest of launcher
   startup and run the five bundled plugin cache syncs concurrently. The
   launcher now spawns the Python webview server, does CLI lookup and cache

@@ -845,6 +845,7 @@ stage_update_builder_bundle() {
     cp "$REPO_DIR/scripts/lib/upstream-dmg-acceptance.js" "$update_builder_root/scripts/lib/upstream-dmg-acceptance.js"
     cp "$REPO_DIR/scripts/lib/upstream-dmg-release-profile.js" "$update_builder_root/scripts/lib/upstream-dmg-release-profile.js"
     cp "$REPO_DIR/scripts/lib/candidate-install.sh" "$update_builder_root/scripts/lib/candidate-install.sh"
+    cp "$REPO_DIR/scripts/lib/candidate-promotion.py" "$update_builder_root/scripts/lib/candidate-promotion.py"
     cp "$REPO_DIR/scripts/lib/rebuild-report.sh" "$update_builder_root/scripts/lib/rebuild-report.sh"
     cp "$REPO_DIR/scripts/lib/build-info.js" "$update_builder_root/scripts/lib/build-info.js"
     cp "$REPO_DIR/scripts/lib/build-info.sh" "$update_builder_root/scripts/lib/build-info.sh"

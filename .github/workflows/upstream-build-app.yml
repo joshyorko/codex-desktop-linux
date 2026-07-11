@@ -41,7 +41,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: upstream-dmg-acceptance-${{ github.event_name }}
+  group: upstream-dmg-acceptance-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: false
 
 env:

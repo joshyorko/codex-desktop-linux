@@ -86,7 +86,10 @@ async function reconcileUpstreamDmgIssue({ github, repo, decision, currentHttpId
     return { action: "ignored-missing-fingerprint" };
   }
   const expectedIdentity = decision.dmg.httpIdentity?.key ?? null;
-  if (expectedIdentity && currentHttpIdentityKey !== expectedIdentity) {
+  if (!expectedIdentity || !currentHttpIdentityKey) {
+    return { action: "ignored-missing-http-identity" };
+  }
+  if (currentHttpIdentityKey !== expectedIdentity) {
     return { action: "ignored-stale-candidate" };
   }
 

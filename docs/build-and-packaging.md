@@ -80,6 +80,10 @@ changes. Every command builds a sibling candidate and runs the shared
 `codex-app/`. A rejected or inconclusive candidate leaves the working app
 unchanged. Acceptance checks only configured Linux Features and rejects drift
 in any enabled feature; disable that feature before retrying if necessary.
+Replacing an existing app uses an atomic directory exchange plus a recovery
+journal, so interruption cannot leave the canonical install path missing. If
+the filesystem does not support atomic exchange, promotion stops without
+changing the working app.
 `--fresh` still forces a cache removal before rebuilding, and an
 explicit `DMG=/path/to/Codex.dmg` uses that file exactly.
 Native install shortcuts use `--fresh --reuse-dmg`, so they build a clean

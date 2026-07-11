@@ -99,3 +99,21 @@ test("does not mutate issues for stale or inconclusive runs", async () => {
     assert.equal(fixture.calls.length, 0);
   }
 });
+
+test("does not mutate accepted or rejected issues when either HTTP identity is missing", async () => {
+  for (const verdict of ["accepted", "rejected"]) {
+    for (const missing of ["expected", "current"]) {
+      const fixture = fakeGithub([{ number: 12, state: "open", body: fingerprintMarker("3".repeat(64)) }]);
+      const candidate = decision(verdict, "4".repeat(64));
+      if (missing === "expected") candidate.dmg.httpIdentity = null;
+      const result = await reconcileUpstreamDmgIssue({
+        github: fixture.github,
+        repo: { owner: "o", repo: "r" },
+        decision: candidate,
+        currentHttpIdentityKey: missing === "current" ? null : "current",
+      });
+      assert.equal(result.action, "ignored-missing-http-identity");
+      assert.equal(fixture.calls.length, 0);
+    }
+  }
+});

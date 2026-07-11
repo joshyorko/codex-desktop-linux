@@ -24,11 +24,19 @@ that feature intact. The user can disable the feature and retry the update.
 
 `install.sh` builds into a hidden sibling candidate directory. It evaluates the
 candidate patch report and writes
-`dist-next/rebuild/upstream-dmg-decision.json`. The existing app is moved only
-after an accepted verdict, immediately before the candidate is renamed into
-place. A failed rename restores the timestamped backup. Each build evaluates
-reports from its own transaction directory, and a per-target promotion lock
-serializes the short final replacement window.
+`dist-next/rebuild/upstream-dmg-decision.json`. After an accepted verdict, an
+existing app and its sibling candidate are exchanged with Linux
+`renameat2(RENAME_EXCHANGE)`, so the canonical app path always names either the
+old or accepted app—even if the process is killed or power is lost. A durable
+journal records the exchanged directory until it becomes the timestamped
+backup; the next install recovers that journal before cleaning or rebuilding a
+candidate. A synchronous backup failure exchanges the directories back. A
+filesystem without atomic exchange support fails before changing the working
+app. First installation remains a single atomic sibling rename.
+
+Each build evaluates reports from its own transaction directory, and a
+per-target promotion lock serializes the short final replacement and recovery
+window.
 
 `--fresh` refreshes the DMG and candidate without deleting the working app
 early. Set `CODEX_KEEP_REJECTED_CANDIDATE=1` to retain a rejected candidate for
@@ -36,9 +44,11 @@ debugging. `CODEX_ACCEPTANCE_OVERRIDE=1` is a developer-only emergency escape
 hatch for a completely built candidate; CI and the updater do not set it.
 
 The updater also publishes downloads to immutable, content-addressed paths
-after a streamed hash, file sync, atomic rename, and parent-directory sync.
-This protects the acceptance input itself from interrupted or concurrent
-daemon and wrapper downloads.
+after a streamed hash, file sync, atomic rename, and parent-directory sync. A
+cache lease remains held through state persistence and package consumption.
+Cleanup keeps the state-referenced DMG and removes older managed hashes plus
+temporary files abandoned by an interrupted download; unrelated files and
+symlinks are ignored.
 
 ## Drift Issue Lifecycle
 
@@ -47,7 +57,10 @@ a display value. One `upstream-dmg-drift` issue is kept per rejected fingerprint
 When a new fingerprint arrives, open issues for older DMGs are closed as
 superseded. An accepted new DMG closes all remaining drift issues. Before any
 mutation, the issue job compares the tested HTTP identity with the current DMG
-headers so rerunning an obsolete workflow cannot reopen an old issue.
+headers so rerunning an obsolete workflow cannot reopen an old issue. The
+identity must contain an ETag or both Last-Modified and Content-Length. If
+either the tested or current identity is unavailable, reconciliation makes no
+issue changes.
 
 ## Manual Validation
 

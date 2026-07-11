@@ -125,6 +125,10 @@ Primary human docs: [architecture](docs/architecture.md),
   features participate in local/updater acceptance, and drift in any enabled
   feature rejects the candidate. Disabled features are not probed. Rejected or
   inconclusive candidates must not replace the working app.
+- Existing local apps are promoted with atomic directory exchange and a durable
+  recovery journal. Do not reintroduce a two-rename window in which the
+  canonical install path is absent, and do not fall back when the filesystem
+  lacks atomic exchange support.
 
 ## Generated Artifacts
 

@@ -86,12 +86,17 @@ function httpIdentity(metadata) {
   if (metadata == null) {
     return null;
   }
+  const normalize = (value) => (
+    value == null || value === "" || value === "unknown" || value === "no-etag" ? null : value
+  );
   const identity = {
-    etag: metadata.etag ?? null,
-    lastModified: metadata.lastModified ?? metadata.last_modified ?? null,
-    contentLength: metadata.contentLength ?? metadata.content_length ?? null,
+    etag: normalize(metadata.etag),
+    lastModified: normalize(metadata.lastModified ?? metadata.last_modified),
+    contentLength: normalize(metadata.contentLength ?? metadata.content_length),
   };
-  if (Object.values(identity).every((value) => value == null || value === "unknown" || value === "no-etag")) {
+  // Content-Length alone is not a stable upstream identity. Require a strong
+  // ETag or the validator pair exposed by CDNs that omit ETag.
+  if (identity.etag == null && (identity.lastModified == null || identity.contentLength == null)) {
     return null;
   }
   identity.key = crypto

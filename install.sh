@@ -106,6 +106,9 @@ transactional_install() {
     final_parent="$(dirname "$final_dir")"
     final_name="$(basename "$final_dir")"
     mkdir -p "$final_parent"
+    # Recover a completed exchange before the standard candidate path can be
+    # reused or cleaned by a new transaction.
+    recover_pending_candidate_promotion "$final_dir"
     candidate_dir="$final_parent/.${final_name}.candidate-$$"
     assert_distinct_candidate_paths "$candidate_dir" "$final_dir"
     remove_tree_safely "$candidate_dir"
