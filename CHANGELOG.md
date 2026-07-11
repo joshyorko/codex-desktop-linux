@@ -18,6 +18,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- Resuming a completed thread no longer leaves it registered as streaming when
+  the app server reports no active runtime. This clears stale stream ownership
+  before the next message instead of leaving the renderer in a repeated thread
+  history refresh path.
 - Linux settings search no longer shows unavailable macOS Dock icon controls or
   Suggested prompts results that do not render in the generated Linux settings
   page.

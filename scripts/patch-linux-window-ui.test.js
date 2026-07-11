@@ -5815,6 +5815,67 @@ test("discovers current app-server conversation core Linux webview patches", () 
   }
 });
 
+test("does not retain streaming ownership when a completed thread resumes without an active runtime", () => {
+  const source = [
+    "async function resume(e,t,L,ue,b){",
+    "e.updateConversationState(t,t=>{t.threadRuntimeStatus=L.thread.status});",
+    "let de=ue.at(-1)??null;e.markConversationStreaming(t),e.setConversationStreamRole(t,{role:`owner`}),b&&e.releaseResumeNotificationBuffer(t);",
+    "let fe=e.broadcastConversationSnapshot(t);",
+    "K.info(`maybe_resume_success`,{safe:{conversationId:t,turnCount:ue.length,latestTurnId:de?.turnId??null,latestTurnStatus:de?.status??null,markedStreaming:!0,assignedStreamRole:e.getStreamRole(t)?.role??null}})",
+    "}",
+  ].join("");
+
+  const patched = applyPatchTwice(applyLinuxAppServerConversationHydrationPatch, source);
+
+  assert.match(patched, /let codexLinuxResumeShouldStream=/);
+  assert.match(patched, /markedStreaming:codexLinuxResumeShouldStream/);
+
+  const context = {};
+  vm.runInNewContext(
+    [
+      "var logs=[];var K={info:(message,details)=>logs.push({message,details})};",
+      patched,
+      "function run(turnStatus,runtimeType){",
+      "logs=[];let state={marked:false,role:null,removed:false,broadcasts:0};",
+      "let manager={",
+      "conversation:{threadRuntimeStatus:{type:runtimeType}},",
+      "updateConversationState:(id,fn)=>fn(manager.conversation),",
+      "getConversation:()=>manager.conversation,",
+      "markConversationStreaming:()=>{state.marked=true},",
+      "setConversationStreamRole:(id,role)=>{state.role=role.role},",
+      "getStreamRole:()=>state.role==null?null:{role:state.role},",
+      "streamState:{removeConversation:()=>{state.removed=true;state.role=null}},",
+      "releaseResumeNotificationBuffer:()=>{},",
+      "broadcastConversationSnapshot:()=>{state.broadcasts+=1;return null}",
+      "};",
+      "resume(manager,`thread-1`,{thread:{status:{type:runtimeType}}},[{turnId:`turn-1`,status:turnStatus}],false);",
+      "return {state,markedStreaming:logs[0].details.safe.markedStreaming};",
+      "}",
+      "result={completedIdle:run(`completed`,`idle`),completedActive:run(`completed`,`active`),inProgressIdle:run(`inProgress`,`idle`),failedIdle:run(`failed`,`idle`)};",
+    ].join(""),
+    context,
+  );
+
+  assert.deepEqual(JSON.parse(JSON.stringify(context.result)), {
+    completedIdle: {
+      state: { marked: false, role: null, removed: true, broadcasts: 1 },
+      markedStreaming: false,
+    },
+    completedActive: {
+      state: { marked: true, role: "owner", removed: false, broadcasts: 1 },
+      markedStreaming: true,
+    },
+    inProgressIdle: {
+      state: { marked: true, role: "owner", removed: false, broadcasts: 1 },
+      markedStreaming: true,
+    },
+    failedIdle: {
+      state: { marked: true, role: "owner", removed: false, broadcasts: 1 },
+      markedStreaming: true,
+    },
+  });
+});
+
 test("recovers completed stream items that arrive after local state lost their started item", () => {
   const source = [
     "class T{onNotification(e,t){let n={method:e,params:t};switch(n.method){case`item/completed`:{if(this.frameTextDeltaQueue.drainBefore(()=>{this.onNotification(`item/completed`,n.params)}))break;",

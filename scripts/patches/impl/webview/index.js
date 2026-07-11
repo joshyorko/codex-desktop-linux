@@ -21,6 +21,7 @@ const LINUX_APP_SERVER_CONVERSATION_HYDRATION_UNKNOWN_TURN_MARKER = "codexLinuxR
 const LINUX_APP_SERVER_CONVERSATION_HYDRATION_QUEUE_MARKER = "codexLinuxRemoteMobileNotificationQueue";
 const LINUX_APP_SERVER_CONVERSATION_HYDRATION_IN_FLIGHT_MARKER = "codexLinuxRemoteMobileHydrationInFlight";
 const LINUX_APP_SERVER_CONVERSATION_HYDRATION_LATE_EVENT_MARKER = "codexLinuxRemoteMobileHydrateLateEvent";
+const LINUX_APP_SERVER_COMPLETED_RESUME_MARKER = "codexLinuxResumeShouldStream";
 
 function applyLinuxSafeMonospaceFontStackPatch(currentSource) {
   const safeLinuxMonoFontPattern =
@@ -898,6 +899,41 @@ function buildLateUnknownConversationHydrationReplacement(eventName, conversatio
 
 function applyLinuxAppServerConversationHydrationPatch(currentSource) {
   let patchedSource = currentSource;
+
+  if (!patchedSource.includes(LINUX_APP_SERVER_COMPLETED_RESUME_MARKER)) {
+    const completedResumeStreamingNeedle =
+      /(let ([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)\.at\(-1\)\?\?null;)([A-Za-z_$][\w$]*)\.markConversationStreaming\(([A-Za-z_$][\w$]*)\),\4\.setConversationStreamRole\(\5,\{role:`owner`\}\),/u;
+    const resumeLogNeedle =
+      /latestTurnStatus:([A-Za-z_$][\w$]*)\?\.status\?\?null,markedStreaming:!0,assignedStreamRole:([A-Za-z_$][\w$]*)\.getStreamRole\(([A-Za-z_$][\w$]*)\)\?\.role\?\?null/u;
+    const streamMatch = completedResumeStreamingNeedle.exec(patchedSource);
+    const logMatch = resumeLogNeedle.exec(patchedSource);
+
+    if (
+      streamMatch != null &&
+      logMatch != null &&
+      logMatch[1] === streamMatch[2] &&
+      logMatch[2] === streamMatch[4] &&
+      logMatch[3] === streamMatch[5]
+    ) {
+      const [, prefix, latestTurnVar, , managerVar, conversationIdVar] = streamMatch;
+      patchedSource = patchedSource
+        .replace(
+          completedResumeStreamingNeedle,
+          `${prefix}let ${LINUX_APP_SERVER_COMPLETED_RESUME_MARKER}=${latestTurnVar}?.status!==\`completed\`||${managerVar}.getConversation(${conversationIdVar})?.threadRuntimeStatus?.type===\`active\`;${LINUX_APP_SERVER_COMPLETED_RESUME_MARKER}?(${managerVar}.markConversationStreaming(${conversationIdVar}),${managerVar}.setConversationStreamRole(${conversationIdVar},{role:\`owner\`})):${managerVar}.streamState.removeConversation(${conversationIdVar}),`,
+        )
+        .replace(
+          resumeLogNeedle,
+          `latestTurnStatus:${latestTurnVar}?.status??null,markedStreaming:${LINUX_APP_SERVER_COMPLETED_RESUME_MARKER},assignedStreamRole:${managerVar}.getStreamRole(${conversationIdVar})?.role??null`,
+        );
+    } else if (
+      patchedSource.includes("maybe_resume_success") &&
+      patchedSource.includes("markConversationStreaming")
+    ) {
+      console.warn(
+        "WARN: Could not find completed resume streaming insertion point — skipping Linux completed resume recovery patch",
+      );
+    }
+  }
 
   if (!patchedSource.includes(LINUX_APP_SERVER_CONVERSATION_HYDRATION_THREAD_RUNTIME_MARKER)) {
     const runtimeNeedle =
