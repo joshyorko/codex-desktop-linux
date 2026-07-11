@@ -402,7 +402,7 @@ async fn run_daemon(
     }
     info!("daemon initialized");
 
-    time::sleep(Duration::from_secs(config.initial_check_delay_seconds)).await;
+    time::sleep(config.initial_check_delay_duration()).await;
     if let Err(error) = run_check_cycle_from_disk(config, state, paths).await {
         error!(?error, "initial check failed");
     }
@@ -410,8 +410,7 @@ async fn run_daemon(
         error!(?error, "initial reconciliation failed");
     }
 
-    let mut check_interval =
-        time::interval(Duration::from_secs(config.check_interval_hours * 3600));
+    let mut check_interval = time::interval(config.check_interval_duration()?);
     let mut reconcile_interval = time::interval(Duration::from_secs(RECONCILE_INTERVAL_SECONDS));
     check_interval.tick().await;
     reconcile_interval.tick().await;
@@ -614,7 +613,9 @@ fn upstream_check_is_fresh(config: &RuntimeConfig, state: &PersistedState) -> bo
         return false;
     };
 
-    let freshness_window = ChronoDuration::hours(config.check_interval_hours as i64);
+    let Ok(freshness_window) = config.check_interval_chrono_duration() else {
+        return false;
+    };
     Utc::now().signed_duration_since(last_successful_check_at) < freshness_window
 }
 
