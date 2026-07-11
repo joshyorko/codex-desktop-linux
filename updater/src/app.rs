@@ -2622,11 +2622,18 @@ mod tests {
     #[test]
     fn daemon_reconcile_reloads_waiting_state_written_by_another_process() -> Result<()> {
         let _env_guard = crate::test_util::env_lock();
+        let _restore_env = crate::test_util::EnvRestoreGuard::capture(&[
+            "CODEX_UPDATE_MANAGER_ASSUME_NO_POLKIT_AGENT",
+            "CODEX_LINUX_SETTINGS_FILE",
+        ]);
         let runtime = tokio::runtime::Runtime::new()?;
-        let previous_no_agent = std::env::var_os("CODEX_UPDATE_MANAGER_ASSUME_NO_POLKIT_AGENT");
         std::env::set_var("CODEX_UPDATE_MANAGER_ASSUME_NO_POLKIT_AGENT", "1");
 
         let temp = tempfile::tempdir()?;
+        std::env::set_var(
+            "CODEX_LINUX_SETTINGS_FILE",
+            temp.path().join("isolated-settings.json"),
+        );
         let paths = test_paths(temp.path());
         paths.ensure_dirs()?;
         let config = test_config(temp.path());
@@ -2654,12 +2661,6 @@ mod tests {
             &mut stale_daemon_state,
             &paths,
         ));
-
-        if let Some(value) = previous_no_agent {
-            std::env::set_var("CODEX_UPDATE_MANAGER_ASSUME_NO_POLKIT_AGENT", value);
-        } else {
-            std::env::remove_var("CODEX_UPDATE_MANAGER_ASSUME_NO_POLKIT_AGENT");
-        }
 
         result?;
         assert_eq!(stale_daemon_state.status, UpdateStatus::ReadyToInstall);
