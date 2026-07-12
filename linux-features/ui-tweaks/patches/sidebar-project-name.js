@@ -2,16 +2,15 @@
 
 const DEFAULT_PROJECT_NAME_STYLE = "font-weight: 700 !important; padding-top: 0.25rem;";
 const PROJECTS_SIDEBAR_ASSET_PATTERN =
-  /^app-initial~app-main~remote-conversation-page~projects-index-page-[^.]+\.js$/;
-const PROJECT_NAME_SELECTOR = ".group\\/folder-row .min-w-0.truncate.pr-1";
+  /^app-initial~app-main~projects-index-page~remote-conversation-page-[^.]+\.js$/;
+const PROJECT_NAME_SELECTOR = ".group\\/folder-row .text-fade-truncate.pr-1";
 const STYLE_ID = "codex-linux-ui-tweaks-sidebar-project-name-style";
 const RUNTIME_MARKER = "codexLinuxUiTweaksSidebarProjectNameStyleRuntime";
 const UNSAFE_PROJECT_NAME_STYLE_PATTERN = /[{}@<>]|\r|\n|\/\*|\*\/|\burl\s*\(/i;
 
 const SIDEBAR_PROJECT_NAME_MARKERS = [
-  "sidebarElectron.projectsNavLink",
   "group/folder-row",
-  "className:`min-w-0 truncate pr-1`",
+  "className:`text-fade-truncate pr-1`",
 ];
 
 function warn(message) {

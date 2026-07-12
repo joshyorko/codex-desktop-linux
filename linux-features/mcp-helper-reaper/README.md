@@ -21,14 +21,12 @@ sessions remain independent.
 
 ## Scope
 
-The reaper deduplicates direct MCP helper children under one non-app-server
-Codex parent. Desktop app-server processes multiplex active threads, so their
-same-generation helpers are not treated as duplicates. Helpers from replaced
-app generations and deleted helper generations remain eligible for cleanup.
-Orphan cleanup
-reaps stale helper roots whose live Codex ancestor is gone, but only when the
-process is adopted by init/user systemd and matches configured MCP server
-commands or this app's staged helper paths.
+The reaper deduplicates direct MCP helper children under one Codex parent. It
+keeps the newest process for each helper signature and reaps older duplicates
+plus their descendants. Its orphan cleanup reaps stale helper roots whose live
+Codex ancestor is gone, but only when the process is adopted by init/user
+systemd and matches configured MCP server commands or this app's staged helper
+paths.
 
 Helper detection is generic:
 

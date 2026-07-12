@@ -1,3 +1,47 @@
+codex_capture_original_ld_library_path() {
+    # Packaged runtimes may extend LD_LIBRARY_PATH after this point. Main-process
+    # host children use this three-state snapshot instead of inheriting those paths.
+    # HOST is populated later from the login shell; inherited values are stale or
+    # user-controlled internal state and must never override this fresh snapshot.
+    unset CODEX_LINUX_HOST_LD_LIBRARY_PATH_STATE CODEX_LINUX_HOST_LD_LIBRARY_PATH_VALUE
+    if [ "${LD_LIBRARY_PATH+x}" != x ]; then
+        CODEX_LINUX_ORIGINAL_LD_LIBRARY_PATH_STATE="unset"
+        CODEX_LINUX_ORIGINAL_LD_LIBRARY_PATH_VALUE=""
+    elif [ -z "$LD_LIBRARY_PATH" ]; then
+        CODEX_LINUX_ORIGINAL_LD_LIBRARY_PATH_STATE="empty"
+        CODEX_LINUX_ORIGINAL_LD_LIBRARY_PATH_VALUE=""
+    else
+        CODEX_LINUX_ORIGINAL_LD_LIBRARY_PATH_STATE="value"
+        CODEX_LINUX_ORIGINAL_LD_LIBRARY_PATH_VALUE="$LD_LIBRARY_PATH"
+    fi
+    export CODEX_LINUX_ORIGINAL_LD_LIBRARY_PATH_STATE CODEX_LINUX_ORIGINAL_LD_LIBRARY_PATH_VALUE
+}
+
+codex_restore_original_ld_library_path() {
+    local state="${CODEX_LINUX_ORIGINAL_LD_LIBRARY_PATH_STATE:-}"
+    local value="${CODEX_LINUX_ORIGINAL_LD_LIBRARY_PATH_VALUE:-}"
+
+    unset CODEX_LINUX_ORIGINAL_LD_LIBRARY_PATH_STATE CODEX_LINUX_ORIGINAL_LD_LIBRARY_PATH_VALUE
+    unset CODEX_LINUX_HOST_LD_LIBRARY_PATH_STATE CODEX_LINUX_HOST_LD_LIBRARY_PATH_VALUE
+    case "$state" in
+        unset) unset LD_LIBRARY_PATH ;;
+        empty) export LD_LIBRARY_PATH="" ;;
+        value) export LD_LIBRARY_PATH="$value" ;;
+    esac
+}
+
+codex_exec_host_command() {
+    codex_restore_original_ld_library_path
+    exec "$@"
+}
+
+codex_run_host_command() (
+    codex_exec_host_command "$@"
+)
+
+# Capture before package-specific launcher patches add application runtime paths.
+codex_capture_original_ld_library_path
+
 resolve_script_dir() {
     local source="${BASH_SOURCE[0]}"
     local dir
@@ -130,7 +174,7 @@ choose_multi_launch_port() {
         fi
     done
 
-    echo "No free Codex Desktop webview port found in CODEX_MULTI_LAUNCH_PORT_RANGE=$range" >&2
+    echo "No free ChatGPT Desktop webview port found in CODEX_MULTI_LAUNCH_PORT_RANGE=$range" >&2
     return 1
 }
 
@@ -449,17 +493,6 @@ clear_bundled_marketplace_tmp_cache() {
     done
 }
 
-monitor_bundled_marketplace_tmp_permissions() {
-    (
-        local i=0
-        while [ "$i" -lt 300 ]; do
-            fix_bundled_marketplace_tmp_permissions
-            sleep 0.1
-            i=$((i + 1))
-        done
-    ) &
-}
-
 import_graphical_env_entry() {
     local entry="$1"
     local name="${entry%%=*}"
@@ -675,16 +708,37 @@ export_packaged_runtime_env() {
     fi
 }
 
+path_without_entry() {
+    local path_value="$1"
+    local entry_to_remove="$2"
+    local remaining
+    local entry
+    local result=""
+    local separator=""
+
+    remaining="$path_value:"
+    while [ -n "$remaining" ]; do
+        entry="${remaining%%:*}"
+        remaining="${remaining#*:}"
+        if [ "$entry" != "$entry_to_remove" ]; then
+            result="$result$separator$entry"
+            separator=:
+        fi
+    done
+
+    printf '%s\n' "$result"
+}
+
 prepend_managed_node_runtime_to_path() {
     [ -x "$MANAGED_NODE_BIN_DIR/node" ] || return 0
 
-    if [ -z "${CODEX_LINUX_USER_PATH+x}" ]; then
-        export CODEX_LINUX_USER_PATH="${PATH:-}"
-    fi
+    local current_path="${PATH:-}"
+    CODEX_LINUX_USER_PATH="$(path_without_entry "${CODEX_LINUX_USER_PATH-$current_path}" "$MANAGED_NODE_BIN_DIR")"
+    export CODEX_LINUX_USER_PATH
 
-    case ":$PATH:" in
-        *":$MANAGED_NODE_BIN_DIR:"*) ;;
-        *) export PATH="$MANAGED_NODE_BIN_DIR:$PATH" ;;
+    case "$current_path" in
+        "$MANAGED_NODE_BIN_DIR"|"$MANAGED_NODE_BIN_DIR":*) ;;
+        *) export PATH="$MANAGED_NODE_BIN_DIR${current_path:+:$current_path}" ;;
     esac
     export CODEX_MANAGED_NODE_RUNTIME_DIR="$SCRIPT_DIR/resources/node-runtime"
 }
@@ -740,7 +794,7 @@ run_feature_prelaunch_hooks() {
         CODEX_LINUX_LAUNCHER_CMD="${CODEX_LINUX_LAUNCHER_CMD:-$SCRIPT_DIR/start.sh}" \
         CODEX_LINUX_FEATURE_HOOK_PHASE="prelaunch" \
         CODEX_UPDATE_MANAGER_PATH="${CODEX_UPDATE_MANAGER_PATH:-}" \
-            "$hook" "$SCRIPT_DIR" "$APP_STATE_DIR" "$LOG_DIR"
+            codex_run_host_command "$hook" "$SCRIPT_DIR" "$APP_STATE_DIR" "$LOG_DIR"
     done
 }
 
@@ -787,9 +841,34 @@ print(name.strip())
 PY
 }
 
+# The bundled marketplace metadata is shared by every plugin sync below and
+# the syncs run concurrently on cold start, so the marketplace.json copy is
+# staged exactly once here instead of racing rm+cp inside each sync.
+stage_bundled_marketplace_metadata() {
+    local source_marketplace="$SCRIPT_DIR/resources/plugins/openai-bundled/.agents/plugins/marketplace.json"
+    local codex_home="${CODEX_HOME:-$HOME/.codex}"
+    local marketplace_root="$codex_home/.tmp/bundled-marketplaces/openai-bundled"
+    local marketplace_plugins_dir="$marketplace_root/.agents/plugins"
+    local marketplace_target="$marketplace_plugins_dir/marketplace.json"
+    local marketplace_temp=""
+
+    [ -f "$source_marketplace" ] || return 0
+    mkdir -p "$marketplace_plugins_dir" "$marketplace_root/plugins"
+    marketplace_temp="$(mktemp "$marketplace_plugins_dir/.marketplace.json.tmp.XXXXXX")" || {
+        echo "Bundled marketplace metadata sync failed; continuing with existing marketplace cache."
+        return 0
+    }
+    if cp "$source_marketplace" "$marketplace_temp" && \
+       chmod u+w "$marketplace_temp" && \
+       mv -fT -- "$marketplace_temp" "$marketplace_target"; then
+        return 0
+    fi
+    rm -f -- "$marketplace_temp"
+    echo "Bundled marketplace metadata sync failed; continuing with existing marketplace cache."
+}
+
 sync_browser_use_bundled_plugin_cache() {
     local source_plugin="$SCRIPT_DIR/resources/plugins/openai-bundled/plugins/browser"
-    local source_marketplace="$SCRIPT_DIR/resources/plugins/openai-bundled/.agents/plugins/marketplace.json"
     local plugin_json=""
     local source_client=""
     local codex_home="${CODEX_HOME:-$HOME/.codex}"
@@ -820,13 +899,7 @@ sync_browser_use_bundled_plugin_cache() {
     marketplace_root="$codex_home/.tmp/bundled-marketplaces/openai-bundled"
     marketplace_plugins_dir="$marketplace_root/.agents/plugins"
     marketplace_plugin_link="$marketplace_root/plugins/$plugin_dir_name"
-    if [ -f "$source_marketplace" ]; then
-        mkdir -p "$marketplace_plugins_dir" "$marketplace_root/plugins"
-        rm -f "$marketplace_plugins_dir/marketplace.json"
-        cp "$source_marketplace" "$marketplace_plugins_dir/marketplace.json" && \
-            chmod u+w "$marketplace_plugins_dir/marketplace.json" || \
-            echo "Browser Use bundled marketplace sync failed; continuing with existing marketplace cache."
-    fi
+    mkdir -p "$marketplace_root/plugins"
 
     version="$(bundled_plugin_version "$plugin_json" 2>/dev/null || true)"
     [ -n "$version" ] || return 0
@@ -960,7 +1033,6 @@ PY
 
 sync_chrome_bundled_plugin_cache() {
     local source_plugin="$SCRIPT_DIR/resources/plugins/openai-bundled/plugins/chrome"
-    local source_marketplace="$SCRIPT_DIR/resources/plugins/openai-bundled/.agents/plugins/marketplace.json"
     local plugin_json="$source_plugin/.codex-plugin/plugin.json"
     local codex_home="${CODEX_HOME:-$HOME/.codex}"
     local extension_arch
@@ -1057,12 +1129,6 @@ sync_chrome_bundled_plugin_cache() {
     marketplace_plugins_dir="$marketplace_root/.agents/plugins"
     marketplace_plugin_link="$marketplace_root/plugins/chrome"
     mkdir -p "$marketplace_plugins_dir" "$marketplace_root/plugins"
-    if [ -f "$source_marketplace" ]; then
-        rm -f "$marketplace_plugins_dir/marketplace.json"
-        cp "$source_marketplace" "$marketplace_plugins_dir/marketplace.json" && \
-            chmod u+w "$marketplace_plugins_dir/marketplace.json" || \
-            echo "Chrome bundled marketplace sync failed; continuing with existing marketplace cache."
-    fi
     replace_symlink "$cache_root/latest" "$marketplace_plugin_link"
 
     host_path="$cache_root/latest/extension-host/linux/$extension_arch/extension-host"
@@ -1073,7 +1139,6 @@ sync_chrome_bundled_plugin_cache() {
 
 sync_computer_use_bundled_plugin_cache() {
     local source_plugin="$SCRIPT_DIR/resources/plugins/openai-bundled/plugins/computer-use"
-    local source_marketplace="$SCRIPT_DIR/resources/plugins/openai-bundled/.agents/plugins/marketplace.json"
     local plugin_json="$source_plugin/.codex-plugin/plugin.json"
     local source_backend="$source_plugin/bin/codex-computer-use-linux"
     local source_cosmic_helper="$source_plugin/bin/codex-computer-use-cosmic"
@@ -1097,13 +1162,7 @@ sync_computer_use_bundled_plugin_cache() {
     marketplace_root="$codex_home/.tmp/bundled-marketplaces/openai-bundled"
     marketplace_plugins_dir="$marketplace_root/.agents/plugins"
     marketplace_plugin_link="$marketplace_root/plugins/computer-use"
-    if [ -f "$source_marketplace" ]; then
-        mkdir -p "$marketplace_plugins_dir" "$marketplace_root/plugins"
-        rm -f "$marketplace_plugins_dir/marketplace.json"
-        cp "$source_marketplace" "$marketplace_plugins_dir/marketplace.json" && \
-            chmod u+w "$marketplace_plugins_dir/marketplace.json" || \
-            echo "Computer Use bundled marketplace sync failed; continuing with existing marketplace cache."
-    fi
+    mkdir -p "$marketplace_root/plugins"
 
     version="$(bundled_plugin_version "$plugin_json" 2>/dev/null || true)"
     [ -n "$version" ] || return 0
@@ -1146,7 +1205,6 @@ sync_computer_use_bundled_plugin_cache() {
 
 sync_read_aloud_bundled_plugin_cache() {
     local source_plugin="$SCRIPT_DIR/resources/plugins/openai-bundled/plugins/read-aloud"
-    local source_marketplace="$SCRIPT_DIR/resources/plugins/openai-bundled/.agents/plugins/marketplace.json"
     local plugin_json="$source_plugin/.codex-plugin/plugin.json"
     local source_backend="$source_plugin/bin/codex-read-aloud-linux"
     local source_runner="$source_plugin/bin/kokoro-stdin"
@@ -1173,13 +1231,7 @@ sync_read_aloud_bundled_plugin_cache() {
     marketplace_root="$codex_home/.tmp/bundled-marketplaces/openai-bundled"
     marketplace_plugins_dir="$marketplace_root/.agents/plugins"
     marketplace_plugin_link="$marketplace_root/plugins/read-aloud"
-    if [ -f "$source_marketplace" ]; then
-        mkdir -p "$marketplace_plugins_dir" "$marketplace_root/plugins"
-        rm -f "$marketplace_plugins_dir/marketplace.json"
-        cp "$source_marketplace" "$marketplace_plugins_dir/marketplace.json" && \
-            chmod u+w "$marketplace_plugins_dir/marketplace.json" || \
-            echo "Read Aloud bundled marketplace sync failed; continuing with existing marketplace cache."
-    fi
+    mkdir -p "$marketplace_root/plugins"
 
     version="$(bundled_plugin_version "$plugin_json" 2>/dev/null || true)"
     [ -n "$version" ] || return 0
@@ -1224,7 +1276,6 @@ sync_read_aloud_bundled_plugin_cache() {
 
 sync_extra_bundled_plugin_cache() {
     local plugins_root="$SCRIPT_DIR/resources/plugins/openai-bundled/plugins"
-    local source_marketplace="$SCRIPT_DIR/resources/plugins/openai-bundled/.agents/plugins/marketplace.json"
     local codex_home="${CODEX_HOME:-$HOME/.codex}"
     local source_plugin
     local plugin_json
@@ -1235,6 +1286,7 @@ sync_extra_bundled_plugin_cache() {
     local cache_plugin
     local cache_parent
     local tmp_plugin
+    local backup_plugin
     local marketplace_root
     local marketplace_plugins_dir
     local marketplace_plugin_link
@@ -1260,34 +1312,66 @@ sync_extra_bundled_plugin_cache() {
         cache_plugin="$cache_root/$version"
         cache_parent="$(dirname "$cache_plugin")"
         tmp_plugin="$cache_parent/.$plugin_name-$version.tmp.$$"
-        remove_tree_if_exists "$tmp_plugin"
-        mkdir -p "$cache_parent"
+        backup_plugin="$cache_parent/.$plugin_name-$version.backup.$$"
+        if ! remove_tree_if_exists "$tmp_plugin" || \
+           ! remove_tree_if_exists "$backup_plugin" || \
+           ! mkdir -p "$cache_parent"; then
+            echo "Extra bundled plugin cache preparation failed for $plugin_name; continuing with existing cache."
+            continue
+        fi
 
         if cp -R "$source_plugin" "$tmp_plugin"; then
             make_tree_owner_writable "$tmp_plugin"
-            find "$tmp_plugin" -type f -name '*:com.apple.*' -delete
-            remove_tree_if_exists "$cache_plugin"
-            mv "$tmp_plugin" "$cache_plugin"
+            if ! find "$tmp_plugin" -type f -name '*:com.apple.*' -delete; then
+                remove_tree_if_exists "$tmp_plugin" || true
+                echo "Extra bundled plugin cache cleanup failed for $plugin_name; continuing with existing cache."
+                continue
+            fi
+            if [ -e "$cache_plugin" ] || [ -L "$cache_plugin" ]; then
+                if ! mv -T -- "$cache_plugin" "$backup_plugin"; then
+                    remove_tree_if_exists "$tmp_plugin" || true
+                    echo "Extra bundled plugin cache sync failed for $plugin_name; existing cache was preserved."
+                    continue
+                fi
+            else
+                backup_plugin=""
+            fi
+            if ! mv -T -- "$tmp_plugin" "$cache_plugin"; then
+                remove_tree_if_exists "$tmp_plugin" || true
+                if [ -n "$backup_plugin" ]; then
+                    if mv -T -- "$backup_plugin" "$cache_plugin"; then
+                        echo "Extra bundled plugin cache sync failed for $plugin_name; previous cache was restored."
+                    else
+                        echo "Extra bundled plugin cache sync failed for $plugin_name and the previous cache could not be restored."
+                    fi
+                else
+                    echo "Extra bundled plugin cache sync failed for $plugin_name; continuing without a new cache."
+                fi
+                continue
+            fi
+            if [ -n "$backup_plugin" ]; then
+                remove_tree_if_exists "$backup_plugin" || \
+                    echo "Extra bundled plugin cache backup cleanup failed for $plugin_name: $backup_plugin"
+            fi
             echo "Extra bundled plugin cache synced from bundled resources: $cache_plugin"
         else
-            remove_tree_if_exists "$tmp_plugin"
+            remove_tree_if_exists "$tmp_plugin" || true
             echo "Extra bundled plugin cache sync failed for $plugin_name; continuing with existing cache."
             continue
         fi
 
-        replace_symlink "$version" "$cache_root/latest"
+        if ! replace_symlink "$version" "$cache_root/latest"; then
+            echo "Extra bundled plugin latest link failed for $plugin_name; continuing with the staged cache."
+            continue
+        fi
 
         marketplace_root="$codex_home/.tmp/bundled-marketplaces/openai-bundled"
         marketplace_plugins_dir="$marketplace_root/.agents/plugins"
         marketplace_plugin_link="$marketplace_root/plugins/$plugin_dir_name"
-        mkdir -p "$marketplace_plugins_dir" "$marketplace_root/plugins"
-        if [ -f "$source_marketplace" ]; then
-            rm -f "$marketplace_plugins_dir/marketplace.json"
-            cp "$source_marketplace" "$marketplace_plugins_dir/marketplace.json" && \
-                chmod u+w "$marketplace_plugins_dir/marketplace.json" || \
-                echo "Extra bundled marketplace sync failed; continuing with existing marketplace cache."
+        if ! mkdir -p "$marketplace_plugins_dir" "$marketplace_root/plugins" || \
+           ! replace_symlink "$cache_root/latest" "$marketplace_plugin_link"; then
+            echo "Extra bundled plugin marketplace link failed for $plugin_name; continuing with the staged cache."
         fi
-        replace_symlink "$cache_root/latest" "$marketplace_plugin_link"
     done
 }
 
@@ -1344,7 +1428,7 @@ run_cold_start_hooks() {
             CODEX_LINUX_LAUNCHER_CMD="${CODEX_LINUX_LAUNCHER_CMD:-$SCRIPT_DIR/start.sh}" \
             CODEX_LINUX_FEATURE_HOOK_PHASE="cold-start" \
             CODEX_UPDATE_MANAGER_PATH="${CODEX_UPDATE_MANAGER_PATH:-}" \
-            "$hook" "$SCRIPT_DIR" "$APP_STATE_DIR" "$LOG_DIR"
+            codex_run_host_command "$hook" "$SCRIPT_DIR" "$APP_STATE_DIR" "$LOG_DIR"
         ) >>"$LOG_FILE" 2>&1 &
     done
 }
@@ -1369,7 +1453,7 @@ run_feature_after_exit_hooks() {
         CODEX_LINUX_FEATURE_HOOK_PHASE="after-exit" \
         CODEX_LINUX_ELECTRON_EXIT_STATUS="$electron_status" \
         CODEX_UPDATE_MANAGER_PATH="${CODEX_UPDATE_MANAGER_PATH:-}" \
-            "$hook" "$SCRIPT_DIR" "$APP_STATE_DIR" "$LOG_DIR" "$electron_status"
+            codex_run_host_command "$hook" "$SCRIPT_DIR" "$APP_STATE_DIR" "$LOG_DIR" "$electron_status"
         hook_status=$?
         set -e
         if [ "$hook_status" -ne 0 ]; then
@@ -1403,7 +1487,7 @@ run_cli_preflight() {
         if [ "$allow_install_missing" = "1" ]; then
             return 1
         fi
-        notify_error "Codex CLI prelaunch check failed. Continuing with the current CLI state. Check the launcher and updater logs if Codex Desktop misbehaves."
+        notify_error "Codex CLI prelaunch check failed. Continuing with the current CLI state. Check the launcher and updater logs if ChatGPT Desktop misbehaves."
         return 0
     fi
 
@@ -1497,6 +1581,52 @@ resolve_notification_icon() {
     echo "$APP_NOTIFICATION_ICON_NAME"
 }
 
+cached_codex_cli_path() {
+    local state_file="${XDG_STATE_HOME:-$HOME/.local/state}/codex-update-manager/state.json"
+    [ -r "$state_file" ] || return 1
+    command -v python3 >/dev/null 2>&1 || return 1
+
+    python3 - "$state_file" <<'PY'
+import json
+import sys
+
+try:
+    with open(sys.argv[1], "r", encoding="utf-8") as handle:
+        value = json.load(handle).get("cli_path")
+except Exception:
+    sys.exit(1)
+if isinstance(value, str) and value:
+    print(value)
+PY
+}
+
+find_fnm_codex_cli() {
+    local candidate root
+
+    if [ -n "${FNM_MULTISHELL_PATH:-}" ]; then
+        candidate="$FNM_MULTISHELL_PATH/bin/codex"
+        if [ -x "$candidate" ]; then
+            echo "$candidate"
+            return 0
+        fi
+    fi
+
+    for root in \
+        "${FNM_DIR:-}" \
+        "${XDG_DATA_HOME:-$HOME/.local/share}/fnm" \
+        "$HOME/.fnm"
+    do
+        [ -n "$root" ] || continue
+        candidate="$root/aliases/default/bin/codex"
+        if [ -x "$candidate" ]; then
+            echo "$candidate"
+            return 0
+        fi
+    done
+
+    return 1
+}
+
 find_codex_cli() {
     if command -v codex >/dev/null 2>&1; then
         command -v codex
@@ -1523,12 +1653,14 @@ find_codex_cli() {
 
     local candidate
     for candidate in \
+        "$(cached_codex_cli_path || true)" \
         "$HOME/.bun/bin/codex" \
         "$HOME/.npm-global/bin/codex" \
         "${XDG_CONFIG_HOME:-$HOME/.config}/nvm/versions/node/current/bin/codex" \
         "${XDG_CONFIG_HOME:-$HOME/.config}/nvm/versions/node"/*/bin/codex \
         "$HOME/.nvm/versions/node/current/bin/codex" \
         "$HOME/.nvm/versions/node"/*/bin/codex \
+        "$(find_fnm_codex_cli || true)" \
         "$HOME/.local/share/pnpm/codex" \
         "$HOME/.local/bin/codex" \
         "/usr/local/bin/codex" \
@@ -1570,9 +1702,13 @@ codex_cli_version_probe() {
     rm -f "$marker"
     ( trap - EXIT
       { exec 9>&-; } 2>/dev/null || true
-      exec "$@" >"$output_file" 2>/dev/null
+      codex_exec_host_command "$@" >"$output_file" 2>/dev/null
     ) &
     probe_pid="$!"
+    # The watchdog (and its sleep child, which outlives the kill below) must
+    # not inherit the caller's stdout: codex_cli_version runs under command
+    # substitution, and an inherited pipe fd would block the caller for the
+    # full watchdog second even when the probe answers immediately.
     ( trap - EXIT
       { exec 9>&-; } 2>/dev/null || true
       sleep 1
@@ -1584,7 +1720,7 @@ codex_cli_version_probe() {
               kill -9 "$probe_pid" 2>/dev/null || true
           fi
       fi
-    ) &
+    ) >/dev/null 2>&1 &
     watchdog_pid="$!"
 
     if wait "$probe_pid"; then
@@ -1663,7 +1799,7 @@ notify_error() {
     icon="$(resolve_notification_icon)"
     echo "$message"
     if command -v notify-send >/dev/null 2>&1; then
-        notify-send \
+        codex_run_host_command notify-send \
             -a "$CODEX_LINUX_APP_DISPLAY_NAME" \
             -i "$icon" \
             -h "string:desktop-entry:$CODEX_LINUX_APP_ID" \
@@ -1718,7 +1854,7 @@ export_feature_runtime_env() {
 
 run_update_manager() {
     resolve_update_manager_path || return 127
-    "$CODEX_UPDATE_MANAGER_PATH" "$@"
+    codex_run_host_command "$CODEX_UPDATE_MANAGER_PATH" "$@"
 }
 
 pid_is_current_user() {
@@ -1986,7 +2122,7 @@ detect_cross_install_conflict() {
 
     install_dir="$(pid_install_dir "$pid" 2>/dev/null || echo "unknown")"
     detail="Another $CODEX_LINUX_APP_DISPLAY_NAME is already running from $install_dir (pid $pid), while this launcher is $SCRIPT_DIR. Both use app id '$CODEX_LINUX_APP_ID', webview port $CODEX_LINUX_WEBVIEW_PORT, config $APP_CONFIG_DIR, and state $APP_STATE_DIR. Close the other app, or launch one build with a side-by-side CODEX_APP_ID/CODEX_LINUX_APP_ID or --new-instance."
-    echo "Foreign Codex Desktop process: $(pid_summary "$pid")"
+    echo "Foreign ChatGPT Desktop process: $(pid_summary "$pid")"
     notify_error "$detail"
     exit 1
 }
@@ -2005,12 +2141,12 @@ set_detected_running_app() {
     if ! linux_setting_enabled "codex-linux-warm-start-enabled" 1; then
         WARM_START=0
         echo "Warm-start handoff disabled by $APP_SETTINGS_FILE"
-        echo "Detected running Codex Desktop pid=$RUNNING_APP_PID; preserving liveness marker for second-instance handoff"
+        echo "Detected running ChatGPT Desktop pid=$RUNNING_APP_PID; preserving liveness marker for second-instance handoff"
         return 0
     fi
 
     WARM_START=1
-    echo "Detected running Codex Desktop pid=$RUNNING_APP_PID; using warm-start handoff"
+    echo "Detected running ChatGPT Desktop pid=$RUNNING_APP_PID; using warm-start handoff"
 }
 
 running_app_is_active() {
@@ -2228,7 +2364,7 @@ stop_owned_webview_server() {
     fi
 
     if running_app_is_active && [ -n "$pid" ] && pid_is_webview_server "$pid"; then
-        echo "Preserving webview server pid=$pid owned by running Codex Desktop pid=$RUNNING_APP_PID"
+        echo "Preserving webview server pid=$pid owned by running ChatGPT Desktop pid=$RUNNING_APP_PID"
         return 0
     fi
 
@@ -2318,7 +2454,7 @@ adopt_existing_webview_server() {
     if pid="$(owned_webview_server_pid)"; then
         if running_app_is_active; then
             ADOPTED_WEBVIEW_PID="$pid"
-            echo "Reusing webview server pid=$pid owned by running Codex Desktop pid=$RUNNING_APP_PID"
+            echo "Reusing webview server pid=$pid owned by running ChatGPT Desktop pid=$RUNNING_APP_PID"
         else
             STARTED_WEBVIEW_PID="$pid"
         fi
@@ -2335,7 +2471,7 @@ adopt_discovered_webview_server() {
         echo "$pid" > "$WEBVIEW_PID_FILE"
         if running_app_is_active; then
             ADOPTED_WEBVIEW_PID="$pid"
-            echo "Reusing webview server pid=$pid owned by running Codex Desktop pid=$RUNNING_APP_PID"
+            echo "Reusing webview server pid=$pid owned by running ChatGPT Desktop pid=$RUNNING_APP_PID"
         else
             STARTED_WEBVIEW_PID="$pid"
             echo "Adopted existing webview server pid=$pid dir=$WEBVIEW_DIR"
@@ -2346,10 +2482,35 @@ adopt_discovered_webview_server() {
     return 1
 }
 
-ensure_webview_server() {
-    if [ ! -d "$WEBVIEW_DIR" ] || [ ! "$(ls -A "$WEBVIEW_DIR" 2>/dev/null)" ]; then
+renderer_url_override_is_active() {
+    if truthy_env_value "${CODEX_LINUX_ALLOW_RENDERER_URL_OVERRIDE:-}" &&
+       [ -n "${ELECTRON_RENDERER_URL:-}" ] &&
+       [ "$ELECTRON_RENDERER_URL" != "$WEBVIEW_ORIGIN/" ]; then
         return 0
     fi
+
+    return 1
+}
+
+require_webview_entrypoint() {
+    local webview_index="$WEBVIEW_DIR/index.html"
+
+    if [ ! -f "$webview_index" ]; then
+        notify_error "$CODEX_LINUX_APP_DISPLAY_NAME webview bundle is incomplete: missing $webview_index. Rebuild the app with ./install.sh before launching."
+        exit 1
+    fi
+}
+
+start_webview_server() {
+    WEBVIEW_STARTUP_PENDING=0
+
+    if renderer_url_override_is_active; then
+        echo "Skipping packaged webview setup because ELECTRON_RENDERER_URL override is enabled"
+        log_phase "webview_override"
+        return 0
+    fi
+
+    require_webview_entrypoint
 
     if adopt_existing_webview_server; then
         if webview_origin_is_reachable; then
@@ -2359,7 +2520,7 @@ ensure_webview_server() {
         fi
 
         if running_app_is_active; then
-            notify_error "Codex Desktop webview server is already running for pid $RUNNING_APP_PID, but origin validation failed. Keeping the live app untouched."
+            notify_error "ChatGPT Desktop webview server is already running for pid $RUNNING_APP_PID, but origin validation failed. Keeping the live app untouched."
             exit 1
         fi
     fi
@@ -2403,8 +2564,20 @@ ensure_webview_server() {
     python3 "$SCRIPT_DIR/.codex-linux/webview-server.py" "$CODEX_LINUX_WEBVIEW_PORT" --bind 127.0.0.1 &
     STARTED_WEBVIEW_PID=$!
     echo "$STARTED_WEBVIEW_PID" > "$WEBVIEW_PID_FILE"
+    WEBVIEW_STARTUP_PENDING=1
 
     echo "Started webview server pid=$STARTED_WEBVIEW_PID dir=$WEBVIEW_DIR"
+    log_phase "webview_spawned"
+}
+
+# Readiness runs separately from the spawn so the Python server finishes
+# booting while the launcher does unrelated cold-start work (CLI lookup,
+# plugin cache syncs). Electron never launches before this verifies the
+# origin; the server is tied to the launcher lifetime via PR_SET_PDEATHSIG,
+# so early-exit paths cannot leak it.
+await_webview_server_ready() {
+    [ "${WEBVIEW_STARTUP_PENDING:-0}" -eq 1 ] || return 0
+    WEBVIEW_STARTUP_PENDING=0
 
     if ! wait_for_webview_server; then
         notify_error "$CODEX_LINUX_APP_DISPLAY_NAME webview server did not become ready on port $CODEX_LINUX_WEBVIEW_PORT. Check the launcher log for the embedded http.server output."
@@ -2547,6 +2720,39 @@ is_wslg_session() {
     [ -n "${DISPLAY:-}" ] && [ -e /mnt/wslg ]
 }
 
+gnome_desktop_detected() {
+    case "${XDG_CURRENT_DESKTOP:-}:${XDG_SESSION_DESKTOP:-}:${DESKTOP_SESSION:-}" in
+        *GNOME*|*gnome*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+connected_drm_monitor_count() {
+    local drm_root="${CODEX_DRM_CLASS_ROOT:-/sys/class/drm}"
+    local status_file status count=0
+
+    [ -d "$drm_root" ] || return 1
+
+    for status_file in "$drm_root"/*/status; do
+        [ -f "$status_file" ] || continue
+        IFS= read -r status < "$status_file" || continue
+        [ "$status" = "connected" ] || continue
+        count=$((count + 1))
+    done
+
+    [ "$count" -gt 0 ] || return 1
+    printf '%s\n' "$count"
+}
+
+gnome_wayland_multi_monitor_detected() {
+    local count
+
+    [ "${XDG_SESSION_TYPE:-}" = "wayland" ] || return 1
+    gnome_desktop_detected || return 1
+    count="$(connected_drm_monitor_count)" || return 1
+    [ "$count" -gt 1 ]
+}
+
 normalize_linux_rendering_mode() {
     case "${CODEX_LINUX_RENDERING_MODE:-auto}" in
         auto|default|wslg|wayland-gpu)
@@ -2672,7 +2878,7 @@ electron_enable_features_arg() {
 
 write_user_electron_flags_template() {
     cat > "$USER_ELECTRON_FLAGS_FILE" <<'EOF'
-# Codex Desktop Linux launch flags.
+# ChatGPT Desktop for Linux launch flags.
 # Uncomment one flag per line. Existing files are never overwritten.
 # Lines starting with # and blank lines are ignored.
 # Shell syntax, quotes, variables, and inline comments are not evaluated.
@@ -2762,6 +2968,10 @@ apply_electron_rendering_profile() {
         auto)
             if [ "$ELECTRON_WSLG_DETECTED" -eq 1 ]; then
                 ELECTRON_RENDERING_MODE="wslg"
+            elif [ "$ELECTRON_PLATFORM_EXPLICIT" -eq 0 ] &&
+                [ "$ELECTRON_OZONE_SWITCH_IN_ARGS" -eq 0 ] &&
+                gnome_wayland_multi_monitor_detected; then
+                ELECTRON_RENDERING_MODE="gnome-wayland-multi-monitor"
             else
                 ELECTRON_RENDERING_MODE="default"
             fi
@@ -2777,6 +2987,13 @@ apply_electron_rendering_profile() {
             return 0
             ;;
     esac
+
+    if [ "$ELECTRON_RENDERING_MODE" = "gnome-wayland-multi-monitor" ]; then
+        ELECTRON_OZONE_PLATFORM="x11"
+        ELECTRON_OZONE_HINT=""
+        echo "Detected GNOME Wayland multi-monitor session; forcing --ozone-platform=x11 for stable window scale/maximize behavior. Set CODEX_OZONE_PLATFORM=wayland or CODEX_LINUX_RENDERING_MODE=default to opt out."
+        return 0
+    fi
 
     [ "$ELECTRON_RENDERING_MODE" = "wslg" ] || return 0
 
@@ -3259,7 +3476,7 @@ run_feature_launcher_hooks() {
             CODEX_LINUX_FEATURES_DIR="$CODEX_LINUX_FEATURES_DIR" \
             CODEX_LINUX_LAUNCHER_LOG="$LOG_FILE" \
             CODEX_LINUX_FEATURE_HOOK_PHASE=launcher \
-            "$hook" "${ELECTRON_ARGS[@]}"
+            codex_run_host_command "$hook" "${ELECTRON_ARGS[@]}"
         )"; then
             :
         else
@@ -3574,7 +3791,7 @@ launch_electron() {
     ) &
     ELECTRON_PID=$!
     if [ -n "${RUNNING_APP_PID:-}" ] && pid_matches_executable "$RUNNING_APP_PID" "$SCRIPT_DIR/electron"; then
-        echo "Preserving Codex Desktop pid=$RUNNING_APP_PID liveness marker for second-instance handoff"
+        echo "Preserving ChatGPT Desktop pid=$RUNNING_APP_PID liveness marker for second-instance handoff"
     else
         echo "$ELECTRON_PID" > "$APP_PID_FILE"
     fi
@@ -3618,7 +3835,7 @@ elif [ "$WARM_START" -eq 1 ]; then
 fi
 
 if using_second_instance_handoff; then
-    echo "Detected running Codex Desktop pid=$RUNNING_APP_PID; using Electron second-instance handoff"
+    echo "Detected running ChatGPT Desktop pid=$RUNNING_APP_PID; using Electron second-instance handoff"
     log_phase "second_instance_handoff_ready"
 elif needs_cold_start; then
     log_phase "feature_prelaunch_start"
@@ -3627,7 +3844,7 @@ elif needs_cold_start; then
     log_phase "packaged_prelaunch_start"
     run_packaged_runtime_prelaunch
     log_phase "packaged_prelaunch"
-    ensure_webview_server
+    start_webview_server
 else
     echo "Skipping packaged prelaunch and webview setup for warm start"
     log_phase "warm_start_ready"
@@ -3639,7 +3856,7 @@ if [ -z "${CODEX_CLI_PATH:-}" ]; then
     log_phase "cli_lookup"
 fi
 export CHROME_DESKTOP="${CHROME_DESKTOP:-$CODEX_LINUX_APP_ID.desktop}"
-if truthy_env_value "${CODEX_LINUX_PIN_RENDERER_URL:-}" && ! truthy_env_value "${CODEX_LINUX_ALLOW_RENDERER_URL_OVERRIDE:-}"; then
+if ! truthy_env_value "${CODEX_LINUX_ALLOW_RENDERER_URL_OVERRIDE:-}"; then
     if [ -n "${ELECTRON_RENDERER_URL:-}" ] && [ "$ELECTRON_RENDERER_URL" != "$WEBVIEW_ORIGIN/" ]; then
         echo "Ignoring inherited ELECTRON_RENDERER_URL; set CODEX_LINUX_ALLOW_RENDERER_URL_OVERRIDE=1 to allow overrides"
     fi
@@ -3652,18 +3869,18 @@ if needs_cold_start && [ -z "$CODEX_CLI_PATH" ]; then
     if is_interactive_terminal; then
         if prompt_install_missing_cli; then
             if ! run_cli_preflight 1; then
-                notify_error "Codex CLI installation was attempted but did not succeed. Retry by reopening the app, or install it manually with: npm i -g @openai/codex or npm i -g --prefix ~/.local @openai/codex"
+                notify_error "Codex CLI installation was attempted but did not succeed. Retry by reopening the app, or install it manually with: npm i -g --include=optional @openai/codex or npm i -g --include=optional --prefix ~/.local @openai/codex"
                 exit 1
             fi
         fi
     elif ! run_gui_cli_prompt; then
-        notify_error "Codex CLI is required but is not installed. Reopen the app to retry the automatic install flow, or install it manually with: npm i -g @openai/codex or npm i -g --prefix ~/.local @openai/codex"
+        notify_error "Codex CLI is required but is not installed. Reopen the app to retry the automatic install flow, or install it manually with: npm i -g --include=optional @openai/codex or npm i -g --include=optional --prefix ~/.local @openai/codex"
         exit 1
     fi
 fi
 
 if needs_cold_start && [ -z "$CODEX_CLI_PATH" ]; then
-    notify_error "Codex CLI is required but is not installed. Reopen the app to retry the automatic install flow, or install it manually with: npm i -g @openai/codex or npm i -g --prefix ~/.local @openai/codex"
+    notify_error "Codex CLI is required but is not installed. Reopen the app to retry the automatic install flow, or install it manually with: npm i -g --include=optional @openai/codex or npm i -g --include=optional --prefix ~/.local @openai/codex"
     exit 1
 fi
 
@@ -3682,24 +3899,31 @@ if needs_cold_start; then
     log_phase "cold_start_cache_sync_start"
     clear_bundled_marketplace_tmp_cache
     log_phase "bundled_marketplace_tmp_cleared"
-    # The runtime marketplace is populated asynchronously and can briefly
-    # recreate read-only plugin cache trees before the sync below replaces them.
-    monitor_bundled_marketplace_tmp_permissions
-    log_phase "bundled_marketplace_tmp_monitor_started"
-    sync_browser_use_bundled_plugin_cache
+    stage_bundled_marketplace_metadata
+    log_phase "bundled_marketplace_metadata_staged"
+    sync_browser_use_bundled_plugin_cache &
+    SYNC_BROWSER_USE_PID=$!
+    sync_chrome_bundled_plugin_cache &
+    SYNC_CHROME_PID=$!
+    sync_computer_use_bundled_plugin_cache &
+    SYNC_COMPUTER_USE_PID=$!
+    sync_read_aloud_bundled_plugin_cache &
+    SYNC_READ_ALOUD_PID=$!
+    sync_extra_bundled_plugin_cache &
+    SYNC_EXTRA_PID=$!
+    wait "$SYNC_BROWSER_USE_PID"
     log_phase "browser_use_plugin_cache_synced"
-    sync_chrome_bundled_plugin_cache
+    wait "$SYNC_CHROME_PID"
     log_phase "chrome_plugin_cache_synced"
-    if ! early_truthy_env_value "${CODEX_COMPUTER_USE_BROWSER_ONLY:-}" && [ "${CODEX_COMPUTER_CONTROL_MODE:-}" != "browser-only" ]; then
-        sync_computer_use_bundled_plugin_cache
-    fi
+    wait "$SYNC_COMPUTER_USE_PID"
     log_phase "computer_use_plugin_cache_synced"
-    sync_read_aloud_bundled_plugin_cache
+    wait "$SYNC_READ_ALOUD_PID"
     log_phase "read_aloud_plugin_cache_synced"
-    sync_extra_bundled_plugin_cache
+    wait "$SYNC_EXTRA_PID"
     log_phase "extra_bundled_plugin_cache_synced"
     run_cold_start_hooks
     log_phase "cold_start_hooks_dispatched"
+    await_webview_server_ready
 fi
 resolve_browser_use_runtime_env
 log_phase "browser_use_runtime_env_resolved"

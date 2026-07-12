@@ -9,7 +9,6 @@ SPEC_TEMPLATE="$REPO_DIR/packaging/linux/codex-desktop.spec"
 DESKTOP_TEMPLATE="$REPO_DIR/packaging/linux/codex-desktop.desktop"
 SERVICE_TEMPLATE="$REPO_DIR/packaging/linux/codex-update-manager.service"
 USER_SERVICE_HELPER_TEMPLATE="$REPO_DIR/packaging/linux/codex-update-manager-user-service.sh"
-ICON_SOURCE="$REPO_DIR/assets/codex-linux.png"
 PACKAGED_RUNTIME_TEMPLATE="$REPO_DIR/packaging/linux/codex-packaged-runtime.sh"
 
 PACKAGE_NAME="${PACKAGE_NAME:-codex-desktop}"
@@ -24,6 +23,8 @@ UPDATE_BUILDER_ROOT_PLACEHOLDER="__UPDATE_BUILDER_ROOT__"
 # Keep the installed update-builder payload aligned with the other package formats.
 # shellcheck source=scripts/lib/package-common.sh
 . "$REPO_DIR/scripts/lib/package-common.sh"
+
+ICON_SOURCE="$(resolve_package_icon_source)"
 
 info()  { echo "[INFO] $*" >&2; }
 error() { echo "[ERROR] $*" >&2; exit 1; }
@@ -64,8 +65,7 @@ main() {
         RPM_BINARY_PAYLOAD="w19T${MAX_BUILD_THREADS}.zstdio"
     fi
 
-    [ -d "$APP_DIR" ] || error "Missing app directory: $APP_DIR. Run ./install.sh first."
-    [ -x "$APP_DIR/start.sh" ] || error "Missing launcher: $APP_DIR/start.sh"
+    ensure_app_layout
     [ -f "$SPEC_TEMPLATE" ] || error "Missing spec template: $SPEC_TEMPLATE"
     [ -f "$DESKTOP_TEMPLATE" ] || error "Missing desktop template: $DESKTOP_TEMPLATE"
     [ -f "$ICON_SOURCE" ] || error "Missing icon: $ICON_SOURCE"

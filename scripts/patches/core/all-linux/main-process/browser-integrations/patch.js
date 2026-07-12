@@ -7,6 +7,8 @@ const {
 const { patchStatusFromChange } = require("../../../../../lib/patch-report.js");
 const {
   applyBrowserUseNodeReplApprovalAssets,
+  applyLinuxBundledPluginCopyPermissionsPatch,
+  applyLinuxBundledPluginReconcileStaleSnapshotPatch,
   applyLinuxBrowserUseRouteLivenessPatch,
   applyLinuxChromeExtensionStatusPatch,
 } = require("../../../../impl/main-process/browser.js");
@@ -36,6 +38,20 @@ module.exports = [
           ? "Browser Use node_repl mcp config bundle not found"
           : warnings[0] ?? null,
     }),
+  }),
+  mainBundlePatch({
+    id: "linux-bundled-plugin-reconcile-stale-snapshot",
+    phase: "main-bundle",
+    order: 164,
+    ciPolicy: "optional",
+    apply: applyLinuxBundledPluginReconcileStaleSnapshotPatch,
+  }),
+  mainBundlePatch({
+    id: "linux-bundled-plugin-copy-permissions",
+    phase: "main-bundle",
+    order: 165,
+    ciPolicy: "optional",
+    apply: applyLinuxBundledPluginCopyPermissionsPatch,
   }),
   mainBundlePatch({
     id: "linux-browser-use-route-liveness",

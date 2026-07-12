@@ -1,8 +1,8 @@
 **IMPORTANT: THIS PROJECT SUPPORTS ONLY THE LATEST UPSTREAM `CODEX.DMG`. WHEN FIXING UPSTREAM DRIFT, REMOVE OLD DRIFT WORKAROUNDS IN THE SAME PULL REQUEST. DO NOT KEEP LEGACY DMG SHAPES, FALLBACK PATCH PATHS, OR VERSION-SPECIFIC COMPATIBILITY ZOOS AROUND. THE CODE SHOULD TARGET THE CURRENT DMG SO REVIEW, VALIDATION, AND DIAGNOSTICS DO NOT HAVE TO GUESS WHICH UPSTREAM VERSION FAILED.**
 
-# Contributing to Codex Desktop for Linux
+# Contributing to ChatGPT Desktop for Linux
 
-Thanks for your interest in contributing to Codex Desktop for Linux. This project adapts the official macOS Codex Desktop DMG into a runnable Linux app, packages it for multiple Linux distributions, and maintains a local Rust update manager for future rebuilds.
+Thanks for your interest in contributing to ChatGPT Desktop for Linux. This project adapts the official macOS ChatGPT Desktop DMG into a runnable Linux app, packages it for multiple Linux distributions, and maintains a local Rust update manager for future rebuilds.
 
 Contributions of all sizes are welcome: bug reports, documentation improvements, packaging fixes, installer updates, tests, and new features.
 
@@ -13,7 +13,7 @@ Contributions of all sizes are welcome: bug reports, documentation improvements,
 - Avoid mixed pull requests that combine unrelated fixes, refactors, formatting, docs, or cleanup.
 - Think through the impact on every supported path: source installs, `.deb`, `.rpm`, pacman packages, Nix, updater rebuilds, and different desktop environments.
 - Preserve existing platform behavior unless the pull request explicitly explains why it must change.
-- If a feature is not part of the standard upstream Codex Desktop experience and is not required Linux compatibility glue, implement it as an opt-in `linux-features/` module instead of a core patch.
+- If a feature is not part of the standard upstream ChatGPT Desktop experience and is not required Linux compatibility glue, implement it as an opt-in `linux-features/` module instead of a core patch.
 - Include a short summary, the user-visible behavior change, and the validation you ran.
 
 ## Before You Start
@@ -311,4 +311,4 @@ Please avoid:
 
 ## Thank You
 
-Every improvement helps make Codex Desktop for Linux more reliable across distributions, desktop environments, and packaging formats. Thanks for taking the time to contribute thoughtfully.
+Every improvement helps make ChatGPT Desktop for Linux more reliable across distributions, desktop environments, and packaging formats. Thanks for taking the time to contribute thoughtfully.

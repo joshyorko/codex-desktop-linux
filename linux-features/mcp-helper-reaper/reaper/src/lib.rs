@@ -9,7 +9,6 @@ use std::time::Duration;
 pub struct ProcInfo {
     pub pid: i32,
     pub ppid: i32,
-    pub pgid: i32,
     pub start_time: u64,
     pub comm: String,
     pub argv: Vec<String>,
@@ -49,14 +48,9 @@ pub fn plan_reap(
         .values()
         .filter(|process| process.ppid == parent_pid)
         .collect::<Vec<_>>();
-    let parent_is_shared_app_server = processes
-        .get(&parent_pid)
-        .is_some_and(is_shared_codex_app_server);
-    if !parent_is_shared_app_server {
-        for process in &direct_children {
-            if let Some(signature) = helper_signature(process, server_specs, app_dir) {
-                groups.entry(signature).or_default().push(*process);
-            }
+    for process in &direct_children {
+        if let Some(signature) = helper_signature(process, server_specs, app_dir) {
+            groups.entry(signature).or_default().push(*process);
         }
     }
 
@@ -90,7 +84,6 @@ pub fn plan_reap(
         &mut seen_stale_pids,
         &direct_children,
         app_dir,
-        parent_is_shared_app_server,
     );
     candidates.sort_by(|left, right| {
         left.signature
@@ -122,15 +115,8 @@ fn append_generation_reap_candidates(
     seen_stale_pids: &mut BTreeSet<i32>,
     direct_children: &[&ProcInfo],
     app_dir: Option<&Path>,
-    parent_is_shared_app_server: bool,
 ) {
-    append_app_generation_reap_candidates(
-        candidates,
-        seen_stale_pids,
-        direct_children,
-        app_dir,
-        parent_is_shared_app_server,
-    );
+    append_app_generation_reap_candidates(candidates, seen_stale_pids, direct_children, app_dir);
     append_deleted_mcp_generation_reap_candidates(candidates, seen_stale_pids, direct_children);
 }
 
@@ -139,17 +125,11 @@ fn append_app_generation_reap_candidates(
     seen_stale_pids: &mut BTreeSet<i32>,
     direct_children: &[&ProcInfo],
     app_dir: Option<&Path>,
-    parent_is_shared_app_server: bool,
 ) {
     let Some(app_dir) = app_dir else {
         return;
     };
     let mut groups: BTreeMap<String, Vec<&ProcInfo>> = BTreeMap::new();
-    let current_generation_pid = direct_children
-        .iter()
-        .filter(|process| looks_like_app_helper(process, Some(app_dir)))
-        .max_by_key(|process| (process.start_time, process.pid))
-        .map(|process| process.pid);
     for process in direct_children {
         if !is_helper_candidate(process) {
             continue;
@@ -157,34 +137,6 @@ fn append_app_generation_reap_candidates(
         if let Some(signature) = app_generation_signature(process, app_dir) {
             groups.entry(signature).or_default().push(*process);
         }
-    }
-
-    if parent_is_shared_app_server {
-        let Some(current_generation_pid) = current_generation_pid else {
-            return;
-        };
-        for process in direct_children {
-            if process.pid == current_generation_pid
-                || !is_helper_candidate(process)
-                || looks_like_app_helper(process, Some(app_dir))
-            {
-                continue;
-            }
-            let Some(signature) = app_generation_signature(process, app_dir) else {
-                continue;
-            };
-            let signature = signature
-                .strip_prefix("app-generation:")
-                .unwrap_or(&signature);
-            push_reap_candidate(
-                candidates,
-                seen_stale_pids,
-                process.pid,
-                current_generation_pid,
-                format!("app-generation:stale:{signature}"),
-            );
-        }
-        return;
     }
 
     for (signature, members) in groups {
@@ -258,22 +210,14 @@ pub fn plan_orphan_reap(
     server_specs: &[ServerSpec],
     app_dir: Option<&Path>,
 ) -> Vec<OrphanReapCandidate> {
-    let live_generations = live_codex_helper_generations(processes, server_specs, app_dir);
     let mut candidates = Vec::new();
     for process in processes.values() {
+        if !is_orphan_helper_root(process, processes, server_specs, app_dir) {
+            continue;
+        }
         let Some(signature) = helper_signature_for_orphan(process, server_specs, app_dir) else {
             continue;
         };
-        if !is_orphan_helper_root(
-            process,
-            processes,
-            server_specs,
-            app_dir,
-            &signature,
-            &live_generations,
-        ) {
-            continue;
-        }
         candidates.push(OrphanReapCandidate {
             stale_pid: process.pid,
             signature,
@@ -285,30 +229,6 @@ pub fn plan_orphan_reap(
             .then(left.stale_pid.cmp(&right.stale_pid))
     });
     candidates
-}
-
-fn live_codex_helper_generations(
-    processes: &BTreeMap<i32, ProcInfo>,
-    server_specs: &[ServerSpec],
-    app_dir: Option<&Path>,
-) -> BTreeMap<String, u64> {
-    let mut generations: BTreeMap<String, u64> = BTreeMap::new();
-    for process in processes.values() {
-        let Some(parent) = processes.get(&process.ppid) else {
-            continue;
-        };
-        if !is_codex_process(parent) {
-            continue;
-        }
-        let Some(signature) = helper_signature_for_orphan(process, server_specs, app_dir) else {
-            continue;
-        };
-        generations
-            .entry(signature)
-            .and_modify(|start_time| *start_time = (*start_time).max(process.start_time))
-            .or_insert(process.start_time);
-    }
-    generations
 }
 
 pub fn load_config_server_specs(path: &Path) -> Result<Vec<ServerSpec>> {
@@ -426,23 +346,6 @@ pub fn descendant_pids(root_pid: i32, processes: &BTreeMap<i32, ProcInfo>) -> Ve
     result
 }
 
-pub fn tree_or_process_group_pids(root_pid: i32, processes: &BTreeMap<i32, ProcInfo>) -> Vec<i32> {
-    let mut pids = descendant_pids(root_pid, processes)
-        .into_iter()
-        .collect::<BTreeSet<_>>();
-    if let Some(root) = processes.get(&root_pid) {
-        if root.pgid == root.pid {
-            pids.extend(
-                processes
-                    .values()
-                    .filter(|process| process.pid != root_pid && process.pgid == root.pgid)
-                    .map(|process| process.pid),
-            );
-        }
-    }
-    pids.into_iter().collect()
-}
-
 pub fn read_proc(pid: i32) -> Option<ProcInfo> {
     let proc_dir = PathBuf::from("/proc").join(pid.to_string());
     let stat = std::fs::read_to_string(proc_dir.join("stat")).ok()?;
@@ -454,7 +357,6 @@ pub fn read_proc(pid: i32) -> Option<ProcInfo> {
     let end = stat.rfind(')')?;
     let fields: Vec<&str> = stat.get(end + 2..)?.split_whitespace().collect();
     let ppid = fields.get(1)?.parse().ok()?;
-    let pgid = fields.get(2)?.parse().ok()?;
     let start_time = fields.get(19)?.parse().ok()?;
     let argv = cmdline
         .split(|byte| *byte == b'\0')
@@ -468,7 +370,6 @@ pub fn read_proc(pid: i32) -> Option<ProcInfo> {
     Some(ProcInfo {
         pid,
         ppid,
-        pgid,
         start_time,
         comm,
         argv,
@@ -514,17 +415,6 @@ pub fn is_codex_process(process: &ProcInfo) -> bool {
     process.comm == "codex" || name == "codex" || name.starts_with("codex-")
 }
 
-fn is_shared_codex_app_server(process: &ProcInfo) -> bool {
-    process_name(process) == "codex-app-server"
-        || (process_name(process) == "codex"
-            && process.argv.get(1).is_some_and(|arg| arg == "-c")
-            && process
-                .argv
-                .get(2)
-                .is_some_and(|arg| arg == "features.code_mode_host=true")
-            && process.argv.get(3).is_some_and(|arg| arg == "app-server"))
-}
-
 fn is_codex_non_owner_process(process: &ProcInfo) -> bool {
     let argv0 = process.argv.first().map(String::as_str).unwrap_or_default();
     let name = Path::new(argv0)
@@ -537,21 +427,7 @@ fn is_codex_non_owner_process(process: &ProcInfo) -> bool {
 
 pub fn same_process(expected: &ProcInfo) -> bool {
     read_proc(expected.pid)
-        .map(|current| {
-            current.ppid == expected.ppid
-                && current.pgid == expected.pgid
-                && current.start_time == expected.start_time
-        })
-        .unwrap_or(false)
-}
-
-pub fn same_process_or_reparented_group_member(expected: &ProcInfo) -> bool {
-    read_proc(expected.pid)
-        .map(|current| {
-            current.start_time == expected.start_time
-                && current.pgid == expected.pgid
-                && (current.ppid == expected.ppid || expected.pgid == expected.pid)
-        })
+        .map(|current| current.ppid == expected.ppid && current.start_time == expected.start_time)
         .unwrap_or(false)
 }
 
@@ -617,46 +493,6 @@ pub fn discover_config_paths(
     dedupe_paths(paths)
 }
 
-pub fn discover_direct_child_config_paths(
-    parent: &ProcInfo,
-    processes: &BTreeMap<i32, ProcInfo>,
-    codex_home: Option<&Path>,
-    extra: &[PathBuf],
-) -> Vec<PathBuf> {
-    let env = read_environ(parent.pid);
-    let home = env.get("HOME").map(PathBuf::from).unwrap_or_else(|| {
-        std::env::var_os("HOME")
-            .map(PathBuf::from)
-            .unwrap_or_default()
-    });
-    let codex_home = codex_home_for_parent(parent, codex_home);
-
-    let mut paths = Vec::new();
-    paths.extend(extra.iter().cloned());
-    paths.push(codex_home.join("config.toml"));
-
-    for process in processes.values() {
-        if process.ppid != parent.pid
-            || process.cwd.as_os_str().is_empty()
-            || !process.cwd.is_absolute()
-            || !is_helper_candidate(process)
-        {
-            continue;
-        }
-
-        let mut cwd = process.cwd.as_path();
-        loop {
-            paths.push(cwd.join(".codex/config.toml"));
-            if cwd == home || cwd.parent().is_none() {
-                break;
-            }
-            cwd = cwd.parent().expect("checked parent exists");
-        }
-    }
-
-    dedupe_paths(paths)
-}
-
 pub fn load_plugin_cache_server_specs(codex_home: &Path) -> Vec<ServerSpec> {
     let root = codex_home.join("plugins/cache");
     let mut specs = Vec::new();
@@ -714,11 +550,17 @@ pub fn terminate_orphan_helpers(
 pub fn escalate_stale_helpers(
     candidates: &[ReapCandidate],
     original_processes: &BTreeMap<i32, ProcInfo>,
-    _current_processes: &BTreeMap<i32, ProcInfo>,
+    current_processes: &BTreeMap<i32, ProcInfo>,
     quiet: bool,
 ) {
     for candidate in candidates {
-        if !has_live_stale_tree_member(candidate.stale_pid, original_processes) {
+        let Some(original) = original_processes.get(&candidate.stale_pid) else {
+            continue;
+        };
+        let Some(current) = current_processes.get(&candidate.stale_pid) else {
+            continue;
+        };
+        if current.ppid != original.ppid || current.start_time != original.start_time {
             continue;
         }
         log(
@@ -728,26 +570,24 @@ pub fn escalate_stale_helpers(
                 candidate.stale_pid, candidate.signature
             ),
         );
-        signal_tree_or_process_group_with(
-            candidate.stale_pid,
-            libc::SIGKILL,
-            original_processes,
-            same_process_or_reparented_group_member,
-            |pid, signal| unsafe {
-                libc::kill(pid, signal);
-            },
-        );
+        signal_tree(candidate.stale_pid, libc::SIGKILL, current_processes);
     }
 }
 
 pub fn escalate_orphan_helpers(
     candidates: &[OrphanReapCandidate],
     original_processes: &BTreeMap<i32, ProcInfo>,
-    _current_processes: &BTreeMap<i32, ProcInfo>,
+    current_processes: &BTreeMap<i32, ProcInfo>,
     quiet: bool,
 ) {
     for candidate in candidates {
-        if !has_live_stale_tree_member(candidate.stale_pid, original_processes) {
+        let Some(original) = original_processes.get(&candidate.stale_pid) else {
+            continue;
+        };
+        let Some(current) = current_processes.get(&candidate.stale_pid) else {
+            continue;
+        };
+        if current.ppid != original.ppid || current.start_time != original.start_time {
             continue;
         }
         log(
@@ -757,15 +597,7 @@ pub fn escalate_orphan_helpers(
                 candidate.stale_pid, candidate.signature
             ),
         );
-        signal_tree_or_process_group_with(
-            candidate.stale_pid,
-            libc::SIGKILL,
-            original_processes,
-            same_process_or_reparented_group_member,
-            |pid, signal| unsafe {
-                libc::kill(pid, signal);
-            },
-        );
+        signal_tree(candidate.stale_pid, libc::SIGKILL, current_processes);
     }
 }
 
@@ -802,7 +634,7 @@ fn collect_plugin_specs(dir: &Path, depth: usize, specs: &mut Vec<ServerSpec>) {
 }
 
 fn signal_tree(root_pid: i32, signal: i32, processes: &BTreeMap<i32, ProcInfo>) {
-    signal_tree_or_process_group_with(
+    signal_tree_with(
         root_pid,
         signal,
         processes,
@@ -813,7 +645,7 @@ fn signal_tree(root_pid: i32, signal: i32, processes: &BTreeMap<i32, ProcInfo>) 
     );
 }
 
-fn signal_tree_or_process_group_with<IdentityMatches, SendSignal>(
+fn signal_tree_with<IdentityMatches, SendSignal>(
     root_pid: i32,
     signal: i32,
     processes: &BTreeMap<i32, ProcInfo>,
@@ -823,7 +655,7 @@ fn signal_tree_or_process_group_with<IdentityMatches, SendSignal>(
     IdentityMatches: FnMut(&ProcInfo) -> bool,
     SendSignal: FnMut(i32, i32),
 {
-    let mut pids = tree_or_process_group_pids(root_pid, processes);
+    let mut pids = descendant_pids(root_pid, processes);
     pids.reverse();
     pids.push(root_pid);
     for pid in pids {
@@ -835,18 +667,6 @@ fn signal_tree_or_process_group_with<IdentityMatches, SendSignal>(
         }
         send_signal(pid, signal);
     }
-}
-
-fn has_live_stale_tree_member(root_pid: i32, original_processes: &BTreeMap<i32, ProcInfo>) -> bool {
-    if let Some(root) = original_processes.get(&root_pid) {
-        if same_process_or_reparented_group_member(root) {
-            return true;
-        }
-    }
-    tree_or_process_group_pids(root_pid, original_processes)
-        .into_iter()
-        .filter_map(|pid| original_processes.get(&pid))
-        .any(same_process_or_reparented_group_member)
 }
 
 fn log(quiet: bool, message: &str) {
@@ -1056,8 +876,6 @@ fn is_orphan_helper_root(
     processes: &BTreeMap<i32, ProcInfo>,
     server_specs: &[ServerSpec],
     app_dir: Option<&Path>,
-    signature: &str,
-    live_generations: &BTreeMap<String, u64>,
 ) -> bool {
     if !has_init_or_user_systemd_parent(process, processes) {
         return false;
@@ -1068,23 +886,10 @@ fn is_orphan_helper_root(
     if has_helper_ancestor(process, processes, server_specs, app_dir) {
         return false;
     }
-    if !has_codex_origin_marker(process)
-        && !has_newer_live_codex_generation(process, signature, live_generations)
-    {
+    if !has_codex_origin_marker(process) {
         return false;
     }
-    true
-}
-
-fn has_newer_live_codex_generation(
-    process: &ProcInfo,
-    signature: &str,
-    live_generations: &BTreeMap<String, u64>,
-) -> bool {
-    live_generations
-        .get(signature)
-        .map(|start_time| *start_time > process.start_time)
-        .unwrap_or(false)
+    helper_signature_for_orphan(process, server_specs, app_dir).is_some()
 }
 
 fn has_codex_origin_marker(process: &ProcInfo) -> bool {
@@ -1320,21 +1125,9 @@ mod tests {
     use tempfile::tempdir;
 
     fn proc(pid: i32, ppid: i32, start_time: u64, argv: &[&str], cwd: &str) -> ProcInfo {
-        proc_with_pgid(pid, ppid, pid, start_time, argv, cwd)
-    }
-
-    fn proc_with_pgid(
-        pid: i32,
-        ppid: i32,
-        pgid: i32,
-        start_time: u64,
-        argv: &[&str],
-        cwd: &str,
-    ) -> ProcInfo {
         ProcInfo {
             pid,
             ppid,
-            pgid,
             start_time,
             comm: argv
                 .first()
@@ -1382,191 +1175,6 @@ mod tests {
                     .to_string(),
             }]
         );
-    }
-
-    #[test]
-    fn keeps_duplicate_helpers_under_shared_desktop_app_server() {
-        let mut processes = BTreeMap::new();
-        let app_dir = "/opt/codex-desktop/current/share/codex-desktop/app";
-        let current_helper = format!("{app_dir}/resources/current-helper");
-        let stale_helper = "/opt/codex-desktop/old/share/codex-desktop/app/resources/stale-helper";
-        processes.insert(
-            100,
-            proc(
-                100,
-                1,
-                10,
-                &[
-                    "codex",
-                    "-c",
-                    "features.code_mode_host=true",
-                    "app-server",
-                    "--remote-control",
-                ],
-                "/app",
-            ),
-        );
-        processes.insert(
-            101,
-            proc(101, 100, 20, &[current_helper.as_str(), "serve"], "/repo"),
-        );
-        processes.insert(
-            102,
-            proc(102, 100, 30, &[current_helper.as_str(), "serve"], "/repo"),
-        );
-        processes.insert(103, proc(103, 100, 40, &[stale_helper, "serve"], "/repo"));
-        let specs = vec![ServerSpec {
-            name: "code-index".to_string(),
-            command: current_helper,
-            args: vec!["serve".to_string()],
-            cwd: None,
-        }];
-
-        assert_eq!(
-            plan_reap(100, &processes, &specs, Some(Path::new(app_dir))),
-            vec![ReapCandidate {
-                stale_pid: 103,
-                keep_pid: 102,
-                signature: "app-generation:stale:resources/stale-helper\u{0}serve".to_string(),
-            }]
-        );
-    }
-
-    #[test]
-    fn does_not_treat_later_app_server_argument_as_shared_parent() {
-        let mut processes = BTreeMap::new();
-        processes.insert(
-            100,
-            proc(100, 1, 10, &["codex", "resume", "app-server"], "/app"),
-        );
-        processes.insert(
-            101,
-            proc(101, 100, 20, &["/tmp/example-helper", "serve"], "/repo"),
-        );
-        processes.insert(
-            102,
-            proc(102, 100, 30, &["/tmp/example-helper", "serve"], "/repo"),
-        );
-        let specs = vec![ServerSpec {
-            name: "code-index".to_string(),
-            command: "/tmp/example-helper".to_string(),
-            args: vec!["serve".to_string()],
-            cwd: None,
-        }];
-
-        assert_eq!(plan_reap(100, &processes, &specs, None).len(), 1);
-    }
-
-    #[test]
-    fn discovers_repo_config_from_direct_helper_children_under_desktop_app_server() {
-        let dir = tempdir().unwrap();
-        let home = dir.path().join("home");
-        let repo = home.join("repo");
-        let app = dir.path().join("app");
-        fs::create_dir_all(repo.join(".codex")).unwrap();
-        fs::create_dir_all(&app).unwrap();
-        fs::write(
-            repo.join(".codex/config.toml"),
-            r#"
-[mcp_servers.code_index]
-command = "/tmp/code-index"
-args = ["serve"]
-"#,
-        )
-        .unwrap();
-
-        let mut processes = BTreeMap::new();
-        processes.insert(
-            100,
-            proc(
-                100,
-                1,
-                10,
-                &[
-                    "/usr/bin/codex",
-                    "-c",
-                    "features.code_mode_host=true",
-                    "app-server",
-                    "--remote-control",
-                ],
-                app.to_str().unwrap(),
-            ),
-        );
-        processes.insert(
-            101,
-            proc(
-                101,
-                100,
-                20,
-                &["/tmp/code-index", "serve"],
-                repo.to_str().unwrap(),
-            ),
-        );
-
-        let paths = discover_direct_child_config_paths(
-            processes.get(&100).unwrap(),
-            &processes,
-            Some(&home.join(".codex")),
-            &[],
-        );
-
-        assert!(paths.contains(&repo.join(".codex/config.toml")));
-    }
-
-    #[test]
-    fn direct_child_config_discovery_ignores_shell_tool_children() {
-        let dir = tempdir().unwrap();
-        let home = dir.path().join("home");
-        let repo = home.join("repo");
-        let app = dir.path().join("app");
-        fs::create_dir_all(repo.join(".codex")).unwrap();
-        fs::create_dir_all(&app).unwrap();
-        fs::write(
-            repo.join(".codex/config.toml"),
-            r#"
-[mcp_servers.not_a_helper]
-command = "echo"
-args = ["mcp-server", "--stdio"]
-"#,
-        )
-        .unwrap();
-
-        let mut processes = BTreeMap::new();
-        processes.insert(
-            100,
-            proc(
-                100,
-                1,
-                10,
-                &[
-                    "/usr/bin/codex",
-                    "-c",
-                    "features.code_mode_host=true",
-                    "app-server",
-                    "--remote-control",
-                ],
-                app.to_str().unwrap(),
-            ),
-        );
-        processes.insert(
-            101,
-            proc(
-                101,
-                100,
-                20,
-                &["bash", "-lc", "echo mcp-server --stdio"],
-                repo.to_str().unwrap(),
-            ),
-        );
-
-        let paths = discover_direct_child_config_paths(
-            processes.get(&100).unwrap(),
-            &processes,
-            Some(&home.join(".codex")),
-            &[],
-        );
-
-        assert!(!paths.contains(&repo.join(".codex/config.toml")));
     }
 
     #[test]
@@ -2018,30 +1626,7 @@ args = ["serve", "--stdio"]
     }
 
     #[test]
-    fn tree_or_process_group_pids_includes_reparented_process_group_members() {
-        let mut processes = BTreeMap::new();
-        processes.insert(
-            101,
-            proc_with_pgid(101, 100, 101, 20, &["helper", "--stdio"], "/repo"),
-        );
-        processes.insert(
-            102,
-            proc_with_pgid(102, 101, 101, 21, &["child-a"], "/repo"),
-        );
-        processes.insert(
-            103,
-            proc_with_pgid(103, 1, 101, 22, &["daemonized-grandchild"], "/repo"),
-        );
-        processes.insert(
-            104,
-            proc_with_pgid(104, 1, 104, 23, &["other-helper"], "/repo"),
-        );
-
-        assert_eq!(tree_or_process_group_pids(101, &processes), vec![102, 103]);
-    }
-
-    #[test]
-    fn signal_tree_revalidates_each_tree_or_process_group_member_identity() {
+    fn signal_tree_revalidates_each_descendant_identity() {
         let mut processes = BTreeMap::new();
         processes.insert(101, proc(101, 100, 20, &["helper", "--stdio"], "/repo"));
         processes.insert(102, proc(102, 101, 21, &["child-a"], "/repo"));
@@ -2050,7 +1635,7 @@ args = ["serve", "--stdio"]
 
         let live_pids = BTreeSet::from([101, 103]);
         let mut signaled = Vec::new();
-        signal_tree_or_process_group_with(
+        signal_tree_with(
             101,
             libc::SIGTERM,
             &processes,
@@ -2059,35 +1644,6 @@ args = ["serve", "--stdio"]
         );
 
         assert_eq!(signaled, vec![(103, libc::SIGTERM), (101, libc::SIGTERM)]);
-    }
-
-    #[test]
-    fn stale_escalation_signals_descendants_when_root_already_exited() {
-        let mut original_processes = BTreeMap::new();
-        original_processes.insert(
-            101,
-            proc_with_pgid(101, 100, 101, 20, &["helper", "--stdio"], "/repo"),
-        );
-        original_processes.insert(
-            102,
-            proc_with_pgid(102, 101, 101, 21, &["daemonized-child"], "/repo"),
-        );
-        let candidates = [ReapCandidate {
-            stale_pid: 101,
-            keep_pid: 201,
-            signature: "argv:helper\0--stdio".to_string(),
-        }];
-
-        let mut signaled = Vec::new();
-        signal_tree_or_process_group_with(
-            candidates[0].stale_pid,
-            libc::SIGKILL,
-            &original_processes,
-            |expected| expected.pid == 102,
-            |pid, signal| signaled.push((pid, signal)),
-        );
-
-        assert_eq!(signaled, vec![(102, libc::SIGKILL)]);
     }
 
     #[test]
@@ -2141,90 +1697,6 @@ args = ["serve", "--stdio"]
             proc(
                 101,
                 10,
-                20,
-                &["python3", "/repo/bin/server-filter.py", "--stdio"],
-                "/repo",
-            ),
-        );
-        let specs = vec![ServerSpec {
-            name: "wrapped-server".to_string(),
-            command: "/repo/bin/server".to_string(),
-            args: Vec::new(),
-            cwd: None,
-        }];
-
-        assert!(plan_orphan_reap(&processes, &specs, None).is_empty());
-    }
-
-    #[test]
-    fn reaps_configured_orphan_when_newer_live_codex_generation_matches() {
-        let mut processes = BTreeMap::new();
-        processes.insert(1, proc(1, 0, 1, &["/usr/lib/systemd/systemd"], "/"));
-        processes.insert(
-            10,
-            proc(10, 1, 2, &["/usr/lib/systemd/systemd", "--user"], "/"),
-        );
-        processes.insert(100, proc(100, 1, 10, &["codex", "app-server"], "/app"));
-        processes.insert(
-            101,
-            proc(
-                101,
-                10,
-                20,
-                &["python3", "/repo/bin/server-filter.py", "--stdio"],
-                "/repo",
-            ),
-        );
-        processes.insert(
-            102,
-            proc(
-                102,
-                100,
-                30,
-                &["python3", "/repo/bin/server-filter.py", "--stdio"],
-                "/repo",
-            ),
-        );
-        let specs = vec![ServerSpec {
-            name: "wrapped-server".to_string(),
-            command: "/repo/bin/server".to_string(),
-            args: Vec::new(),
-            cwd: None,
-        }];
-
-        assert_eq!(
-            plan_orphan_reap(&processes, &specs, None),
-            vec![OrphanReapCandidate {
-                stale_pid: 101,
-                signature: "config:wrapped-server\u{0}/repo/bin/server\u{0}\u{0}/repo".to_string(),
-            }]
-        );
-    }
-
-    #[test]
-    fn ignores_configured_orphan_when_matching_live_codex_generation_is_older() {
-        let mut processes = BTreeMap::new();
-        processes.insert(1, proc(1, 0, 1, &["/usr/lib/systemd/systemd"], "/"));
-        processes.insert(
-            10,
-            proc(10, 1, 2, &["/usr/lib/systemd/systemd", "--user"], "/"),
-        );
-        processes.insert(100, proc(100, 1, 10, &["codex", "app-server"], "/app"));
-        processes.insert(
-            101,
-            proc(
-                101,
-                10,
-                30,
-                &["python3", "/repo/bin/server-filter.py", "--stdio"],
-                "/repo",
-            ),
-        );
-        processes.insert(
-            102,
-            proc(
-                102,
-                100,
                 20,
                 &["python3", "/repo/bin/server-filter.py", "--stdio"],
                 "/repo",

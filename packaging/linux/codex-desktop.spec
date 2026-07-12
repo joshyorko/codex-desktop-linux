@@ -1,7 +1,7 @@
 Name:           __PACKAGE_NAME__
 Version:        __RPM_VERSION__
 Release:        __RPM_RELEASE__%{?dist}
-Summary:        Codex Desktop for Linux
+Summary:        ChatGPT Desktop for Linux
 License:        Proprietary
 ExclusiveArch:  __ARCH__
 %global __requires_exclude_from ^/opt/__PACKAGE_NAME__/.*$
@@ -26,7 +26,7 @@ Requires:       libXrandr.so.2%{codex_elf_suffix}, libgbm.so.1%{codex_elf_suffix
 Recommends:     zenity, kdialog
 
 %description
-Community-built Linux package for Codex Desktop generated from the macOS DMG.
+Community-built Linux package for ChatGPT Desktop generated from the macOS DMG.
 Requires the Codex CLI to be available in PATH or CODEX_CLI_PATH.
 %if __PACKAGE_WITH_UPDATER__
 Local auto-updates rebuild a Linux package from the upstream Codex.dmg and therefore
@@ -109,5 +109,5 @@ fi
 %endif
 
 %changelog
-* Thu Jan 01 2026 Codex Desktop Linux Maintainers <maintainers@codex-desktop-linux>
+* Thu Jan 01 2026 ChatGPT Desktop for Linux Maintainers <maintainers@codex-desktop-linux>
 - Initial RPM package

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Guided, conservative setup helper for native Codex Desktop Linux builds.
+# Guided, conservative setup helper for native ChatGPT Desktop for Linux builds.
 set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -552,7 +552,7 @@ print_system_summary() {
         atomic_host="yes"
     fi
 
-    info "Codex Desktop Linux guided setup"
+    info "ChatGPT Desktop for Linux guided setup"
     info "Repository: $REPO_DIR"
     info "Distro: ID=${OS_RELEASE_ID:-unknown} ID_LIKE=${OS_RELEASE_ID_LIKE:-unknown} VERSION_ID=${OS_RELEASE_VERSION_ID:-unknown}"
     info "Package manager: $(detect_package_manager)"
@@ -819,7 +819,7 @@ else:
     print("[setup] Available Linux features: none found")
 
 if apply_changes and (enable or disable):
-    print("[setup] Feature changes apply after rebuilding and reinstalling Codex Desktop Linux.")
+    print("[setup] Feature changes apply after rebuilding and reinstalling ChatGPT Desktop for Linux.")
 PY
     then
         SETUP_ERROR_REPORTED=1
@@ -1129,7 +1129,7 @@ prompt_for_feature_changes_gui() {
             rows+=("$id" "${title_of[$id]}")
         done
         selected="$(zenity --list --checklist \
-            --title="Codex Desktop Linux features" \
+            --title="ChatGPT Desktop for Linux features" \
             --text="Select the optional Linux features to enable for the next build." \
             --column="Enable" --column="Feature" --column="Description" \
             --print-column=2 --separator=$'\n' \

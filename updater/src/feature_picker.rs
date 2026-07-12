@@ -303,7 +303,7 @@ fn show_picker(
             cmd.args([
                 "--list",
                 "--checklist",
-                "--title=Codex Desktop Linux features",
+                "--title=ChatGPT Desktop for Linux features",
                 "--text=Select the optional Linux features to enable for this update.",
                 "--column=Enable",
                 "--column=Feature",

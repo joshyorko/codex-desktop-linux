@@ -20,20 +20,52 @@ installs continue to update through npm, while official standalone installs
 under `~/.codex/packages/standalone` are updated with the official standalone
 installer instead of being replaced through npm.
 
+System-package-managed CLI installs are reused but not mutated through npm or
+the standalone installer flow. On Arch-like hosts, when the resolved CLI lives
+under a system bin directory and `pacman -Qo` confirms package ownership, the
+updater tracks two separate version signals in state:
+`cli_official_latest_version` for the latest published `@openai/codex` npm
+release and `cli_package_manager_latest_version` for the latest package version
+currently known to pacman.
+
+For pacman-managed installs, `cli_status` follows the package-manager-actionable
+result, not the npm result:
+
+- if pacman currently offers a newer package, `cli_status` becomes
+  `UpdateRequired` and the stored status message tells the user to update
+  through pacman instead (for example: `sudo pacman -Syu`)
+- if pacman does not currently offer a newer package but npm upstream is newer,
+  `cli_status` stays `UpToDate` and the stored status message explains that the
+  distro package and official upstream have diverged so the user can decide
+  whether to stay on the distro-managed CLI or switch installation channels
+
+If the CLI resolves to a system-path binary but `pacman -Qo` cannot determine
+ownership, the updater still skips npm auto-updates and reports that ownership
+verification failed so the user can inspect the CLI source manually.
+
 The launcher does not choose the newest installed CLI. It resolves an explicit
 `CODEX_CLI_PATH` first, then falls back to the usual `PATH`, nvm, and known
 user/system locations. Startup logs include the resolved path plus a
 best-effort CLI version probe; set `CODEX_CLI_PATH=/path/to/codex` when you
-need to pin a particular binary from a GUI-launched session.
+need to pin a particular binary from a GUI-launched session. `CODEX_CLI_PATH`
+does not bypass install-type detection; if it points at a pacman-managed CLI,
+the same non-npm guidance applies.
 
 ## Inspect State
 
 ```bash
 systemctl --user status codex-update-manager.service
 codex-update-manager status --json
+codex-update-manager diagnose --json
 sed -n '1,160p' ~/.local/state/codex-update-manager/state.json
 sed -n '1,160p' ~/.local/state/codex-update-manager/service.log
 ```
+
+`diagnose` is read-only and intended for post-update support reports. It checks
+the persisted updater state, installed app executable, launcher `app.pid` and
+`webview.pid`, local webview HTTP endpoint, warm-start handoff socket, and
+Linux build metadata without starting, stopping, installing, or repairing
+anything.
 
 Runtime files:
 
@@ -70,7 +102,7 @@ that look like this wrapper repository or packaged update-builder.
 ## Rollback
 
 If a rebuilt update installs but the previous retained package was better,
-close Codex Desktop and run:
+close ChatGPT Desktop and run:
 
 ```bash
 codex-update-manager rollback
@@ -103,7 +135,37 @@ PACKAGE_WITH_UPDATER=0 make update-native
 ```
 
 `make update-native` runs `git pull --ff-only`, regenerates `codex-app/` from a
-fresh upstream `Codex.dmg`, builds the native package, and installs it.
+fresh upstream `Codex.dmg`, builds the native package, and installs it. The
+rebuild uses the shared [upstream DMG acceptance profile](upstream-dmg-acceptance.md);
+rejected and inconclusive candidates never replace the working generated app
+or advance to package installation.
+The rebuild evaluates only the Linux Features selected in the user's saved
+configuration. Drift in any selected feature rejects the candidate; disable
+that feature and retry if receiving the upstream update is more important than
+retaining it.
+
+Automated user-local rebuilds always force
+`CODEX_INSTALL_ALLOW_RUNNING=0` and `CODEX_ACCEPTANCE_OVERRIDE=0`, even if the
+service or invoking shell inherited developer overrides. The in-app update path
+continues through its after-exit hook and relaunches after a successful update.
+A manual command or timer may build while the app is open, but final promotion
+is refused and the working app remains unchanged until Electron exits. Failed
+promotion candidates are disposable by default; opt in to diagnostic retention
+with `CODEX_KEEP_REJECTED_CANDIDATE=1`.
+
+Transactional user-local installs retain one previous-app directory for manual
+recovery. Each successful promotion replaces that retained backup with the
+version that was working immediately beforehand; older exact managed backup
+directories are pruned under the promotion lock.
+
+Updater downloads are streamed to unique temporary files and published as
+`Codex-<sha256>.dmg` only after the file and parent directory are synced. The
+content-addressed path stays immutable while daemon and wrapper rebuild flows
+consume it under a shared lease, so cleanup and concurrent rebuilds cannot
+truncate or remove another build's DMG input. Startup and post-build cleanup
+retain the DMG referenced by updater state, remove older managed hash files,
+and delete strictly named download temporaries left by a killed process.
+Unrelated files and symlinks in `downloads/` are never removed.
 
 ## Service Controls
 
@@ -123,7 +185,7 @@ Desktop usable, disable the user service:
 systemctl --user disable --now codex-update-manager.service
 ```
 
-Launching Codex Desktop and upgrading the package will not re-enable a disabled
+Launching ChatGPT Desktop and upgrading the package will not re-enable a disabled
 updater service. Re-enable updater behavior explicitly when you want automatic
 checks again:
 

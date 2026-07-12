@@ -18,8 +18,11 @@ const {
 const {
   applyLinuxFileManagerPatch,
   patchLinuxWorkerFileManagerTarget,
+  patchLinuxHostProcessEnvironmentTargets,
+  applyLinuxTerminalHostEnvironmentPatch,
   applyLinuxTerminalUserPathPatch,
   applyLinuxGitOriginsSourceFallbackPatch,
+  applyLinuxX11ProjectPickerPatch,
 } = require("../../../../impl/main-process/misc.js");
 const {
   applyLinuxBuildInfoTrayPatch,
@@ -29,6 +32,22 @@ const {
 const { applyLinuxAvatarOverlayMousePassthroughPatch } = require("../../../../impl/avatar-overlay.js");
 
 module.exports = [
+  extractedAppPatch({
+    id: "linux-host-child-process-environment",
+    phase: "extracted-app:pre-webview",
+    order: -10,
+    ciPolicy: "optional",
+    apply: patchLinuxHostProcessEnvironmentTargets,
+    status: (result, warnings) => {
+      if (result?.changed) {
+        return warnings.length > 0 ? "applied-with-warnings" : "applied";
+      }
+      if (warnings.length > 0 || result?.matched === 0 || result?.reason != null) {
+        return { status: "skipped-optional", reason: result?.reason ?? warnings[0] };
+      }
+      return "already-applied";
+    },
+  }),
   mainBundlePatch({
     id: "linux-about-dialog",
     phase: "main-bundle",
@@ -93,6 +112,13 @@ module.exports = [
     apply: applyLinuxOpaqueBackgroundPatch,
   }),
   mainBundlePatch({
+    id: "linux-x11-project-picker",
+    phase: "main-bundle",
+    order: 82,
+    ciPolicy: "optional",
+    apply: applyLinuxX11ProjectPickerPatch,
+  }),
+  mainBundlePatch({
     id: "linux-avatar-overlay-mouse-passthrough",
     phase: "main-bundle",
     order: 90,
@@ -121,6 +147,13 @@ module.exports = [
       }
       return "already-applied";
     },
+  }),
+  mainBundlePatch({
+    id: "linux-terminal-host-environment",
+    phase: "main-bundle",
+    order: 104,
+    ciPolicy: "optional",
+    apply: applyLinuxTerminalHostEnvironmentPatch,
   }),
   mainBundlePatch({
     id: "linux-terminal-user-path",

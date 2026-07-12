@@ -33,16 +33,10 @@ replace_linux_webview_icon_assets() {
     info "Linux app icon applied to ${#icon_assets[@]} webview asset(s)"
 }
 
-stage_linux_webview_plugin_icon_aliases() {
-    local assets_dir="$INSTALL_DIR/content/webview/assets"
-    local computer_use_icon
+require_webview_entrypoint() {
+    local webview_index="$INSTALL_DIR/content/webview/index.html"
 
-    [ -d "$assets_dir" ] || return 0
-
-    computer_use_icon="$(find "$assets_dir" -maxdepth 1 -type f -name 'computer-use-plugin-icon-*.png' | sort | head -n 1)"
-    if [ -n "$computer_use_icon" ] && [ -f "$computer_use_icon" ]; then
-        cp "$computer_use_icon" "$assets_dir/computer-use-plugin-icon-linux.png"
-    fi
+    [ -f "$webview_index" ] || error "Missing webview entrypoint: $webview_index. Upstream ASAR layout may have changed."
 }
 
 # ---- Extract webview files ----
@@ -52,21 +46,17 @@ extract_webview() {
 
     # Webview files are inside the extracted asar at webview/
     local asar_extracted="$WORK_DIR/app-extracted"
-    if [ -d "$asar_extracted/webview" ]; then
-        cp -r "$asar_extracted/webview/"* "$INSTALL_DIR/content/webview/"
-        # Replace transparent startup background with an opaque color for Linux.
-        # The upstream app relies on macOS vibrancy for the transparent effect;
-        # on Linux the transparent background causes flickering.
-        local webview_index="$INSTALL_DIR/content/webview/index.html"
-        if [ -f "$webview_index" ]; then
-            sed -i 's/--startup-background: transparent/--startup-background: #1e1e1e/' "$webview_index"
-        fi
-        replace_linux_webview_icon_assets
-        stage_linux_webview_plugin_icon_aliases
-        info "Webview files copied"
-    else
-        warn "Webview directory not found in asar — app may not work"
-    fi
+    [ -d "$asar_extracted/webview" ] || error "Webview directory not found in extracted asar: $asar_extracted/webview"
+
+    cp -a "$asar_extracted/webview/." "$INSTALL_DIR/content/webview/"
+    require_webview_entrypoint
+
+    # Replace transparent startup background with an opaque color for Linux.
+    # The upstream app relies on macOS vibrancy for the transparent effect;
+    # on Linux the transparent background causes flickering.
+    sed -i 's/--startup-background: transparent/--startup-background: #1e1e1e/' "$INSTALL_DIR/content/webview/index.html"
+    replace_linux_webview_icon_assets
+    info "Webview files copied"
 }
 
 # ---- Install app.asar ----

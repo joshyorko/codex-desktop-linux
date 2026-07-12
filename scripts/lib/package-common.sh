@@ -22,6 +22,7 @@ ensure_file_exists() {
 ensure_app_layout() {
     [ -d "$APP_DIR" ] || error "Missing app directory: $APP_DIR. Run ./install.sh first."
     [ -x "$APP_DIR/start.sh" ] || error "Missing launcher: $APP_DIR/start.sh"
+    [ -f "$APP_DIR/content/webview/index.html" ] || error "Missing webview entrypoint: $APP_DIR/content/webview/index.html. Run ./install.sh first."
 }
 
 sed_escape_replacement() {
@@ -53,6 +54,20 @@ package_node_binary() {
     command -v node
 }
 
+linux_feature_enabled() {
+    local feature_id="$1"
+    local helper="$REPO_DIR/scripts/lib/linux-features.js"
+    local node_bin
+    local enabled_output
+
+    [ -f "$helper" ] || error "Missing Linux features helper: $helper"
+    node_bin="$(package_node_binary)"
+    if ! enabled_output="$("$node_bin" "$helper" --enabled)"; then
+        error "Failed to discover enabled Linux features"
+    fi
+    grep -Fxq "$feature_id" <<<"$enabled_output"
+}
+
 stage_update_builder_linux_features_config() {
     local update_builder_root="$1"
     local helper="$REPO_DIR/scripts/lib/linux-features.js"
@@ -79,6 +94,17 @@ if (config.enabled.length === 0) {
 fs.mkdirSync(path.dirname(targetPath), { recursive: true });
 fs.writeFileSync(targetPath, `${JSON.stringify(config, null, 2)}\n`);
 NODE
+}
+
+stage_update_builder_global_dictation_source() {
+    local update_builder_root="$1"
+    local source_root="$REPO_DIR/global-dictation-linux"
+    local target_root="$update_builder_root/global-dictation-linux"
+
+    mkdir -p "$target_root/src"
+    cp "$source_root/Cargo.toml" "$target_root/Cargo.toml"
+    cp "$source_root/Cargo.lock" "$target_root/Cargo.lock"
+    cp -R "$source_root/src/." "$target_root/src/"
 }
 
 linux_features_root_path() {
@@ -147,8 +173,8 @@ render_desktop_entry() {
     local rendered_target="$target.tmp"
 
     package_name="$(sed_escape_replacement "$PACKAGE_NAME")"
-    display_name="$(sed_escape_replacement "${PACKAGE_DISPLAY_NAME:-Codex Desktop}")"
-    comment="$(sed_escape_replacement "${PACKAGE_COMMENT:-Run Codex Desktop on Linux}")"
+    display_name="$(sed_escape_replacement "${PACKAGE_DISPLAY_NAME:-ChatGPT}")"
+    comment="$(sed_escape_replacement "${PACKAGE_COMMENT:-Run ChatGPT Desktop on Linux}")"
 
     awk \
         -v package_name="$package_name" \
@@ -201,6 +227,40 @@ render_desktop_entry() {
         rm -f "$rendered_target"
     fi
     chmod 0644 "$target"
+}
+
+resolve_package_icon_source() {
+    if [ -n "${PACKAGE_ICON_SOURCE:-}" ]; then
+        printf '%s\n' "$PACKAGE_ICON_SOURCE"
+        return 0
+    fi
+
+    local expected_icon="$APP_DIR/.codex-linux/$PACKAGE_NAME.png"
+    if [ -f "$expected_icon" ]; then
+        printf '%s\n' "$expected_icon"
+        return 0
+    fi
+
+    local icon_dir="$APP_DIR/.codex-linux"
+    local -a candidates=()
+    local candidate
+    if [ -d "$icon_dir" ]; then
+        while IFS= read -r -d '' candidate; do
+            candidates+=("$candidate")
+        done < <(
+            find "$icon_dir" -maxdepth 1 -type f -name '*.png' ! -name '*-tray.png' -print0 |
+                sort -z
+        )
+    fi
+    if [ "${#candidates[@]}" -eq 1 ]; then
+        printf '%s\n' "${candidates[0]}"
+        return 0
+    fi
+
+    if [ "${#candidates[@]}" -gt 1 ]; then
+        warn "Multiple generated app icons found in $icon_dir; using the bundled Linux icon"
+    fi
+    printf '%s\n' "$REPO_DIR/assets/codex-linux.png"
 }
 
 render_packaged_runtime_helper() {
@@ -664,6 +724,8 @@ stage_common_package_files() {
     local app_root="$root/opt/$PACKAGE_NAME"
     local polkit_policy="$REPO_DIR/packaging/linux/com.github.ilysenko.codex-desktop-linux.update.policy"
 
+    ensure_app_layout
+
     if package_with_updater_enabled; then
         ensure_file_exists "$polkit_policy" "polkit policy"
     fi
@@ -762,11 +824,13 @@ stage_update_builder_bundle() {
     cp "$REPO_DIR/scripts/build-rpm.sh" "$update_builder_root/scripts/build-rpm.sh"
     cp "$REPO_DIR/scripts/build-pacman.sh" "$update_builder_root/scripts/build-pacman.sh"
     cp "$REPO_DIR/scripts/rebuild-candidate.sh" "$update_builder_root/scripts/rebuild-candidate.sh"
+    cp "$REPO_DIR/scripts/validate-upstream-dmg.js" "$update_builder_root/scripts/validate-upstream-dmg.js"
     cp "$REPO_DIR/scripts/patch-linux-window-ui.js" "$update_builder_root/scripts/patch-linux-window-ui.js"
     cp -r "$REPO_DIR/scripts/patches/." "$update_builder_root/scripts/patches/"
     cp "$REPO_DIR/scripts/lib/package-common.sh" "$update_builder_root/scripts/lib/package-common.sh"
     cp "$REPO_DIR/scripts/lib/patch-chrome-plugin.js" "$update_builder_root/scripts/lib/patch-chrome-plugin.js"
     cp "$REPO_DIR/scripts/lib/node-runtime.sh" "$update_builder_root/scripts/lib/node-runtime.sh"
+    cp "$REPO_DIR/scripts/lib/upstream-dmg-intel.js" "$update_builder_root/scripts/lib/upstream-dmg-intel.js"
     cp "$REPO_DIR/scripts/lib/install-helpers.sh" "$update_builder_root/scripts/lib/install-helpers.sh"
     cp "$REPO_DIR/scripts/lib/process-detection.sh" "$update_builder_root/scripts/lib/process-detection.sh"
     cp "$REPO_DIR/scripts/lib/dmg.sh" "$update_builder_root/scripts/lib/dmg.sh"
@@ -774,11 +838,18 @@ stage_update_builder_bundle() {
     cp "$REPO_DIR/scripts/lib/asar-patch.sh" "$update_builder_root/scripts/lib/asar-patch.sh"
     cp "$REPO_DIR/scripts/lib/webview-install.sh" "$update_builder_root/scripts/lib/webview-install.sh"
     cp "$REPO_DIR/scripts/lib/bundled-plugins.sh" "$update_builder_root/scripts/lib/bundled-plugins.sh"
+    cp "$REPO_DIR/scripts/lib/patch-browser-client-iab-socket-scope.js" \
+        "$update_builder_root/scripts/lib/patch-browser-client-iab-socket-scope.js"
     cp "$REPO_DIR/scripts/lib/linux-features.js" "$update_builder_root/scripts/lib/linux-features.js"
     cp "$REPO_DIR/scripts/lib/linux-features.sh" "$update_builder_root/scripts/lib/linux-features.sh"
     cp "$REPO_DIR/scripts/lib/linux-target-context.js" "$update_builder_root/scripts/lib/linux-target-context.js"
     cp "$REPO_DIR/scripts/lib/linux-update-bridge-patch.js" "$update_builder_root/scripts/lib/linux-update-bridge-patch.js"
     cp "$REPO_DIR/scripts/lib/patch-report.js" "$update_builder_root/scripts/lib/patch-report.js"
+    cp "$REPO_DIR/scripts/lib/patch-validation.js" "$update_builder_root/scripts/lib/patch-validation.js"
+    cp "$REPO_DIR/scripts/lib/upstream-dmg-acceptance.js" "$update_builder_root/scripts/lib/upstream-dmg-acceptance.js"
+    cp "$REPO_DIR/scripts/lib/upstream-dmg-release-profile.js" "$update_builder_root/scripts/lib/upstream-dmg-release-profile.js"
+    cp "$REPO_DIR/scripts/lib/candidate-install.sh" "$update_builder_root/scripts/lib/candidate-install.sh"
+    cp "$REPO_DIR/scripts/lib/candidate-promotion.py" "$update_builder_root/scripts/lib/candidate-promotion.py"
     cp "$REPO_DIR/scripts/lib/rebuild-report.sh" "$update_builder_root/scripts/lib/rebuild-report.sh"
     cp "$REPO_DIR/scripts/lib/build-info.js" "$update_builder_root/scripts/lib/build-info.js"
     cp "$REPO_DIR/scripts/lib/build-info.sh" "$update_builder_root/scripts/lib/build-info.sh"
@@ -799,6 +870,9 @@ stage_update_builder_bundle() {
     cp "$REPO_DIR/packaging/linux/codex-update-manager.prerm" "$update_builder_root/packaging/linux/codex-update-manager.prerm"
     stage_update_builder_linux_features_tree "$update_builder_root"
     stage_update_builder_linux_features_config "$update_builder_root"
+    if linux_feature_enabled "global-dictation"; then
+        stage_update_builder_global_dictation_source "$update_builder_root"
+    fi
     cp "$REPO_DIR/packaging/linux/codex-update-manager.postrm" "$update_builder_root/packaging/linux/codex-update-manager.postrm"
     cp "$REPO_DIR/assets/codex.png" "$update_builder_root/assets/codex.png"
     cp "$REPO_DIR/assets/codex-linux.png" "$update_builder_root/assets/codex-linux.png"

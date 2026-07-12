@@ -16,11 +16,6 @@ const LINUX_SAFE_MONOSPACE_FONT_STACK =
   "\"Noto Sans Mono\", \"DejaVu Sans Mono\", \"Liberation Mono\", \"Ubuntu Mono\", ui-monospace, \"SFMono-Regular\", \"SF Mono\", Menlo, Consolas, monospace";
 const LINUX_TOOLTIP_COLLISION_PADDING_TOP = 44;
 const LINUX_WINDOW_CONTROLS_SAFE_AREA_RIGHT = 138;
-const LINUX_APP_SERVER_CONVERSATION_HYDRATION_THREAD_RUNTIME_MARKER = "codexLinuxRemoteMobileThreadRuntimeStatus";
-const LINUX_APP_SERVER_CONVERSATION_HYDRATION_UNKNOWN_TURN_MARKER = "codexLinuxRemoteMobileHydrateUnknownTurn";
-const LINUX_APP_SERVER_CONVERSATION_HYDRATION_QUEUE_MARKER = "codexLinuxRemoteMobileNotificationQueue";
-const LINUX_APP_SERVER_CONVERSATION_HYDRATION_IN_FLIGHT_MARKER = "codexLinuxRemoteMobileHydrationInFlight";
-const LINUX_APP_SERVER_CONVERSATION_HYDRATION_LATE_EVENT_MARKER = "codexLinuxRemoteMobileHydrateLateEvent";
 
 function applyLinuxSafeMonospaceFontStackPatch(currentSource) {
   const safeLinuxMonoFontPattern =
@@ -46,164 +41,138 @@ function applyLinuxSafeMonospaceFontStackPatch(currentSource) {
   return currentSource;
 }
 
-function applyLinuxOpaqueWindowsDefaultPatch(currentSource) {
-  let patchedSource = currentSource;
-  let warnedMissingNeedle = false;
-  const mergeDefaultPatched = () =>
-    patchedSource.includes("opaqueWindows:e?.opaqueWindows??(typeof navigator<`u`&&");
-  const settingsDefaultPatched = () =>
-    patchedSource.includes("navigator.userAgent.includes(`Linux`)&&r?.opaqueWindows==null") ||
-    patchedSource.includes("navigator.userAgent.includes(`Linux`)&&x?.opaqueWindows==null") ||
-    /navigator\.userAgent\.includes\(`Linux`\)&&[A-Za-z_$][\w$]*\?\.opaqueWindows==null/u.test(patchedSource);
-  const runtimeDefaultPatched = () =>
-    patchedSource.includes("document.documentElement.dataset.codexOs===`linux`&&((o===`light`?l:f)?.opaqueWindows==null") ||
-    patchedSource.includes("document.documentElement.dataset.codexOs===`linux`&&((s===`light`?u:p)?.opaqueWindows==null") ||
-    patchedSource.includes("document.documentElement.dataset.codexOs===`linux`&&g.opaqueWindows==null&&(g={...g,opaqueWindows:!0})") ||
-    /useState\)\(document\.documentElement\.dataset\.codexOs===`linux`\)/.test(patchedSource) ||
-    /document\.documentElement\.dataset\.codexOs===`linux`&&\(\([A-Za-z_$][\w$]*===`light`\?[A-Za-z_$][\w$]*:[A-Za-z_$][\w$]*\)\?\.opaqueWindows==null/u.test(patchedSource);
-  const linuxDefaultPatched = () =>
-    mergeDefaultPatched() || settingsDefaultPatched() || runtimeDefaultPatched();
-  const warnMissingNeedle = () => {
-    if (warnedMissingNeedle || linuxDefaultPatched()) {
-      return;
+function applyLinuxSettingsSearchVisibilityPatch(currentSource) {
+  if (currentSource.includes("function codexLinuxFilterSettingsSearchSection(")) {
+    return currentSource;
+  }
+
+  let sharedSettingsImport = null;
+  let featureGateImport = null;
+  for (const match of currentSource.matchAll(/import\{([^}]*)\}from"[^"]+"/gu)) {
+    const featureGateMatch = match[1].match(/\baG as ([A-Za-z_$][\w$]*)\b/u);
+    if (featureGateMatch == null) {
+      continue;
     }
-    warnedMissingNeedle = true;
+    sharedSettingsImport = {
+      text: match[0],
+      specifiers: match[1],
+    };
+    featureGateImport = featureGateMatch;
+    break;
+  }
+  const functionPattern =
+    /function ([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*)\)\{let [A-Za-z_$][\w$]*=\(0,[A-Za-z_$][\w$]*\.c\)\(\d+\),/gu;
+  let settingsSearchFunction = null;
+  let match;
+  while ((match = functionPattern.exec(currentSource)) != null) {
+    const openBrace = currentSource.indexOf("{", match.index);
+    const closeBrace = findMatchingBrace(currentSource, openBrace);
+    if (closeBrace === -1) {
+      continue;
+    }
+    const text = currentSource.slice(match.index, closeBrace + 1);
+    if (
+      text.includes("isSystemBackdropSupported") &&
+      text.includes("?.platform===`darwin`") &&
+      text.includes("sectionSlug===`appearance`") &&
+      text.includes("sectionSlug===`agent`")
+    ) {
+      settingsSearchFunction = {
+        start: match.index,
+        end: closeBrace + 1,
+        name: match[1],
+        param: match[2],
+        text,
+      };
+      break;
+    }
+  }
+
+  const darwinVariable = settingsSearchFunction?.text.match(
+    /,([A-Za-z_$][\w$]*)=[A-Za-z_$][\w$]*\?\.platform===`darwin`,/u,
+  )?.[1];
+  const resultVariable = settingsSearchFunction?.text.match(
+    /return ([A-Za-z_$][\w$]*)\}$/u,
+  )?.[1];
+  if (
+    featureGateImport == null ||
+    settingsSearchFunction == null ||
+    darwinVariable == null ||
+    resultVariable == null
+  ) {
+    if (
+      currentSource.includes("settingsSearchDocuments") ||
+      currentSource.includes("isSystemBackdropSupported")
+    ) {
+      console.warn(
+        "WARN: Could not find settings search visibility insertion point — skipping Linux settings search visibility patch",
+      );
+    }
+    return currentSource;
+  }
+
+  const importAdditions = [
+    "oJ as codexLinuxAccountInfoQuery",
+    "y1 as codexLinuxSuggestedPromptsEligible",
+    "lS as codexLinuxUseAuthSession",
+  ].filter((specifier) => !sharedSettingsImport.specifiers.includes(specifier));
+  const patchedImport = importAdditions.length === 0
+    ? sharedSettingsImport.text
+    : sharedSettingsImport.text.replace(
+        sharedSettingsImport.specifiers,
+        `${sharedSettingsImport.specifiers},${importAdditions.join(",")}`,
+      );
+  const helper =
+    `var codexLinuxDarwinOnlySettingsSearchMessageIds=new Set([\`settings.general.appearance.dockIcon.chatGPT.ariaLabel\`,\`settings.general.appearance.dockIcon.codex.ariaLabel\`,\`settings.general.appearance.dockIcon.label\`,\`settings.general.appearance.dockIcon.row.description\`]);function codexLinuxSuggestedPromptsSearchEnabled(){return ${featureGateImport[1]}(\`2425897452\`)}function codexLinuxSuggestedPromptsSearchVisible(e){let t=codexLinuxSuggestedPromptsSearchEnabled(),n=codexLinuxUseAuthSession(),{authMethod:r,email:i,planAtLogin:a}=n,o=e&&t&&r===\`chatgpt\`,s={queryConfig:{enabled:o}},{data:c}=codexLinuxAccountInfoQuery(\`account-info\`,s);return e&&t&&codexLinuxSuggestedPromptsEligible({authMethod:r,email:c?.email??i,plan:c?.plan??a})}function codexLinuxFilterSettingsSearchSection(e,t,n){let r=e.messages;return e.sectionSlug===\`appearance\`&&!t&&(r=r.filter(e=>!codexLinuxDarwinOnlySettingsSearchMessageIds.has(e.id))),((e.sectionSlug===\`agent\`||e.sectionSlug===\`general-settings\`)&&!n)&&(r=r.filter(e=>!e.id.startsWith(\`settings.agent.ambientSuggestions.\`))),r===e.messages?e:{...e,messages:r}}`;
+  const functionStart = `function ${settingsSearchFunction.name}(${settingsSearchFunction.param}){`;
+  const functionPatch =
+    `${functionStart}let codexLinuxSuggestedPromptsVisible=codexLinuxSuggestedPromptsSearchVisible(${settingsSearchFunction.param}.enabled);`;
+  const returnNeedle = `return ${resultVariable}}`;
+  const returnPatch =
+    `return ${resultVariable}.map(e=>codexLinuxFilterSettingsSearchSection(e,${darwinVariable},codexLinuxSuggestedPromptsVisible))}`;
+  const patchedFunction = settingsSearchFunction.text
+    .replace(functionStart, functionPatch)
+    .replace(returnNeedle, returnPatch);
+
+  if (patchedFunction === settingsSearchFunction.text) {
     console.warn(
-      "WARN: Could not find Linux opaque window default insertion point — skipping settings default patch",
+      "WARN: Could not find settings search visibility insertion point — skipping Linux settings search visibility patch",
     );
-  };
-
-  const mergeNeedle = "opaqueWindows:e?.opaqueWindows??n.opaqueWindows,semanticColors:";
-  const mergePatch =
-    "opaqueWindows:e?.opaqueWindows??(typeof navigator<`u`&&((navigator.userAgentData?.platform??navigator.platform??navigator.userAgent).toLowerCase().includes(`linux`))?!0:n.opaqueWindows),semanticColors:";
-
-  if (mergeDefaultPatched()) {
-    // Already patched.
-  } else if (patchedSource.includes(mergeNeedle)) {
-    patchedSource = patchedSource.replace(mergeNeedle, mergePatch);
-  } else if (patchedSource.includes("opaqueWindows") && patchedSource.includes("semanticColors")) {
-    warnMissingNeedle();
+    return currentSource;
   }
 
-  const settingsNeedle =
-    "let d=ot(r,e),f=at(e),p={codeThemeId:tt(a,e).id,theme:d},";
-  const settingsPatch =
-    "let d=ot(r,e);navigator.userAgent.includes(`Linux`)&&r?.opaqueWindows==null&&(d={...d,opaqueWindows:!0});let f=at(e),p={codeThemeId:tt(a,e).id,theme:d},";
-  if (patchedSource.includes("navigator.userAgent.includes(`Linux`)&&r?.opaqueWindows==null")) {
-    // Already patched.
-  } else if (patchedSource.includes(settingsNeedle)) {
-    patchedSource = patchedSource.replace(settingsNeedle, settingsPatch);
+  return `${currentSource.slice(0, settingsSearchFunction.start)}${helper}${patchedFunction}${currentSource.slice(settingsSearchFunction.end)}`.replace(
+    sharedSettingsImport.text,
+    patchedImport,
+  );
+}
+
+function applyLinuxOpaqueWindowsDefaultPatch(currentSource) {
+  if (
+    /navigator\.userAgent\.includes\(`Linux`\)&&[A-Za-z_$][\w$]*\?\.opaqueWindows==null/u.test(
+      currentSource,
+    )
+  ) {
+    return currentSource;
   }
 
-  const currentSettingsNeedle = "setThemePatch:b,theme:x}=ne(t),S=$t(i,t),";
-  const currentSettingsPatch =
-    "setThemePatch:b,theme:x}=ne(t);navigator.userAgent.includes(`Linux`)&&x?.opaqueWindows==null&&(x={...x,opaqueWindows:!0});let S=$t(i,t),";
-  if (patchedSource.includes("navigator.userAgent.includes(`Linux`)&&x?.opaqueWindows==null")) {
-    // Already patched.
-  } else if (patchedSource.includes(currentSettingsNeedle)) {
-    patchedSource = patchedSource.replace(currentSettingsNeedle, currentSettingsPatch);
-  }
-
-  const currentSettingsRegex =
-    /setThemePatch:([A-Za-z_$][\w$]*),theme:([A-Za-z_$][\w$]*)\}=([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*)\),([A-Za-z_$][\w$]*)=/;
-  if (patchedSource.includes("navigator.userAgent.includes(`Linux`)&&x?.opaqueWindows==null")) {
-    // Already patched by the current-settings branch above.
-  } else if (/navigator\.userAgent\.includes\(`Linux`\)&&[A-Za-z_$][\w$]*\?\.opaqueWindows==null/.test(patchedSource)) {
-    // Already patched with drifted minified names.
-  } else if (currentSettingsRegex.test(patchedSource)) {
-    patchedSource = patchedSource.replace(
-      currentSettingsRegex,
-      (match, setThemePatchVar, themeVar, hookVar, variantVar, nextVar) =>
+  const settingsPattern =
+    /setThemePatch:([A-Za-z_$][\w$]*),theme:([A-Za-z_$][\w$]*)\}=([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*)\),([A-Za-z_$][\w$]*)=/u;
+  if (settingsPattern.test(currentSource)) {
+    return currentSource.replace(
+      settingsPattern,
+      (_match, setThemePatchVar, themeVar, hookVar, variantVar, nextVar) =>
         `setThemePatch:${setThemePatchVar},theme:${themeVar}}=${hookVar}(${variantVar});navigator.userAgent.includes(\`Linux\`)&&${themeVar}?.opaqueWindows==null&&(${themeVar}={...${themeVar},opaqueWindows:!0});let ${nextVar}=`,
     );
   }
 
-  const runtimeNeedle =
-    "let T=o===`light`?C:w,E;if(T.opaqueWindows&&!XZ()){";
-  const runtimePatch =
-    "let T=o===`light`?C:w,E;document.documentElement.dataset.codexOs===`linux`&&((o===`light`?l:f)?.opaqueWindows==null&&(T={...T,opaqueWindows:!0}));if(T.opaqueWindows&&!XZ()){";
-  if (patchedSource.includes("document.documentElement.dataset.codexOs===`linux`&&((o===`light`?l:f)?.opaqueWindows==null")) {
-    // Already patched.
-  } else if (patchedSource.includes(runtimeNeedle)) {
-    patchedSource = patchedSource.replace(runtimeNeedle, runtimePatch);
+  if (currentSource.includes("opaqueWindows") && currentSource.includes("setThemePatch")) {
+    console.warn(
+      "WARN: Could not find Linux opaque window default insertion point — skipping settings default patch",
+    );
   }
 
-  const currentRuntimeNeedle = "let T=s===`light`?S:w,E;";
-  const currentRuntimePatch =
-    "let T=s===`light`?S:w,E;document.documentElement.dataset.codexOs===`linux`&&((s===`light`?u:p)?.opaqueWindows==null&&(T={...T,opaqueWindows:!0}));";
-  if (patchedSource.includes("document.documentElement.dataset.codexOs===`linux`&&((s===`light`?u:p)?.opaqueWindows==null")) {
-    // Already patched.
-  } else if (patchedSource.includes(currentRuntimeNeedle)) {
-    patchedSource = patchedSource.replace(currentRuntimeNeedle, currentRuntimePatch);
-  }
-
-  const appMainRuntimeNeedle =
-    "if((g.opaqueWindows||i)&&!pc()){e.classList.add(`electron-opaque`);return}";
-  const appMainRuntimePatch =
-    "if(document.documentElement.dataset.codexOs===`linux`&&g.opaqueWindows==null&&(g={...g,opaqueWindows:!0}),(g.opaqueWindows||i)&&!pc()){e.classList.add(`electron-opaque`);return}";
-  if (patchedSource.includes("document.documentElement.dataset.codexOs===`linux`&&g.opaqueWindows==null&&(g={...g,opaqueWindows:!0})")) {
-    // Already patched.
-  } else if (patchedSource.includes(appMainRuntimeNeedle)) {
-    patchedSource = patchedSource.replace(appMainRuntimeNeedle, appMainRuntimePatch);
-  }
-
-  const appMainStatePatched = () =>
-    /useState\)\(document\.documentElement\.dataset\.codexOs===`linux`\)/.test(patchedSource);
-  const appMainStateRegex =
-    /\[([A-Za-z_$][\w$]*),([A-Za-z_$][\w$]*)\]=\(0,([A-Za-z_$][\w$]*)\.useState\)\(!1\),([A-Za-z_$][\w$]*)=/;
-  if (!appMainStatePatched() && currentSource.includes("electron-window-opaque-surface-changed")) {
-    const eventIndex = patchedSource.indexOf("electron-window-opaque-surface-changed");
-    const prefixStart = Math.max(0, eventIndex - 2000);
-    const prefix = patchedSource.slice(prefixStart, eventIndex);
-    const stateMatches = [...prefix.matchAll(new RegExp(appMainStateRegex.source, "g"))];
-    const stateMatch = stateMatches[stateMatches.length - 1];
-    if (stateMatch?.index != null) {
-      const [match, stateVar, setterVar, reactVar, nextVar] = stateMatch;
-      const replacement =
-        `[${stateVar},${setterVar}]=(0,${reactVar}.useState)(document.documentElement.dataset.codexOs===\`linux\`),${nextVar}=`;
-      const matchStart = prefixStart + stateMatch.index;
-      patchedSource =
-        patchedSource.slice(0, matchStart) +
-        replacement +
-        patchedSource.slice(matchStart + match.length);
-    }
-  }
-
-  if (!runtimeDefaultPatched()) {
-    const currentRuntimeRegex =
-      /let\{data:([A-Za-z_$][\w$]*)\}=Qc\([A-Za-z_$][\w$]*\.APPEARANCE_LIGHT_CHROME_THEME,[A-Za-z_$][\w$]*\).*?let\{data:([A-Za-z_$][\w$]*)\}=Qc\([A-Za-z_$][\w$]*\.APPEARANCE_DARK_CHROME_THEME,[A-Za-z_$][\w$]*\).*?let ([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)===`light`\?([A-Za-z_$][\w$]*):([A-Za-z_$][\w$]*),/;
-    const currentRuntimeMatch = patchedSource.match(currentRuntimeRegex);
-    if (currentRuntimeMatch != null) {
-      const [
-        ,
-        lightThemeRawVar,
-        darkThemeRawVar,
-        selectedThemeVar,
-        resolvedVariantVar,
-        lightThemeVar,
-        darkThemeVar,
-      ] = currentRuntimeMatch;
-      const selectorNeedle =
-        `let ${selectedThemeVar}=${resolvedVariantVar}===\`light\`?${lightThemeVar}:${darkThemeVar},`;
-      const selectorPatch =
-        `let ${selectedThemeVar}=${resolvedVariantVar}===\`light\`?${lightThemeVar}:${darkThemeVar};document.documentElement.dataset.codexOs===\`linux\`&&((${resolvedVariantVar}===\`light\`?${lightThemeRawVar}:${darkThemeRawVar})?.opaqueWindows==null&&(${selectedThemeVar}={...${selectedThemeVar},opaqueWindows:!0}));let `;
-      if (patchedSource.includes(selectorNeedle)) {
-        patchedSource = patchedSource.replace(selectorNeedle, selectorPatch);
-      }
-    }
-  }
-
-  if (
-    patchedSource === currentSource &&
-    !linuxDefaultPatched() &&
-    (currentSource.includes("opaqueWindows") ||
-      currentSource.includes("electron-opaque") ||
-      currentSource.includes("translucentSidebar"))
-  ) {
-    warnMissingNeedle();
-  }
-
-  return patchedSource;
+  return currentSource;
 }
 
 function applyLinuxWindowControlsSafeAreaPatch(currentSource) {
@@ -720,6 +689,33 @@ function applyLinuxAppServerFeatureEnablementPatch(currentSource) {
   ].join("");
 }
 
+function applyAutomationUpdateEagerToolPatch(currentSource) {
+  const markerPattern =
+    /[A-Za-z_$][\w$]*\.name===`automation_update`&&delete [A-Za-z_$][\w$]*\.deferLoading/u;
+  if (markerPattern.test(currentSource)) {
+    return currentSource;
+  }
+
+  const dynamicToolsPattern =
+    /\.map\(([A-Za-z_$][\w$]*)=>\(\{type:`function`,\.\.\.\1,\.\.\.([A-Za-z_$][\w$]*)\.has\(\1\.name\)\?\{\}:\{deferLoading:!0\}\}\)\)/u;
+  if (!dynamicToolsPattern.test(currentSource)) {
+    if (currentSource.includes("automation_update") && currentSource.includes("deferLoading:!0")) {
+      console.warn(
+        "WARN: Could not find dynamic tools construction point — skipping automation_update eager tool patch",
+      );
+    }
+    return currentSource;
+  }
+
+  return currentSource.replace(
+    dynamicToolsPattern,
+    (_match, toolVar, eagerToolsVar) => {
+      const descriptorVar = toolVar === "t" ? "codexLinuxAutomationDescriptor" : "t";
+      return `.map(${toolVar}=>{let ${descriptorVar}={type:\`function\`,...${toolVar},...${eagerToolsVar}.has(${toolVar}.name)?{}:{deferLoading:!0}};return ${toolVar}.name===\`automation_update\`&&delete ${descriptorVar}.deferLoading,${descriptorVar}})`;
+    },
+  );
+}
+
 function applyLinuxAppServerBackfillWaitPatch(currentSource) {
   const helperSource =
     "function codexLinuxIsStateDbBackfillMessage(e){return typeof e===`string`&&e.toLowerCase().includes(`state db backfill is running`)}" +
@@ -873,161 +869,6 @@ function applyLinuxAppServerBackfillWaitPatch(currentSource) {
   return patchedSource;
 }
 
-function buildLateUnknownConversationHydrationReplacement(eventName, conversationIdVar, loggerVar) {
-  const pendingMapVar = "codexLinuxRemoteMobilePendingMap";
-  const queueVar = "codexLinuxRemoteMobileQueue";
-  const inFlightVar = "codexLinuxRemoteMobileInFlight";
-  const readVar = "codexLinuxRemoteMobileRead";
-  return (
-    `if(!this.conversations.get(${conversationIdVar})){/*${LINUX_APP_SERVER_CONVERSATION_HYDRATION_LATE_EVENT_MARKER}*/` +
-    `let ${pendingMapVar}=this.codexLinuxRemoteMobilePendingNotifications??=new Map,${queueVar}=${pendingMapVar}.get(${conversationIdVar});` +
-    `${queueVar}||(${queueVar}=[],${pendingMapVar}.set(${conversationIdVar},${queueVar})),${queueVar}.push(n);` +
-    `let ${inFlightVar}=this.codexLinuxRemoteMobileInFlightHydrations??=new Set;` +
-    `if(${inFlightVar}.has(${conversationIdVar})){${loggerVar}.warning(\`Queueing ${eventName} for hydrating conversation\`,{safe:{conversationId:${conversationIdVar},queuedNotificationCount:${queueVar}.length},sensitive:{}});break}` +
-    `${loggerVar}.warning(\`Hydrating conversation for ${eventName}\`,{safe:{conversationId:${conversationIdVar},queuedNotificationCount:${queueVar}.length},sensitive:{}});` +
-    `let ${readVar}=(s=0)=>this.readThread(${conversationIdVar},{includeTurns:!1}).then(e=>{let t=e?.thread??e,c=this.codexLinuxRemoteMobilePendingNotifications?.get(${conversationIdVar})??[];` +
-    `if(!t){if(s<12){${loggerVar}.warning(\`Retrying hydration for missing conversation\`,{safe:{conversationId:${conversationIdVar},queuedNotificationCount:c.length,attempt:s+1},sensitive:{}}),setTimeout(()=>${readVar}(s+1),250);return}` +
-    `this.codexLinuxRemoteMobilePendingNotifications?.delete(${conversationIdVar}),this.codexLinuxRemoteMobileInFlightHydrations?.delete(${conversationIdVar}),${loggerVar}.warning(\`Skipping hydration for missing conversation\`,{safe:{conversationId:${conversationIdVar},queuedNotificationCount:c.length},sensitive:{}});return}` +
-    `this.upsertConversationFromThread(t),this.codexLinuxRemoteMobilePendingNotifications?.delete(${conversationIdVar}),this.codexLinuxRemoteMobileInFlightHydrations?.delete(${conversationIdVar});for(let e of c)this.onNotification(e.method,e.params)})` +
-    `.catch(e=>{if(s<12){${loggerVar}.warning(\`Retrying hydration for ${eventName}\`,{safe:{conversationId:${conversationIdVar},attempt:s+1},sensitive:{error:e}}),setTimeout(()=>${readVar}(s+1),250);return}` +
-    `this.codexLinuxRemoteMobilePendingNotifications?.delete(${conversationIdVar}),this.codexLinuxRemoteMobileInFlightHydrations?.delete(${conversationIdVar}),${loggerVar}.error(\`Failed to hydrate conversation for ${eventName}\`,{safe:{conversationId:${conversationIdVar}},sensitive:{error:e}})});` +
-    `${inFlightVar}.add(${conversationIdVar}),${readVar}();break}`
-  );
-}
-
-function applyLinuxAppServerConversationHydrationPatch(currentSource) {
-  let patchedSource = currentSource;
-
-  if (!patchedSource.includes(LINUX_APP_SERVER_CONVERSATION_HYDRATION_THREAD_RUNTIME_MARKER)) {
-    const runtimeNeedle =
-      /([A-Za-z_$][\w$]*)\.resumeState===`needs_resume`&&\(\1\.threadRuntimeStatus=([A-Za-z_$][\w$]*)\)/u;
-    if (runtimeNeedle.test(patchedSource)) {
-      patchedSource = patchedSource.replace(
-        runtimeNeedle,
-        (_needle, conversationVar, runtimeVar) =>
-          `/*${LINUX_APP_SERVER_CONVERSATION_HYDRATION_THREAD_RUNTIME_MARKER}*/(${conversationVar}.resumeState===\`needs_resume\`||${runtimeVar}?.type===\`active\`||${runtimeVar}?.type===\`idle\`)&&(${conversationVar}.threadRuntimeStatus=${runtimeVar})`,
-      );
-    } else if (
-      patchedSource.includes("threadRuntimeStatus:e.threadRuntimeStatus") &&
-      patchedSource.includes("t===`needs_resume`?n?.type===`active`")
-    ) {
-      // Current upstream already preserves threadRuntimeStatus on summaries.
-    } else if (patchedSource.includes("threadRuntimeStatus") && patchedSource.includes("resumeState")) {
-      console.warn(
-        "WARN: Could not find app-server conversation runtime-status needle — skipping Linux app-server hydration runtime-status patch",
-      );
-    }
-  }
-
-  if (!patchedSource.includes(LINUX_APP_SERVER_CONVERSATION_HYDRATION_QUEUE_MARKER)) {
-    const unknownTurnNeedle =
-      /(let\{threadId:([A-Za-z_$][\w$]*),turn:[A-Za-z_$][\w$]*\}=([A-Za-z_$][\w$]*)\.params,([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)\(\2\);)if\(!this\.conversations\.get\(\4\)\)\{([A-Za-z_$][\w$]*)\.error\(`Received turn\/started for unknown conversation`,\{safe:\{conversationId:\4\},sensitive:\{\}\}\);break\}/u;
-    const unknownTurnReplacement =
-      (_needle, prefix, _threadIdParamVar, notificationVar, conversationIdVar, normalizerFn, loggerVar) =>
-        `${prefix}if(!this.conversations.get(${conversationIdVar})){/*${LINUX_APP_SERVER_CONVERSATION_HYDRATION_UNKNOWN_TURN_MARKER}*//*${LINUX_APP_SERVER_CONVERSATION_HYDRATION_QUEUE_MARKER}*//*${LINUX_APP_SERVER_CONVERSATION_HYDRATION_IN_FLIGHT_MARKER}*/let l=${notificationVar}.params?.turn?.threadId??${notificationVar}.params?.thread?.id,d=l!=null?${normalizerFn}(l):null,u=${notificationVar}.params?.turn?.id??${notificationVar}.params?.turnId;if(d==null||u!=null&&d===${normalizerFn}(u)){${loggerVar}.warning(\`Skipping hydration for ambiguous turn/started\`,{safe:{conversationId:${conversationIdVar},resolvedConversationId:d,turnId:u??null},sensitive:{}});break}${notificationVar}={...${notificationVar},params:{...${notificationVar}.params,threadId:l}};if(this.conversations.get(d)){this.onNotification(${notificationVar}.method,${notificationVar}.params);break}let i=this.codexLinuxRemoteMobilePendingNotifications??=new Map,a=i.get(d);a||(a=[],i.set(d,a));let p=u!=null?a.findIndex(e=>{let t=e.params?.turn?.id??e.params?.turnId;return e.method===${notificationVar}.method&&t!=null&&${normalizerFn}(t)===${normalizerFn}(u)}):-1;p>=0?a[p]=${notificationVar}:a.push(${notificationVar});let h=this.codexLinuxRemoteMobileInFlightHydrations??=new Set;if(h.has(d)){${loggerVar}.warning(\`Queueing turn/started for hydrating conversation\`,{safe:{conversationId:d,queuedNotificationCount:a.length,dedupedNotification:p>=0},sensitive:{}});break}${loggerVar}.warning(\`Hydrating conversation for turn/started\`,{safe:{conversationId:d,queuedNotificationCount:a.length},sensitive:{}});let o=(s=0)=>this.readThread(d,{includeTurns:!1}).then(e=>{let t=e?.thread??e,c=this.codexLinuxRemoteMobilePendingNotifications?.get(d)??[];if(!t){if(s<12){${loggerVar}.warning(\`Retrying hydration for missing conversation\`,{safe:{conversationId:d,queuedNotificationCount:c.length,attempt:s+1},sensitive:{}}),setTimeout(()=>o(s+1),250);return}this.codexLinuxRemoteMobilePendingNotifications?.delete(d),this.codexLinuxRemoteMobileInFlightHydrations?.delete(d),${loggerVar}.warning(\`Skipping hydration for missing conversation\`,{safe:{conversationId:d,queuedNotificationCount:c.length},sensitive:{}});return}this.upsertConversationFromThread(t),this.codexLinuxRemoteMobilePendingNotifications?.delete(d),this.codexLinuxRemoteMobileInFlightHydrations?.delete(d);for(let e of c)this.onNotification(e.method,e.params)}).catch(e=>{if(s<12){${loggerVar}.warning(\`Retrying hydration for turn/started\`,{safe:{conversationId:d,attempt:s+1},sensitive:{error:e}}),setTimeout(()=>o(s+1),250);return}this.codexLinuxRemoteMobilePendingNotifications?.delete(d),this.codexLinuxRemoteMobileInFlightHydrations?.delete(d),${loggerVar}.error(\`Failed to hydrate conversation for turn/started\`,{safe:{conversationId:d},sensitive:{error:e}})});h.add(d),o();break}`;
-
-    if (unknownTurnNeedle.test(patchedSource)) {
-      patchedSource = patchedSource.replace(unknownTurnNeedle, unknownTurnReplacement);
-    } else if (patchedSource.includes("Received turn/started for unknown conversation")) {
-      console.warn(
-        "WARN: Could not find unknown turn/started needle — skipping Linux app-server conversation hydration patch",
-      );
-    }
-
-    const unknownEventGuards = [
-      {
-        eventName: "item/started",
-        needle:
-          /if\(!this\.conversations\.get\(([A-Za-z_$][\w$]*)\)\)\{([A-Za-z_$][\w$]*)\.error\(`Received item\/started for unknown conversation`,\{safe:\{conversationId:\1\},sensitive:\{\}\}\);break\}/u,
-      },
-      {
-        eventName: "item/completed",
-        needle:
-          /if\(!this\.conversations\.get\(([A-Za-z_$][\w$]*)\)\)\{([A-Za-z_$][\w$]*)\.error\(`Received item\/completed for unknown conversation`,\{safe:\{conversationId:\1\},sensitive:\{\}\}\);break\}/u,
-      },
-      {
-        eventName: "turn/completed",
-        needle:
-          /if\(!this\.conversations\.get\(([A-Za-z_$][\w$]*)\)\)\{([A-Za-z_$][\w$]*)\.error\(`Received turn\/completed for unknown conversation`,\{safe:\{conversationId:\1\},sensitive:\{\}\}\);break\}/u,
-      },
-    ];
-
-    for (const { eventName, needle } of unknownEventGuards) {
-      if (needle.test(patchedSource)) {
-        patchedSource = patchedSource.replace(
-          needle,
-          (_match, conversationIdVar, loggerVar) =>
-            buildLateUnknownConversationHydrationReplacement(eventName, conversationIdVar, loggerVar),
-        );
-      } else if (patchedSource.includes(`Received ${eventName} for unknown conversation`)) {
-        console.warn(
-          `WARN: Could not find unknown ${eventName} needle — skipping Linux app-server conversation ${eventName} hydration patch`,
-        );
-      }
-    }
-  }
-
-  return patchedSource;
-}
-
-function applyLinuxCompletedItemRecoveryPatch(currentSource) {
-  if (currentSource.includes("codexLinuxCompletedItemExists=")) {
-    return currentSource;
-  }
-
-  const completedItemDropPattern =
-    /Mut\(([A-Za-z_$][\w$]*)\)&&\(([A-Za-z_$][\w$]*)\.firstTurnWorkItemStartedAtMs=\2\.firstTurnWorkItemStartedAtMs\?\?Date\.now\(\)\),!\(\1\.type!==`subAgentActivity`&&!TR\(\2,\1\.id,\1\.type\)\)&&\(\1\.type,HI\(\2,([A-Za-z_$][\w$]*)\)\)/u;
-
-  if (completedItemDropPattern.test(currentSource)) {
-    return currentSource.replace(
-      completedItemDropPattern,
-      (_match, completedItemVar, turnVar, viewItemVar) =>
-        `Mut(${completedItemVar})&&(${turnVar}.firstTurnWorkItemStartedAtMs=${turnVar}.firstTurnWorkItemStartedAtMs??Date.now());let codexLinuxCompletedItemExists=${turnVar}.items.some(e=>e.id===${viewItemVar}.id);if(${completedItemVar}.type!==\`subAgentActivity\`&&codexLinuxCompletedItemExists&&!TR(${turnVar},${completedItemVar}.id,${completedItemVar}.type))return;HI(${turnVar},${viewItemVar})`,
-    );
-  }
-
-  if (
-    currentSource.includes("Item not found in turn state") &&
-    currentSource.includes("case`item/completed`") &&
-    currentSource.includes("item/agentMessage/delta")
-  ) {
-    console.warn(
-      "WARN: Could not find completed item recovery insertion point — skipping Linux completed item recovery patch",
-    );
-  }
-
-  return currentSource;
-}
-
-function applyLinuxRemoteTerminalStatusRecoveryPatch(currentSource) {
-  if (currentSource.includes("codexLinuxRemoteTerminalStatusActive=")) {
-    return currentSource;
-  }
-
-  const terminalStatusPattern =
-    /function ([A-Za-z_$][\w$]*)\(\{hasInProgressSideChat:([A-Za-z_$][\w$]*),isResponseInProgress:([A-Za-z_$][\w$]*),latestTurnHasSystemError:([A-Za-z_$][\w$]*),resumeState:([A-Za-z_$][\w$]*),threadRuntimeStatus:([A-Za-z_$][\w$]*)\}\)\{return \2\?`loading`:\6\?\.type===`systemError`\?`error`:\6\?\.type===`active`\?`loading`:\5===`needs_resume`\?`idle`:\4\?`error`:\3===!0\?`loading`:`idle`\}/u;
-
-  if (terminalStatusPattern.test(currentSource)) {
-    return currentSource.replace(
-      terminalStatusPattern,
-      (_match, fnName, sideChatVar, responseProgressVar, systemErrorVar, resumeStateVar, runtimeStatusVar) =>
-        `function ${fnName}({hasInProgressSideChat:${sideChatVar},isResponseInProgress:${responseProgressVar},latestTurnHasSystemError:${systemErrorVar},resumeState:${resumeStateVar},threadRuntimeStatus:${runtimeStatusVar}}){let codexLinuxRemoteTerminalStatusActive=${runtimeStatusVar}?.type===\`active\`,codexLinuxRemoteTerminalStatusLoading=codexLinuxRemoteTerminalStatusActive&&(${responseProgressVar}===!0||!Array.isArray(${runtimeStatusVar}.activeFlags)||${runtimeStatusVar}.activeFlags.length>0);return ${sideChatVar}?\`loading\`:${runtimeStatusVar}?.type===\`systemError\`?\`error\`:codexLinuxRemoteTerminalStatusLoading?\`loading\`:${resumeStateVar}===\`needs_resume\`?\`idle\`:${systemErrorVar}?\`error\`:${responseProgressVar}===!0?\`loading\`:\`idle\`}`,
-    );
-  }
-
-  if (
-    currentSource.includes("hasInProgressSideChat") &&
-    currentSource.includes("isResponseInProgress") &&
-    currentSource.includes("threadRuntimeStatus")
-  ) {
-    console.warn(
-      "WARN: Could not find remote terminal status insertion point — skipping Linux remote terminal status recovery patch",
-    );
-  }
-
-  return currentSource;
-}
-
 function applyLinuxI18nGatePatch(currentSource) {
   const alreadyPatchedI18nGateRegexes = [
     /([A-Za-z_$][\w$]*)=[^;]*?\.get\(`enable_i18n`,!1\)[^;]*;let [^;]*,([A-Za-z_$][\w$]*)=[A-Za-z_$][\w$]*\([A-Za-z_$][\w$]*\.localeOverride\),[A-Za-z_$][\w$]*=\1\|\|\2!=null/u,
@@ -1090,23 +931,6 @@ function applyLinuxI18nGatePatch(currentSource) {
     !alreadyPatchedI18nGateRegexes.some((regex) => regex.test(currentSource))
   ) {
     console.warn("WARN: Could not find i18n gate needle — skipping Linux i18n gate patch");
-  }
-
-  return patchedSource;
-}
-
-function applyLinuxProfileSettingsMenuPatch(currentSource) {
-  if (!currentSource.includes("codex.profileDropdown.settingsPage")) {
-    return currentSource;
-  }
-
-  const patchedSource = currentSource.replace(
-    /([A-Za-z_$][\w$]*)=[A-Za-z_$][\w$]*\(`4166894088`\)/g,
-    "$1=!0",
-  );
-
-  if (currentSource.includes("4166894088") && patchedSource === currentSource) {
-    console.warn("WARN: Could not find profile settings menu gate needle — skipping Linux settings menu patch");
   }
 
   return patchedSource;
@@ -1228,6 +1052,17 @@ function applyLocalEnvironmentActionModalDraftPatch(currentSource) {
   const stateNeedle = `workspaceRoot:${workspaceVar}}=${paramVar},`;
   const statePatch =
     `workspaceRoot:${workspaceVar}}=${paramVar},[codexLinuxActionDraft,codexLinuxSetActionDraft]=(0,${reactVar}.useState)(()=>${actionVar}),codexLinuxUpdateActionDraft=codexLinuxPatch=>(codexLinuxSetActionDraft(codexLinuxDraft=>({...codexLinuxDraft,...codexLinuxPatch})),${updateVar}(codexLinuxPatch)),`;
+  const memoGuardPattern = new RegExp(
+    String.raw`if\(${cacheVar}\[(\d+)\]!==${actionVar}\|\|`,
+  );
+  const memoGuardMatch = patchedFunction.match(memoGuardPattern);
+  if (memoGuardMatch == null) {
+    console.warn(
+      "WARN: Could not find local environment action modal modal memo guard — skipping action input patch",
+    );
+    return currentSource;
+  }
+  const memoGuardSlot = memoGuardMatch[1];
   const requiredReplacements = [
     {
       needle: stateNeedle,
@@ -1235,8 +1070,8 @@ function applyLocalEnvironmentActionModalDraftPatch(currentSource) {
       description: "draft state insertion point",
     },
     {
-      needle: `if(${cacheVar}[0]!==${actionVar}||`,
-      replacement: `if(${cacheVar}[0]!==codexLinuxActionDraft||${cacheVar}[0]!==${actionVar}||`,
+      needle: memoGuardMatch[0],
+      replacement: `if(${cacheVar}[${memoGuardSlot}]!==codexLinuxActionDraft||${cacheVar}[${memoGuardSlot}]!==${actionVar}||`,
       description: "modal memo guard",
     },
     {
@@ -2007,17 +1842,14 @@ function patchCommentPreloadBundle(extractedDir) {
 module.exports = {
   applyBrowserAnnotationScreenshotPatch,
   applyLinuxAppServerBackfillWaitPatch,
-  applyLinuxAppServerConversationHydrationPatch,
-  applyLinuxCompletedItemRecoveryPatch,
-  applyLinuxRemoteTerminalStatusRecoveryPatch,
   applyLinuxAppServerFeatureEnablementPatch,
+  applyAutomationUpdateEagerToolPatch,
   applyLinuxChatSearchHydrationPatch,
   applyLinuxBrowserUseAvailabilityPatch,
   applyLinuxBrowserUseExternalAvailabilityPatch,
   applyLinuxBrowserUseNonLocalNavigationPatch,
   applyLinuxConfigWriteVersionConflictPatch,
   applyLinuxI18nGatePatch,
-  applyLinuxProfileSettingsMenuPatch,
   applyPersistentRateLimitFooterPatch,
   applyLinuxAppSunsetPatch,
   applyLinuxOpaqueWindowsDefaultPatch,
@@ -2025,6 +1857,7 @@ module.exports = {
   applyLinuxTooltipWindowControlsCollisionPatch,
   applyLinuxWindowControlsSafeAreaPatch,
   applyLinuxSafeMonospaceFontStackPatch,
+  applyLinuxSettingsSearchVisibilityPatch,
   applyLinuxFastModeModelGuardPatch,
   applyLinuxSkillsListDedupePatch,
   applyLocalEnvironmentActionModalDraftPatch,

@@ -1,12 +1,14 @@
-//! Binary entrypoint for the local Codex Desktop update manager.
+//! Binary entrypoint for the local ChatGPT Desktop update manager.
 
 mod app;
 mod builder;
 mod cache_cleanup;
 mod changelog;
 mod cli;
+mod cli_management;
 mod codex_cli;
 mod config;
+mod diagnostics;
 mod feature_picker;
 mod install;
 mod install_rollback;

@@ -3,6 +3,41 @@ set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+normalize_host_tool_path() {
+    local entry
+    local normalized=""
+    local -a entries=()
+
+    IFS=: read -r -a entries <<< "${PATH-}"
+    for entry in "${entries[@]}"; do
+        [[ "$entry" == /* ]] || continue
+        case ":$normalized:" in
+            *":$entry:"*) continue ;;
+        esac
+        normalized="${normalized:+$normalized:}$entry"
+    done
+
+    [ -n "$normalized" ] || {
+        printf '%s\n' "No absolute tool directories found in PATH" >&2
+        return 1
+    }
+    printf '%s\n' "$normalized"
+}
+
+# Keep host tools available to portable fixtures without inheriting empty or
+# relative PATH entries that could resolve executables from the worktree.
+HOST_TOOL_PATH="$(normalize_host_tool_path)"
+BASH_BIN="$(PATH="$HOST_TOOL_PATH" type -P bash)"
+TRUE_BIN="$(PATH="$HOST_TOOL_PATH" type -P true)"
+[ -x "$BASH_BIN" ] || {
+    printf '%s\n' "Could not resolve executable Bash from absolute PATH entries" >&2
+    exit 1
+}
+[ -x "$TRUE_BIN" ] || {
+    printf '%s\n' "Could not resolve executable true from absolute PATH entries" >&2
+    exit 1
+}
 TMP_DIR="$(mktemp -d)"
 
 export CODEX_LINUX_FEATURES_CONFIG="$REPO_DIR/linux-features/features.example.json"
@@ -128,8 +163,44 @@ JSON
 {"name":"browser","version":"0.1.0-alpha2","interface":{"category":"Engineering"}}
 JSON
     cat > "$resources_dir/plugins/openai-bundled/plugins/browser/scripts/browser-client.mjs" <<'JS'
-function lu(e){let t=globalThis.nodeRepl?.env[e];return typeof t=="string"?t:void 0}function th(){let e=import.meta.__codexNativePipe;return e==null||typeof e.createConnection!="function"?null:e}var I2=new Set(["about:blank"]);function Gb(e){if(I2.has(e))return!0;let t;try{t=new URL(e)}catch{return!1}return t.protocol==="http:"||t.protocol==="https:"}class Uf{async fetchBlocked(e){let r=await bS(e.endpoint,{method:"GET"});if(!r.ok)throw new Error(ae(`Browser Use cannot determine if ${e.displayUrl} is allowed. Please try again later or use another source.`));let n=await r.json();return TF(n)}}export function setupAtlasRuntime() {}
+function lu(e){let t=globalThis.nodeRepl?.env[e];return typeof t=="string"?t:void 0}function th(){let e=import.meta.__codexNativePipe;return e==null||typeof e.createConnection!="function"?null:e}var I2=new Set(["about:blank"]);function Gb(e){if(I2.has(e))return!0;let t;try{t=new URL(e)}catch{return!1}return t.protocol==="http:"||t.protocol==="https:"}class Uf{async fetchBlocked(e){let r=await bS(e.endpoint,{method:"GET"});if(!r.ok)throw new Error(ae(`Browser Use cannot determine if ${e.displayUrl} is allowed. Please try again later or use another source.`));let n=await r.json();return TF(n)}}var Cb=kE(hV.platform()),EV=()=>_P()==="win32"?TV():CV(),CV=async()=>(await yP(Cb)).map(e=>wP.resolve(Cb,e)),TV=async()=>[];export function setupAtlasRuntime() {}
 JS
+}
+
+make_fake_portable_plugins_upstream_app() {
+    local app_dir="$1"
+    local resources_dir="$app_dir/Contents/Resources"
+    local plugins_dir="$resources_dir/plugins/openai-bundled/plugins"
+
+    mkdir -p \
+        "$resources_dir/plugins/openai-bundled/.agents/plugins" \
+        "$plugins_dir/sites/.codex-plugin" \
+        "$plugins_dir/sites/scripts" \
+        "$plugins_dir/sites/mcp" \
+        "$plugins_dir/deep-research/.codex-plugin" \
+        "$plugins_dir/deep-research/skills/deep-research" \
+        "$plugins_dir/visualize/.codex-plugin" \
+        "$plugins_dir/visualize/skills/visualize/scripts" \
+        "$plugins_dir/latex/.codex-plugin" \
+        "$plugins_dir/latex/bin" \
+        "$plugins_dir/record-and-replay/.codex-plugin" \
+        "$plugins_dir/record-and-replay/Codex Computer Use.app"
+
+    cat > "$resources_dir/plugins/openai-bundled/.agents/plugins/marketplace.json" <<'JSON'
+{"plugins":[{"name":"sites","source":{"source":"local","path":"./plugins/sites"},"policy":{"installation":"AVAILABLE","authentication":"ON_INSTALL"},"category":"Productivity"},{"name":"record-and-replay","source":{"source":"local","path":"./plugins/record-and-replay"},"policy":{"installation":"AVAILABLE"}},{"name":"latex","source":{"source":"local","path":"./plugins/latex"},"policy":{"installation":"AVAILABLE"}},{"name":"deep-research","source":{"source":"local","path":"./plugins/deep-research"},"policy":{"installation":"AVAILABLE"},"category":"Research"},{"name":"visualize","source":{"source":"local","path":"./plugins/visualize"},"policy":{"installation":"AVAILABLE"},"category":"Productivity"}]}
+JSON
+    printf '%s\n' '{"name":"sites","version":"1.0.0","mcpServers":"./.mcp.json"}' > "$plugins_dir/sites/.codex-plugin/plugin.json"
+    printf '%s\n' "#!$BASH_BIN" 'set -euo pipefail' > "$plugins_dir/sites/scripts/init-site.sh"
+    chmod 0755 "$plugins_dir/sites/scripts/init-site.sh"
+    printf '%s\n' 'console.log("sites");' > "$plugins_dir/sites/mcp/server.mjs"
+    printf '%s\n' '{"name":"deep-research","version":"1.0.0"}' > "$plugins_dir/deep-research/.codex-plugin/plugin.json"
+    printf '%s\n' '# Deep Research' > "$plugins_dir/deep-research/skills/deep-research/SKILL.md"
+    printf '%s\n' '{"name":"visualize","version":"1.0.0"}' > "$plugins_dir/visualize/.codex-plugin/plugin.json"
+    printf '%s\n' 'print("visualize")' > "$plugins_dir/visualize/skills/visualize/scripts/render.py"
+    printf '%s\n' '{"name":"latex","version":"1.0.0"}' > "$plugins_dir/latex/.codex-plugin/plugin.json"
+    printf '\xcf\xfa\xed\xfe' > "$plugins_dir/latex/bin/tectonic"
+    chmod 0755 "$plugins_dir/latex/bin/tectonic"
+    printf '%s\n' '{"name":"record-and-replay","version":"1.0.0"}' > "$plugins_dir/record-and-replay/.codex-plugin/plugin.json"
 }
 
 make_fake_app() {
@@ -178,6 +249,138 @@ test_extract_webview_replaces_linux_icon_assets() {
     assert_contains "$output_log" "Linux app icon applied to 2 webview asset(s)"
 }
 
+test_installer_prefers_compact_upstream_chatgpt_icon() {
+    info "Checking installer prefers the compact upstream ChatGPT icon"
+    local workspace="$TMP_DIR/chatgpt-icon-selection"
+    local work_dir="$workspace/work"
+    local app_dir="$workspace/ChatGPT.app"
+    local compact_icon="$work_dir/app-extracted/webview/assets/referral-modal-chatgpt-blossom-test.png"
+    local full_size_icon="$app_dir/Contents/Resources/icon-chatgpt.png"
+    local selection_file="$workspace/selection.txt"
+
+    mkdir -p "$(dirname "$compact_icon")" "$(dirname "$full_size_icon")"
+    cp "$REPO_DIR/assets/codex-linux.png" "$compact_icon"
+    printf '%s\n' full-size > "$full_size_icon"
+
+    (
+        export CODEX_INSTALLER_SOURCE_ONLY=1
+        # shellcheck disable=SC1091
+        source "$REPO_DIR/install.sh"
+        WORK_DIR="$work_dir"
+        LINUX_ICON_SOURCE=""
+        select_linux_icon_source
+        printf '%s\n' "$LINUX_ICON_SOURCE" > "$selection_file"
+    )
+
+    [ "$(cat "$selection_file")" = "$compact_icon" ] \
+        || fail "Expected compact upstream ChatGPT icon to win over the full-size resource icon"
+
+    rm -f "$compact_icon"
+    (
+        export CODEX_INSTALLER_SOURCE_ONLY=1
+        # shellcheck disable=SC1091
+        source "$REPO_DIR/install.sh"
+        WORK_DIR="$work_dir"
+        LINUX_ICON_SOURCE=""
+        select_linux_icon_source
+        printf '%s\n' "$LINUX_ICON_SOURCE" > "$selection_file"
+    )
+
+    [ "$(cat "$selection_file")" = "$REPO_DIR/assets/codex-linux.png" ] \
+        || fail "Expected a missing compact ChatGPT icon to avoid the oversized upstream app icon"
+
+    mkdir -p "$(dirname "$compact_icon")"
+    cp "$REPO_DIR/assets/codex-linux.png" "$compact_icon"
+    python3 - "$compact_icon" <<'PY'
+import struct
+import sys
+
+with open(sys.argv[1], "r+b") as icon_file:
+    icon_file.seek(16)
+    icon_file.write(struct.pack(">II", 2048, 2048))
+PY
+    (
+        export CODEX_INSTALLER_SOURCE_ONLY=1
+        # shellcheck disable=SC1091
+        source "$REPO_DIR/install.sh"
+        WORK_DIR="$work_dir"
+        LINUX_ICON_SOURCE=""
+        select_linux_icon_source
+        printf '%s\n' "$LINUX_ICON_SOURCE" > "$selection_file"
+    )
+
+    [ "$(cat "$selection_file")" = "$REPO_DIR/assets/codex-linux.png" ] \
+        || fail "Expected an oversized upstream ChatGPT icon to fall back safely"
+}
+
+test_user_local_icon_prefers_generated_app_icon() {
+    info "Checking user-local integration reuses the generated ChatGPT icon"
+    local workspace="$TMP_DIR/user-local-chatgpt-icon"
+    local home_dir="$workspace/home"
+    local generated_icon="$home_dir/.local/opt/codex-desktop-linux/codex-app/.codex-linux/codex-desktop.png"
+
+    mkdir -p "$(dirname "$generated_icon")"
+    printf '%s\n' 'generated-chatgpt-icon' > "$generated_icon"
+
+    (
+        HOME="$home_dir"
+        XDG_DATA_HOME="$home_dir/.local/share"
+        XDG_STATE_HOME="$home_dir/.local/state"
+        # shellcheck disable=SC1091
+        source "$REPO_DIR/contrib/user-local-install/files/.local/lib/codex-desktop-linux/common.sh"
+        extract_icon
+        cmp -s "$generated_icon" "$ICON_PATH"
+    ) || fail "Expected user-local integration to reuse the generated ChatGPT icon"
+}
+
+test_extract_webview_requires_entrypoint() {
+    info "Checking webview extraction rejects incomplete upstream assets"
+    local workspace="$TMP_DIR/webview-required-entrypoint"
+    local output_log="$workspace/output.log"
+
+    mkdir -p "$workspace/missing-dir/work/app-extracted" \
+        "$workspace/missing-dir/install" \
+        "$workspace/missing-index/work/app-extracted/webview/assets" \
+        "$workspace/missing-index/install"
+    printf '%s\n' 'asset' > "$workspace/missing-index/work/app-extracted/webview/assets/app-main.png"
+
+    set +e
+    (
+        SCRIPT_DIR="$REPO_DIR"
+        INSTALL_DIR="$workspace/missing-dir/install"
+        WORK_DIR="$workspace/missing-dir/work"
+        ICON_SOURCE="$workspace/icon.png"
+        CODEX_LINUX_ICON_SOURCE="$workspace/icon.png"
+        error() { echo "[ERROR] $*" >&2; exit 1; }
+        warn() { echo "[WARN] $*" >&2; }
+        # shellcheck disable=SC1091
+        source "$REPO_DIR/scripts/lib/webview-install.sh"
+        extract_webview "$workspace/Codex.app"
+    ) >"$output_log" 2>&1
+    local rc=$?
+    set -e
+    [ "$rc" -ne 0 ] || fail "extract_webview should fail when upstream webview directory is missing"
+    assert_contains "$output_log" "Webview directory not found"
+
+    set +e
+    (
+        SCRIPT_DIR="$REPO_DIR"
+        INSTALL_DIR="$workspace/missing-index/install"
+        WORK_DIR="$workspace/missing-index/work"
+        ICON_SOURCE="$workspace/icon.png"
+        CODEX_LINUX_ICON_SOURCE="$workspace/icon.png"
+        error() { echo "[ERROR] $*" >&2; exit 1; }
+        warn() { echo "[WARN] $*" >&2; }
+        # shellcheck disable=SC1091
+        source "$REPO_DIR/scripts/lib/webview-install.sh"
+        extract_webview "$workspace/Codex.app"
+    ) >"$output_log" 2>&1
+    rc=$?
+    set -e
+    [ "$rc" -ne 0 ] || fail "extract_webview should fail when upstream webview/index.html is missing"
+    assert_contains "$output_log" "Missing webview entrypoint"
+}
+
 test_common_helper_sourcing() {
     info "Checking shared packaging helpers"
     local probe_file="$TMP_DIR/probe.txt"
@@ -188,6 +391,54 @@ test_common_helper_sourcing() {
     ensure_file_exists "$probe_file" "probe file"
 }
 
+test_package_icon_source_resolution() {
+    info "Checking shared package icon source resolution"
+    local workspace="$TMP_DIR/package-icon-source"
+    local app_dir="$workspace/app"
+    local generated_icon="$app_dir/.codex-linux/codex-desktop.png"
+    local explicit_icon="$workspace/explicit.png"
+
+    mkdir -p "$(dirname "$generated_icon")"
+    printf '%s\n' 'generated-chatgpt-icon' > "$generated_icon"
+    printf '%s\n' 'explicit-chatgpt-icon' > "$explicit_icon"
+
+    # shellcheck disable=SC1091
+    source "$REPO_DIR/scripts/lib/package-common.sh"
+    APP_DIR="$app_dir"
+    PACKAGE_NAME="side-by-side-chatgpt"
+    PACKAGE_ICON_SOURCE=""
+    [ "$(resolve_package_icon_source)" = "$generated_icon" ] \
+        || fail "Expected a unique generated app icon to survive a custom package name"
+
+    PACKAGE_ICON_SOURCE="$explicit_icon"
+    [ "$(resolve_package_icon_source)" = "$explicit_icon" ] \
+        || fail "Expected PACKAGE_ICON_SOURCE to take precedence"
+}
+
+test_package_layout_requires_webview_entrypoint() {
+    info "Checking package helpers reject an app without webview/index.html"
+    local workspace="$TMP_DIR/package-webview-entrypoint"
+    local app_dir="$workspace/app"
+    local output_log="$workspace/output.log"
+
+    mkdir -p "$app_dir/content/webview"
+    printf '%s\n' '#!/usr/bin/env bash' 'exit 0' > "$app_dir/start.sh"
+    chmod +x "$app_dir/start.sh"
+
+    set +e
+    (
+        APP_DIR="$app_dir"
+        # shellcheck disable=SC1091
+        source "$REPO_DIR/scripts/lib/package-common.sh"
+        ensure_app_layout
+    ) >"$output_log" 2>&1
+    local rc=$?
+    set -e
+
+    [ "$rc" -ne 0 ] || fail "ensure_app_layout should fail when webview/index.html is missing"
+    assert_contains "$output_log" "Missing webview entrypoint"
+}
+
 test_package_payload_permission_normalization() {
     info "Checking package payload permission normalization"
     local root="$TMP_DIR/package-permissions"
@@ -195,9 +446,9 @@ test_package_payload_permission_normalization() {
     local private_file="$app_root/.codex-linux/features/private/secret.txt"
 
     mkdir -p "$app_root/content/webview" "$root/usr/bin" "$(dirname "$private_file")"
-    printf '%s\n' '#!/bin/bash' 'echo start' > "$app_root/start.sh"
+    printf '%s\n' "#!$BASH_BIN" 'echo start' > "$app_root/start.sh"
     printf '%s\n' '<!doctype html>' > "$app_root/content/webview/index.html"
-    printf '%s\n' '#!/bin/bash' 'exec /opt/codex-desktop/start.sh "$@"' > "$root/usr/bin/codex-desktop"
+    printf '%s\n' "#!$BASH_BIN" 'exec /opt/codex-desktop/start.sh "$@"' > "$root/usr/bin/codex-desktop"
     printf '%s\n' 'secret' > "$private_file"
     cat > "$app_root/.codex-linux/linux-features-staged.json" <<'JSON'
 {
@@ -371,7 +622,12 @@ SCRIPT
     assert_file_exists "$pkg_root/DEBIAN/postrm"
     assert_file_exists "$pkg_root/opt/codex-desktop/update-builder/scripts/lib/package-common.sh"
     assert_file_exists "$pkg_root/opt/codex-desktop/update-builder/scripts/lib/patch-chrome-plugin.js"
+    assert_file_exists "$pkg_root/opt/codex-desktop/update-builder/scripts/lib/patch-browser-client-iab-socket-scope.js"
     assert_file_exists "$pkg_root/opt/codex-desktop/update-builder/scripts/lib/node-runtime.sh"
+    assert_file_exists "$pkg_root/opt/codex-desktop/update-builder/scripts/lib/upstream-dmg-intel.js"
+    assert_file_exists "$pkg_root/opt/codex-desktop/update-builder/scripts/lib/upstream-dmg-acceptance.js"
+    assert_file_exists "$pkg_root/opt/codex-desktop/update-builder/scripts/lib/candidate-promotion.py"
+    assert_file_exists "$pkg_root/opt/codex-desktop/update-builder/scripts/validate-upstream-dmg.js"
     assert_file_exists "$pkg_root/opt/codex-desktop/update-builder/scripts/lib/linux-update-bridge-patch.js"
     assert_file_exists "$pkg_root/opt/codex-desktop/update-builder/scripts/lib/patch-report.js"
     assert_file_exists "$pkg_root/opt/codex-desktop/update-builder/scripts/lib/rebuild-report.sh"
@@ -399,11 +655,15 @@ SCRIPT
     assert_file_exists "$pkg_root/opt/codex-desktop/update-builder/Cargo.toml"
     assert_file_exists "$pkg_root/opt/codex-desktop/update-builder/CHANGELOG.md"
     assert_file_exists "$pkg_root/opt/codex-desktop/update-builder/computer-use-linux/Cargo.toml"
+    assert_file_not_exists "$pkg_root/opt/codex-desktop/update-builder/global-dictation-linux/Cargo.toml"
     assert_file_exists "$pkg_root/opt/codex-desktop/update-builder/read-aloud-linux/Cargo.toml"
     assert_file_exists "$pkg_root/opt/codex-desktop/update-builder/updater/Cargo.toml"
     assert_file_exists "$pkg_root/opt/codex-desktop/update-builder/plugins/openai-bundled/plugins/computer-use/.mcp.json"
     assert_file_exists "$pkg_root/opt/codex-desktop/update-builder/plugins/openai-bundled/plugins/read-aloud/.mcp.json"
     assert_file_exists "$pkg_root/opt/codex-desktop/update-builder/.codex-linux/source-info.json"
+    node "$pkg_root/opt/codex-desktop/update-builder/scripts/patch-linux-window-ui.js" --help \
+        >"$workspace/update-builder-patcher-help.txt"
+    assert_contains "$workspace/update-builder-patcher-help.txt" "Usage: patch-linux-window-ui.js"
     assert_file_exists "$pkg_root/opt/codex-desktop/.codex-linux/codex-packaged-runtime.sh"
     assert_contains "$pkg_root/opt/codex-desktop/.codex-linux/codex-packaged-runtime.sh" "is-enabled codex-update-manager.service"
     assert_not_contains "$pkg_root/opt/codex-desktop/.codex-linux/codex-packaged-runtime.sh" "enable --now codex-update-manager.service"
@@ -477,15 +737,21 @@ test_update_builder_preserves_enabled_linux_features_config() {
     local staged_local_manifest="$root/opt/codex-desktop/update-builder/linux-features/local/local-tool/feature.json"
     local source_info="$root/opt/codex-desktop/update-builder/.codex-linux/source-info.json"
     local update_builder_manifest="$root/opt/codex-desktop/update-builder/.codex-linux/update-builder-manifest.txt"
+    local global_dictation_target_marker="$REPO_DIR/global-dictation-linux/target/codex-smoke-should-not-stage.txt"
 
     mkdir -p "$workspace"
     make_fake_app "$app_dir"
-    mkdir -p "$features_root/example-feature" "$features_root/local/local-tool"
+    mkdir -p "$features_root/example-feature" "$features_root/global-dictation" "$features_root/local/local-tool"
+    mkdir -p "$(dirname "$global_dictation_target_marker")"
+    printf '%s\n' "generated build output" > "$global_dictation_target_marker"
     printf '%s\n' '# Linux Features' > "$features_root/README.md"
     printf '%s\n' '{"enabled":[]}' > "$features_root/features.example.json"
     printf '%s\n' '{"id":"example-feature","title":"Example Linux Feature"}' \
         > "$features_root/example-feature/feature.json"
     printf '%s\n' '# Example Linux Feature' > "$features_root/example-feature/README.md"
+    printf '%s\n' '{"id":"global-dictation","title":"Global Dictation"}' \
+        > "$features_root/global-dictation/feature.json"
+    printf '%s\n' '# Global Dictation' > "$features_root/global-dictation/README.md"
     printf '%s\n' '{"id":"local-tool","title":"Local Tool"}' \
         > "$features_root/local/local-tool/feature.json"
     printf '%s\n' '# Local Tool' > "$features_root/local/local-tool/README.md"
@@ -493,6 +759,7 @@ test_update_builder_preserves_enabled_linux_features_config() {
 {
   "enabled": [
     "example-feature",
+    "global-dictation",
     "local-tool"
   ],
   "settings": {
@@ -530,21 +797,27 @@ JSON
     assert_file_exists "$staged_local_manifest"
     assert_file_exists "$update_builder_manifest"
     assert_contains "$staged_config" "example-feature"
+    assert_contains "$staged_config" "global-dictation"
     assert_contains "$staged_config" "local-tool"
     assert_contains "$staged_config" "tweaks"
     assert_contains "$staged_config" "mode"
     assert_not_contains "$staged_config" "localComment"
     assert_not_contains "$staged_config" "disabled-feature"
     assert_contains "$update_builder_manifest" "record-replay-linux/Cargo.toml"
+    assert_contains "$update_builder_manifest" "global-dictation-linux/Cargo.toml"
     assert_contains "$update_builder_manifest" "assets/codex-linux.png"
     assert_not_contains "$update_builder_manifest" "^node-runtime/"
+    assert_not_contains "$update_builder_manifest" "global-dictation-linux/target/"
+    assert_file_exists "$root/opt/codex-desktop/update-builder/global-dictation-linux/Cargo.toml"
+    assert_file_not_exists "$root/opt/codex-desktop/update-builder/global-dictation-linux/target/codex-smoke-should-not-stage.txt"
+    rm -f "$global_dictation_target_marker"
 
     node - "$staged_config" <<'NODE' || fail "Expected staged Linux features config to be sanitized"
 const fs = require("node:fs");
 const configPath = process.argv[2];
 const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
 const expected = {
-  enabled: ["example-feature", "local-tool"],
+  enabled: ["example-feature", "global-dictation", "local-tool"],
   settings: {
     "example-feature": {
       tweaks: {
@@ -1109,11 +1382,27 @@ test_appimage_builder_smoke() {
     local dist_dir="$workspace/dist"
     local appdir="$workspace/codex-desktop.AppDir"
     local capture_dir="$workspace/capture"
+    local cli_root="$workspace/cli/node_modules/@openai"
+    local cli_source="$cli_root/codex"
+    local platform_source
+    local platform_package
+    local target_triple
+    local platform_version_suffix
     local arch
 
     case "$(uname -m)" in
-        x86_64) arch="x86_64" ;;
-        aarch64|arm64) arch="aarch64" ;;
+        x86_64)
+            arch="x86_64"
+            platform_package="codex-linux-x64"
+            target_triple="x86_64-unknown-linux-musl"
+            platform_version_suffix="linux-x64"
+            ;;
+        aarch64|arm64)
+            arch="aarch64"
+            platform_package="codex-linux-arm64"
+            target_triple="aarch64-unknown-linux-musl"
+            platform_version_suffix="linux-arm64"
+            ;;
         armv7l|armhf) arch="armhf" ;;
         *) fail "Unsupported AppImage smoke-test architecture: $(uname -m)" ;;
     esac
@@ -1121,6 +1410,8 @@ test_appimage_builder_smoke() {
     mkdir -p "$workspace" "$dist_dir" "$capture_dir"
     make_stub_bin_dir "$bin_dir"
     make_fake_app "$app_dir"
+    mkdir -p "$app_dir/resources/codex-cli"
+    printf '%s\n' 'upstream-payload' > "$app_dir/resources/codex-cli/preserve.txt"
 
     cat > "$bin_dir/appimagetool" <<'SCRIPT'
 #!/usr/bin/env bash
@@ -1169,6 +1460,8 @@ SCRIPT
     assert_file_exists "$capture_dir/AppDir/opt/codex-desktop/.codex-linux/codex-desktop.png"
     assert_file_exists "$capture_dir/AppDir/opt/codex-desktop/.codex-linux/codex-packaged-runtime.sh"
     assert_file_exists "$capture_dir/AppDir/opt/codex-desktop/resources/node-runtime/bin/node"
+    assert_file_exists "$capture_dir/AppDir/opt/codex-desktop/resources/codex-cli/preserve.txt"
+    assert_file_not_exists "$capture_dir/AppDir/opt/codex-desktop/resources/codex-cli/bin/codex"
     assert_file_not_exists "$capture_dir/AppDir/usr/bin/codex-update-manager"
     assert_file_not_exists "$capture_dir/AppDir/usr/lib/systemd/user/codex-update-manager.service"
     assert_file_not_exists "$capture_dir/AppDir/usr/share/polkit-1/actions/com.github.ilysenko.codex-desktop-linux.update.policy"
@@ -1183,6 +1476,133 @@ SCRIPT
     assert_not_contains "$capture_dir/AppDir/opt/codex-desktop/.codex-linux/codex-packaged-runtime.sh" "/usr/share/applications"
     [ "$(cat "$capture_dir/arch")" = "$arch" ] || fail "Expected appimagetool ARCH=$arch"
     [ "$(cat "$capture_dir/version")" = "2026.03.24.120000+appimage" ] || fail "Expected appimagetool VERSION override"
+
+    if [ "$arch" = "armhf" ]; then
+        return 0
+    fi
+
+    platform_source="$cli_root/$platform_package"
+    mkdir -p \
+        "$cli_source/bin" \
+        "$platform_source/vendor/$target_triple/bin"
+    printf '%s\n' \
+        '{' \
+        '  "name": "@openai/codex",' \
+        '  "version": "0.144.1",' \
+        '  "bin": {"codex": "bin/codex.js"},' \
+        "  \"optionalDependencies\": {\"@openai/$platform_package\": \"npm:@openai/codex@0.144.1-$platform_version_suffix\"}" \
+        '}' > "$cli_source/package.json"
+    printf '%s\n' '#!/usr/bin/env node' 'console.log("fixture");' > "$cli_source/bin/codex.js"
+    printf '%s\n' \
+        '{' \
+        '  "name": "@openai/codex",' \
+        "  \"version\": \"0.144.1-$platform_version_suffix\"" \
+        '}' > "$platform_source/package.json"
+    printf '%s\n' '#!/usr/bin/env bash' 'echo fixture-native-codex' > "$platform_source/vendor/$target_triple/bin/codex"
+    chmod 0755 "$platform_source/vendor/$target_triple/bin/codex"
+
+    rm -rf "$capture_dir"
+    mkdir -p "$capture_dir"
+    PATH="$bin_dir:$PATH" \
+    CAPTURE_DIR="$capture_dir" \
+    APP_DIR_OVERRIDE="$app_dir" \
+    DIST_DIR_OVERRIDE="$dist_dir" \
+    APPIMAGE_APPDIR_OVERRIDE="$appdir" \
+    CODEX_CLI_BUNDLE_SOURCE="$cli_source" \
+    PACKAGE_VERSION="2026.03.24.120000+appimage-cli" \
+    bash "$REPO_DIR/scripts/build-appimage.sh"
+
+    local bundled_cli="$capture_dir/AppDir/opt/codex-desktop/resources/codex-cli/bin/codex"
+    assert_file_exists "$bundled_cli"
+    assert_file_not_exists "$capture_dir/AppDir/opt/codex-desktop/resources/codex-cli/preserve.txt"
+    [ -x "$bundled_cli" ] || fail "Expected bundled Codex CLI wrapper to be executable"
+    assert_file_exists "$capture_dir/AppDir/opt/codex-desktop/resources/codex-cli/node_modules/@openai/codex/bin/codex.js"
+    assert_file_exists "$capture_dir/AppDir/opt/codex-desktop/resources/codex-cli/node_modules/@openai/$platform_package/vendor/$target_triple/bin/codex"
+    assert_contains "$capture_dir/AppDir/AppRun" "resources/codex-cli/bin/codex"
+    assert_contains "$capture_dir/AppDir/AppRun" "export CODEX_CLI_PATH"
+
+    printf '%s\n' '#!/usr/bin/env bash' 'printf "%s\n" "${CODEX_CLI_PATH:-}"' > "$capture_dir/AppDir/opt/codex-desktop/start.sh"
+    chmod 0755 "$capture_dir/AppDir/opt/codex-desktop/start.sh"
+    local app_run_output
+    local app_run_path
+    app_run_path="$(dirname "$BASH_BIN")"
+    app_run_output="$(env -i PATH="$app_run_path" HOME="$workspace/home" APPDIR="$capture_dir/AppDir" "$BASH_BIN" "$capture_dir/AppDir/AppRun")"
+    [ "$app_run_output" = "$bundled_cli" ] || fail "Expected AppRun to select bundled Codex CLI: $app_run_output"
+    app_run_output="$(env -i PATH="$app_run_path" HOME="$workspace/home" APPDIR="$capture_dir/AppDir" CODEX_CLI_PATH=/custom/codex "$BASH_BIN" "$capture_dir/AppDir/AppRun")"
+    [ "$app_run_output" = "/custom/codex" ] || fail "Expected explicit CODEX_CLI_PATH to override bundled CLI: $app_run_output"
+    [ "$("$BASH_BIN" "$bundled_cli" --version)" = "v22.22.2" ] || fail "Expected bundled CLI wrapper to use the managed Node runtime"
+
+    rm -rf "$platform_source" "$capture_dir"
+    mkdir -p "$capture_dir"
+    local missing_platform_log="$workspace/missing-platform.log"
+    if PATH="$bin_dir:$PATH" \
+        CAPTURE_DIR="$capture_dir" \
+        APP_DIR_OVERRIDE="$app_dir" \
+        DIST_DIR_OVERRIDE="$dist_dir" \
+        APPIMAGE_APPDIR_OVERRIDE="$appdir" \
+        CODEX_CLI_BUNDLE_SOURCE="$cli_source" \
+        PACKAGE_VERSION="2026.03.24.120000+appimage-cli-missing" \
+        bash "$REPO_DIR/scripts/build-appimage.sh" >"$missing_platform_log" 2>&1; then
+        fail "AppImage build should reject a Codex CLI bundle without its Linux platform package"
+    fi
+    assert_contains "$missing_platform_log" "Missing bundled Codex CLI platform package"
+
+    mkdir -p "$platform_source/vendor/$target_triple/bin"
+    printf '%s\n' \
+        '{' \
+        '  "name": "@openai/codex",' \
+        "  \"version\": \"0.144.1-$platform_version_suffix\"" \
+        '}' > "$platform_source/package.json"
+    printf '%s\n' '#!/usr/bin/env bash' 'echo fixture-native-codex' > "$platform_source/vendor/$target_triple/bin/codex"
+    chmod 0755 "$platform_source/vendor/$target_triple/bin/codex"
+    ln -s package.json "$cli_source/package-link.json"
+
+    local symlink_log="$workspace/symlink.log"
+    if PATH="$bin_dir:$PATH" \
+        CAPTURE_DIR="$capture_dir" \
+        APP_DIR_OVERRIDE="$app_dir" \
+        DIST_DIR_OVERRIDE="$dist_dir" \
+        APPIMAGE_APPDIR_OVERRIDE="$appdir" \
+        CODEX_CLI_BUNDLE_SOURCE="$cli_source" \
+        PACKAGE_VERSION="2026.03.24.120000+appimage-cli-symlink" \
+        bash "$REPO_DIR/scripts/build-appimage.sh" >"$symlink_log" 2>&1; then
+        fail "AppImage build should reject symlinks inside a bundled Codex CLI package"
+    fi
+    assert_contains "$symlink_log" "Bundled Codex CLI package contains a symlink"
+    rm "$cli_source/package-link.json"
+
+    mkfifo "$cli_source/unsupported.pipe"
+    local unsupported_entry_log="$workspace/unsupported-entry.log"
+    if PATH="$bin_dir:$PATH" \
+        CAPTURE_DIR="$capture_dir" \
+        APP_DIR_OVERRIDE="$app_dir" \
+        DIST_DIR_OVERRIDE="$dist_dir" \
+        APPIMAGE_APPDIR_OVERRIDE="$appdir" \
+        CODEX_CLI_BUNDLE_SOURCE="$cli_source" \
+        PACKAGE_VERSION="2026.03.24.120000+appimage-cli-fifo" \
+        bash "$REPO_DIR/scripts/build-appimage.sh" >"$unsupported_entry_log" 2>&1; then
+        fail "AppImage build should reject unsupported filesystem entries in a bundled Codex CLI package"
+    fi
+    assert_contains "$unsupported_entry_log" "Bundled Codex CLI package contains an unsupported filesystem entry"
+    rm "$cli_source/unsupported.pipe"
+
+    printf '%s\n' \
+        '{' \
+        '  "name": "@openai/codex",' \
+        "  \"version\": \"0.143.0-$platform_version_suffix\"" \
+        '}' > "$platform_source/package.json"
+    local version_log="$workspace/version.log"
+    if PATH="$bin_dir:$PATH" \
+        CAPTURE_DIR="$capture_dir" \
+        APP_DIR_OVERRIDE="$app_dir" \
+        DIST_DIR_OVERRIDE="$dist_dir" \
+        APPIMAGE_APPDIR_OVERRIDE="$appdir" \
+        CODEX_CLI_BUNDLE_SOURCE="$cli_source" \
+        PACKAGE_VERSION="2026.03.24.120000+appimage-cli-version" \
+        bash "$REPO_DIR/scripts/build-appimage.sh" >"$version_log" 2>&1; then
+        fail "AppImage build should reject mismatched Codex CLI package versions"
+    fi
+    assert_contains "$version_log" "Bundled Codex CLI platform package version does not match"
 }
 
 test_missing_input_failure() {
@@ -1190,11 +1610,16 @@ test_missing_input_failure() {
     local workspace="$TMP_DIR/missing"
     local bin_dir="$workspace/bin"
     local rpm_app_dir="$workspace/rpm-app"
+    local rpm_no_webview_app_dir="$workspace/rpm-no-webview-app"
     local rpm_log="$workspace/rpm-missing-runtime.log"
+    local rpm_no_webview_log="$workspace/rpm-missing-webview.log"
 
     mkdir -p "$workspace"
     make_stub_bin_dir "$bin_dir"
     make_fake_app "$rpm_app_dir"
+    mkdir -p "$rpm_no_webview_app_dir/content/webview"
+    printf '%s\n' '#!/usr/bin/env bash' 'exit 0' > "$rpm_no_webview_app_dir/start.sh"
+    chmod +x "$rpm_no_webview_app_dir/start.sh"
     cat > "$bin_dir/dpkg" <<'SCRIPT'
 #!/usr/bin/env bash
 echo amd64
@@ -1208,6 +1633,11 @@ SCRIPT
     if PATH="$bin_dir:$PATH" APP_DIR_OVERRIDE="$workspace/does-not-exist" PKG_ROOT_OVERRIDE="$workspace/deb-root" bash "$REPO_DIR/scripts/build-deb.sh" >/dev/null 2>&1; then
         fail "build-deb.sh should fail when APP_DIR is missing"
     fi
+
+    if APP_DIR_OVERRIDE="$rpm_no_webview_app_dir" PACKAGE_WITH_UPDATER=0 bash "$REPO_DIR/scripts/build-rpm.sh" >"$rpm_no_webview_log" 2>&1; then
+        fail "build-rpm.sh should fail when webview/index.html is missing"
+    fi
+    assert_contains "$rpm_no_webview_log" "Missing webview entrypoint"
 
     if APP_DIR_OVERRIDE="$rpm_app_dir" PACKAGED_RUNTIME_SOURCE="$workspace/does-not-exist.sh" bash "$REPO_DIR/scripts/build-rpm.sh" >"$rpm_log" 2>&1; then
         fail "build-rpm.sh should fail when PACKAGED_RUNTIME_SOURCE is missing"
@@ -1262,7 +1692,6 @@ test_make_build_app_uses_installer_download_flow_by_default() {
     local workspace="$TMP_DIR/make-build-app"
     local install_log="$workspace/install-args.log"
     local first_line
-    local second_line
 
     mkdir -p "$workspace"
 
@@ -1353,7 +1782,7 @@ test_installer_refreshes_stale_cached_dmg_metadata() {
     info "Checking installer DMG cache freshness metadata branches"
     local workspace="$TMP_DIR/dmg-cache-refresh"
     local bin_dir="$workspace/bin"
-    local url="https://persistent.oaistatic.com/codex-app-prod/Codex.dmg"
+    local url="https://persistent.oaistatic.com/codex-app-prod/ChatGPT.dmg"
     local url_sha256
 
     url_sha256="$(printf '%s' "$url" | sha256sum | awk '{print $1}')"
@@ -1402,6 +1831,12 @@ done
 printf '%s' "${TEST_DOWNLOAD_CONTENT:-new}" >"$out"
 SCRIPT
     chmod +x "$bin_dir/curl"
+
+    cat >"$bin_dir/aria2c" <<'SCRIPT'
+#!/usr/bin/env bash
+exit 127
+SCRIPT
+    chmod +x "$bin_dir/aria2c"
 
     run_dmg_cache_case() {
         local source_dir="$1"
@@ -1593,6 +2028,67 @@ EOF
     assert_not_contains "$secret_url/Codex.dmg.metadata" "topsecret"
     assert_not_contains "$secret_url/Codex.dmg.metadata" "fragsecret"
 
+    cat >"$bin_dir/aria2c" <<'SCRIPT'
+#!/usr/bin/env bash
+set -eu
+
+download_dir=""
+download_name=""
+for arg in "$@"; do
+    printf '%s\n' "$arg" >>"$TEST_ARIA2_LOG"
+    case "$arg" in
+        --dir=*)
+            download_dir="${arg#--dir=}"
+            ;;
+        --out=*)
+            download_name="${arg#--out=}"
+            ;;
+    esac
+done
+
+[ -n "$download_dir" ] || exit 2
+[ -n "$download_name" ] || exit 2
+
+if [ "${TEST_ARIA2_MODE:-success}" = "fail" ]; then
+    printf '%s' "partial" >"$download_dir/$download_name"
+    printf '%s' "control" >"$download_dir/$download_name.aria2"
+    exit 1
+fi
+
+printf '%s' "aria2-download" >"$download_dir/$download_name"
+SCRIPT
+    chmod +x "$bin_dir/aria2c"
+
+    local aria2_success="$workspace/aria2-success"
+    mkdir -p "$aria2_success"
+    : >"$aria2_success/aria2.log"
+    run_dmg_cache_case "$aria2_success" "$aria2_success/output.log" \
+        TEST_ARIA2_LOG="$aria2_success/aria2.log" \
+        TEST_ETAG=aria2-etag \
+        TEST_CONTENT_LENGTH=14
+    [ "$(cat "$aria2_success/Codex.dmg")" = "aria2-download" ] || fail "Expected aria2c to download the DMG"
+    assert_not_contains "$aria2_success/curl.log" "GET"
+    assert_contains "$aria2_success/aria2.log" "--max-connection-per-server=16"
+    assert_contains "$aria2_success/aria2.log" "--split=16"
+    assert_contains "$aria2_success/aria2.log" "--dir=$aria2_success"
+    assert_contains "$aria2_success/aria2.log" "--out=Codex.dmg.part"
+    assert_contains "$aria2_success/output.log" "Using aria2c for parallel DMG download"
+
+    local aria2_fallback="$workspace/aria2-fallback"
+    mkdir -p "$aria2_fallback"
+    : >"$aria2_fallback/aria2.log"
+    run_dmg_cache_case "$aria2_fallback" "$aria2_fallback/output.log" \
+        TEST_ARIA2_LOG="$aria2_fallback/aria2.log" \
+        TEST_ARIA2_MODE=fail \
+        TEST_ETAG=fallback-etag \
+        TEST_CONTENT_LENGTH=13 \
+        TEST_DOWNLOAD_CONTENT=curl-fallback
+    [ "$(cat "$aria2_fallback/Codex.dmg")" = "curl-fallback" ] || fail "Expected curl fallback after aria2c failure"
+    assert_contains "$aria2_fallback/curl.log" "GET"
+    assert_contains "$aria2_fallback/output.log" "aria2c download failed; falling back to curl"
+    assert_file_not_exists "$aria2_fallback/Codex.dmg.part"
+    assert_file_not_exists "$aria2_fallback/Codex.dmg.part.aria2"
+
     local invalid_url="$workspace/invalid-url"
     mkdir -p "$invalid_url"
     if run_dmg_cache_case "$invalid_url" "$invalid_url/output.log" \
@@ -1609,7 +2105,7 @@ test_extract_dmg_repairs_safe_7z_link_warnings() {
     local bin_dir="$workspace/bin"
     local work_dir="$workspace/work"
     local output_log="$workspace/output.log"
-    local app_dir="$work_dir/dmg-extract/Codex Installer/Codex.app"
+    local app_dir="$work_dir/dmg-extract/ChatGPT Installer/ChatGPT.app"
     local node_modules="$app_dir/Contents/Resources/cua_node/lib/node_modules"
     local actual
 
@@ -1630,7 +2126,7 @@ for arg in "$@"; do
 done
 [ -n "$out" ] || exit 2
 
-app="$out/Codex Installer/Codex.app"
+app="$out/ChatGPT Installer/ChatGPT.app"
 node_modules="$app/Contents/Resources/cua_node/lib/node_modules"
 mkdir -p \
     "$node_modules/.bin" \
@@ -1662,15 +2158,15 @@ printf '%s\n' "target" >"$node_modules/@oai/sky/bin/linux/sky_linux_x64"
 : >"$node_modules/sharp/node_modules/.bin/semver"
 
 cat <<'LOG'
-ERROR: Dangerous link path was ignored : Codex Installer/Codex.app/Contents/Resources/cua_node/lib/node_modules/.bin/opencollective-postinstall : ../opencollective-postinstall/index.js
-ERROR: Dangerous link path was ignored : Codex Installer/Codex.app/Contents/Resources/cua_node/lib/node_modules/.bin/pixelmatch : ../pixelmatch/bin/pixelmatch
-ERROR: Dangerous link path was ignored : Codex Installer/Codex.app/Contents/Resources/cua_node/lib/node_modules/.bin/playwright : ../playwright/cli.js
-ERROR: Dangerous link path was ignored : Codex Installer/Codex.app/Contents/Resources/cua_node/lib/node_modules/.bin/playwright-core : ../playwright-core/cli.js
-ERROR: Dangerous link path was ignored : Codex Installer/Codex.app/Contents/Resources/cua_node/lib/node_modules/.bin/semver : ../semver/bin/semver.js
-ERROR: Dangerous link path was ignored : Codex Installer/Codex.app/Contents/Resources/cua_node/lib/node_modules/.bin/sky_linux_arm64 : ../@oai/sky/bin/linux/sky_linux_arm64
-ERROR: Dangerous link path was ignored : Codex Installer/Codex.app/Contents/Resources/cua_node/lib/node_modules/.bin/sky_linux_x64 : ../@oai/sky/bin/linux/sky_linux_x64
-ERROR: Dangerous link path was ignored : Codex Installer/Codex.app/Contents/Resources/cua_node/lib/node_modules/tesseract.js/node_modules/.bin/opencollective-postinstall : ../../../opencollective-postinstall/index.js
-ERROR: Dangerous link path was ignored : Codex Installer/Codex.app/Contents/Resources/cua_node/lib/node_modules/sharp/node_modules/.bin/semver : ../../../semver/bin/semver.js
+ERROR: Dangerous link path was ignored : ChatGPT Installer/ChatGPT.app/Contents/Resources/cua_node/lib/node_modules/.bin/opencollective-postinstall : ../opencollective-postinstall/index.js
+ERROR: Dangerous link path was ignored : ChatGPT Installer/ChatGPT.app/Contents/Resources/cua_node/lib/node_modules/.bin/pixelmatch : ../pixelmatch/bin/pixelmatch
+ERROR: Dangerous link path was ignored : ChatGPT Installer/ChatGPT.app/Contents/Resources/cua_node/lib/node_modules/.bin/playwright : ../playwright/cli.js
+ERROR: Dangerous link path was ignored : ChatGPT Installer/ChatGPT.app/Contents/Resources/cua_node/lib/node_modules/.bin/playwright-core : ../playwright-core/cli.js
+ERROR: Dangerous link path was ignored : ChatGPT Installer/ChatGPT.app/Contents/Resources/cua_node/lib/node_modules/.bin/semver : ../semver/bin/semver.js
+ERROR: Dangerous link path was ignored : ChatGPT Installer/ChatGPT.app/Contents/Resources/cua_node/lib/node_modules/.bin/sky_linux_arm64 : ../@oai/sky/bin/linux/sky_linux_arm64
+ERROR: Dangerous link path was ignored : ChatGPT Installer/ChatGPT.app/Contents/Resources/cua_node/lib/node_modules/.bin/sky_linux_x64 : ../@oai/sky/bin/linux/sky_linux_x64
+ERROR: Dangerous link path was ignored : ChatGPT Installer/ChatGPT.app/Contents/Resources/cua_node/lib/node_modules/tesseract.js/node_modules/.bin/opencollective-postinstall : ../../../opencollective-postinstall/index.js
+ERROR: Dangerous link path was ignored : ChatGPT Installer/ChatGPT.app/Contents/Resources/cua_node/lib/node_modules/sharp/node_modules/.bin/semver : ../../../semver/bin/semver.js
 
 Sub items Errors: 9
 
@@ -1697,7 +2193,7 @@ error() { echo "[ERROR] $*" >&2; exit 1; }
 source "$REPO_DIR/scripts/lib/dmg.sh"
 
 app_dir="$(extract_dmg "$TEST_DMG_PATH")"
-[ "$(basename "$app_dir")" = "Codex.app" ]
+[ "$(basename "$app_dir")" = "ChatGPT.app" ]
 SCRIPT
 
     assert_contains "$output_log" "7z reported 9 safe package symlink warnings; repaired and continuing"
@@ -1798,7 +2294,7 @@ test_fresh_reuse_dmg_uses_cache_when_metadata_matches() {
     local bin_dir="$workspace/bin"
     local source_dir="$workspace/source"
     local output_log="$workspace/output.log"
-    local url="https://persistent.oaistatic.com/codex-app-prod/Codex.dmg"
+    local url="https://persistent.oaistatic.com/codex-app-prod/ChatGPT.dmg"
     local url_sha256
 
     url_sha256="$(printf '%s' "$url" | sha256sum | awk '{print $1}')"
@@ -1913,19 +2409,346 @@ SCRIPT
     REBUILD_REPORT_DIR="$workspace/report" \
         bash "$repo/scripts/rebuild-candidate.sh" >"$workspace/default.out" 2>&1
     first_line="$(sed -n '1p' "$workspace/default.log")"
-    second_line="$(sed -n '2p' "$workspace/default.log")"
-    [[ "$first_line" != *"Codex.dmg"* ]] || fail "Default inspect should let installer validate the cache: $first_line"
-    [[ "$second_line" == *"<$repo/Codex.dmg>"* ]] || fail "Default build should pin the validated cache: $second_line"
-    assert_contains "$workspace/default.out" "Using validated DMG for build"
+    [ "$first_line" = "CALL:" ] || fail "Default rebuild should let the transactional installer validate its cache: $first_line"
 
     TEST_REBUILD_LOG="$workspace/explicit.log" \
     CODEX_NEXT_APP_DIR="$workspace/next-explicit" \
     REBUILD_REPORT_DIR="$workspace/report-explicit" \
         bash "$repo/scripts/rebuild-candidate.sh" "$explicit_dmg" >"$workspace/explicit.out" 2>&1
     first_line="$(sed -n '1p' "$workspace/explicit.log")"
-    second_line="$(sed -n '2p' "$workspace/explicit.log")"
-    [[ "$first_line" == *"<$explicit_realpath>"* ]] || fail "Explicit inspect should receive explicit DMG: $first_line"
-    [[ "$second_line" == *"<$explicit_realpath>"* ]] || fail "Explicit build should receive explicit DMG: $second_line"
+    [[ "$first_line" == *"<$explicit_realpath>"* ]] || fail "Explicit transactional build should receive explicit DMG: $first_line"
+}
+
+test_candidate_install_is_transactional() {
+    info "Checking atomic candidate promotion, first install, and rollback"
+    local workspace="$TMP_DIR/candidate-install"
+    mkdir -p "$workspace/final" "$workspace/candidate"
+    printf '%s' "old" >"$workspace/final/version"
+    printf '%s' "new" >"$workspace/candidate/version"
+
+    (
+        info() { :; }
+        warn() { :; }
+        error() { echo "$*" >&2; exit 1; }
+        assert_install_target_not_running() { :; }
+        INSTALL_DIR="$workspace/final"
+        # shellcheck source=scripts/lib/candidate-install.sh
+        . "$REPO_DIR/scripts/lib/candidate-install.sh"
+        promote_candidate_install "$workspace/candidate" "$workspace/final"
+        [ "$(cat "$workspace/final/version")" = "new" ] || fail "Expected accepted candidate to be promoted"
+        [ -n "$PROMOTED_BACKUP_APP_DIR" ] || fail "Expected previous app backup"
+        [ "$(cat "$PROMOTED_BACKUP_APP_DIR/version")" = "old" ] || fail "Expected backup to preserve previous app"
+    )
+
+    rm -rf "$workspace/final" "$workspace/candidate" "$workspace"/final.backup-* "$workspace"/.final.promotion.json
+    mkdir -p "$workspace/final" "$workspace/candidate"
+    printf '%s' "old" >"$workspace/final/version"
+    printf '%s' "new" >"$workspace/candidate/version"
+    (
+        info() { :; }
+        warn() { :; }
+        error() { echo "$*" >&2; exit 1; }
+        assert_install_target_not_running() { :; }
+        INSTALL_DIR="$workspace/final"
+        # shellcheck source=scripts/lib/candidate-install.sh
+        . "$REPO_DIR/scripts/lib/candidate-install.sh"
+        if CODEX_PROMOTION_TEST_FAIL_BACKUP_MOVE=1 \
+            promote_candidate_install "$workspace/candidate" "$workspace/final"; then
+            fail "Expected simulated backup move failure"
+        fi
+        [ "$(cat "$workspace/final/version")" = "old" ] || fail "Expected failed backup move to atomically restore previous app"
+        [ "$(cat "$workspace/candidate/version")" = "new" ] || fail "Expected rollback to preserve the accepted candidate"
+        [ ! -e "$workspace/.final.promotion.json" ] || fail "Expected rollback to remove the promotion journal"
+    )
+
+    rm -rf "$workspace/final" "$workspace/candidate" "$workspace"/final.backup-* "$workspace"/.final.promotion.json
+    mkdir -p "$workspace/final" "$workspace/candidate"
+    printf '%s' "old" >"$workspace/final/version"
+    printf '%s' "new" >"$workspace/candidate/version"
+    (
+        info() { :; }
+        warn() { :; }
+        error() { echo "$*" >&2; return 1; }
+        assert_install_target_not_running() { :; }
+        # shellcheck source=scripts/lib/candidate-install.sh
+        . "$REPO_DIR/scripts/lib/candidate-install.sh"
+        if CODEX_PROMOTION_TEST_FAIL_EXCHANGE=1 \
+            promote_candidate_install "$workspace/candidate" "$workspace/final"; then
+            fail "Expected simulated unsupported atomic exchange"
+        fi
+        [ "$(cat "$workspace/final/version")" = "old" ] || fail "Unsupported exchange changed the current app"
+        [ "$(cat "$workspace/candidate/version")" = "new" ] || fail "Unsupported exchange changed the candidate"
+    )
+
+    rm -rf "$workspace/final" "$workspace/candidate" "$workspace"/final.backup-* "$workspace"/.final.promotion.json
+    mkdir -p "$workspace/candidate"
+    printf '%s' "new" >"$workspace/candidate/version"
+    (
+        info() { :; }
+        warn() { :; }
+        error() { echo "$*" >&2; return 1; }
+        assert_install_target_not_running() { :; }
+        # shellcheck source=scripts/lib/candidate-install.sh
+        . "$REPO_DIR/scripts/lib/candidate-install.sh"
+        promote_candidate_install "$workspace/candidate" "$workspace/final"
+        [ "$(cat "$workspace/final/version")" = "new" ] || fail "Expected first install to use an atomic rename"
+        [ -z "$PROMOTED_BACKUP_APP_DIR" ] || fail "First install must not report a backup"
+    )
+}
+
+test_candidate_promotion_refuses_a_running_final_app() {
+    info "Checking user-local promotion cannot replace a running app"
+    local workspace="$TMP_DIR/candidate-running-app"
+    local electron_pid
+    mkdir -p "$workspace/final" "$workspace/candidate"
+    cp "$BASH" "$workspace/final/electron"
+    printf '%s' "old" >"$workspace/final/version"
+    printf '%s' "new" >"$workspace/candidate/version"
+    "$workspace/final/electron" --noprofile --norc -c \
+        'trap "exit 0" TERM INT; while :; do sleep 0.1; done' &
+    electron_pid=$!
+    while [ ! -e "/proc/$electron_pid/exe" ]; do sleep 0.01; done
+
+    (
+        info() { :; }
+        warn() { :; }
+        error() { echo "$*" >&2; return 1; }
+        CODEX_APP_ID="codex-desktop-test"
+        INSTALL_DIR="$workspace/final"
+        # shellcheck source=scripts/lib/process-detection.sh
+        . "$REPO_DIR/scripts/lib/process-detection.sh"
+        # shellcheck source=scripts/lib/candidate-install.sh
+        . "$REPO_DIR/scripts/lib/candidate-install.sh"
+        if promote_candidate_install "$workspace/candidate" "$workspace/final"; then
+            fail "Promotion unexpectedly replaced a running app"
+        fi
+    )
+    [ "$(cat "$workspace/final/version")" = "old" ] || fail "Running app promotion changed the final directory"
+    [ "$(cat "$workspace/candidate/version")" = "new" ] || fail "Running app promotion changed the candidate"
+    [ ! -e "$workspace/.final.promotion.json" ] || fail "Running app refusal must happen before journal creation"
+
+    kill "$electron_pid"
+    wait "$electron_pid" 2>/dev/null || true
+    (
+        info() { :; }
+        warn() { :; }
+        error() { echo "$*" >&2; exit 1; }
+        CODEX_APP_ID="codex-desktop-test"
+        INSTALL_DIR="$workspace/final"
+        . "$REPO_DIR/scripts/lib/process-detection.sh"
+        . "$REPO_DIR/scripts/lib/candidate-install.sh"
+        promote_candidate_install "$workspace/candidate" "$workspace/final"
+    )
+    [ "$(cat "$workspace/final/version")" = "new" ] || fail "Promotion did not succeed after the app exited"
+}
+
+test_candidate_backup_retention_is_bounded() {
+    info "Checking promotion retains only the immediate previous app backup"
+    local workspace="$TMP_DIR/candidate-backup-retention"
+    local managed_count=0
+    local path name suffix
+    mkdir -p "$workspace/final" "$workspace/candidate"
+    printf '%s' "v1" >"$workspace/final/version"
+    printf '%s' "v2" >"$workspace/candidate/version"
+
+    (
+        info() { :; }
+        warn() { :; }
+        error() { echo "$*" >&2; exit 1; }
+        assert_install_target_not_running() { :; }
+        . "$REPO_DIR/scripts/lib/candidate-install.sh"
+        promote_candidate_install "$workspace/candidate" "$workspace/final"
+    )
+
+    mkdir -p "$workspace/final.backup-20200101010101/nested" "$workspace/final.backup-manual"
+    printf '%s' "stale" >"$workspace/final.backup-20200101010101/version"
+    chmod 0555 "$workspace/final.backup-20200101010101" "$workspace/final.backup-20200101010101/nested"
+    printf '%s' "manual" >"$workspace/final.backup-20200101010103"
+    mkdir -p "$workspace/symlink-target"
+    ln -s "$workspace/symlink-target" "$workspace/final.backup-20200101010102"
+    mkdir -p "$workspace/candidate"
+    printf '%s' "v3" >"$workspace/candidate/version"
+
+    (
+        info() { :; }
+        warn() { :; }
+        error() { echo "$*" >&2; exit 1; }
+        assert_install_target_not_running() { :; }
+        . "$REPO_DIR/scripts/lib/candidate-install.sh"
+        promote_candidate_install "$workspace/candidate" "$workspace/final"
+    )
+
+    for path in "$workspace"/final.backup-*; do
+        [ -d "$path" ] || continue
+        [ ! -L "$path" ] || continue
+        name="$(basename "$path")"
+        suffix="${name#final.backup-}"
+        [[ "$suffix" =~ ^[0-9]{14}(-[1-9][0-9]*)?$ ]] || continue
+        managed_count=$((managed_count + 1))
+        [ "$(cat "$path/version")" = "v2" ] || fail "Retention kept a backup other than the immediate previous app"
+    done
+    [ "$managed_count" -eq 1 ] || fail "Expected exactly one managed app backup, found $managed_count"
+    [ -L "$workspace/final.backup-20200101010102" ] || fail "Managed cleanup removed an exact-name symlink"
+    [ -f "$workspace/final.backup-20200101010103" ] || fail "Managed cleanup removed an exact-name file"
+    [ -d "$workspace/final.backup-manual" ] || fail "Managed cleanup removed a manually named directory"
+}
+
+test_candidate_promotion_recovers_after_sigkill() {
+    info "Checking interrupted candidate promotion keeps the app available and recovers its backup"
+    local workspace="$TMP_DIR/candidate-promotion-interruption"
+    local pause_file="$workspace/exchanged"
+    local promotion_pid
+    local recovered_backup
+    mkdir -p "$workspace/final" "$workspace/candidate"
+    mkdir -p "$workspace/final.backup-20200101010101"
+    printf '%s' "stale" >"$workspace/final.backup-20200101010101/version"
+    printf '%s' "old" >"$workspace/final/version"
+    printf '%s' "new" >"$workspace/candidate/version"
+
+    (
+        info() { :; }
+        warn() { :; }
+        error() { echo "$*" >&2; exit 1; }
+        assert_install_target_not_running() { :; }
+        # shellcheck source=scripts/lib/candidate-install.sh
+        . "$REPO_DIR/scripts/lib/candidate-install.sh"
+        CODEX_PROMOTION_TEST_PAUSE_FILE="$pause_file" \
+            promote_candidate_install "$workspace/candidate" "$workspace/final"
+    ) &
+    promotion_pid=$!
+    while [ ! -e "$pause_file" ]; do
+        kill -0 "$promotion_pid" 2>/dev/null || fail "Promotion exited before the post-exchange pause"
+        sleep 0.01
+    done
+
+    [ "$(cat "$workspace/final/version")" = "new" ] || fail "Canonical app path disappeared or did not contain the accepted app"
+    kill -KILL "$promotion_pid"
+    wait "$promotion_pid" 2>/dev/null || true
+    [ "$(cat "$workspace/final/version")" = "new" ] || fail "SIGKILL left the canonical app unavailable"
+    [ -f "$workspace/.final.promotion.json" ] || fail "Expected durable recovery journal after SIGKILL"
+
+    (
+        info() { :; }
+        warn() { :; }
+        error() { echo "$*" >&2; exit 1; }
+        # shellcheck source=scripts/lib/candidate-install.sh
+        . "$REPO_DIR/scripts/lib/candidate-install.sh"
+        recover_pending_candidate_promotion "$workspace/final"
+    )
+    recovered_backup="$(find "$workspace" -maxdepth 1 -type d -name 'final.backup-*' -print -quit)"
+    [ -n "$recovered_backup" ] || fail "Expected interrupted promotion recovery to create the backup"
+    [ "$(cat "$recovered_backup/version")" = "old" ] || fail "Recovered backup did not preserve the previous app"
+    [ ! -e "$workspace/.final.promotion.json" ] || fail "Expected recovery to clear the promotion journal"
+    [ ! -e "$workspace/final/.codex-promotion-transaction" ] || fail "Expected recovery to clear the transaction marker"
+    [ "$(find "$workspace" -maxdepth 1 -type d -name 'final.backup-*' | wc -l)" -eq 1 ] \
+        || fail "Interrupted recovery must retain only the recovered previous app"
+}
+
+test_candidate_backup_cleanup_retries_after_failure() {
+    info "Checking backup cleanup failure is fail-soft and retried"
+    local workspace="$TMP_DIR/candidate-backup-cleanup-retry"
+    mkdir -p "$workspace/final" "$workspace/candidate" "$workspace/final.backup-20200101010101"
+    printf '%s' "v1" >"$workspace/final/version"
+    printf '%s' "v2" >"$workspace/candidate/version"
+    printf '%s' "stale" >"$workspace/final.backup-20200101010101/version"
+
+    (
+        info() { :; }
+        warn() { :; }
+        error() { echo "$*" >&2; exit 1; }
+        assert_install_target_not_running() { :; }
+        . "$REPO_DIR/scripts/lib/candidate-install.sh"
+        CODEX_PROMOTION_TEST_FAIL_BACKUP_CLEANUP=1 \
+            promote_candidate_install "$workspace/candidate" "$workspace/final"
+    )
+    [ "$(cat "$workspace/final/version")" = "v2" ] || fail "Cleanup failure rolled back the accepted app"
+    [ "$(find "$workspace" -maxdepth 1 -type d -name 'final.backup-*' | wc -l)" -gt 1 ] \
+        || fail "Simulated cleanup failure did not leave work for retry"
+
+    (
+        info() { :; }
+        warn() { :; }
+        error() { echo "$*" >&2; exit 1; }
+        . "$REPO_DIR/scripts/lib/candidate-install.sh"
+        recover_pending_candidate_promotion "$workspace/final"
+    )
+    [ "$(find "$workspace" -maxdepth 1 -type d -name 'final.backup-*' | wc -l)" -eq 1 ] \
+        || fail "Next recovery did not retry managed backup cleanup"
+}
+
+test_user_local_updates_preserve_the_running_app_gate() {
+    info "Checking automated user-local updates cannot inherit the running-app override"
+    assert_contains "$REPO_DIR/contrib/user-local-install/files/.local/bin/codex-desktop-update" "CODEX_INSTALL_ALLOW_RUNNING=0"
+    assert_not_contains "$REPO_DIR/contrib/user-local-install/files/.local/bin/codex-desktop-update" "CODEX_INSTALL_ALLOW_RUNNING=1"
+    assert_contains "$REPO_DIR/updater/src/wrapper_apply.rs" '.env("CODEX_INSTALL_ALLOW_RUNNING", "0")'
+    assert_not_contains "$REPO_DIR/updater/src/wrapper_apply.rs" '.env("CODEX_INSTALL_ALLOW_RUNNING", "1")'
+}
+
+test_candidate_promotion_is_serialized() {
+    info "Checking accepted candidate promotion is serialized per target"
+    local workspace="$TMP_DIR/candidate-promotion-lock"
+    local candidate="$workspace/candidate"
+    local final="$workspace/final"
+    local lock_file="$workspace/.final.promotion.lock"
+    local release_fifo="$workspace/release"
+    mkdir -p "$candidate"
+    printf '%s\n' "new" >"$candidate/version"
+    mkfifo "$release_fifo"
+
+    (
+        exec 8>"$lock_file"
+        flock 8
+        touch "$workspace/locked"
+        read -r _ <"$release_fifo"
+    ) &
+    local holder_pid=$!
+    while [ ! -f "$workspace/locked" ]; do sleep 0.01; done
+
+    (
+        error() { echo "[test][ERROR] $*" >&2; return 1; }
+        info() { :; }
+        warn() { :; }
+        assert_install_target_not_running() { :; }
+        # shellcheck source=scripts/lib/candidate-install.sh
+        . "$REPO_DIR/scripts/lib/candidate-install.sh"
+        promote_candidate_install "$candidate" "$final"
+    ) &
+    local promotion_pid=$!
+    sleep 0.1
+    [ -d "$candidate" ] || fail "Promotion advanced while another process held the target lock"
+    printf '%s\n' "release" >"$release_fifo"
+    wait "$holder_pid"
+    wait "$promotion_pid"
+    [ "$(cat "$final/version")" = "new" ] || fail "Serialized promotion did not install the candidate"
+}
+
+test_transactional_install_reenters_with_current_bash() {
+    info "Checking transactional install re-entry uses the active Bash binary"
+    assert_contains "$REPO_DIR/install.sh" '"\$BASH" "\$SCRIPT_DIR/install.sh" "\${original_args\[@\]}"'
+}
+
+test_transactional_install_uses_managed_node_and_isolated_reports() {
+    info "Checking transactional acceptance uses managed Node and isolated reports"
+    assert_contains "$REPO_DIR/install.sh" 'CODEX_ACCEPTANCE_NODE="\$CODEX_MANAGED_NODE_RUNTIME_DIR/bin/node"'
+    assert_contains "$REPO_DIR/install.sh" 'report_dir="\$report_base/transactions/\$transaction_id"'
+    assert_contains "$REPO_DIR/install.sh" '"\$CODEX_ACCEPTANCE_NODE" "\$SCRIPT_DIR/scripts/validate-upstream-dmg.js"'
+}
+
+test_installer_cleanup_handles_readonly_trees() {
+    info "Checking installer cleanup handles immutable-source directory modes"
+    local workspace="$TMP_DIR/readonly-installer-cleanup"
+    local work_dir="$workspace/work"
+    mkdir -p "$work_dir/runtime/lib"
+    printf '%s\n' "runtime" >"$work_dir/runtime/lib/node"
+    chmod 0555 "$work_dir" "$work_dir/runtime" "$work_dir/runtime/lib"
+    (
+        WORK_DIR="$work_dir"
+        # shellcheck source=scripts/lib/install-helpers.sh
+        . "$REPO_DIR/scripts/lib/install-helpers.sh"
+        cleanup
+        trap - EXIT ERR
+    )
+    [ ! -e "$work_dir" ] || fail "Expected cleanup to remove a read-only copied tree"
 }
 
 test_native_shortcut_targets_compose_existing_flows() {
@@ -1988,8 +2811,8 @@ test_fedora_atomic_rpm_ostree_target_detection() {
     local helper_output="$workspace/helper-output.log"
 
     mkdir -p "$fake_bin"
-    printf '%s\n' '#!/bin/sh' 'exit 0' > "$fake_bin/rpm-ostree"
-    printf '%s\n' '#!/bin/sh' 'exit 0' > "$fake_bin/rpmbuild"
+    printf '%s\n' "#!$BASH_BIN" 'exit 0' > "$fake_bin/rpm-ostree"
+    printf '%s\n' "#!$BASH_BIN" 'exit 0' > "$fake_bin/rpmbuild"
     chmod +x "$fake_bin/rpm-ostree" "$fake_bin/rpmbuild"
     cat > "$os_release" <<'EOF'
 ID=fedora
@@ -2000,11 +2823,11 @@ VARIANT_ID=kde
 EOF
     : > "$ostree_booted"
 
-    PATH="$fake_bin:/usr/bin:/bin" \
+    PATH="$fake_bin:$PATH" \
     OS_RELEASE_FILE="$os_release" \
     OSTREE_BOOTED_FILE="$ostree_booted" \
     DETECT_ONLY=1 \
-        bash "$REPO_DIR/scripts/install-deps.sh" >"$install_log"
+        "$BASH_BIN" "$REPO_DIR/scripts/install-deps.sh" >"$install_log"
     assert_contains "$install_log" "Detected dependency profile: rpm-ostree"
     assert_contains "$install_log" "ID=fedora"
     assert_not_contains "$install_log" "ID_LIKE=ubuntu"
@@ -2015,7 +2838,7 @@ EOF
     for command in dirname pwd uname; do
         ln -s "$(command -v "$command")" "$missing_bin/$command"
     done
-    printf '%s\n' '#!/bin/sh' 'exit 0' > "$missing_bin/rpm-ostree"
+    printf '%s\n' "#!$BASH_BIN" 'exit 0' > "$missing_bin/rpm-ostree"
     chmod +x "$missing_bin/rpm-ostree"
 
     local status=0
@@ -2023,7 +2846,7 @@ EOF
     OS_RELEASE_FILE="$os_release" \
     OSTREE_BOOTED_FILE="$ostree_booted" \
     HOME="$workspace/home-missing" \
-        /bin/bash "$REPO_DIR/scripts/install-deps.sh" >"$missing_log" 2>&1 || status=$?
+        "$BASH_BIN" "$REPO_DIR/scripts/install-deps.sh" >"$missing_log" 2>&1 || status=$?
     [ "$status" -ne 0 ] || fail "Expected rpm-ostree install-deps to stop before packages are layered"
     assert_contains "$missing_log" "sudo rpm-ostree install python3 7zip curl unzip rpm-build make gcc-c++"
     assert_contains "$missing_log" "Still missing:"
@@ -2036,8 +2859,8 @@ EOF
         ln -s "$(command -v "$command")" "$layered_bin/$command"
     done
     for command in rpm-ostree python3 7zz curl unzip rpmbuild make g++ cargo; do
-        cat > "$layered_bin/$command" <<'SCRIPT'
-#!/bin/sh
+        printf '%s\n' "#!$BASH_BIN" > "$layered_bin/$command"
+        cat >> "$layered_bin/$command" <<'SCRIPT'
 command_name="${0##*/}"
 case "$command_name" in
     7zz) echo "7-Zip 26.00" ;;
@@ -2052,20 +2875,20 @@ SCRIPT
     OS_RELEASE_FILE="$os_release" \
     OSTREE_BOOTED_FILE="$ostree_booted" \
     HOME="$workspace/home-layered" \
-        /bin/bash "$REPO_DIR/scripts/install-deps.sh" >"$layered_log" 2>&1
+        "$BASH_BIN" "$REPO_DIR/scripts/install-deps.sh" >"$layered_log" 2>&1
     assert_contains "$layered_log" "rpm-ostree layered build dependencies are already available"
     assert_contains "$layered_log" "Skipping system Node.js check; install.sh provides the managed Node.js runtime"
     assert_contains "$layered_log" "All dependencies installed"
     assert_not_contains "$layered_log" "Node.js 20+ with npm and npx is required"
 
-    PATH="$fake_bin:/usr/bin:/bin" \
+    PATH="$fake_bin:$PATH" \
     OS_RELEASE_FILE="$os_release" \
     OSTREE_BOOTED_FILE="$ostree_booted" \
     CODEX_BOOTSTRAP_DRY_RUN=1 \
     CODEX_BOOTSTRAP_NONINTERACTIVE=1 \
     CODEX_LINUX_FEATURES_ROOT="$REPO_DIR/linux-features" \
     CODEX_LINUX_FEATURES_CONFIG="$workspace/features.json" \
-        bash "$REPO_DIR/scripts/bootstrap-wizard.sh" >"$wizard_log"
+        "$BASH_BIN" "$REPO_DIR/scripts/bootstrap-wizard.sh" >"$wizard_log"
     assert_contains "$wizard_log" "Package manager: rpm-ostree"
     assert_contains "$wizard_log" "Native package format: rpm"
     assert_contains "$wizard_log" "Atomic host: yes"
@@ -2074,7 +2897,7 @@ SCRIPT
     PATH="$fake_bin" \
     OS_RELEASE_FILE="$os_release" \
     OSTREE_BOOTED_FILE="$ostree_booted" \
-    /bin/bash -c '
+    "$BASH_BIN" -c '
         # shellcheck disable=SC1091
         source "$1"
         OS_RELEASE_ID="$(os_release_field ID)"
@@ -2091,7 +2914,7 @@ SCRIPT
     PATH="$fake_bin" \
     OS_RELEASE_FILE="$os_release" \
     OSTREE_BOOTED_FILE="$ostree_booted" \
-    /bin/bash -c '
+    "$BASH_BIN" -c '
         # shellcheck disable=SC1091
         source "$1"
         OS_RELEASE_ID="$(os_release_field ID)"
@@ -2108,7 +2931,7 @@ SCRIPT
     PATH="$fake_bin" \
     OS_RELEASE_FILE="$os_release" \
     OSTREE_BOOTED_FILE="$ostree_booted" \
-    /bin/bash -c '
+    "$BASH_BIN" -c '
         # shellcheck disable=SC1091
         source "$1"
         OS_RELEASE_ID="$(os_release_field ID)"
@@ -2829,7 +3652,7 @@ make_update_nix_hash_fixture() {
   electronVersion = "42.1.0";
 
   codexDmg = pkgs.fetchurl {
-    url = "https://persistent.oaistatic.com/codex-app-prod/Codex.dmg";
+    url = "https://persistent.oaistatic.com/codex-app-prod/ChatGPT.dmg";
     hash = "$hash_a";
   };
 
@@ -3080,13 +3903,13 @@ test_port_validation_rejects_oversized_numeric_values() {
     [ "$(cat "$canonical_stdout")" = "80" ] || fail "Expected installer validation to canonicalize leading-zero CODEX_WEBVIEW_PORT"
     [ ! -s "$canonical_stderr" ] || fail "Expected installer leading-zero canonicalization to be quiet, got: $(cat "$canonical_stderr")"
 
-    cat > "$start_script" <<'SCRIPT'
-#!/bin/bash
-set -euo pipefail
-CODEX_LINUX_APP_ID=codex-desktop
-CODEX_LINUX_APP_DISPLAY_NAME=Codex
-CODEX_LINUX_WEBVIEW_PORT=${CODEX_WEBVIEW_PORT:-5175}
-SCRIPT
+    printf '%s\n' \
+        "#!$BASH_BIN" \
+        'set -euo pipefail' \
+        'CODEX_LINUX_APP_ID=codex-desktop' \
+        'CODEX_LINUX_APP_DISPLAY_NAME=Codex' \
+        'CODEX_LINUX_WEBVIEW_PORT=${CODEX_WEBVIEW_PORT:-5175}' \
+        > "$start_script"
     cat "$REPO_DIR/launcher/start.sh.template" >> "$start_script"
     chmod +x "$start_script"
 
@@ -3102,11 +3925,11 @@ SCRIPT
     assert_contains "$launcher_stdout" "electron-flags.conf"
     assert_file_not_exists "$workspace/help-config/codex-desktop/electron-flags.conf"
 
-    cat > "$launcher_probe_script" <<'SCRIPT'
-#!/bin/bash
-set -euo pipefail
-CODEX_LINUX_WEBVIEW_PORT=${CODEX_WEBVIEW_PORT:-5175}
-SCRIPT
+    printf '%s\n' \
+        "#!$BASH_BIN" \
+        'set -euo pipefail' \
+        'CODEX_LINUX_WEBVIEW_PORT=${CODEX_WEBVIEW_PORT:-5175}' \
+        > "$launcher_probe_script"
     awk '
         /^normalize_tcp_port\(\) \{/ { emit = 1 }
         /^launcher_port_is_open\(\) \{/ { exit }
@@ -3526,12 +4349,15 @@ test_bundled_plugin_builders_accept_prebuilt_binaries() {
     local backend="$workspace/codex-computer-use-linux"
     local cosmic="$workspace/codex-computer-use-cosmic"
     local host="$workspace/codex-chrome-extension-host"
+    local chatgpt_icon="$workspace/chatgpt.png"
+    local staged_plugins="$workspace/plugins"
     local output_log="$workspace/output.log"
 
     mkdir -p "$workspace"
     printf '#!/usr/bin/env bash\n' > "$backend"
     printf '#!/usr/bin/env bash\n' > "$cosmic"
     printf '#!/usr/bin/env bash\n' > "$host"
+    printf '%s\n' 'chatgpt-icon' > "$chatgpt_icon"
     chmod +x "$backend" "$cosmic" "$host"
 
     (
@@ -3539,6 +4365,8 @@ test_bundled_plugin_builders_accept_prebuilt_binaries() {
         CODEX_LINUX_COMPUTER_USE_BACKEND_SOURCE="$backend"
         CODEX_LINUX_COMPUTER_USE_COSMIC_SOURCE="$cosmic"
         CODEX_CHROME_EXTENSION_HOST_SOURCE="$host"
+        LINUX_ICON_SOURCE="$chatgpt_icon"
+        ICON_SOURCE="$REPO_DIR/assets/codex.png"
         info() { echo "[INFO] $*" >&2; }
         warn() { echo "[WARN] $*" >&2; }
         error() { echo "[ERROR] $*" >&2; exit 1; }
@@ -3546,6 +4374,7 @@ test_bundled_plugin_builders_accept_prebuilt_binaries() {
         source "$REPO_DIR/scripts/lib/bundled-plugins.sh"
         build_linux_computer_use_backend
         build_chrome_extension_host
+        stage_linux_computer_use_plugin "$staged_plugins"
     ) > "$output_log" 2>&1
 
     assert_contains "$output_log" "Using prebuilt Linux Computer Use backend"
@@ -3553,10 +4382,511 @@ test_bundled_plugin_builders_accept_prebuilt_binaries() {
     assert_contains "$output_log" "$backend"
     assert_contains "$output_log" "$cosmic"
     assert_contains "$output_log" "$host"
+    cmp -s "$chatgpt_icon" "$staged_plugins/computer-use/assets/app-icon.png" \
+        || fail "Expected the bundled Computer Use plugin to use the selected ChatGPT icon"
+    [ ! -e "$staged_plugins/computer-use/bin/computer-use-linux-cosmic" ] \
+        || fail "Vendored/prebuilt Computer Use staging must not add the external helper alias"
 }
+
+test_bundled_plugin_system_computer_use_preserves_cosmic_helper_name() {
+    info "Checking opt-in system Computer Use staging preserves its helper contract"
+    local workspace="$TMP_DIR/bundled-plugin-system-computer-use"
+    local fake_home="$workspace/home"
+    local system_bin="$fake_home/.cargo/bin"
+    local backend="$system_bin/computer-use-linux"
+    local cosmic="$system_bin/computer-use-linux-cosmic"
+    local staged_plugins="$workspace/plugins"
+    local output_log="$workspace/output.log"
+
+    mkdir -p "$system_bin"
+    printf '%s\n' \
+        '#!/usr/bin/env bash' \
+        'helper="$(dirname "$0")/computer-use-linux-cosmic"' \
+        '[ -x "$helper" ] || { echo "missing COSMIC helper: $helper" >&2; exit 9; }' \
+        '"$helper"' > "$backend"
+    printf '%s\n' '#!/usr/bin/env bash' 'echo cosmic-ok' > "$cosmic"
+    chmod +x "$backend" "$cosmic"
+
+    (
+        SCRIPT_DIR="$REPO_DIR"
+        HOME="$fake_home"
+        CODEX_LINUX_COMPUTER_USE_SYSTEM_INSTALL=1
+        ICON_SOURCE="$REPO_DIR/assets/codex.png"
+        info() { echo "[INFO] $*" >&2; }
+        warn() { echo "[WARN] $*" >&2; }
+        error() { echo "[ERROR] $*" >&2; exit 1; }
+        # shellcheck disable=SC1091
+        source "$REPO_DIR/scripts/lib/bundled-plugins.sh"
+        stage_linux_computer_use_plugin "$staged_plugins"
+        "$staged_plugins/computer-use/bin/codex-computer-use-linux"
+    ) > "$output_log" 2>&1
+
+    assert_contains "$output_log" "Using system computer-use-linux MCP binaries"
+    assert_contains "$output_log" "cosmic-ok"
+    assert_file_exists "$staged_plugins/computer-use/bin/computer-use-linux-cosmic"
+}
+
+test_launcher_managed_node_handles_unset_path() {
+    info "Checking managed Node PATH setup without an inherited PATH"
+    local workspace="$TMP_DIR/launcher-unset-path"
+    local probe="$workspace/probe.sh"
+    local managed_node_bin_dir="$workspace/managed-node/bin"
+
+    mkdir -p "$managed_node_bin_dir"
+    printf '#!/bin/sh\nexit 0\n' > "$managed_node_bin_dir/node"
+    chmod +x "$managed_node_bin_dir/node"
+
+    cat > "$probe" <<EOF
+#!/usr/bin/env bash
+set -u
+SCRIPT_DIR=$(printf '%q' "$workspace")
+MANAGED_NODE_BIN_DIR=$(printf '%q' "$managed_node_bin_dir")
+BASH_BIN=$(printf '%q' "$BASH_BIN")
+EOF
+    awk '
+        /^path_without_entry\(\) \{/ { capture = 1 }
+        capture { print }
+        capture && /^}/ { exit }
+    ' "$REPO_DIR/launcher/start.sh.template" >> "$probe"
+    awk '
+        /^prepend_managed_node_runtime_to_path\(\) \{/ { capture = 1 }
+        capture { print }
+        capture && /^}/ { exit }
+    ' "$REPO_DIR/launcher/start.sh.template" >> "$probe"
+    cat >> "$probe" <<'EOF'
+unset CODEX_LINUX_USER_PATH
+unset PATH
+prepend_managed_node_runtime_to_path
+[ "$PATH" = "$MANAGED_NODE_BIN_DIR" ] || exit 2
+[ "${CODEX_LINUX_USER_PATH+x}" = x ] || exit 3
+[ -z "$CODEX_LINUX_USER_PATH" ] || exit 4
+[ "$CODEX_MANAGED_NODE_RUNTIME_DIR" = "$SCRIPT_DIR/resources/node-runtime" ] || exit 5
+
+PATH="/tmp/untrusted:$MANAGED_NODE_BIN_DIR:/usr/bin"
+unset CODEX_LINUX_USER_PATH
+prepend_managed_node_runtime_to_path
+case "$PATH" in
+    "$MANAGED_NODE_BIN_DIR":*) ;;
+    *) exit 6 ;;
+esac
+[ "$CODEX_LINUX_USER_PATH" = "/tmp/untrusted:/usr/bin" ] || exit 7
+
+PATH="$MANAGED_NODE_BIN_DIR:/usr/bin"
+CODEX_LINUX_USER_PATH=":/tmp/tools::$MANAGED_NODE_BIN_DIR:/usr/bin:"
+prepend_managed_node_runtime_to_path
+[ "$CODEX_LINUX_USER_PATH" = ":/tmp/tools::/usr/bin:" ] || exit 8
+"$BASH_BIN" -c '[ "$CODEX_LINUX_USER_PATH" = ":/tmp/tools::/usr/bin:" ]' || exit 9
+EOF
+
+    "$BASH_BIN" "$probe" || fail "Expected managed Node PATH setup to tolerate an unset PATH"
+}
+
+test_launcher_captures_original_ld_library_path_state() {
+    info "Checking launcher LD_LIBRARY_PATH snapshot semantics"
+    local probe="$TMP_DIR/launcher-ld-library-path-probe.sh"
+
+    awk '
+        /^codex_capture_original_ld_library_path\(\) \{/ { capture = 1 }
+        capture { print }
+        capture && /^# Capture before package-specific launcher patches/ { exit }
+    ' "$REPO_DIR/launcher/start.sh.template" > "$probe"
+    cat >> "$probe" <<'EOF'
+CODEX_LINUX_HOST_LD_LIBRARY_PATH_STATE=value
+CODEX_LINUX_HOST_LD_LIBRARY_PATH_VALUE=/stale/host/lib
+unset LD_LIBRARY_PATH
+codex_capture_original_ld_library_path
+[ "$CODEX_LINUX_ORIGINAL_LD_LIBRARY_PATH_STATE" = unset ] || exit 2
+[ -z "$CODEX_LINUX_ORIGINAL_LD_LIBRARY_PATH_VALUE" ] || exit 3
+[ "${CODEX_LINUX_HOST_LD_LIBRARY_PATH_STATE+x}" != x ] || exit 8
+[ "${CODEX_LINUX_HOST_LD_LIBRARY_PATH_VALUE+x}" != x ] || exit 9
+LD_LIBRARY_PATH=/nix/app
+export LD_LIBRARY_PATH
+codex_run_host_command "$BASH" -c '
+    [ "${LD_LIBRARY_PATH+x}" != x ] &&
+    [ "${CODEX_LINUX_ORIGINAL_LD_LIBRARY_PATH_STATE+x}" != x ] &&
+    [ "${CODEX_LINUX_HOST_LD_LIBRARY_PATH_STATE+x}" != x ]
+' || exit 10
+
+LD_LIBRARY_PATH=""
+codex_capture_original_ld_library_path
+[ "$CODEX_LINUX_ORIGINAL_LD_LIBRARY_PATH_STATE" = empty ] || exit 4
+[ -z "$CODEX_LINUX_ORIGINAL_LD_LIBRARY_PATH_VALUE" ] || exit 5
+LD_LIBRARY_PATH=/nix/app
+codex_run_host_command "$BASH" -c '[ "${LD_LIBRARY_PATH+x}" = x ] && [ -z "$LD_LIBRARY_PATH" ]' || exit 11
+
+LD_LIBRARY_PATH="/home/user/lib:/opt/vendor/lib"
+codex_capture_original_ld_library_path
+[ "$CODEX_LINUX_ORIGINAL_LD_LIBRARY_PATH_STATE" = value ] || exit 6
+[ "$CODEX_LINUX_ORIGINAL_LD_LIBRARY_PATH_VALUE" = "/home/user/lib:/opt/vendor/lib" ] || exit 7
+LD_LIBRARY_PATH=/nix/app
+codex_run_host_command "$BASH" -c '[ "$LD_LIBRARY_PATH" = "/home/user/lib:/opt/vendor/lib" ]' || exit 12
+EOF
+
+    "$BASH_BIN" "$probe" || fail "Expected launcher to preserve all LD_LIBRARY_PATH states"
+}
+
+test_packaged_runtime_keeps_managed_node_out_of_user_service_path() {
+    info "Checking packaged runtime exports the user PATH to user services"
+    local workspace="$TMP_DIR/packaged-runtime-user-path"
+    local fake_bin="$workspace/bin"
+    local runtime_dir="$workspace/runtime"
+    local capture_log="$workspace/path-captures"
+    local managed_node_bin="$workspace/managed-node/bin"
+    local user_path="$fake_bin:/usr/bin"
+    local fallback_path="$fake_bin:/fallback/bin"
+    local import_args="PATH DISPLAY WAYLAND_DISPLAY DBUS_SESSION_BUS_ADDRESS XAUTHORITY XDG_RUNTIME_DIR HYPRLAND_INSTANCE_SIGNATURE YDOTOOL_SOCKET"
+    local -a captures
+
+    mkdir -p "$fake_bin" "$runtime_dir" "$managed_node_bin"
+    printf '%s\n' "#!$BASH_BIN" > "$fake_bin/systemctl"
+    cat >> "$fake_bin/systemctl" <<'EOF'
+case "$*" in
+    "--user show-environment") exit 0 ;;
+    "--user import-environment "*) printf 'systemctl|%s|%s\n' "${PATH-}" "$*" >> "$CAPTURE_LOG"; exit 0 ;;
+    "--user is-enabled "*) exit 1 ;;
+    *) exit 0 ;;
+esac
+EOF
+    printf '%s\n' "#!$BASH_BIN" > "$fake_bin/dbus-update-activation-environment"
+    cat >> "$fake_bin/dbus-update-activation-environment" <<'EOF'
+printf 'dbus|%s|%s\n' "${PATH-}" "$*" >> "$CAPTURE_LOG"
+EOF
+    chmod +x "$fake_bin/systemctl" "$fake_bin/dbus-update-activation-environment"
+
+    (
+        export CAPTURE_LOG="$capture_log"
+        export XDG_RUNTIME_DIR="$runtime_dir"
+        export CODEX_LINUX_USER_PATH="$user_path"
+        export PATH="$managed_node_bin:$user_path"
+        # shellcheck disable=SC1091
+        source "$REPO_DIR/packaging/linux/codex-packaged-runtime.sh"
+
+        codex_packaged_runtime_prelaunch_background
+        [ "$PATH" = "$managed_node_bin:$user_path" ] \
+            || fail "Expected the packaged runtime to preserve the app PATH"
+        mapfile -t captures < "$capture_log"
+        [ "${captures[0]:-}" = "systemctl|$user_path|--user import-environment $import_args" ] \
+            || fail "Expected systemd to import the user PATH"
+        [ "${captures[1]:-}" = "dbus|$user_path|--systemd $import_args" ] \
+            || fail "Expected D-Bus activation to import the user PATH"
+        [ "${#captures[@]}" -eq 2 ] \
+            || fail "Expected one PATH export for systemd and D-Bus"
+
+        : > "$capture_log"
+        unset CODEX_LINUX_USER_PATH
+        export PATH="$fallback_path"
+        codex_packaged_runtime_prelaunch_background
+        [ "$PATH" = "$fallback_path" ] \
+            || fail "Expected the packaged runtime to preserve the fallback PATH"
+        mapfile -t captures < "$capture_log"
+        [ "${captures[0]:-}" = "systemctl|$fallback_path|--user import-environment $import_args" ] \
+            || fail "Expected systemd to import PATH when CODEX_LINUX_USER_PATH is unset"
+        [ "${captures[1]:-}" = "dbus|$fallback_path|--systemd $import_args" ] \
+            || fail "Expected D-Bus activation to import PATH when CODEX_LINUX_USER_PATH is unset"
+        [ "${#captures[@]}" -eq 2 ] \
+            || fail "Expected fallback PATH exports only for systemd and D-Bus"
+    )
+}
+
+test_launcher_rejects_missing_webview_entrypoint() {
+    info "Checking launcher rejects an app without webview/index.html"
+    local workspace="$TMP_DIR/launcher-webview-entrypoint"
+    local app_dir="$workspace/app"
+    local home_dir="$workspace/home"
+    local runtime_dir="$workspace/runtime"
+    local electron_marker="$workspace/electron-called"
+    local launcher_log="$home_dir/.cache/codex-desktop/launcher.log"
+
+    mkdir -p \
+        "$app_dir/.codex-linux/cold-start.d" \
+        "$app_dir/.codex-linux/env.d" \
+        "$app_dir/.codex-linux/features" \
+        "$app_dir/.codex-linux/prelaunch.d" \
+        "$app_dir/.codex-linux/electron-args.d" \
+        "$app_dir/.codex-linux/launcher.d" \
+        "$app_dir/.codex-linux/after-exit.d" \
+        "$app_dir/content/webview" \
+        "$app_dir/resources/node-runtime/bin" \
+        "$app_dir/resources/plugins/openai-bundled/.agents/plugins" \
+        "$app_dir/resources/plugins/openai-bundled/plugins" \
+        "$home_dir" \
+        "$runtime_dir"
+
+    {
+        printf '%s\n' \
+            '#!/usr/bin/env bash' \
+            'set -Eeuo pipefail' \
+            'CODEX_LINUX_APP_ID=codex-desktop' \
+            'CODEX_LINUX_APP_DISPLAY_NAME="Codex Desktop"' \
+            'CODEX_LINUX_WEBVIEW_PORT="${CODEX_WEBVIEW_PORT:-5175}"'
+        cat "$REPO_DIR/launcher/start.sh.template"
+    } > "$app_dir/start.sh"
+    chmod +x "$app_dir/start.sh"
+    cp "$REPO_DIR/launcher/webview-server.py" "$app_dir/.codex-linux/webview-server.py"
+    ln -s "$(command -v node)" "$app_dir/resources/node-runtime/bin/node"
+
+    cat > "$app_dir/electron" <<'SCRIPT'
+#!/usr/bin/env bash
+printf '%s\n' "${ELECTRON_RENDERER_URL:-}" > "$ELECTRON_MARKER"
+exit 0
+SCRIPT
+    chmod +x "$app_dir/electron"
+
+    set +e
+    timeout 20 env -i \
+        PATH="$HOST_TOOL_PATH" \
+        HOME="$home_dir" \
+        XDG_RUNTIME_DIR="$runtime_dir" \
+        CODEX_CLI_PATH="$TRUE_BIN" \
+        CODEX_WEBVIEW_PORT=45675 \
+        ELECTRON_RENDERER_URL="http://127.0.0.1:9999/" \
+        ELECTRON_MARKER="$electron_marker" \
+        "$app_dir/start.sh" >/dev/null 2>&1
+    local rc=$?
+    set -e
+
+    [ "$rc" -ne 124 ] || fail "Launcher hung while handling a missing webview entrypoint"
+    [ "$rc" -ne 0 ] || fail "Launcher should fail when webview/index.html is missing"
+    [ ! -e "$electron_marker" ] || fail "Launcher should not reach Electron when webview/index.html is missing"
+    assert_contains "$launcher_log" "webview bundle is incomplete"
+
+    rm -f "$electron_marker"
+    set +e
+    timeout 20 env -i \
+        PATH="$HOST_TOOL_PATH" \
+        HOME="$home_dir" \
+        XDG_RUNTIME_DIR="$runtime_dir" \
+        CODEX_CLI_PATH="$TRUE_BIN" \
+        CODEX_WEBVIEW_PORT=45675 \
+        CODEX_LINUX_ALLOW_RENDERER_URL_OVERRIDE=1 \
+        ELECTRON_RENDERER_URL="http://127.0.0.1:9999/" \
+        ELECTRON_MARKER="$electron_marker" \
+        "$app_dir/start.sh" >/dev/null 2>&1
+    rc=$?
+    set -e
+
+    [ "$rc" -ne 124 ] || fail "Launcher hung while using an explicit renderer URL override"
+    [ "$rc" -eq 0 ] || fail "Launcher should allow an explicit renderer URL override without local webview assets"
+    assert_file_exists "$electron_marker"
+    [ "$(cat "$electron_marker")" = "http://127.0.0.1:9999/" ] \
+        || fail "Launcher should preserve explicit renderer URL override"
+    assert_contains "$launcher_log" "Skipping packaged webview setup because ELECTRON_RENDERER_URL override is enabled"
+}
+
+test_launcher_extra_bundled_plugin_cache_rollback() {
+    info "Checking extra bundled plugin cache rollback"
+    local workspace="$TMP_DIR/extra-bundled-plugin-cache-rollback"
+    local app_dir="$workspace/app"
+    local fake_home="$workspace/home"
+    local source_plugin="$app_dir/resources/plugins/openai-bundled/plugins/sites"
+    local cache_root="$fake_home/.codex/plugins/cache/openai-bundled/sites"
+    local cache_plugin="$cache_root/1.2.3"
+    local launcher_defs="$workspace/launcher-defs.sh"
+    local initial_log="$workspace/initial.log"
+    local failure_log="$workspace/failure.log"
+    local no_cache_log="$workspace/no-cache.log"
+    local visualize_source="$app_dir/resources/plugins/openai-bundled/plugins/visualize"
+    local visualize_cache="$fake_home/.codex/plugins/cache/openai-bundled/visualize/2.0.0"
+
+    mkdir -p "$source_plugin/.codex-plugin" "$fake_home"
+    printf '%s\n' '{"name":"sites","version":"1.2.3"}' > "$source_plugin/.codex-plugin/plugin.json"
+    printf '%s\n' "initial" > "$source_plugin/content.txt"
+    sed '/^hydrate_graphical_session_env$/,$d' "$REPO_DIR/launcher/start.sh.template" > "$launcher_defs"
+
+    (
+        export HOME="$fake_home"
+        export CODEX_HOME="$fake_home/.codex"
+        export CODEX_LINUX_APP_ID="codex-desktop"
+        export CODEX_LINUX_APP_DISPLAY_NAME="Codex Desktop"
+        export CODEX_LINUX_WEBVIEW_PORT="5175"
+        exec 7>&1 8>&2
+        # shellcheck disable=SC1090
+        source "$launcher_defs"
+        exec 1>&7 2>&8
+        SCRIPT_DIR="$app_dir"
+
+        sync_extra_bundled_plugin_cache > "$initial_log" 2>&1
+        printf '%s\n' "replacement" > "$source_plugin/content.txt"
+
+        mv() {
+            local args=("$@")
+            local argc="${#args[@]}"
+            local source="${args[$((argc - 2))]}"
+            local destination="${args[$((argc - 1))]}"
+            if [[ "$source" == *".tmp."* ]] && [ "$destination" = "$cache_plugin" ]; then
+                return 73
+            fi
+            command mv "$@"
+        }
+
+        sync_extra_bundled_plugin_cache > "$failure_log" 2>&1
+
+        rm -rf "$source_plugin"
+        mkdir -p "$visualize_source/.codex-plugin"
+        printf '%s\n' '{"name":"visualize","version":"2.0.0"}' > "$visualize_source/.codex-plugin/plugin.json"
+        printf '%s\n' "visualize" > "$visualize_source/content.txt"
+        sync_extra_bundled_plugin_cache > "$no_cache_log" 2>&1
+    )
+
+    assert_contains "$initial_log" "Extra bundled plugin cache synced from bundled resources"
+    assert_contains "$failure_log" "previous cache was restored"
+    assert_contains "$cache_plugin/content.txt" "initial"
+    assert_not_contains "$cache_plugin/content.txt" "replacement"
+    [ "$(readlink "$cache_root/latest")" = "1.2.3" ] || fail "Expected latest to keep the restored plugin version"
+    [ -L "$fake_home/.codex/.tmp/bundled-marketplaces/openai-bundled/plugins/sites" ] \
+        || fail "Expected marketplace plugin link to remain available"
+    [ -z "$(find "$cache_root" -mindepth 1 -maxdepth 1 -type d \( -name '*.tmp.*' -o -name '*.backup.*' \) -print -quit)" ] \
+        || fail "Expected failed extra plugin sync to clean temporary and backup directories"
+    assert_contains "$no_cache_log" "continuing without a new cache"
+    [ ! -e "$visualize_cache" ] || fail "Expected failed first cache install to leave no plugin payload"
+    [ ! -L "${visualize_cache%/*}/latest" ] || fail "Expected failed first cache install to leave no latest link"
+    [ ! -L "$fake_home/.codex/.tmp/bundled-marketplaces/openai-bundled/plugins/visualize" ] \
+        || fail "Expected failed first cache install to leave no marketplace link"
+    [ -z "$(find "${visualize_cache%/*}" -mindepth 1 -maxdepth 1 -type d \( -name '*.tmp.*' -o -name '*.backup.*' \) -print -quit)" ] \
+        || fail "Expected failed first cache install to clean temporary and backup directories"
+}
+
+test_launcher_extra_bundled_plugin_cache_concurrent_destination() {
+    info "Checking extra bundled plugin cache concurrent destination handling"
+    local workspace="$TMP_DIR/extra-bundled-plugin-cache-concurrent-destination"
+    local app_dir="$workspace/app"
+    local fake_home="$workspace/home"
+    local source_plugin="$app_dir/resources/plugins/openai-bundled/plugins/sites"
+    local cache_root="$fake_home/.codex/plugins/cache/openai-bundled/sites"
+    local cache_plugin="$cache_root/1.2.3"
+    local launcher_defs="$workspace/launcher-defs.sh"
+    local race_log="$workspace/race.log"
+    local backup_plugin=""
+
+    mkdir -p "$source_plugin/.codex-plugin" "$fake_home"
+    printf '%s\n' '{"name":"sites","version":"1.2.3"}' > "$source_plugin/.codex-plugin/plugin.json"
+    printf '%s\n' "initial" > "$source_plugin/content.txt"
+    sed '/^hydrate_graphical_session_env$/,$d' "$REPO_DIR/launcher/start.sh.template" > "$launcher_defs"
+
+    (
+        export HOME="$fake_home"
+        export CODEX_HOME="$fake_home/.codex"
+        export CODEX_LINUX_APP_ID="codex-desktop"
+        export CODEX_LINUX_APP_DISPLAY_NAME="ChatGPT Desktop"
+        export CODEX_LINUX_WEBVIEW_PORT="5175"
+        exec 7>&1 8>&2
+        # shellcheck disable=SC1090
+        source "$launcher_defs"
+        exec 1>&7 2>&8
+        SCRIPT_DIR="$app_dir"
+
+        sync_extra_bundled_plugin_cache >/dev/null 2>&1
+        printf '%s\n' "replacement" > "$source_plugin/content.txt"
+
+        concurrent_destination_injected=0
+        mv() {
+            local args=("$@")
+            local argc="${#args[@]}"
+            local source="${args[$((argc - 2))]}"
+            local destination="${args[$((argc - 1))]}"
+            if [[ "$source" == *".tmp."* ]] && \
+               [ "$destination" = "$cache_plugin" ] && \
+               [ "$concurrent_destination_injected" -eq 0 ]; then
+                mkdir -p "$cache_plugin"
+                printf '%s\n' "concurrent" > "$cache_plugin/content.txt"
+                concurrent_destination_injected=1
+            fi
+            command mv "$@"
+        }
+
+        sync_extra_bundled_plugin_cache > "$race_log" 2>&1
+    )
+
+    assert_contains "$race_log" "previous cache could not be restored"
+    assert_not_contains "$race_log" "Extra bundled plugin cache synced from bundled resources"
+    assert_contains "$cache_plugin/content.txt" "concurrent"
+    assert_not_contains "$cache_plugin/content.txt" "replacement"
+    [ -z "$(find "$cache_plugin" -mindepth 1 -maxdepth 1 -type d -name '*.tmp.*' -print -quit)" ] \
+        || fail "Expected collision-safe move to avoid nesting the temporary payload"
+    [ -z "$(find "$cache_root" -mindepth 1 -maxdepth 1 -type d -name '*.tmp.*' -print -quit)" ] \
+        || fail "Expected failed concurrent cache install to clean its temporary directory"
+    backup_plugin="$(find "$cache_root" -mindepth 1 -maxdepth 1 -type d -name '*.backup.*' -print -quit)"
+    [ -n "$backup_plugin" ] || fail "Expected concurrent cache collision to preserve the previous cache backup"
+    assert_contains "$backup_plugin/content.txt" "initial"
+}
+
+test_launcher_marketplace_metadata_atomic_staging() (
+    info "Checking atomic bundled marketplace metadata staging"
+    local workspace="$TMP_DIR/launcher-marketplace-metadata"
+    local app_dir="$workspace/app"
+    local codex_home="$workspace/codex-home"
+    local source_marketplace="$app_dir/resources/plugins/openai-bundled/.agents/plugins/marketplace.json"
+    local target_dir="$codex_home/.tmp/bundled-marketplaces/openai-bundled/.agents/plugins"
+    local target_marketplace="$target_dir/marketplace.json"
+    local function_file="$workspace/stage-function.sh"
+    local failing_command
+    local observed_temp
+    local observed_target
+
+    mkdir -p "$(dirname "$source_marketplace")" "$target_dir"
+    printf '%s\n' 'new metadata' > "$source_marketplace"
+    awk '/^stage_bundled_marketplace_metadata\(\) \{/{copy=1} copy{print} copy && /^}/{exit}' \
+        "$REPO_DIR/launcher/start.sh.template" > "$function_file"
+    # shellcheck source=/dev/null
+    source "$function_file"
+    SCRIPT_DIR="$app_dir"
+    CODEX_HOME="$codex_home"
+
+    for failing_command in cp chmod mv; do
+        printf '%s\n' 'existing metadata' > "$target_marketplace"
+        observed_temp=""
+        observed_target=""
+        cp() {
+            observed_temp="$2"
+            [ "$failing_command" != "cp" ] || return 1
+            command cp "$@"
+        }
+        chmod() {
+            [ "$failing_command" != "chmod" ] || return 1
+            command chmod "$@"
+        }
+        mv() {
+            observed_temp="${@: -2:1}"
+            observed_target="${@: -1}"
+            [ "$failing_command" != "mv" ] || return 1
+            command mv "$@"
+        }
+
+        stage_bundled_marketplace_metadata
+
+        assert_contains "$target_marketplace" "existing metadata"
+        [ "$(dirname "$observed_temp")" = "$target_dir" ] \
+            || fail "Marketplace metadata temp must be created beside the destination"
+        [ -z "$(find "$target_dir" -maxdepth 1 -type f -name '.marketplace.json.tmp.*' -print -quit)" ] \
+            || fail "Failed marketplace metadata staging must clean its temporary file"
+        if [ "$failing_command" = "mv" ]; then
+            [ "$observed_target" = "$target_marketplace" ] \
+                || fail "Marketplace metadata staging must atomically replace the final target"
+        fi
+        unset -f cp chmod mv
+    done
+
+    stage_bundled_marketplace_metadata
+    assert_contains "$target_marketplace" "new metadata"
+    [ -z "$(find "$target_dir" -maxdepth 1 -type f -name '.marketplace.json.tmp.*' -print -quit)" ] \
+        || fail "Successful marketplace metadata staging must leave no temporary file"
+
+    rm -f "$target_marketplace"
+    mkdir -p "$workspace/symlink-target"
+    ln -s "$workspace/symlink-target" "$target_marketplace"
+    stage_bundled_marketplace_metadata
+    [ ! -L "$target_marketplace" ] \
+        || fail "Marketplace metadata staging must replace a destination symlink"
+    assert_contains "$target_marketplace" "new metadata"
+    [ -z "$(find "$workspace/symlink-target" -mindepth 1 -print -quit)" ] \
+        || fail "Marketplace metadata staging must not follow a destination directory symlink"
+)
 
 test_launcher_template_sanity() {
     info "Checking launcher template markers"
+    assert_contains "$REPO_DIR/launcher/start.sh.template" "codex_capture_original_ld_library_path"
+    assert_contains "$REPO_DIR/flake.nix" 'export LD_LIBRARY_PATH="${electronLibPath}:${runtimeLibPath}'
+    assert_not_contains "$REPO_DIR/flake.nix" '--prefix LD_LIBRARY_PATH'
     assert_contains "$REPO_DIR/install.sh" 'DEFAULT_CODEX_WEBVIEW_PORT=5175'
     assert_contains "$REPO_DIR/install.sh" "inspect_rebuild_candidate"
     assert_contains "$REPO_DIR/scripts/lib/install-helpers.sh" "--inspect"
@@ -3636,11 +4966,15 @@ send_body = source.split("send_warm_start_launch_action() {", 1)[1].split("webvi
 prelaunch_hooks_body = source.split("run_feature_prelaunch_hooks() {", 1)[1].split("bundled_plugin_version() {", 1)[0]
 launcher_hooks_body = source.split("run_feature_launcher_hooks() {", 1)[1].split("build_electron_launch_args() {", 1)[0]
 cold_start_hooks_body = source.split("run_cold_start_hooks() {", 1)[1].split("run_cli_preflight() {", 1)[0]
+after_exit_hooks_body = source.split("run_feature_after_exit_hooks() {", 1)[1].split("run_cli_preflight() {", 1)[0]
+cli_probe_body = source.split("codex_cli_version_probe() {", 1)[1].split("codex_cli_version() {", 1)[0]
+notify_body = source.split("notify_error() {", 1)[1].split("canonical_path() {", 1)[0]
+update_manager_body = source.split("run_update_manager() {", 1)[1].split("pid_is_current_user() {", 1)[0]
 stop_body = source.split("stop_owned_webview_server() {", 1)[1].split("owned_webview_server_pid() {", 1)[0]
 stale_body = source.split("pid_is_stale_webview_server() {", 1)[1].split("stop_owned_webview_server() {", 1)[0]
 multi_body = source.split("configure_multi_launch_instance() {", 1)[1].split('WEBVIEW_ORIGIN="http://127.0.0.1:$CODEX_LINUX_WEBVIEW_PORT"', 1)[0]
-adopt_body = source.split("adopt_existing_webview_server() {", 1)[1].split("ensure_webview_server() {", 1)[0]
-ensure_body = source.split("ensure_webview_server() {", 1)[1].split("wait_for_webview_server", 1)[0]
+adopt_body = source.split("adopt_existing_webview_server() {", 1)[1].split("start_webview_server() {", 1)[0]
+ensure_body = source.split("start_webview_server() {", 1)[1].split("wait_for_webview_server", 1)[0]
 reconcile_body = source.split("reconcile_runtime_state() {", 1)[1].split("set_electron_defaults() {", 1)[0]
 orphan_body = source.split("pid_is_orphaned_runtime_process() {", 1)[1].split("detect_cross_install_conflict() {", 1)[0]
 reap_body = source.split("reap_orphaned_runtime_processes() {", 1)[1].split("reconcile_runtime_state() {", 1)[0]
@@ -3748,15 +5082,31 @@ if "using_second_instance_handoff" not in source or "needs_cold_start" not in so
     raise SystemExit("launcher must have an explicit second-instance handoff mode")
 if "second_instance_handoff_ready" not in runtime_body:
     raise SystemExit("second-instance handoff must skip cold-start setup")
-if "clear_bundled_marketplace_tmp_cache\nmonitor_bundled_marketplace_tmp_permissions\nreconcile_runtime_state" in runtime_body:
+if "clear_bundled_marketplace_tmp_cache\nreconcile_runtime_state" in runtime_body:
     raise SystemExit("warm-start path must not clear bundled marketplace temp cache")
-if not re.search(r'if needs_cold_start; then\s+log_phase "cold_start_cache_sync_start"\s+clear_bundled_marketplace_tmp_cache.*?monitor_bundled_marketplace_tmp_permissions.*?sync_browser_use_bundled_plugin_cache.*?sync_chrome_bundled_plugin_cache.*?sync_computer_use_bundled_plugin_cache.*?sync_read_aloud_bundled_plugin_cache.*?run_cold_start_hooks.*?log_phase "cold_start_hooks_dispatched"\s+fi', runtime_body, re.S):
-    raise SystemExit("bundled marketplace cleanup, plugin sync, and cold-start hooks must run only on cold start")
+if not re.search(r'if needs_cold_start; then\s+log_phase "cold_start_cache_sync_start"\s+clear_bundled_marketplace_tmp_cache.*?stage_bundled_marketplace_metadata.*?sync_browser_use_bundled_plugin_cache &.*?sync_chrome_bundled_plugin_cache &.*?sync_computer_use_bundled_plugin_cache &.*?sync_read_aloud_bundled_plugin_cache &.*?sync_extra_bundled_plugin_cache &.*?run_cold_start_hooks.*?log_phase "cold_start_hooks_dispatched"\s+await_webview_server_ready\s+fi', runtime_body, re.S):
+    raise SystemExit("bundled marketplace cleanup, staged metadata, concurrent plugin syncs, cold-start hooks, and the webview readiness wait must run only on cold start")
+# The plugin syncs run concurrently, so the shared marketplace.json is staged
+# exactly once beforehand and every sync is awaited before cold-start hooks.
+if source.count('\n    stage_bundled_marketplace_metadata\n') != 1:
+    raise SystemExit("bundled marketplace metadata must be staged exactly once")
+if 'rm -f "$marketplace_plugins_dir/marketplace.json"' in source:
+    raise SystemExit("bundled marketplace metadata must not delete the live target before copying")
+if 'mktemp "$marketplace_plugins_dir/.marketplace.json.tmp.XXXXXX"' not in source:
+    raise SystemExit("bundled marketplace metadata temp must be unique and destination-adjacent")
+if 'mv -fT -- "$marketplace_temp" "$marketplace_target"' not in source:
+    raise SystemExit("bundled marketplace metadata must atomically replace the live target")
+for sync_pid_var in ("SYNC_BROWSER_USE_PID", "SYNC_CHROME_PID", "SYNC_COMPUTER_USE_PID", "SYNC_READ_ALOUD_PID", "SYNC_EXTRA_PID"):
+    if 'wait "$' + sync_pid_var + '"' not in runtime_body:
+        raise SystemExit(f"cold start must await concurrent plugin sync {sync_pid_var}")
+    if runtime_body.index('wait "$' + sync_pid_var + '"') > runtime_body.index("run_cold_start_hooks"):
+        raise SystemExit(f"plugin sync {sync_pid_var} must be awaited before cold-start hooks run")
 for marker in (
     "initial_launch_state_refresh_start",
     "initial_launch_state_refreshed",
     "feature_prelaunch_start",
     "packaged_prelaunch_start",
+    "bundled_marketplace_metadata_staged",
     "browser_use_plugin_cache_synced",
     "chrome_plugin_cache_synced",
     "computer_use_plugin_cache_synced",
@@ -3787,15 +5137,21 @@ if "if needs_cold_start;" not in runtime_body:
     raise SystemExit("second-instance handoff must skip CLI preflight")
 if 'run_cold_start_hooks' not in runtime_body:
     raise SystemExit("cold start must run feature-staged hooks before Electron launches")
-if 'export CODEX_LINUX_USER_PATH="${PATH:-}"' not in source:
-    raise SystemExit("launcher must capture the user PATH before prepending the managed Node runtime")
-if source.index('export CODEX_LINUX_USER_PATH="${PATH:-}"') > source.index('export PATH="$MANAGED_NODE_BIN_DIR:$PATH"'):
-    raise SystemExit("launcher must capture CODEX_LINUX_USER_PATH before mutating PATH for Electron")
 for name, body in (("prelaunch", prelaunch_hooks_body), ("cold-start", cold_start_hooks_body), ("launcher", launcher_hooks_body)):
     if 'CODEX_HOME="$CODEX_HOME"' not in body:
         raise SystemExit(f"launcher {name} hooks must receive resolved CODEX_HOME")
     if 'CODEX_LINUX_FEATURES_DIR="$CODEX_LINUX_FEATURES_DIR"' not in body:
         raise SystemExit(f"launcher {name} hooks must receive the app-local Linux feature resource directory")
+    if 'codex_run_host_command "$hook"' not in body:
+        raise SystemExit(f"launcher {name} hooks must not inherit packaged LD_LIBRARY_PATH")
+if 'codex_run_host_command "$hook"' not in after_exit_hooks_body:
+    raise SystemExit("launcher after-exit hooks must not inherit packaged LD_LIBRARY_PATH")
+if 'codex_exec_host_command "$@"' not in cli_probe_body:
+    raise SystemExit("launcher CLI version probes must not inherit packaged LD_LIBRARY_PATH")
+if 'codex_run_host_command notify-send' not in notify_body:
+    raise SystemExit("desktop notifications must not inherit packaged LD_LIBRARY_PATH")
+if 'codex_run_host_command "$CODEX_UPDATE_MANAGER_PATH" "$@"' not in update_manager_body:
+    raise SystemExit("update manager and its host children must not inherit packaged LD_LIBRARY_PATH")
 if 'CODEX_LINUX_FEATURE_HOOK_PHASE=launcher' not in launcher_hooks_body:
     raise SystemExit("launcher hooks must receive their hook phase")
 if '"$hook" "${ELECTRON_ARGS[@]}"' not in launcher_hooks_body:
@@ -3823,13 +5179,37 @@ if 'STARTED_WEBVIEW_PID="$pid"' not in adopt_body:
 if "running_app_is_active" not in adopt_body:
     raise SystemExit("adopt_existing_webview_server must detect live-app reuse before cleanup")
 if "if adopt_existing_webview_server; then" not in ensure_body:
-    raise SystemExit("ensure_webview_server must split adoption from origin verification")
+    raise SystemExit("start_webview_server must split adoption from origin verification")
 if "stop_stale_webview_server" not in ensure_body:
-    raise SystemExit("ensure_webview_server must clear stale deleted webview servers before treating the port as foreign")
+    raise SystemExit("start_webview_server must clear stale deleted webview servers before treating the port as foreign")
 if ensure_body.find("stop_stale_webview_server") > ensure_body.find("is already serving Codex content"):
-    raise SystemExit("ensure_webview_server must try stale-server cleanup before foreign reachable-port failure")
+    raise SystemExit("start_webview_server must try stale-server cleanup before foreign reachable-port failure")
 if "Keeping the live app untouched" not in ensure_body:
-    raise SystemExit("ensure_webview_server must not stop a live app server when validation fails")
+    raise SystemExit("start_webview_server must not stop a live app server when validation fails")
+
+# Cold-start overlap: the webview server is spawned before the plugin cache
+# syncs and only awaited (readiness + origin verification) after them, so the
+# Python server boots while the launcher does unrelated work. Electron must
+# still never launch before the origin is verified.
+if "ensure_webview_server" in source:
+    raise SystemExit("ensure_webview_server was split into start_webview_server + await_webview_server_ready")
+if "WEBVIEW_STARTUP_PENDING" not in source:
+    raise SystemExit("start_webview_server must track pending startup for await_webview_server_ready")
+cold_flow = source.split("elif needs_cold_start; then", 1)[1]
+if "\n    start_webview_server\n" not in cold_flow:
+    raise SystemExit("cold start must spawn the webview server before the cache syncs")
+overlap_start = cold_flow.index("\n    start_webview_server\n")
+overlap_sync = cold_flow.index('log_phase "cold_start_cache_sync_start"')
+overlap_last_sync = cold_flow.index("sync_extra_bundled_plugin_cache")
+overlap_await = cold_flow.index("\n    await_webview_server_ready\n")
+overlap_lock = cold_flow.index("acquire_launcher_lock")
+if not (overlap_start < overlap_sync < overlap_last_sync < overlap_await < overlap_lock):
+    raise SystemExit("webview readiness wait must overlap the plugin cache syncs and finish before the launcher lock")
+await_body = source.split("await_webview_server_ready() {", 1)[1].split("clear_stale_pid_file() {", 1)[0]
+if "wait_for_webview_server" not in await_body or "verify_webview_origin" not in await_body:
+    raise SystemExit("await_webview_server_ready must keep readiness and origin verification before Electron")
+if 'log_phase "webview_ready"' not in await_body:
+    raise SystemExit("await_webview_server_ready must keep the webview_ready phase marker")
 if 'if [ -n "${RUNNING_APP_PID:-}" ] && running_app_is_active; then' not in reconcile_body:
     raise SystemExit("reconcile_runtime_state must preserve runtime markers when a live app still exists")
 if 'discover_running_app_pid' in reconcile_body:
@@ -3890,10 +5270,24 @@ import sys
 
 source_path, output_path = sys.argv[1:3]
 source = open(source_path, encoding="utf-8").read()
+host_command_helpers = source[
+    source.index("codex_restore_original_ld_library_path() {"):
+    source.index("# Capture before package-specific launcher patches")
+]
 start = source.index("is_wsl_environment() {")
 end = source.index("configure_side_by_side_app_env() {")
-probe = "#!/usr/bin/env bash\n" + source[start:end] + r'''
+helpers = source[start:end].replace(
+    "is_wsl_environment() {",
+    "launcher_is_wsl_environment() {",
+    1,
+)
+probe = "#!/usr/bin/env bash\n" + host_command_helpers + helpers + r'''
 set -Eeuo pipefail
+
+is_wsl_environment() {
+    [ "${CODEX_TEST_ASSUME_NON_WSL:-0}" != "1" ] || return 1
+    launcher_is_wsl_environment
+}
 
 CODEX_LINUX_APP_ID="${CODEX_LINUX_APP_ID:-codex-desktop}"
 SCRIPT_DIR="${SCRIPT_DIR:-/tmp/codex-launcher-probe-app}"
@@ -4000,6 +5394,14 @@ EOF
 
     output="$(env -i PATH="$PATH" HOME="$HOME" XDG_SESSION_TYPE=wayland CODEX_LINUX_RENDERING_MODE=default "$launcher_probe" probe)"
     [[ "$output" == *"comp=1"* && "$output" == *"<--disable-gpu-compositing>"* ]] || fail "Wayland default profile must disable GPU compositing for side-panel stability: $output"
+
+    local drm_stub_dir="$TMP_DIR/drm-stubs/two"
+    mkdir -p "$drm_stub_dir/card0-DP-2" "$drm_stub_dir/card0-HDMI-3"
+    printf '%s\n' connected > "$drm_stub_dir/card0-DP-2/status"
+    printf '%s\n' connected > "$drm_stub_dir/card0-HDMI-3/status"
+    output="$(env -i PATH="$PATH" HOME="$HOME" CODEX_TEST_ASSUME_NON_WSL=1 CODEX_DRM_CLASS_ROOT="$drm_stub_dir" DISPLAY=:0 XDG_SESSION_TYPE=wayland XDG_CURRENT_DESKTOP=ubuntu:GNOME "$launcher_probe" probe)"
+    [[ "$output" == *"mode=gnome-wayland-multi-monitor"* && "$output" == *"<--ozone-platform=x11>"* ]] || fail "GNOME Wayland multi-monitor auto profile must force X11 for stable maximize/scale behavior: $output"
+    [[ "$output" != *"<--ozone-platform-hint=auto>"* ]] || fail "GNOME Wayland multi-monitor auto profile must not leave backend selection to Electron: $output"
 
     output="$(env -i PATH="$PATH" HOME="$HOME" XDG_SESSION_TYPE=wayland CODEX_LINUX_RENDERING_MODE=default CODEX_ELECTRON_DISABLE_GPU_COMPOSITING=0 "$launcher_probe" probe)"
     [[ "$output" == *"comp=0"* && "$output" != *"<--disable-gpu-compositing>"* ]] || fail "CODEX_ELECTRON_DISABLE_GPU_COMPOSITING=0 must suppress the Wayland compositor workaround: $output"
@@ -4319,10 +5721,8 @@ EOF
     assert_contains "$REPO_DIR/launcher/start.sh.template" "hydrate_graphical_session_env"
     assert_not_contains "$REPO_DIR/install.sh" "pkill -f \"http.server 5175\""
     assert_contains "$REPO_DIR/launcher/start.sh.template" "CODEX_WEBVIEW_PORT"
-    assert_contains "$REPO_DIR/launcher/start.sh.template" "CODEX_LINUX_PIN_RENDERER_URL"
     assert_contains "$REPO_DIR/launcher/start.sh.template" "CODEX_LINUX_ALLOW_RENDERER_URL_OVERRIDE"
     assert_contains "$REPO_DIR/launcher/start.sh.template" 'export ELECTRON_RENDERER_URL="$WEBVIEW_ORIGIN/"'
-    assert_contains "$REPO_DIR/launcher/start.sh.template" 'ELECTRON_RENDERER_URL="${ELECTRON_RENDERER_URL:-$WEBVIEW_ORIGIN/}"'
     assert_contains "$REPO_DIR/launcher/start.sh.template" '--app-id="$CODEX_LINUX_APP_ID"'
     assert_contains "$REPO_DIR/scripts/lib/process-detection.sh" "CODEX_APP_ID"
     assert_contains "$REPO_DIR/launcher/start.sh.template" 'ELECTRON_OZONE_HINT="auto"'
@@ -4344,7 +5744,7 @@ EOF
     assert_contains "$REPO_DIR/scripts/lib/process-detection.sh" "CODEX_INSTALL_ALLOW_RUNNING"
     assert_contains "$REPO_DIR/scripts/lib/process-detection.sh" "assert_install_target_not_running"
     assert_contains "$REPO_DIR/scripts/lib/process-detection.sh" "find_running_install_target_pid"
-    assert_contains "$REPO_DIR/scripts/lib/process-detection.sh" "Codex Desktop is currently running from"
+    assert_contains "$REPO_DIR/scripts/lib/process-detection.sh" "ChatGPT Desktop is currently running from"
     assert_contains "$REPO_DIR/launcher/start.sh.template" "prompt_install_missing_cli"
     assert_contains "$REPO_DIR/launcher/start.sh.template" "prompt-install-cli"
     assert_contains "$REPO_DIR/launcher/start.sh.template" '.npm-global/bin/codex'
@@ -4359,7 +5759,7 @@ EOF
     assert_contains "$REPO_DIR/launcher/start.sh.template" "sync_read_aloud_bundled_plugin_cache"
     assert_contains "$REPO_DIR/launcher/start.sh.template" "make_tree_owner_writable"
     assert_contains "$REPO_DIR/launcher/start.sh.template" "clear_bundled_marketplace_tmp_cache"
-    assert_contains "$REPO_DIR/launcher/start.sh.template" "monitor_bundled_marketplace_tmp_permissions"
+    assert_not_contains "$REPO_DIR/launcher/start.sh.template" "monitor_bundled_marketplace_tmp_permissions"
     assert_contains "$REPO_DIR/launcher/start.sh.template" "extension-id.json"
     assert_contains "$REPO_DIR/launcher/start.sh.template" ".config/BraveSoftware/Brave-Browser/NativeMessagingHosts"
     assert_contains "$REPO_DIR/launcher/start.sh.template" ".config/chromium/NativeMessagingHosts"
@@ -4491,7 +5891,10 @@ import re
 import sys
 
 source = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
-functions = []
+functions = [source[
+    source.index("codex_restore_original_ld_library_path() {"):
+    source.index("# Capture before package-specific launcher patches")
+]]
 for name in ("find_codex_cli", "pid_parent_matches", "codex_cli_version_probe", "codex_cli_version", "log_codex_cli_path"):
     match = re.search(r"^" + re.escape(name) + r"\(\) \{[\s\S]*?^\}\n", source, re.M)
     if match is None:
@@ -4535,14 +5938,14 @@ PY
     printf '#!/usr/bin/env bash\nprintf "codex-cli 9.999.0\\n"\n' > "$fake_home/.npm-global/bin/codex"
     chmod +x "$path_cli_bin/codex" "$fake_home/.npm-global/bin/codex"
 
-    selected_cli="$(env -i PATH="$path_cli_bin:/usr/bin:/bin" HOME="$fake_home" "$launcher_probe" find)"
+    selected_cli="$(env -i PATH="$path_cli_bin:$HOST_TOOL_PATH" HOME="$fake_home" "$launcher_probe" find)"
     [ "$selected_cli" = "$path_cli_bin/codex" ] || fail "CLI lookup must keep the first PATH hit, got $selected_cli"
 
     local override_cli="$workspace/override-codex"
     local log_output
     printf '#!/usr/bin/env bash\nprintf "codex-cli 0.42.0\\n"\n' > "$override_cli"
     chmod +x "$override_cli"
-    log_output="$(env -i PATH="$path_cli_bin:/usr/bin:/bin" HOME="$fake_home" "$launcher_probe" log "$override_cli")"
+    log_output="$(env -i PATH="$path_cli_bin:$HOST_TOOL_PATH" HOME="$fake_home" "$launcher_probe" log "$override_cli")"
     [[ "$log_output" == "Using CODEX_CLI_PATH=$override_cli (version 0.42.0)" ]] || fail "CODEX_CLI_PATH must remain an explicit override with version logging: $log_output"
 
     local dash_version_cli="$workspace/dash-version-codex"
@@ -4552,15 +5955,27 @@ PY
     printf '#!/usr/bin/env bash\nif [ "${1:-}" = "--version" ]; then exit 2; fi\n[ "${1:-}" = "version" ] || exit 2\nprintf "codex-cli v0.151.0\\n"\n' > "$fallback_version_cli"
     chmod +x "$dash_version_cli" "$fallback_version_cli"
 
-    version_output="$(env -i PATH="/usr/bin:/bin" HOME="$fake_home" "$launcher_probe" version "$dash_version_cli")"
+    version_output="$(env -i PATH="$HOST_TOOL_PATH" HOME="$fake_home" "$launcher_probe" version "$dash_version_cli")"
     [ "$version_output" = "0.150.0" ] || fail "CLI version probe must read --version output, got $version_output"
-    version_output="$(env -i PATH="/usr/bin:/bin" HOME="$fake_home" "$launcher_probe" version "$fallback_version_cli")"
+    version_output="$(env -i PATH="$HOST_TOOL_PATH" HOME="$fake_home" "$launcher_probe" version "$fallback_version_cli")"
     [ "$version_output" = "0.151.0" ] || fail "CLI version probe must fall back to version output, got $version_output"
+
+    # The version probe result is read through command substitution on the
+    # launch path. The watchdog subshell (and its sleep child) must not
+    # inherit that pipe, or a fast CLI still blocks the caller for the full
+    # watchdog second waiting for pipe EOF.
+    local fast_probe_start_ns fast_probe_end_ns fast_probe_elapsed_ms
+    fast_probe_start_ns="$(date +%s%N)"
+    version_output="$(env -i PATH="$HOST_TOOL_PATH" HOME="$fake_home" "$launcher_probe" version "$dash_version_cli")"
+    fast_probe_end_ns="$(date +%s%N)"
+    fast_probe_elapsed_ms=$(( (10#$fast_probe_end_ns - 10#$fast_probe_start_ns) / 1000000 ))
+    [ "$version_output" = "0.150.0" ] || fail "fast CLI version probe must still parse --version output, got $version_output"
+    [ "$fast_probe_elapsed_ms" -lt 700 ] || fail "CLI version probe must not hold the command-substitution pipe until the watchdog sleep expires, took ${fast_probe_elapsed_ms}ms"
 
     local unknown_cli="$workspace/unknown-version-codex"
     printf '#!/usr/bin/env bash\nprintf "codex-cli dev build\\n"\n' > "$unknown_cli"
     chmod +x "$unknown_cli"
-    log_output="$(env -i PATH="/usr/bin:/bin" HOME="$fake_home" "$launcher_probe" log "$unknown_cli")"
+    log_output="$(env -i PATH="$HOST_TOOL_PATH" HOME="$fake_home" "$launcher_probe" log "$unknown_cli")"
     [[ "$log_output" == "Using CODEX_CLI_PATH=$unknown_cli (version unknown; set CODEX_CLI_PATH=/path/to/codex to pin a known CLI)" ]] || fail "CLI diagnostics must explain unknown versions and explicit pinning: $log_output"
 
     local fd_probe_cli="$workspace/fd-probe-codex"
@@ -4573,7 +5988,7 @@ PY
     chmod +x "$fd_probe_cli"
     version_output="$(
         exec 9>"$workspace/launcher.lock"
-        env -i PATH="/usr/bin:/bin" HOME="$fake_home" "$launcher_probe" version "$fd_probe_cli"
+        env -i PATH="$HOST_TOOL_PATH" HOME="$fake_home" "$launcher_probe" version "$fd_probe_cli"
     )"
     [ "$version_output" = "0.200.0" ] || fail "fd-guarded CLI probe must still read versions, got $version_output"
     [ "$(cat "$fd_state")" = "closed" ] || fail "CLI version probe child must not inherit launcher lock fd 9"
@@ -4588,7 +6003,7 @@ PY
     } > "$hanging_cli"
     chmod +x "$hanging_cli"
 
-    version_output="$(env -i PATH="/usr/bin:/bin" HOME="$fake_home" TMPDIR="$workspace" "$launcher_probe" version "$hanging_cli" || true)"
+    version_output="$(env -i PATH="$HOST_TOOL_PATH" HOME="$fake_home" TMPDIR="$workspace" "$launcher_probe" version "$hanging_cli" || true)"
     [ -z "$version_output" ] || fail "hanging CLI probe must ignore partial version output, got $version_output"
     assert_file_exists "$hanging_pid_file"
     local hanging_pid
@@ -4611,7 +6026,7 @@ PY
     } > "$hanging_log_cli"
     chmod +x "$hanging_log_cli"
 
-    log_output="$(env -i PATH="/usr/bin:/bin" HOME="$fake_home" TMPDIR="$workspace" "$launcher_probe" log "$hanging_log_cli")"
+    log_output="$(env -i PATH="$HOST_TOOL_PATH" HOME="$fake_home" TMPDIR="$workspace" "$launcher_probe" log "$hanging_log_cli")"
     [[ "$log_output" == "Using CODEX_CLI_PATH=$hanging_log_cli (version unknown; set CODEX_CLI_PATH=/path/to/codex to pin a known CLI)" ]] || fail "log path must time out hung CLI version probes under command substitution: $log_output"
     assert_file_exists "$hanging_log_pid_file"
     local hanging_log_pid
@@ -4705,8 +6120,6 @@ try:
     )
     assert cached_status == 200, (cached_status, cached_headers)
     assert cached_headers.get("cache-control") == "no-store, max-age=0", cached_headers
-    assert cached_headers.get("pragma") == "no-cache", cached_headers
-    assert cached_headers.get("expires") == "0", cached_headers
 
     refreshed_index_status, _, _ = request(
         "GET",
@@ -4783,10 +6196,8 @@ test_side_by_side_launcher_identity() {
     assert_contains "$app_dir/start.sh" 'CODEX_LINUX_SETTINGS_FILE="$APP_SETTINGS_FILE"'
     assert_contains "$app_dir/start.sh" 'export CODEX_HOME CODEX_LINUX_APP_ID CODEX_LINUX_APP_DISPLAY_NAME CODEX_LINUX_WEBVIEW_PORT CODEX_LINUX_SETTINGS_FILE CODEX_LINUX_FEATURES_DIR'
     assert_contains "$app_dir/start.sh" 'WEBVIEW_ORIGIN="http://127.0.0.1:$CODEX_LINUX_WEBVIEW_PORT"'
-    assert_contains "$app_dir/start.sh" "CODEX_LINUX_PIN_RENDERER_URL"
     assert_contains "$app_dir/start.sh" "CODEX_LINUX_ALLOW_RENDERER_URL_OVERRIDE"
     assert_contains "$app_dir/start.sh" 'export ELECTRON_RENDERER_URL="$WEBVIEW_ORIGIN/"'
-    assert_contains "$app_dir/start.sh" 'ELECTRON_RENDERER_URL="${ELECTRON_RENDERER_URL:-$WEBVIEW_ORIGIN/}"'
     assert_contains "$app_dir/start.sh" "resolve_script_dir"
     assert_contains "$app_dir/start.sh" "configure_side_by_side_app_env"
     assert_contains "$app_dir/start.sh" 'XDG_CONFIG_HOME="${CODEX_XDG_CONFIG_HOME:-$APP_STATE_DIR/xdg-config}"'
@@ -4982,12 +6393,302 @@ test_browser_plugin_renamed_upstream_staging() {
     assert_not_contains "$browser_dir/scripts/browser-client.mjs" "let e=import.meta.__codexNativePipe;return"
     assert_contains "$browser_dir/scripts/browser-client.mjs" "codexLinuxSiteStatusAllowlistFallback"
     assert_contains "$browser_dir/scripts/browser-client.mjs" "codexLinuxFileUrlPolicy"
+    assert_contains "$browser_dir/scripts/browser-client.mjs" "codexLinuxIabSocketScope"
     assert_contains "$browser_dir/scripts/browser-client.mjs" 'protocol==="file:"'
     assert_not_contains "$browser_dir/scripts/browser-client.mjs" 'protocol==="data:"'
     assert_contains "$marketplace" '"name": "browser"'
     assert_contains "$marketplace" '"path": "./plugins/browser"'
     assert_contains "$output_log" "Browser plugin staged from upstream DMG"
     assert_not_contains "$output_log" "Browser bundled plugin resources not present"
+}
+
+test_portable_bundled_plugins_staging() {
+    info "Checking portable upstream bundled plugin staging"
+    local workspace="$TMP_DIR/portable-bundled-plugins"
+    local app_dir="$workspace/ChatGPT.app"
+    local install_dir="$workspace/install"
+    local output_log="$workspace/output.log"
+    local marketplace="$install_dir/resources/plugins/openai-bundled/.agents/plugins/marketplace.json"
+    local plugins_dir="$install_dir/resources/plugins/openai-bundled/plugins"
+
+    mkdir -p "$workspace" "$install_dir/resources"
+    make_fake_portable_plugins_upstream_app "$app_dir"
+
+    (
+        SCRIPT_DIR="$REPO_DIR"
+        INSTALL_DIR="$install_dir"
+        WORK_DIR="$workspace/work"
+        ARCH="x86_64"
+        ICON_SOURCE="$workspace/missing-icon.png"
+        CODEX_APP_ID="codex-desktop"
+        mkdir -p "$WORK_DIR"
+        warn() { echo "[WARN] $*" >&2; }
+        info() { echo "[INFO] $*" >&2; }
+        # shellcheck disable=SC1091
+        source "$REPO_DIR/scripts/lib/bundled-plugins.sh"
+        stage_linux_computer_use_plugin() { return 1; }
+        stage_browser_plugin_from_upstream() { return 1; }
+        stage_chrome_plugin_from_upstream() { return 1; }
+        install_browser_use_node_repl_resource() { return 0; }
+        install_bundled_plugin_resources "$app_dir"
+    ) >"$output_log" 2>&1
+
+    assert_file_exists "$plugins_dir/sites/.codex-plugin/plugin.json"
+    assert_file_exists "$plugins_dir/deep-research/.codex-plugin/plugin.json"
+    assert_file_exists "$plugins_dir/visualize/.codex-plugin/plugin.json"
+    assert_mode "$plugins_dir/sites/scripts/init-site.sh" "755"
+    [ ! -e "$plugins_dir/latex" ] || fail "Expected native LaTeX plugin to remain unstaged"
+    [ ! -e "$plugins_dir/record-and-replay" ] || fail "Expected native Record and Replay plugin to remain unstaged"
+    assert_contains "$output_log" "Portable bundled plugin sites staged from upstream DMG"
+    assert_contains "$output_log" "Portable bundled plugin deep-research staged from upstream DMG"
+    assert_contains "$output_log" "Portable bundled plugin visualize staged from upstream DMG"
+
+    node - "$marketplace" <<'NODE'
+const fs = require("fs");
+const marketplace = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+const names = marketplace.plugins.map((plugin) => plugin.name);
+const expected = ["sites", "deep-research", "visualize"];
+if (JSON.stringify(names) !== JSON.stringify(expected)) {
+  throw new Error(`expected ${JSON.stringify(expected)}, got ${JSON.stringify(names)}`);
+}
+for (const plugin of marketplace.plugins) {
+  if (plugin.source?.source !== "local" || plugin.source.path !== `./plugins/${plugin.name}`) {
+    throw new Error(`unsafe marketplace source for ${plugin.name}`);
+  }
+}
+NODE
+    node --check "$plugins_dir/sites/mcp/server.mjs"
+    python3 -m py_compile "$plugins_dir/visualize/skills/visualize/scripts/render.py"
+}
+
+test_portable_bundled_plugins_reject_unsafe_content() {
+    info "Checking unsafe portable bundled plugin rejection"
+    local workspace="$TMP_DIR/portable-bundled-plugins-unsafe"
+    local app_dir="$workspace/ChatGPT.app"
+    local install_dir="$workspace/install"
+    local output_log="$workspace/output.log"
+    local source_plugins="$app_dir/Contents/Resources/plugins/openai-bundled/plugins"
+    local target_plugins="$install_dir/resources/plugins/openai-bundled/plugins"
+    local victim="$workspace/private.txt"
+
+    mkdir -p "$workspace" "$install_dir/resources"
+    make_fake_portable_plugins_upstream_app "$app_dir"
+    printf '%s\n' 'do-not-copy' > "$victim"
+    ln -s "$victim" "$source_plugins/sites/private-link"
+    printf '\x7fELF' > "$source_plugins/deep-research/native-helper"
+    chmod 0755 "$source_plugins/deep-research/native-helper"
+
+    (
+        SCRIPT_DIR="$REPO_DIR"
+        INSTALL_DIR="$install_dir"
+        WORK_DIR="$workspace/work"
+        ARCH="x86_64"
+        ICON_SOURCE="$workspace/missing-icon.png"
+        CODEX_APP_ID="codex-desktop"
+        mkdir -p "$WORK_DIR"
+        warn() { echo "[WARN] $*" >&2; }
+        info() { echo "[INFO] $*" >&2; }
+        # shellcheck disable=SC1091
+        source "$REPO_DIR/scripts/lib/bundled-plugins.sh"
+        stage_linux_computer_use_plugin() { return 1; }
+        stage_browser_plugin_from_upstream() { return 1; }
+        stage_chrome_plugin_from_upstream() { return 1; }
+        install_browser_use_node_repl_resource() { return 0; }
+        install_bundled_plugin_resources "$app_dir"
+    ) >"$output_log" 2>&1
+
+    [ ! -e "$target_plugins/sites" ] || fail "Expected symlink-bearing Sites plugin to be rejected"
+    [ ! -e "$target_plugins/deep-research" ] || fail "Expected native Deep Research payload to be rejected"
+    assert_file_exists "$target_plugins/visualize/.codex-plugin/plugin.json"
+    assert_contains "$output_log" "symlink is not allowed: private-link"
+    assert_contains "$output_log" "native executable is not portable: native-helper"
+    assert_contains "$victim" "do-not-copy"
+}
+
+test_portable_bundled_plugin_validator_guards() {
+    info "Checking portable bundled plugin manifest and filesystem guards"
+    local workspace="$TMP_DIR/portable-bundled-plugin-validator-guards"
+    local base_plugin="$workspace/base"
+    local case_dir=""
+    local case_name=""
+    local output_log=""
+
+    mkdir -p "$base_plugin/.codex-plugin"
+    printf '%s\n' '{"name":"sites","version":"1.0.0"}' > "$base_plugin/.codex-plugin/plugin.json"
+    printf '%s\n' "portable" > "$base_plugin/content.txt"
+
+    # shellcheck disable=SC1091
+    source "$REPO_DIR/scripts/lib/bundled-plugins.sh"
+
+    for case_name in invalid-version manifest-symlink privileged-directory native-bundle named-pipe; do
+        case_dir="$workspace/$case_name"
+        output_log="$workspace/$case_name.log"
+        cp -R "$base_plugin" "$case_dir"
+
+        case "$case_name" in
+            invalid-version)
+                printf '%s\n' '{"name":"sites","version":"../invalid"}' > "$case_dir/.codex-plugin/plugin.json"
+                ;;
+            manifest-symlink)
+                printf '%s\n' '{"name":"sites","version":"1.0.0"}' > "$workspace/external-manifest.json"
+                rm "$case_dir/.codex-plugin/plugin.json"
+                ln -s "$workspace/external-manifest.json" "$case_dir/.codex-plugin/plugin.json"
+                ;;
+            privileged-directory)
+                mkdir "$case_dir/privileged"
+                chmod 2755 "$case_dir/privileged"
+                ;;
+            native-bundle)
+                mkdir "$case_dir/helper.app"
+                ;;
+            named-pipe)
+                mkfifo "$case_dir/channel"
+                ;;
+        esac
+
+        if validate_portable_bundled_plugin "$case_dir" sites >"$output_log" 2>&1; then
+            fail "Expected portable plugin validator to reject $case_name"
+        fi
+    done
+
+    assert_contains "$workspace/invalid-version.log" "plugin manifest version is missing or invalid"
+    assert_contains "$workspace/manifest-symlink.log" "plugin manifest cannot be a symlink"
+    assert_contains "$workspace/privileged-directory.log" "privileged mode is not allowed: privileged"
+    assert_contains "$workspace/native-bundle.log" "native bundle is not portable: helper.app"
+    assert_contains "$workspace/named-pipe.log" "non-regular file is not allowed: channel"
+}
+
+test_portable_bundled_plugin_stage_failures() {
+    info "Checking portable bundled plugin stage failure propagation"
+    local workspace="$TMP_DIR/portable-bundled-plugin-stage-failures"
+    local failure=""
+
+    for failure in sidecar-cleanup target-backup final-move; do
+        local case_dir="$workspace/$failure"
+        local app_dir="$case_dir/ChatGPT.app"
+        local source_plugin="$app_dir/Contents/Resources/plugins/openai-bundled/plugins/sites"
+        local target_plugins="$case_dir/target"
+        local output_log="$case_dir/output.log"
+
+        mkdir -p "$target_plugins"
+        make_fake_portable_plugins_upstream_app "$app_dir"
+        if [ "$failure" = "target-backup" ] || [ "$failure" = "final-move" ]; then
+            mkdir -p "$target_plugins/sites"
+            printf '%s\n' "keep-existing" > "$target_plugins/sites/existing.txt"
+        fi
+
+        if ! (
+            warn() { echo "[WARN] $*" >&2; }
+            info() { echo "[INFO] $*" >&2; }
+            # shellcheck disable=SC1091
+            source "$REPO_DIR/scripts/lib/bundled-plugins.sh"
+
+            case "$failure" in
+                sidecar-cleanup)
+                    remove_macos_sidecar_files() { return 71; }
+                    ;;
+                target-backup)
+                    mv() {
+                        local args=("$@")
+                        local offset=0
+                        if [ "${args[0]}" = "--" ]; then
+                            offset=1
+                        fi
+                        if [ "${args[$offset]}" = "$target_plugins/sites" ]; then
+                            return 72
+                        fi
+                        command mv "$@"
+                    }
+                    ;;
+                final-move)
+                    mv() {
+                        local args=("$@")
+                        local offset=0
+                        if [ "${args[0]}" = "--" ]; then
+                            offset=1
+                        fi
+                        local source="${args[$offset]}"
+                        local destination="${args[$((offset + 1))]}"
+                        if [[ "$source" == *".sites.tmp."* ]] && [ "$destination" = "$target_plugins/sites" ]; then
+                            return 73
+                        fi
+                        command mv "$@"
+                    }
+                    ;;
+            esac
+
+            if stage_portable_bundled_plugin_from_upstream "$source_plugin" "$target_plugins" sites; then
+                echo "stage unexpectedly succeeded for $failure" >&2
+                exit 1
+            fi
+        ) >"$output_log" 2>&1; then
+            fail "Expected $failure to propagate as a staging failure"
+        fi
+
+        assert_not_contains "$output_log" "Portable bundled plugin sites staged from upstream DMG"
+        [ -z "$(find "$target_plugins" -mindepth 1 -maxdepth 1 -type d \( -name '.sites.tmp.*' -o -name '.sites.backup.*' \) -print -quit)" ] \
+            || fail "Expected $failure staging and backup cleanup"
+
+        case "$failure" in
+            sidecar-cleanup)
+                assert_contains "$output_log" "Failed to clean macOS sidecar files for portable bundled plugin sites"
+                [ ! -e "$target_plugins/sites" ] || fail "Expected sidecar cleanup failure to leave no target"
+                ;;
+            target-backup)
+                assert_contains "$output_log" "Failed to preserve existing portable bundled plugin sites"
+                assert_contains "$target_plugins/sites/existing.txt" "keep-existing"
+                ;;
+            final-move)
+                assert_contains "$output_log" "previous target was restored"
+                assert_contains "$target_plugins/sites/existing.txt" "keep-existing"
+                ;;
+        esac
+    done
+}
+
+test_portable_bundled_plugin_marketplace_path_guard() {
+    info "Checking portable bundled plugin marketplace path guard"
+    local workspace="$TMP_DIR/portable-bundled-plugin-path-guard"
+    local marketplace="$workspace/marketplace.json"
+    local listed="$workspace/listed.txt"
+    local rewritten="$workspace/rewritten/.agents/plugins/marketplace.json"
+
+    mkdir -p "$workspace"
+    cat > "$marketplace" <<'JSON'
+{"plugins":[{"name":"sites","source":{"source":"local","path":"../../outside"},"category":"unsafe-first"},{"name":"sites","source":{"source":"local","path":"./plugins/sites"},"category":"safe-sites"},{"name":"sites","source":{"source":"local","path":"./plugins/sites"},"category":"duplicate-safe"},{"name":"deep-research","source":{"source":"git","path":"./plugins/deep-research"}},{"name":"visualize","source":{"source":"local","path":".\\plugins\\visualize"},"category":"safe-visualize"}]}
+JSON
+
+    (
+        # shellcheck disable=SC1091
+        source "$REPO_DIR/scripts/lib/bundled-plugins.sh"
+        list_portable_bundled_plugins "$marketplace"
+    ) > "$listed"
+
+    [ "$(grep -Fxc 'sites' "$listed")" -eq 1 ] || fail "Expected one safe Sites marketplace entry"
+    [ "$(grep -Fxc 'visualize' "$listed")" -eq 1 ] || fail "Expected one safe Visualize marketplace entry"
+    assert_not_contains "$listed" "deep-research"
+
+    (
+        # shellcheck disable=SC1091
+        source "$REPO_DIR/scripts/lib/bundled-plugins.sh"
+        write_bundled_plugins_marketplace "$marketplace" "$rewritten" 0 0 0 sites visualize
+    )
+    node - "$rewritten" <<'NODE'
+const fs = require("fs");
+const marketplace = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+const byName = new Map(marketplace.plugins.map((plugin) => [plugin.name, plugin]));
+if (byName.get("sites")?.category !== "safe-sites") {
+  throw new Error("Sites metadata did not come from the accepted marketplace entry");
+}
+if (byName.get("visualize")?.category !== "safe-visualize") {
+  throw new Error("Visualize metadata did not come from the accepted marketplace entry");
+}
+for (const [name, plugin] of byName) {
+  if (plugin.source?.source !== "local" || plugin.source.path !== `./plugins/${name}`) {
+    throw new Error(`unsafe rewritten source for ${name}`);
+  }
+}
+NODE
 }
 
 test_browser_use_node_repl_glibc_pidfd_patch_static() {
@@ -5043,22 +6744,14 @@ JS
     cat > "$chrome_dir/skills/control-chrome/SKILL.md" <<'MD'
 # Chrome
 
-```js
-const { setupBrowserRuntime } = await import("<plugin root>/scripts/browser-client.mjs");
-await setupBrowserRuntime({ globals: globalThis });
-globalThis.browser = await agent.browsers.get("extension");
-nodeRepl.write(await browser.documentation());
-```
-
 Use the browser bound to `browser` for tasks in this skill.
 MD
     cat > "$chrome_dir/scripts/extension-id.json" <<'JSON'
 {"extensionId":"hehggadaopoacecdllhhajmbjkdcmajg","extensionHostName":"com.openai.codexextension"}
 JSON
     cat > "$chrome_dir/scripts/browser-client.mjs" <<'JS'
-import{readdir as ZI}from"node:fs/promises";import L7,{platform as XI}from"node:os";import QI from"node:path";import{readFile as P7}from"fs/promises";import{resolve as D7}from"path";import{resolve as S7}from"path";import{homedir as v7,platform as E7}from"os";var Cd=S7(v7(),E7()==="win32"?"AppData\\Local\\Google\\Chrome\\User Data":"Library/Application Support/Google/Chrome");import{ClassicLevel as C7}from"./node_modules/classic-level.mjs";import{resolve as bg}from"path";import{tmpdir as T7}from"os";import{cp as A7,mkdtemp as I7,rm as HI}from"fs/promises";import{existsSync as k7}from"fs";var VI=async(e,t)=>{let r=bg(Cd,e,"Local Extension Settings",t);if(!k7(r))return null;let n=await I7(bg(R7(),"codex"));await A7(r,n,{recursive:!0}),await HI(bg(n,"LOCK"));let o=new C7(n,{createIfMissing:!1,keyEncoding:"utf8",valueEncoding:"utf8"});try{await o.open();let i=await o.get("extensionInstanceId");if(!i)return null;let s=JSON.parse(i);return typeof s!="string"?null:s}finally{await o.close(),await HI(n,{force:!0,recursive:!0})}},R7=()=>"nodeRepl"in globalThis&&globalThis.nodeRepl?globalThis.nodeRepl.tmpDir:T7();var GI=async e=>{if(e.type!=="extension"||!e.metadata?.extensionInstanceId||!e.metadata.extensionId)return e;let t=await N7(e.metadata.extensionId,e.metadata.extensionInstanceId);return t?{...e,metadata:{...e.metadata,profileName:t.name,profileIsLastUsed:t.isLastUsed.toString(),profileOrdering:t.orderingIndex.toString()}}:e},N7=async(e,t)=>(await O7(e)).find(o=>o.instanceId===t)||null,O7=async e=>{let t=await M7();return await Promise.all(t.map(async r=>({...r,instanceId:await VI(r.id,e).catch(n=>(le(n),null))})))},M7=async()=>{let e=D7(Cd,"Local State"),t=JSON.parse(await P7(e,"utf8"));return t.profile.profiles_order.map((r,n)=>{let o=t.profile.info_cache[r];return o?{id:r,name:o.name,isLastUsed:t.profile.last_used===r,orderingIndex:n,avatarUrl:o.avatar_icon}:null}).filter(r=>!!r)};
-var U7=5e3,_g=__(L7.platform()),j7=async(e,{codexSessionId:t})=>{let r=tl(p_),n=e.filter(i=>i.info.type==="iab"),o=q7(n,t,r);return await Promise.all(n.filter(i=>!o.includes(i)).map(async({api:i})=>i.close())),[...e.filter(i=>i.info.type!=="iab"),...o]},q7=(e,t,r)=>t==null?[]:e.filter(n=>n.info.metadata?.codexSessionId===t&&(r==null||n.info.metadata.codexAppBuildFlavor===r)),ek=async()=>{};
-function og(e){return e}function ig(e){return e==="extension"||e==="iab"||e==="cdp"}function li(e){return e}function KI(e){return e}class Id{async getBrowsers(){return[]}async get(e){return e}}function tI({browserId:e,clientInfo:t,requestedBrowserId:r}){return ig(r)?og(t.type)===r:e===r}function ld(){return null}async function mwe({globals:e}){let r=new Id,n=new Map(),l={browser_id:"extension"};if(ig(l.browser_id)){let _=li(l.browser_id);KI(_)}let p=await r.get(l.browser_id),f=n.get(p.api);return f}
+const browserPreference={};function preferredWindowIdFor(){}function getForUrl(){}const extensionInstanceId=null;
+var Cb=kE(hV.platform()),EV=()=>_P()==="win32"?TV():CV(),CV=async()=>(await yP(Cb)).map(e=>wP.resolve(Cb,e)),TV=async()=>[];
 function lu(e){let t=globalThis.nodeRepl?.env[e];return typeof t=="string"?t:void 0}
 function Me(){let e=globalThis.nodeRepl;return e?.config==null?void 0:e}
 import{platform as yT}from"node:os";function eh(){return"privileged native pipe bridge is not available; browser-client is not trusted"}function th(){let e=globalThis.nodeRepl?.nativePipe;return e==null||typeof e.createConnection!="function"?null:e}var ml=class e{constructor(t){this.socket=t}static async create(t){let r=th();if(r!=null){let n=await r.createConnection(t);return new e(n)}throw new Error(eh())}};
@@ -5297,15 +6990,9 @@ test_chrome_plugin_staging() {
     assert_contains "$chrome_dir/scripts/open-chrome-window.js" "defaultBrowser ==="
     assert_contains "$chrome_dir/scripts/open-chrome-window.js" "resolveChromeProfileDirectoryFromRunningProcess"
     assert_contains "$chrome_dir/scripts/open-chrome-window.js" "defaultLinuxUserDataDirectoryForCommand"
-    assert_contains "$chrome_dir/scripts/browser-client.mjs" "codexLinuxChromeUserDataDirectories"
-    assert_contains "$chrome_dir/scripts/browser-client.mjs" '"BraveSoftware","Brave-Browser"'
-    assert_contains "$chrome_dir/scripts/browser-client.mjs" '".config","chromium"'
-    assert_contains "$chrome_dir/scripts/browser-client.mjs" "instanceId:await VI(o.id,e,r)"
-    assert_contains "$chrome_dir/scripts/browser-client.mjs" "codexLinuxRankBrowserBackends"
-    assert_contains "$chrome_dir/scripts/browser-client.mjs" "codexLinuxFilterBrowserBackends"
-    assert_contains "$chrome_dir/scripts/browser-client.mjs" "codexLinuxCloseDiscardedBrowserBackends"
-    assert_contains "$chrome_dir/scripts/browser-client.mjs" "await codexLinuxFilterBrowserBackends"
-    assert_contains "$chrome_dir/scripts/browser-client.mjs" "getUserTabs()"
+    assert_contains "$chrome_dir/scripts/browser-client.mjs" "browserPreference"
+    assert_contains "$chrome_dir/scripts/browser-client.mjs" "preferredWindowIdFor"
+    assert_contains "$chrome_dir/scripts/browser-client.mjs" "getForUrl"
     assert_contains "$chrome_dir/scripts/browser-client.mjs" 'globalThis.nodeRepl?.env?.\[e\]'
     assert_not_contains "$chrome_dir/scripts/browser-client.mjs" 'globalThis.nodeRepl?.env\[e\]'
     assert_contains "$chrome_dir/scripts/browser-client.mjs" "codexLinuxBrowserUseConfigShim"
@@ -5320,52 +7007,11 @@ test_chrome_plugin_staging() {
     assert_not_contains "$chrome_dir/scripts/browser-client.mjs" "codexLinuxNativePipeFallback"
     assert_not_contains "$chrome_dir/scripts/browser-client.mjs" 'await import("node:net")'
     assert_contains "$chrome_dir/scripts/browser-client.mjs" "codexLinuxSiteStatusAllowlistFallback"
-    assert_contains "$chrome_dir/skills/control-chrome/SKILL.md" "activeSummaries"
-    assert_contains "$chrome_dir/skills/control-chrome/SKILL.md" "No active Chrome user tabs"
+    assert_not_contains "$chrome_dir/scripts/browser-client.mjs" "codexLinuxIabSocketScope"
     assert_contains "$chrome_dir/skills/control-chrome/SKILL.md" "agent.browsers.list()"
     assert_contains "$chrome_dir/skills/control-chrome/SKILL.md" "browser.tabs.new()"
-    assert_contains "$chrome_dir/skills/control-chrome/SKILL.md" "tabs: Array.isArray(tabs) ? tabs : \\[\\]"
-    assert_contains "$chrome_dir/skills/control-chrome/SKILL.md" "...(error ? { error } : {})"
-    assert_contains "$chrome_dir/skills/control-chrome/SKILL.md" "Promise.race"
-    assert_contains "$chrome_dir/skills/control-chrome/SKILL.md" "Chrome profile tab probe timed out"
-    assert_not_contains "$chrome_dir/skills/control-chrome/SKILL.md" "{ error: String(error) }"
-    assert_not_contains "$chrome_dir/skills/control-chrome/SKILL.md" 'globalThis.browser = await agent.browsers.get("extension");'
     assert_contains "$install_dir/resources/plugins/openai-bundled/.agents/plugins/marketplace.json" '"name": "chrome"'
     assert_contains "$output_log" "Chrome plugin staged from upstream DMG"
-}
-
-test_chrome_browser_client_profile_root_variants() {
-    info "Checking current Chrome browser-client profile root patch"
-    local workspace="$TMP_DIR/chrome-browser-client-profile-roots"
-    local chrome_dir="$workspace/chrome"
-    local browser_client="$chrome_dir/scripts/browser-client.mjs"
-    local patch_log="$workspace/current-browser-client.log"
-
-    mkdir -p "$chrome_dir/scripts"
-
-    cat > "$browser_client" <<'JS'
-import{readdir as ZI}from"node:fs/promises";import L7,{platform as XI}from"node:os";import QI from"node:path";import{readFile as P7}from"fs/promises";import{resolve as D7}from"path";import{resolve as S7}from"path";import{homedir as v7,platform as E7}from"os";var Cd=S7(v7(),E7()==="win32"?"AppData\\Local\\Google\\Chrome\\User Data":"Library/Application Support/Google/Chrome");import{ClassicLevel as C7}from"./node_modules/classic-level.mjs";import{resolve as bg}from"path";import{tmpdir as T7}from"os";import{cp as A7,mkdtemp as I7,rm as HI}from"fs/promises";import{existsSync as k7}from"fs";var VI=async(e,t)=>{let r=bg(Cd,e,"Local Extension Settings",t);if(!k7(r))return null;let n=await I7(bg(R7(),"codex"));await A7(r,n,{recursive:!0}),await HI(bg(n,"LOCK"));let o=new C7(n,{createIfMissing:!1,keyEncoding:"utf8",valueEncoding:"utf8"});try{await o.open();let i=await o.get("extensionInstanceId");if(!i)return null;let s=JSON.parse(i);return typeof s!="string"?null:s}finally{await o.close(),await HI(n,{force:!0,recursive:!0})}},R7=()=>"nodeRepl"in globalThis&&globalThis.nodeRepl?globalThis.nodeRepl.tmpDir:T7();var GI=async e=>e,N7=async(e,t)=>(await O7(e)).find(o=>o.instanceId===t)||null,O7=async e=>{let t=await M7();return await Promise.all(t.map(async r=>({...r,instanceId:await VI(r.id,e).catch(n=>(le(n),null))})))},M7=async()=>{let e=D7(Cd,"Local State"),t=JSON.parse(await P7(e,"utf8"));return t.profile.profiles_order.map((r,n)=>{let o=t.profile.info_cache[r];return o?{id:r,name:o.name,isLastUsed:t.profile.last_used===r,orderingIndex:n,avatarUrl:o.avatar_icon}:null}).filter(r=>!!r)};var U7=5e3,_g=__(L7.platform()),j7=async(e,{codexSessionId:t})=>{let r=tl(p_),n=e.filter(i=>i.info.type==="iab"),o=q7(n,t,r);return await Promise.all(n.filter(i=>!o.includes(i)).map(async({api:i})=>i.close())),[...e.filter(i=>i.info.type!=="iab"),...o]},q7=(e,t,r)=>t==null?[]:e.filter(n=>n.info.metadata?.codexSessionId===t&&(r==null||n.info.metadata.codexAppBuildFlavor===r)),ek=async()=>{};function og(e){return e}function ig(e){return e==="extension"||e==="iab"||e==="cdp"}function li(e){return e}function KI(e){return e}class Id{async getBrowsers(){return[]}async get(e){return e}}function tI({browserId:e,clientInfo:t,requestedBrowserId:r}){return ig(r)?og(t.type)===r:e===r}function ld(){return null}async function mwe({globals:e}){let r=new Id,n=new Map(),l={browser_id:"extension"};if(ig(l.browser_id)){let _=li(l.browser_id);KI(_)}let p=await r.get(l.browser_id),f=n.get(p.api);return f}
-JS
-    node "$REPO_DIR/scripts/lib/patch-chrome-plugin.js" "$chrome_dir" >"$patch_log" 2>&1
-    assert_not_contains "$patch_log" "browser-client.mjs missing patch target for Linux Chrome profile roots"
-    assert_not_contains "$patch_log" "browser-client.mjs missing patch target for Linux Chrome profile metadata lookup"
-    assert_not_contains "$patch_log" "browser-client.mjs missing patch target for Linux Chrome profile instance matching"
-    assert_not_contains "$patch_log" "browser-client.mjs missing patch target for Linux Chrome active profile backend ordering"
-    assert_not_contains "$patch_log" "browser-client.mjs missing patch target for Linux idle Chrome profile filtering"
-    assert_not_contains "$patch_log" "browser-client.mjs missing patch target for Linux ambiguous active Chrome extension alias guard"
-    assert_not_contains "$patch_log" "browser-client.mjs missing patch target for Linux ambiguous active Chrome extension alias check"
-    assert_contains "$browser_client" "codexLinuxChromeUserDataDirectories"
-    assert_contains "$browser_client" '"BraveSoftware","Brave-Browser"'
-    assert_contains "$browser_client" '".config","chromium"'
-    assert_contains "$browser_client" 'async(e,t,r=Cd)'
-    assert_contains "$browser_client" "instanceId:await VI(o.id,e,r)"
-    assert_contains "$browser_client" "codexLinuxRankBrowserBackends"
-    assert_contains "$browser_client" "codexLinuxFilterBrowserBackends"
-    assert_contains "$browser_client" "codexLinuxCloseDiscardedBrowserBackends"
-    assert_contains "$browser_client" "await codexLinuxFilterBrowserBackends"
-    assert_contains "$browser_client" "XI()"
-    assert_contains "$browser_client" "codexLinuxRejectAmbiguousBrowserAlias"
-    assert_contains "$browser_client" "codexLinuxRejectAmbiguousBrowserAlias(l.browser_id,await r.getBrowsers())"
 }
 
 test_chrome_marketplace_fallback_synthesis() {
@@ -5536,31 +7182,16 @@ test_linux_translucent_sidebar_default_patch_smoke() {
     make_fake_extracted_asar \
         "$extracted" \
         'let D={removeMenu(){},setMenuBarVisibility(){},setIcon(){},once(){}};let n=require(`electron`),t=require(`node:path`),a=require(`node:fs`);...process.platform===`win32`?{autoHideMenuBar:!0}:{},process.platform===`win32`&&D.removeMenu(),foo)}),D.once(`ready-to-show`,()=>{var sa=Mi({id:`fileManager`,label:`Finder`,icon:`apps/finder.png`,kind:`fileManager`,darwin:{detect:()=>`open`,args:e=>ai(e)},win32:{label:`File Explorer`,icon:`apps/file-explorer.png`,detect:ca,args:e=>ai(e),open:async({path:e})=>la(e)}});function ca(){let e=1;return e}async function la(e){let t=ua(e);if(t&&(0,a.statSync)(t).isFile()){n.shell.showItemInFolder(t);return}let r=t??e,i=await n.shell.openPath(r);if(i)throw Error(i)}function ua(e){return e}var Ua=Mi({id:`systemDefault`,label:`System Default App`,icon:`apps/file-explorer.png`,kind:`systemDefault`,hidden:!0,darwin:{icon:`apps/finder.png`,detect:()=>`system-default`,iconPath:()=>null,args:e=>[e],open:async({path:e})=>Wa(e)},win32:{detect:()=>`system-default`,iconPath:()=>null,args:e=>[e],open:async({path:e})=>Wa(e)},linux:{detect:()=>`system-default`,iconPath:()=>null,args:e=>[e],open:async({path:e})=>Wa(e)}});async function Wa(e){return e}' \
-        'function settings(){let d=ot(r,e),f=at(e),p={codeThemeId:tt(a,e).id,theme:d},x=`settings.general.appearance.chromeTheme.translucentSidebar`;return {p,x}}' \
-        'function runtime(){let o=`light`,a=`electron`,l=null,f=null,C=fl(l,`light`),w=fl(f,`dark`);let T=o===`light`?C:w,E;if(T.opaqueWindows&&!XZ()){document.body.classList.add(`electron-opaque`);return E}return E}'
-    cat > "$extracted/webview/assets/app-main-test.js" <<'JS'
-let{data:c}=Qc(y.APPEARANCE_LIGHT_CHROME_THEME,s),l;let{data:u}=Qc(y.APPEARANCE_DARK_CHROME_THEME,l),d;let x=b,S;let C=o===`light`?x:S,w;if(C.opaqueWindows&&!ba()){e.classList.add(`electron-opaque`)}
-JS
-    cat > "$extracted/webview/assets/diff-view-mode-test.js" <<'JS'
-function oe(e,t){let n=o[t];return{accent:p(e?.accent)??n.accent,contrast:se(e?.contrast,n.contrast),fonts:le(e?.fonts),ink:p(e?.ink)??n.ink,opaqueWindows:e?.opaqueWindows??n.opaqueWindows,semanticColors:ue(e?.semanticColors,n.semanticColors),surface:p(e?.surface)??n.surface}}
-JS
+        'function settings(){let{canImportThemeString:u,setThemePatch:b,theme:x}=p(t),S=vn(r,t),k=[{label:i}],A=[];return x.opaqueWindows}' \
+        ''
 
     node "$REPO_DIR/scripts/patch-linux-window-ui.js" "$extracted" >"$output_log" 2>&1
-    assert_contains "$extracted/webview/assets/general-settings-test.js" 'navigator.userAgent.includes(`Linux`)&&r?.opaqueWindows==null&&(d={...d,opaqueWindows:!0})'
-    assert_contains "$extracted/webview/assets/index-test.js" 'document.documentElement.dataset.codexOs===`linux`&&((o===`light`?l:f)?.opaqueWindows==null&&(T={...T,opaqueWindows:!0}))'
-    assert_contains "$extracted/webview/assets/app-main-test.js" 'document.documentElement.dataset.codexOs===`linux`&&((o===`light`?c:u)?.opaqueWindows==null&&(C={...C,opaqueWindows:!0}))'
-    assert_contains "$extracted/webview/assets/diff-view-mode-test.js" 'opaqueWindows:e?.opaqueWindows??(typeof navigator<`u`&&((navigator.userAgentData?.platform??navigator.platform??navigator.userAgent).toLowerCase().includes(`linux`))?!0:n.opaqueWindows)'
+    assert_contains "$extracted/webview/assets/general-settings-test.js" 'navigator.userAgent.includes(`Linux`)&&x?.opaqueWindows==null&&(x={...x,opaqueWindows:!0})'
     assert_occurrence_count "$extracted/webview/assets/general-settings-test.js" 'navigator.userAgent.includes(`Linux`)' '1'
-    assert_occurrence_count "$extracted/webview/assets/index-test.js" 'dataset.codexOs===`linux`' '1'
-    assert_occurrence_count "$extracted/webview/assets/app-main-test.js" 'dataset.codexOs===`linux`' '1'
-    assert_occurrence_count "$extracted/webview/assets/diff-view-mode-test.js" 'toLowerCase().includes(`linux`)' '1'
     assert_not_contains "$output_log" 'Could not find Linux opaque window default insertion point'
 
     node "$REPO_DIR/scripts/patch-linux-window-ui.js" "$extracted" >"$output_log" 2>&1
     assert_occurrence_count "$extracted/webview/assets/general-settings-test.js" 'navigator.userAgent.includes(`Linux`)' '1'
-    assert_occurrence_count "$extracted/webview/assets/index-test.js" 'dataset.codexOs===`linux`' '1'
-    assert_occurrence_count "$extracted/webview/assets/app-main-test.js" 'dataset.codexOs===`linux`' '1'
-    assert_occurrence_count "$extracted/webview/assets/diff-view-mode-test.js" 'toLowerCase().includes(`linux`)' '1'
     assert_not_contains "$output_log" 'Could not find Linux opaque window default insertion point'
 }
 
@@ -5719,6 +7350,12 @@ NODE
     assert_occurrence_count "$extracted/.vite/build/main-test.js" 'if(process.platform===`linux`)return;e.once(`menu-will-show`' '1'
     assert_occurrence_count "$extracted/.vite/build/main-test.js" 'process.platform===`linux`&&!(typeof codexLinuxIsQuitInProgress===`function`&&codexLinuxIsQuitInProgress())&&this.setLinuxTrayContextMenu?.()' '1'
     assert_occurrence_count "$extracted/.vite/build/main-test.js" 'process.platform===`linux`&&(typeof codexLinuxIsTrayEnabled!==`function`||codexLinuxIsTrayEnabled()))&&oe' '1'
+    assert_contains "$extracted/.vite/build/main-test.js" 'codexLinuxRegisterTray=e=>(codexLinuxTray=e,e)'
+    assert_contains "$extracted/.vite/build/main-test.js" 'codexLinuxDestroyTray=()=>{if(process.platform!==`linux`)return;'
+    assert_contains "$extracted/.vite/build/main-test.js" 'codexLinuxMarkQuitInProgress=()=>{codexLinuxQuitInProgress=!0,codexLinuxDestroyTray()}'
+    assert_contains "$extracted/.vite/build/main-test.js" 'n.app.on(`before-quit`,()=>codexLinuxDestroyTray())'
+    assert_contains "$extracted/.vite/build/main-test.js" 'i=typeof codexLinuxRegisterTray===`function`?codexLinuxRegisterTray(new n.Tray(r.defaultIcon)):new n.Tray(r.defaultIcon)'
+    assert_not_contains "$extracted/.vite/build/main-test.js" 'codexLinuxTrayQuitDelayMs'
 }
 
 test_linux_explicit_quit_patch_smoke() {
@@ -5759,7 +7396,9 @@ JS
 const fs = require("fs");
 
 const source = fs.readFileSync(process.argv[2], "utf8");
-const helperSnippet = source.match(/let codexLinuxQuitInProgress=!1,[^;]*codexLinuxShouldBypassQuitPrompt=\(\)=>codexLinuxExplicitQuitApproved===!0,[^;]*codexLinuxIsQuitInProgress=\(\)=>codexLinuxQuitInProgress===!0;/)?.[0];
+const helperStart = source.indexOf("let codexLinuxTray=null");
+const helperEnd = source.indexOf(";n.app.on(`before-quit`,()=>codexLinuxDestroyTray())", helperStart) + 1;
+const helperSnippet = helperStart === -1 || helperEnd === 0 ? null : source.slice(helperStart, helperEnd);
 const traySnippet = source.match(/\{label:rB\(this\.appName\),click:\(\)=>\{typeof codexLinuxPrepareForExplicitQuit===`function`\?codexLinuxPrepareForExplicitQuit\(\):typeof codexLinuxMarkQuitInProgress===`function`&&codexLinuxMarkQuitInProgress\(\),n\.app\.quit\(\)\}\}/)?.[0];
 const quitAppSnippet = source.match(/if\(o\.type===`quit-app`\)\{typeof codexLinuxPrepareForExplicitQuit===`function`\?codexLinuxPrepareForExplicitQuit\(\):typeof codexLinuxMarkQuitInProgress===`function`&&codexLinuxMarkQuitInProgress\(\),n\.app\.quit\(\);return\}/)?.[0];
 const beforeQuitSnippet = source.match(/if\(\(typeof codexLinuxShouldBypassQuitPrompt===`function`&&codexLinuxShouldBypassQuitPrompt\(\)\)\|\|e\|\|i\.canQuitWithoutPrompt\(\)\|\|r\|\|!s&&!c\)\{process\.platform===`linux`&&typeof codexLinuxMarkQuitInProgress===`function`&&codexLinuxMarkQuitInProgress\(\),g=!0,a\.markAppQuitting\(\);return\}/)?.[0];
@@ -5870,7 +7509,7 @@ JS
 import{t as d}from"./jsx-runtime-test.js";var c={"general-settings":{id:`settings.nav.general-settings`,defaultMessage:`General`,description:`Title for general settings section`},"keyboard-shortcuts":{id:`settings.nav.keyboard-shortcuts`,defaultMessage:`Keyboard shortcuts`,description:`Title for keyboard shortcuts settings section`}};function m(e){let t=(0,u.c)(17),{slug:r}=e;switch(r){case`keyboard-shortcuts`:{let e;return t[1]===Symbol.for(`react.memo_cache_sentinel`)?(e=(0,d.jsx)(n,{id:`settings.section.keyboard-shortcuts`,defaultMessage:`Keyboard shortcuts`,description:`Title for keyboard shortcuts settings section`}),t[1]=e):e=t[1],e}case`general-settings`:{let e;return t[2]===Symbol.for(`react.memo_cache_sentinel`)?(e=(0,d.jsx)(n,{id:`settings.section.general-settings`,defaultMessage:`General`,description:`Title for general settings section`}),t[2]=e):e=t[2],e}}}
 JS
     cat > "$extracted/webview/assets/index-test.js" <<'JS'
-var Xge={"general-settings":xh,"keyboard-shortcuts":ks,appearance:Pf,agent:gU},H7={},Zge=[`general-settings`,`profile`,`keyboard-shortcuts`,`appearance`,`agent`,`personalization`,`mcp-settings`,`connections`,`git-settings`,`local-environments`,`worktrees`,`browser-use`,`computer-use`,`data-controls`],Qge=[{key:`app`,heading:H7.appHeading,slugs:[`general-settings`,`profile`,`keyboard-shortcuts`,`appearance`,`connections`,`git-settings`,`usage`]}];function n_e(){let l=`electron`,e=e=>{switch(e.slug){case`appearance`:case`git-settings`:case`worktrees`:case`local-environments`:case`data-controls`:case`environments`:return l===`electron`;case`account`:case`general-settings`:case`agent`:case`personalization`:case`keyboard-shortcuts`:case`mcp-settings`:return!0}};if(O)bb0:switch(D.slug){case`usage`:k=g;break bb0;case`appearance`:case`general-settings`:case`agent`:case`git-settings`:case`account`:case`data-controls`:case`personalization`:case`keyboard-shortcuts`:k=!1;break bb0;}}function s_e(e){let{slug:n}=e,r=c_e[n];return (0,$.jsx)(r,{})}var c_e={"general-settings":(0,Z.lazy)(()=>s(()=>import(`./general-settings-DZbwMmWz.js`).then(e=>({default:e.GeneralSettings})),__vite__mapDeps([4]),import.meta.url)),"keyboard-shortcuts":(0,Z.lazy)(()=>s(()=>import(`./keyboard-shortcuts-settings-test.js`),[],import.meta.url)),appearance:(0,Z.lazy)(()=>s(()=>import(`./appearance-settings-D4xYjo5o.js`).then(e=>({default:e.AppearanceSettings})),__vite__mapDeps([56]),import.meta.url)),agent:(0,Z.lazy)(()=>Promise.resolve({default:l_e}))};
+var Xge={"general-settings":xh,"keyboard-shortcuts":ks,appearance:Pf,agent:gU},H7={},Zge=[`general-settings`,`profile`,`keyboard-shortcuts`,`appearance`,`agent`,`personalization`,`mcp-settings`,`connections`,`git-settings`,`local-environments`,`worktrees`,`browser-use`,`computer-use`,`data-controls`],Qge=[{key:`app`,heading:H7.appHeading,slugs:[`general-settings`,`profile`,`keyboard-shortcuts`,`appearance`,`connections`,`git-settings`,`usage`]}];function n_e(){let e=e=>{switch(e.slug){case`general-settings`:case`agent`:case`personalization`:return!0;case`keyboard-shortcuts`:return!0}};if(O)bb0:switch(D.slug){case`usage`:k=g;break bb0;case`appearance`:case`general-settings`:case`agent`:case`git-settings`:case`account`:case`data-controls`:case`personalization`:k=!1;break bb0;case`keyboard-shortcuts`:k=!1;break bb0;}}function s_e(e){let{slug:n}=e,r=c_e[n];return (0,$.jsx)(r,{})}var c_e={"general-settings":Z(async()=>(await s(async()=>{let{GeneralSettings:e}=await import(`./general-settings-DZbwMmWz.js`);return{GeneralSettings:e}},[],import.meta.url)).GeneralSettings),"keyboard-shortcuts":Z(async()=>(await s(async()=>{let{KeyboardShortcutsSettings:e}=await import(`./keyboard-shortcuts-settings-test.js`);return{KeyboardShortcutsSettings:e}},[],import.meta.url)).KeyboardShortcutsSettings)};
 JS
     cat > "$extracted/webview/assets/keyboard-shortcuts-settings-test.js" <<'JS'
 slug:`keyboard-shortcuts`;export default function KeyboardShortcutsSettings(){}
@@ -5878,6 +7517,7 @@ JS
 
     node "$REPO_DIR/scripts/patch-linux-window-ui.js" "$extracted" >"$output_log" 2>&1
     assert_file_exists "$extracted/webview/assets/linux-desktop-settings-linux.js"
+    assert_file_exists "$extracted/webview/assets/linux-settings-toggle-linux.js"
     [ ! -f "$extracted/webview/assets/keybinds-settings-linux.js" ] || fail "Old Keybinds settings asset should not be written for current native Keyboard Shortcuts"
     assert_contains "$extracted/webview/assets/linux-desktop-settings-linux.js" "function LinuxDesktopSettings"
     assert_contains "$extracted/webview/assets/linux-desktop-settings-linux.js" "Linux desktop"
@@ -5887,7 +7527,7 @@ JS
     assert_contains "$extracted/webview/assets/linux-desktop-settings-linux.js" "codex-linux-system-tray-enabled"
     assert_contains "$extracted/webview/assets/linux-desktop-settings-linux.js" "codex-linux-warm-start-enabled"
     assert_contains "$extracted/webview/assets/linux-desktop-settings-linux.js" "codex-linux-prompt-window-enabled"
-    assert_contains "$extracted/webview/assets/linux-desktop-settings-linux.js" ' as Toggle}from"./'
+    assert_contains "$extracted/webview/assets/linux-desktop-settings-linux.js" 'import{t as Toggle}from"./linux-settings-toggle-linux.js"'
     assert_not_contains "$extracted/webview/assets/linux-desktop-settings-linux.js" "function LinuxSwitch"
     assert_not_contains "$extracted/webview/assets/linux-desktop-settings-linux.js" "bg-token-text-primary"
     assert_not_contains "$extracted/webview/assets/linux-desktop-settings-linux.js" "translate-x-4"
@@ -5898,7 +7538,7 @@ JS
     assert_contains "$extracted/webview/assets/index-test.js" '"linux-desktop":'
     assert_contains "$extracted/webview/assets/index-test.js" 'Zge=\[`general-settings`,`linux-desktop`'
     assert_contains "$extracted/webview/assets/index-test.js" 'slugs:\[`general-settings`,`linux-desktop`'
-    assert_contains "$extracted/webview/assets/index-test.js" 'case`linux-desktop`:return l===`electron`'
+    assert_contains "$extracted/webview/assets/index-test.js" 'case`linux-desktop`:case`general-settings`'
     assert_not_contains "$extracted/webview/assets/index-test.js" "keybinds-settings-linux.js"
     assert_not_contains "$extracted/webview/assets/index-test.js" "codexLinuxKeybindOverridesRuntime"
 
@@ -5933,7 +7573,6 @@ JS
 
     node "$REPO_DIR/scripts/patch-linux-window-ui.js" "$extracted" >"$output_log" 2>&1
     assert_contains "$output_log" "WARN: Keybinds settings patch skipped"
-    assert_contains "$output_log" "could not add Linux desktop visibility"
     [ ! -f "$extracted/webview/assets/linux-desktop-settings-linux.js" ] || fail "Linux desktop settings asset should not be written when route bundle is missing"
     [ ! -f "$extracted/webview/assets/linux-settings-row-linux.js" ] || fail "Fallback row asset should not be written when route bundle is missing"
     [ ! -f "$extracted/webview/assets/linux-settings-section-linux.js" ] || fail "Fallback section asset should not be written when route bundle is missing"
@@ -6522,7 +8161,7 @@ test_linux_computer_use_ui_opt_in_smoke() {
     local main_bundle="$extracted/.vite/build/main-test.js"
     local renderer_asset="$extracted/webview/assets/computer-use-settings-renderer-test.js"
     local current_renderer_asset="$extracted/webview/assets/computer-use-settings-current-test.js"
-    local install_flow_asset="$extracted/webview/assets/app-initial~app-main~onboarding-page~hotkey-window-thread-page~quick-chat-window-page~chatg~test.js"
+    local install_flow_asset="$extracted/webview/assets/app-initial~app-main~onboarding-page~hotkey-window-thread-page~quick-chat-window-page~chatg~gwqc41kz-test.js"
     local native_apps_asset="$extracted/webview/assets/computer-use-settings-native-apps-test.js"
     local bundle_body
     local renderer_body
@@ -6582,7 +8221,7 @@ JS
     assert_not_contains "$renderer_asset" 'function hae(e){return e===`macOS`||e===`windows`||e===`linux`}'
     assert_not_contains "$current_renderer_asset" 'areRequiredFeaturesEnabled:o===`linux`||y'
     assert_not_contains "$native_apps_asset" 'a===`macOS`||a===`windows`||a===`linux`'
-    assert_not_contains "$install_flow_asset" 'areRequiredFeaturesEnabled:o===`linux`||h'
+    assert_not_contains "$install_flow_asset" 'isHostCompatiblePlatform:o===`linux`||Rj(o)'
 
     # Branch 2: env var opts in — all Computer Use UI patches apply.
     rm "$main_bundle" "$renderer_asset" "$current_renderer_asset" "$install_flow_asset" "$native_apps_asset"
@@ -6605,8 +8244,12 @@ JS
     assert_contains "$current_renderer_asset" 'areRequiredFeaturesEnabled:o===`linux`||y'
     assert_contains "$current_renderer_asset" 'isAnyFeatureLoading:o===`linux`?!1:g'
     assert_contains "$native_apps_asset" 'a===`macOS`||a===`windows`||a===`linux`'
-    assert_contains "$install_flow_asset" 'areRequiredFeaturesEnabled:o===`linux`||h'
-    assert_contains "$install_flow_asset" 'isAnyFeatureLoading:o===`linux`?!1:m'
+    assert_contains "$install_flow_asset" 'areRequiredFeaturesEnabled:h'
+    assert_contains "$install_flow_asset" 'isAnyFeatureLoading:m'
+    assert_contains "$install_flow_asset" 'isComputerUseGateEnabled:s'
+    assert_contains "$install_flow_asset" 'isHostCompatiblePlatform:o===`linux`||Rj(o)'
+    assert_not_contains "$install_flow_asset" 'areRequiredFeaturesEnabled:o===`linux`||h'
+    assert_not_contains "$install_flow_asset" 'isComputerUseGateEnabled:o===`linux`||s'
 
     # Branch 3: settings.json flag opts in even without env var.
     rm "$main_bundle" "$renderer_asset" "$current_renderer_asset" "$install_flow_asset" "$native_apps_asset"
@@ -6626,7 +8269,11 @@ JS
     assert_contains "$renderer_asset" 'function hae(e){return e===`macOS`||e===`windows`||e===`linux`}'
     assert_contains "$current_renderer_asset" 'areRequiredFeaturesEnabled:o===`linux`||y'
     assert_contains "$native_apps_asset" 'a===`macOS`||a===`windows`||a===`linux`'
-    assert_contains "$install_flow_asset" 'areRequiredFeaturesEnabled:o===`linux`||h'
+    assert_contains "$install_flow_asset" 'areRequiredFeaturesEnabled:h'
+    assert_contains "$install_flow_asset" 'isComputerUseGateEnabled:s'
+    assert_contains "$install_flow_asset" 'isHostCompatiblePlatform:o===`linux`||Rj(o)'
+    assert_not_contains "$install_flow_asset" 'areRequiredFeaturesEnabled:o===`linux`||h'
+    assert_not_contains "$install_flow_asset" 'isComputerUseGateEnabled:o===`linux`||s'
 }
 
 test_linux_file_manager_patch_fails_soft() {
@@ -7456,7 +9103,12 @@ EOF
 
 main() {
     test_common_helper_sourcing
+    test_package_icon_source_resolution
     test_extract_webview_replaces_linux_icon_assets
+    test_installer_prefers_compact_upstream_chatgpt_icon
+    test_user_local_icon_prefers_generated_app_icon
+    test_extract_webview_requires_entrypoint
+    test_package_layout_requires_webview_entrypoint
     test_package_payload_permission_normalization
     test_deb_builder_smoke
     test_deb_builder_rebuilds_deleted_updater_source
@@ -7482,6 +9134,16 @@ main() {
     test_fresh_pinned_dmg_preserves_cached_dmg_metadata
     test_fresh_reuse_dmg_uses_cache_when_metadata_matches
     test_rebuild_candidate_uses_validated_default_dmg
+    test_candidate_install_is_transactional
+    test_candidate_promotion_refuses_a_running_final_app
+    test_candidate_backup_retention_is_bounded
+    test_candidate_promotion_recovers_after_sigkill
+    test_candidate_backup_cleanup_retries_after_failure
+    test_candidate_promotion_is_serialized
+    test_user_local_updates_preserve_the_running_app_gate
+    test_transactional_install_reenters_with_current_bash
+    test_transactional_install_uses_managed_node_and_isolated_reports
+    test_installer_cleanup_handles_readonly_trees
     test_native_shortcut_targets_compose_existing_flows
     test_fedora_dependency_bootstrap_installs_rpmbuild
     test_fedora_atomic_rpm_ostree_target_detection
@@ -7521,16 +9183,28 @@ main() {
     test_native_module_rebuild_uses_local_electron_rebuild_toolchain
     test_native_module_rebuild_accepts_prebuilt_source
     test_bundled_plugin_builders_accept_prebuilt_binaries
+    test_bundled_plugin_system_computer_use_preserves_cosmic_helper_name
     test_browser_use_node_repl_fallback_runtime
     test_browser_use_file_url_policy_patch_behavior
     test_browser_plugin_renamed_upstream_staging
+    test_portable_bundled_plugins_staging
+    test_portable_bundled_plugins_reject_unsafe_content
+    test_portable_bundled_plugin_validator_guards
+    test_portable_bundled_plugin_stage_failures
+    test_portable_bundled_plugin_marketplace_path_guard
     test_browser_use_node_repl_glibc_pidfd_patch_static
     test_browser_use_node_repl_ldd_output_compatibility
     test_sites_plugin_staging
     test_chrome_plugin_staging
-    test_chrome_browser_client_profile_root_variants
     test_chrome_marketplace_fallback_synthesis
     test_chrome_native_host_manifest_writer
+    test_launcher_managed_node_handles_unset_path
+    test_launcher_captures_original_ld_library_path_state
+    test_packaged_runtime_keeps_managed_node_out_of_user_service_path
+    test_launcher_extra_bundled_plugin_cache_rollback
+    test_launcher_extra_bundled_plugin_cache_concurrent_destination
+    test_launcher_rejects_missing_webview_entrypoint
+    test_launcher_marketplace_metadata_atomic_staging
     test_launcher_template_sanity
     test_launcher_cli_resolution_policy
     test_webview_server_cache_policy

@@ -78,100 +78,76 @@ function applyLinuxAppshotMainProcessPatch(currentSource) {
 }
 
 function applyLinuxAppshotHotkeyPatch(currentSource) {
-  let changed = false;
-
-  currentSource = currentSource.replace(
-    /let ([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)\.(getStored|get)\(`appshotHotkey`\),([A-Za-z_$][\w$]*)=\1===void 0\?([A-Za-z_$][\w$]*):\1,([A-Za-z_$][\w$]*)=null,([A-Za-z_$][\w$]*)=\(\)=>\(\{supported:([A-Za-z_$][\w$]*)&&process\.platform===`darwin`,configuredHotkey:\4,isActive:\6!=null\}\),([A-Za-z_$][\w$]*)=\(\)=>\{if\(\6\?\.unregister\(\),\6=null,!\8\|\|process\.platform!==`darwin`\|\|\4==null\)\{/g,
-    (
-      match,
-      storedVar,
-      globalStateVar,
-      getterName,
-      configuredVar,
-      defaultHotkeyVar,
-      registrationVar,
-      stateFnVar,
-      enabledVar,
-      reconcileFnVar,
-    ) => {
-      changed = true;
-      return `let ${storedVar}=${globalStateVar}.${getterName}(\`appshotHotkey\`),${configuredVar}=${storedVar}===void 0?(process.platform===\`linux\`?null:${defaultHotkeyVar}):${storedVar},${registrationVar}=null,${stateFnVar}=()=>({supported:${enabledVar}&&(process.platform===\`darwin\`||process.platform===\`linux\`),configuredHotkey:${configuredVar},isActive:${registrationVar}!=null,linuxWayland:codexLinuxAppshotIsWayland()}),${reconcileFnVar}=()=>{if(${registrationVar}?.unregister(),${registrationVar}=null,!${enabledVar}||process.platform!==\`darwin\`&&process.platform!==\`linux\`||${configuredVar}==null){`;
-    },
-  );
-  currentSource = currentSource.replace(
-    /return ([A-Za-z_$][\w$]*)\.length===1\?([A-Za-z_$][\w$]*)===`darwin`\?([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*),\2\)\?null:`This shortcut key is not supported\.`:`Choose a shortcut with Ctrl or Alt plus another key\.`:`Use Ctrl, Alt, or Command when combining with another key\.`/g,
-    (match, partsVar, platformVar, supportedBareModifierFn, hotkeyVar) => {
-      changed = true;
-      return `return ${partsVar}.length===1?(${platformVar}===\`darwin\`||${platformVar}===\`linux\`)?${supportedBareModifierFn}(${hotkeyVar},${platformVar})?null:\`This shortcut key is not supported.\`:\`Choose a shortcut with Ctrl or Alt plus another key.\`:\`Use Ctrl, Alt, or Command when combining with another key.\``;
-    },
-  );
-  currentSource = currentSource.replace(
-    /new Set\(\[\.\.\.([A-Za-z_$][\w$]*),`shift`\]\)/g,
-    (match, baseModifiersVar) => {
-      changed = true;
-      return `new Set([...${baseModifiersVar},\`shift\`,\`super\`,\`meta\`,\`win\`])`;
-    },
-  );
-
-  if (
-    currentSource.includes("process.platform===`linux`?null") &&
-    currentSource.includes("process.platform!==`darwin`&&process.platform!==`linux`") &&
-    currentSource.includes("!codexLinuxAppshotIsWayland()") &&
-    currentSource.includes("if(process.platform!==`darwin`&&process.platform!==`linux`)return null") &&
-    currentSource.includes("codexLinuxAppshotIsWayland") &&
-    currentSource.includes("`super`,`meta`,`win`")
-  ) {
+  const alreadyPatched = [
+    /this\.configuredHotkey=[A-Za-z_$][\w$]*===void 0\?\(process\.platform===`linux`\?null:[A-Za-z_$][\w$]*\):[A-Za-z_$][\w$]*/,
+    /supported:this\.enabled&&\(process\.platform===`darwin`\|\|process\.platform===`linux`\),configuredHotkey:this\.configuredHotkey,isActive:this\.registration!=null,linuxWayland:codexLinuxAppshotIsWayland\(\)/,
+    /if\(!this\.enabled\|\|process\.platform!==`darwin`&&process\.platform!==`linux`\)return\{success:!1,error:`Not supported\.`,state:this\.getState\(\)\}/,
+    /!this\.enabled\|\|process\.platform!==`darwin`&&process\.platform!==`linux`\|\|this\.configuredHotkey==null/,
+    /return [A-Za-z_$][\w$]*\.length===1\?\([A-Za-z_$][\w$]*===`darwin`\|\|[A-Za-z_$][\w$]*===`linux`\)\?/,
+    /return \([A-Za-z_$][\w$]*===`darwin`\|\|[A-Za-z_$][\w$]*===`linux`&&!codexLinuxAppshotIsWayland\(\)\)&&/,
+    /if\(process\.platform!==`darwin`&&process\.platform!==`linux`\)return null/,
+    /new Set\(\[\.\.\.[A-Za-z_$][\w$]*,`shift`,`super`,`meta`,`win`\]\)/,
+  ].every((pattern) => pattern.test(currentSource));
+  if (alreadyPatched && currentSource.includes("function codexLinuxAppshotIsWayland")) {
     return currentSource;
   }
 
-  let patchedSource = currentSource.replace(
-    /function ([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*),([A-Za-z_$][\w$]*)=process\.platform\)\{return \3===`darwin`&&([A-Za-z_$][\w$]*)\(\2\)!=null\}/g,
-    (match, fnName, hotkeyVar, platformVar, modifierFn) => {
-      changed = true;
-      return `function ${fnName}(${hotkeyVar},${platformVar}=process.platform){return (${platformVar}===\`darwin\`||${platformVar}===\`linux\`&&!codexLinuxAppshotIsWayland())&&${modifierFn}(${hotkeyVar})!=null}`;
-    },
+  let patchedSource = currentSource;
+  const counts = [];
+  function replaceRequired(pattern, replacement) {
+    const flags = pattern.flags.includes("g") ? pattern.flags : `${pattern.flags}g`;
+    const count = [...patchedSource.matchAll(new RegExp(pattern.source, flags))].length;
+    counts.push(count);
+    if (count !== 1) {
+      return;
+    }
+    patchedSource = patchedSource.replace(pattern, replacement);
+  }
+
+  replaceRequired(
+    /this\.configuredHotkey=([A-Za-z_$][\w$]*)===void 0\?([A-Za-z_$][\w$]*):\1/,
+    (match, storedVar, defaultHotkeyVar) =>
+      `this.configuredHotkey=${storedVar}===void 0?(process.platform===\`linux\`?null:${defaultHotkeyVar}):${storedVar}`,
+  );
+  replaceRequired(
+    /getState\(\)\{return\{supported:this\.enabled&&process\.platform===`darwin`,configuredHotkey:this\.configuredHotkey,isActive:this\.registration!=null\}\}/,
+    "getState(){return{supported:this.enabled&&(process.platform===`darwin`||process.platform===`linux`),configuredHotkey:this.configuredHotkey,isActive:this.registration!=null,linuxWayland:codexLinuxAppshotIsWayland()}}",
+  );
+  replaceRequired(
+    /if\(!this\.enabled\|\|process\.platform!==`darwin`\)return\{success:!1,error:`Not supported\.`,state:this\.getState\(\)\}/,
+    "if(!this.enabled||process.platform!==`darwin`&&process.platform!==`linux`)return{success:!1,error:`Not supported.`,state:this.getState()}",
+  );
+  replaceRequired(
+    /!this\.enabled\|\|process\.platform!==`darwin`\|\|this\.configuredHotkey==null/,
+    "!this.enabled||process.platform!==`darwin`&&process.platform!==`linux`||this.configuredHotkey==null",
+  );
+  replaceRequired(
+    /return ([A-Za-z_$][\w$]*)\.length===1\?([A-Za-z_$][\w$]*)===`darwin`\?([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*),\2\)\?null:`This shortcut key is not supported\.`:`Choose a shortcut with Ctrl or Alt plus another key\.`:`Use Ctrl, Alt, or Command when combining with another key\.`/,
+    (match, partsVar, platformVar, supportedBareModifierFn, hotkeyVar) =>
+      `return ${partsVar}.length===1?(${platformVar}===\`darwin\`||${platformVar}===\`linux\`)?${supportedBareModifierFn}(${hotkeyVar},${platformVar})?null:\`This shortcut key is not supported.\`:\`Choose a shortcut with Ctrl or Alt plus another key.\`:\`Use Ctrl, Alt, or Command when combining with another key.\``,
+  );
+  replaceRequired(
+    /function ([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*),([A-Za-z_$][\w$]*)=process\.platform\)\{return \3===`darwin`&&([A-Za-z_$][\w$]*)\(\2\)!=null\}/,
+    (match, fnName, hotkeyVar, platformVar, modifierFn) =>
+      `function ${fnName}(${hotkeyVar},${platformVar}=process.platform){return (${platformVar}===\`darwin\`||${platformVar}===\`linux\`&&!codexLinuxAppshotIsWayland())&&${modifierFn}(${hotkeyVar})!=null}`,
+  );
+  replaceRequired(
+    /function ([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*),([A-Za-z_$][\w$]*),([A-Za-z_$][\w$]*)=`press`\)\{if\(process\.platform!==`darwin`\)return null;/,
+    (match, fnName, hotkeyVar, handlerVar, triggerVar) =>
+      `function ${fnName}(${hotkeyVar},${handlerVar},${triggerVar}=\`press\`){if(process.platform!==\`darwin\`&&process.platform!==\`linux\`)return null;`,
+  );
+  replaceRequired(
+    /new Set\(\[\.\.\.([A-Za-z_$][\w$]*),`shift`\]\)/,
+    (match, baseModifiersVar) =>
+      `new Set([...${baseModifiersVar},\`shift\`,\`super\`,\`meta\`,\`win\`])`,
   );
 
-  patchedSource = patchedSource.replace(
-    /function ([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*),([A-Za-z_$][\w$]*),([A-Za-z_$][\w$]*)=`press`\)\{if\(process\.platform!==`darwin`\)return null;/g,
-    (match, fnName, hotkeyVar, handlerVar, triggerVar) => {
-      changed = true;
-      return `function ${fnName}(${hotkeyVar},${handlerVar},${triggerVar}=\`press\`){if(process.platform!==\`darwin\`&&process.platform!==\`linux\`)return null;`;
-    },
-  );
-
-  patchedSource = patchedSource.replace(
-    /let ([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)\.(getStored|get)\(`appshotHotkey`\)\?\?([A-Za-z_$][\w$]*),([A-Za-z_$][\w$]*)=null,([A-Za-z_$][\w$]*)=\(\)=>\(\{supported:([A-Za-z_$][\w$]*)&&process\.platform===`darwin`,configuredHotkey:\1,isActive:\5!=null\}\),([A-Za-z_$][\w$]*)=\(\)=>\{if\(\5\?\.unregister\(\),\5=null,!\7\|\|process\.platform!==`darwin`\|\|\1==null\)\{/,
-    (
-      match,
-      configuredVar,
-      globalStateVar,
-      getterName,
-      defaultHotkeyVar,
-      registrationVar,
-      stateFnVar,
-      enabledVar,
-      reconcileFnVar,
-    ) => {
-      changed = true;
-      return `let ${configuredVar}=${globalStateVar}.${getterName}(\`appshotHotkey\`)??(process.platform===\`linux\`?null:${defaultHotkeyVar});let ${registrationVar}=null,${stateFnVar}=()=>({supported:${enabledVar}&&(process.platform===\`darwin\`||process.platform===\`linux\`),configuredHotkey:${configuredVar},isActive:${registrationVar}!=null,linuxWayland:codexLinuxAppshotIsWayland()}),${reconcileFnVar}=()=>{if(${registrationVar}?.unregister(),${registrationVar}=null,!${enabledVar}||process.platform!==\`darwin\`&&process.platform!==\`linux\`||${configuredVar}==null){`;
-    },
-  );
-
-  patchedSource = patchedSource.replace(
-    /if\(!([A-Za-z_$][\w$]*)\|\|process\.platform!==`darwin`\)return\{success:!1,error:`Not supported\.`,state:([A-Za-z_$][\w$]*)\(\)\};if\(([A-Za-z_$][\w$]*)!=null\)\{/,
-    (match, enabledVar, stateFnVar, nextHotkeyVar) => {
-      changed = true;
-      return `if(!${enabledVar}||process.platform!==\`darwin\`&&process.platform!==\`linux\`)return{success:!1,error:\`Not supported.\`,state:${stateFnVar}()};if(${nextHotkeyVar}!=null){`;
-    },
-  );
-
-  if (changed) {
+  if (counts.every((count) => count === 1)) {
     return withLinuxAppshotWaylandHelper(patchedSource);
   }
 
   if (currentSource.includes("appshotHotkey") || currentSource.includes("appshot-hotkey-state")) {
-    warn("Could not find AppShots hotkey controller", "Linux AppShots hotkey patch");
+    warn("Could not find current AppShots hotkey class", "Linux AppShots hotkey patch");
   }
   return currentSource;
 }
@@ -187,7 +163,8 @@ function applyLinuxAppshotSettingsHotkeyPatch(currentSource) {
     return currentSource;
   }
 
-  const stateDataVar = currentSource.match(/\{data:([A-Za-z_$][\w$]*)\}=/)?.[1] ?? null;
+  const stateDataVar =
+    currentSource.match(/\b([A-Za-z_$][\w$]*)\?\.configuredHotkey\?\?null/)?.[1] ?? null;
   if (stateDataVar == null) {
     if (currentSource.includes("appshot-hotkey-state") || currentSource.includes("DoubleCommand")) {
       warn("Could not find AppShots settings state binding", "Linux AppShots settings hotkey patch");
@@ -195,28 +172,51 @@ function applyLinuxAppshotSettingsHotkeyPatch(currentSource) {
     return currentSource;
   }
 
-  let changed = false;
+  let optionsMatched = false;
   let optionsVarName = null;
   let patchedSource = currentSource.replace(
-    /((?:var\s+|,)([A-Za-z_$][\w$]*)=)(\[\{hotkey:`DoubleCommand`,label:`[^`]+`\},\{hotkey:`DoubleOption`,label:`[^`]+`\},\{hotkey:`DoubleShift`,label:`[^`]+`\}\])(?=;)/,
+    /((?:var\s+|,)([A-Za-z_$][\w$]*)=)(\[\{hotkey:`DoubleCommand`,label:`[^`]+`\},\{hotkey:`DoubleOption`,label:`[^`]+`\},\{hotkey:`DoubleShift`,label:`[^`]+`\}\])(?=[,;)}])/,
     (match, declarationPrefix, optionsVar, macOptions) => {
-      changed = true;
+      optionsMatched = true;
       optionsVarName = optionsVar;
-      const helper =
-        `codexLinuxAppshotHotkeyOptions=e=>typeof navigator!=\`undefined\`&&navigator.userAgent.includes(\`Linux\`)?e?.linuxWayland?${linuxWaylandOptions}:${linuxX11Options}:${optionsVar}`;
-      return `${declarationPrefix}${macOptions},${helper}`;
+      return `${declarationPrefix}${macOptions}`;
     },
   );
 
-  if (changed && optionsVarName != null) {
-    const escapedOptionsVarName = escapeRegExp(optionsVarName);
-    patchedSource = patchedSource
-      .replace(new RegExp(`\\b${escapedOptionsVarName}\\.find\\(`, "g"), `codexLinuxAppshotHotkeyOptions(${stateDataVar}).find(`)
-      .replace(new RegExp(`\\b${escapedOptionsVarName}\\.map\\(`, "g"), `codexLinuxAppshotHotkeyOptions(${stateDataVar}).map(`);
+  let patchedFind = false;
+  let patchedMap = false;
+  if (optionsMatched && optionsVarName != null) {
+    const findResult = replaceIdentifierCall(
+      patchedSource,
+      optionsVarName,
+      "find",
+      `codexLinuxAppshotHotkeyOptions(${stateDataVar}).find(`,
+    );
+    patchedSource = findResult.source;
+    patchedFind = findResult.count > 0;
+    const mapResult = replaceIdentifierCall(
+      patchedSource,
+      optionsVarName,
+      "map",
+      `codexLinuxAppshotHotkeyOptions(${stateDataVar}).map(`,
+    );
+    patchedSource = mapResult.source;
+    patchedMap = mapResult.count > 0;
   }
 
-  if (changed) {
-    return patchedSource;
+  if (optionsMatched && patchedFind && patchedMap) {
+    const helper =
+      `function codexLinuxAppshotHotkeyOptions(e){return typeof navigator!=\`undefined\`&&navigator.userAgent.includes(\`Linux\`)?e?.linuxWayland?${linuxWaylandOptions}:${linuxX11Options}:${optionsVarName}}`;
+    const sourceMapIndex = patchedSource.lastIndexOf("\n//# sourceMappingURL=");
+    if (sourceMapIndex >= 0) {
+      return `${patchedSource.slice(0, sourceMapIndex)};${helper}${patchedSource.slice(sourceMapIndex)}`;
+    }
+    return `${patchedSource}\n;${helper}`;
+  }
+
+  if (optionsMatched) {
+    warn("Could not find both AppShots settings hotkey option call sites", "Linux AppShots settings patch");
+    return currentSource;
   }
 
   if (currentSource.includes("appshot-hotkey-state") || currentSource.includes("DoubleCommand")) {
@@ -273,17 +273,18 @@ async function codexLinuxAppshotScreenshot(e,t){
 let n=codexLinuxAppshotRequire(\`node:fs\`),r=codexLinuxAppshotRequire(\`node:os\`),i=codexLinuxAppshotRequire(\`node:path\`),a=codexLinuxAppshotRequire(\`node:child_process\`),o=codexLinuxAppshotRequire(\`electron\`).nativeImage,s=codexLinuxAppshotCropRects(e,t);
 if(s.length===0)return codexLinuxAppshotWarn(\`screenshot-crop-missing\`,{hasBounds:e?.bounds!=null}),null;
 for(let c of codexLinuxAppshotScreenshotCommands(e))for(let l of c.programs){
-let u=i.join(r.tmpdir(),\`codex-appshot-\${process.pid}-\${Date.now()}-\${Math.random().toString(16).slice(2)}.png\`),d=i.join(r.tmpdir(),\`codex-appshot-crop-\${process.pid}-\${Date.now()}-\${Math.random().toString(16).slice(2)}.png\`),f=c.output===\`append\`?[...c.args,u]:[...c.args,...c.output,u];
+let u=null;
 try{
-await codexLinuxAppshotExecFile(a,l,f,{timeout:15000,maxBuffer:8388608});
-if(!n.existsSync(u)){codexLinuxAppshotWarn(\`screenshot-output-missing\`,{source:c.source,program:l});continue}
-let e=n.statSync(u);if(e.size<=0){codexLinuxAppshotWarn(\`screenshot-output-empty\`,{source:c.source,program:l});continue}
-let t=await codexLinuxAppshotCropWithImageMagick({childProcess:a,fs:n,sourcePath:u,tmpPath:d,cropRects:s});
+u=n.mkdtempSync(i.join(r.tmpdir(),\`codex-appshot-\`)),n.chmodSync(u,448);let d=i.join(u,\`source.png\`),f=i.join(u,\`crop.png\`),p=c.output===\`append\`?[...c.args,d]:[...c.args,...c.output,d];
+await codexLinuxAppshotExecFile(a,l,p,{timeout:15000,maxBuffer:8388608});
+if(!n.existsSync(d)){codexLinuxAppshotWarn(\`screenshot-output-missing\`,{source:c.source,program:l});continue}
+let e=n.statSync(d);if(e.size<=0){codexLinuxAppshotWarn(\`screenshot-output-empty\`,{source:c.source,program:l});continue}
+let t=await codexLinuxAppshotCropWithImageMagick({childProcess:a,fs:n,sourcePath:d,tmpPath:f,cropRects:s});
 if(t!=null)return{dataURL:t.dataURL,width:t.width,height:t.height,source:\`\${c.source}:imagemagick-window-crop\`};
-let r=codexLinuxAppshotCropNativeImage(o,u,s);
-if(r!=null)return{dataURL:r.image.toDataURL(),width:r.width,height:r.height,source:\`\${c.source}:feature-window-crop\`}
+let h=codexLinuxAppshotCropNativeImage(o,d,s);
+if(h!=null)return{dataURL:h.image.toDataURL(),width:h.width,height:h.height,source:\`\${c.source}:feature-window-crop\`}
 }catch(e){codexLinuxAppshotWarn(\`screenshot-command-failed\`,{source:c.source,program:l,message:e instanceof Error?e.message:String(e),stderr:typeof e?.codexStderr===\`string\`?e.codexStderr.slice(0,200):\`\`})}
-finally{try{n.rmSync(u,{force:true})}catch{}try{n.rmSync(d,{force:true})}catch{}}
+finally{if(u!=null)try{n.rmSync(u,{recursive:true,force:true})}catch{}}
 }
 return codexLinuxAppshotWarn(\`screenshot-all-commands-failed\`,{commandCount:codexLinuxAppshotScreenshotCommands(e).length}),null
 }
@@ -303,6 +304,33 @@ function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+function replaceIdentifierCall(source, identifier, method, replacement) {
+  const needle = `${identifier}.${method}(`;
+  let count = 0;
+  let cursor = 0;
+  let output = "";
+
+  while (cursor < source.length) {
+    const matchIndex = source.indexOf(needle, cursor);
+    if (matchIndex < 0) {
+      output += source.slice(cursor);
+      break;
+    }
+    const previous = matchIndex > 0 ? source[matchIndex - 1] : "";
+    if (previous === "." || /[A-Za-z0-9_$]/.test(previous)) {
+      const nextCursor = matchIndex + needle.length;
+      output += source.slice(cursor, nextCursor);
+      cursor = nextCursor;
+      continue;
+    }
+    output += source.slice(cursor, matchIndex) + replacement;
+    cursor = matchIndex + needle.length;
+    count += 1;
+  }
+
+  return { source: output, count };
+}
+
 const descriptors = [
   {
     id: "linux-appshots-main-process",
@@ -314,7 +342,7 @@ const descriptors = [
     id: "linux-appshots-availability",
     phase: "webview-asset",
     order: 1090,
-    pattern: /^appshot-availability-.*\.js$/,
+    pattern: /^app-initial~app-main~new-thread-panel-page~appgen-library-page~hotkey-window-thread-page~ho~iufn7mg3-[^.]+\.js$/,
     missingDescription: "AppShots availability bundle",
     skipDescription: "Linux AppShots availability patch",
     apply: applyLinuxAppshotAvailabilityPatch,

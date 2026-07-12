@@ -1,5 +1,5 @@
 #!/bin/bash
-# install-deps.sh — Install system dependencies for Codex Desktop Linux
+# install-deps.sh — Install system dependencies for ChatGPT Desktop for Linux
 # Supports: Debian/Ubuntu (apt), Fedora 41+ (dnf5), Fedora <41 (dnf), Fedora Atomic detection (rpm-ostree), Arch (pacman), openSUSE (zypper)
 # Also installs the Rust toolchain (cargo) via rustup when not already present.
 set -Eeuo pipefail

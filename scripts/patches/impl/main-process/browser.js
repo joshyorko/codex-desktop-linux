@@ -4,53 +4,223 @@ const fs = require("node:fs");
 const path = require("node:path");
 
 const {
+  escapeRegExp,
   requireName,
 } = require("../../lib/minified-js.js");
 
-function applyBrowserUseNodeReplApprovalPatch(currentSource) {
-  const approvalPatch =
-    "startup_timeout_sec:120,tools:{js:{approval_mode:`approve`}},env:{";
-  const needle = "startup_timeout_sec:120,env:{";
-  const runtimeFactoryMethods = String.raw`Dn|Pn|Fa|La|Ha|vo|\$a`;
-  let patchedSource = currentSource;
-  let patchedTrustedHashes = false;
-  if (patchedSource.includes(needle)) {
-    patchedSource = patchedSource.split(needle).join(approvalPatch);
+function applyLinuxBundledPluginCopyPermissionsPatch(currentSource) {
+  const helperName = "codexLinuxMakeBundledPluginTreeWritable";
+  if (currentSource.includes(`async function ${helperName}(`)) {
+    return currentSource;
   }
 
-  const runtimeFactoryTrustedHashesRegex =
-    new RegExp(String.raw`([A-Za-z_$][\w$]*)\.(${runtimeFactoryMethods})\(\{([^{}]*?trustedBrowserClientSha256s:)(?!codexLinuxTrustedBrowserClientSha256s\()([A-Za-z_$][\w$]*)(,[^{}]*?\})\)`, "g");
+  const pathVar = requireName(currentSource, "node:path");
+  if (pathVar == null) {
+    if (currentSource.includes("verbatimSymlinks")) {
+      console.warn(
+        "WARN: Could not find node:path binding — skipping Linux plugin permissions patch",
+      );
+    }
+    return currentSource;
+  }
+
+  const copyBranchRegex =
+    /if\(([A-Za-z_$][\w$]*)\.default\.platform!==`win32`\)\{await ([A-Za-z_$][\w$]*)\.default\.cp\(([A-Za-z_$][\w$]*),([A-Za-z_$][\w$]*),\{recursive:!0,verbatimSymlinks:!0\}\);return\}/;
+  let patchedCopyBranch = false;
+  const patchedSource = currentSource.replace(
+    copyBranchRegex,
+    (_match, platformVar, fsPromisesVar, sourceVar, targetVar) => {
+      patchedCopyBranch = true;
+      return `if(${platformVar}.default.platform!==\`win32\`){await ${fsPromisesVar}.default.cp(${sourceVar},${targetVar},{recursive:!0,verbatimSymlinks:!0});if(process.platform===\`linux\`)await ${helperName}(${targetVar},${fsPromisesVar}.default);return}`;
+    },
+  );
+  if (!patchedCopyBranch) {
+    if (currentSource.includes("verbatimSymlinks")) {
+      console.warn(
+        "WARN: Could not find bundled plugin copy branch — skipping Linux plugin permissions patch",
+      );
+    }
+    return currentSource;
+  }
+
+  const helper =
+    `async function ${helperName}(e,t){let n=await t.lstat(e);if(n.isSymbolicLink())return;await t.chmod(e,n.mode|128);if(n.isDirectory())for(let n of await t.readdir(e))await ${helperName}((0,${pathVar}.join)(e,n),t)}`;
+  const strictDirective = '"use strict";';
+  const helperInsertionIndex = currentSource.startsWith(strictDirective)
+    ? strictDirective.length
+    : 0;
+  return (
+    patchedSource.slice(0, helperInsertionIndex) +
+    helper +
+    patchedSource.slice(helperInsertionIndex)
+  );
+}
+
+function applyLinuxBundledPluginReconcileStaleSnapshotPatch(currentSource) {
+  const marker = "/*codex-linux-skip-stale-bundled-plugin-reconcile*/";
+  if (currentSource.includes(marker)) {
+    return currentSource;
+  }
+
+  const reconcilerStartRegex =
+    /([A-Za-z_$][\w$]*)=\(\{force:([A-Za-z_$][\w$]*),reason:([A-Za-z_$][\w$]*)\}\)=>\{if\(([A-Za-z_$][\w$]*)==null\)return [A-Za-z_$][\w$]*\(\)\.info\(`bundled_plugins_reconcile_skipped_features_unavailable`/;
+  const match = currentSource.match(reconcilerStartRegex);
+  if (match == null || match.index == null) {
+    if (currentSource.includes("bundled_plugins_reconcile_skipped_features_unavailable")) {
+      console.warn(
+        "WARN: Could not find bundled plugin reconcile queue — skipping stale snapshot patch",
+      );
+    }
+    return currentSource;
+  }
+
+  const featureSnapshotVar = match[4];
+  const escapedFeatureSnapshotVar = escapeRegExp(featureSnapshotVar);
+  const reconcilerPrefix = currentSource.slice(match.index);
+  const snapshotMatch = reconcilerPrefix.match(
+    new RegExp(`;let ([A-Za-z_$][\\w$]*)=${escapedFeatureSnapshotVar}(?:,|;)`),
+  );
+  const reconcileLogIndex = reconcilerPrefix.indexOf(
+    "bundled_plugins_reconcile_started",
+  );
+  if (snapshotMatch == null || snapshotMatch.index == null || reconcileLogIndex < 0) {
+    console.warn(
+      "WARN: Could not find bundled plugin reconcile snapshot — skipping stale snapshot patch",
+    );
+    return currentSource;
+  }
+
+  const capturedSnapshotVar = snapshotMatch[1];
+  const hashMatch = reconcilerPrefix.match(
+    new RegExp(
+      `;if\\(!${escapeRegExp(match[2])}&&([A-Za-z_$][\\w$]*)===([A-Za-z_$][\\w$]*)\\)return`,
+    ),
+  );
+  if (hashMatch == null) {
+    console.warn(
+      "WARN: Could not find bundled plugin reconcile semantic hash — skipping stale snapshot patch",
+    );
+    return currentSource;
+  }
+
+  const latestHashVar = hashMatch[1];
+  const capturedHashVar = hashMatch[2];
+  const reconcileCallMatch = reconcilerPrefix.match(
+    new RegExp(
+      `await ([A-Za-z_$][\\w$]*)\\(\\{desktopFeatureAvailability:${escapeRegExp(capturedSnapshotVar)},`,
+    ),
+  );
+  if (reconcileCallMatch == null) {
+    console.warn(
+      "WARN: Could not find bundled plugin reconcile worker — skipping stale snapshot patch",
+    );
+    return currentSource;
+  }
+
+  const reconcileWorkerVar = reconcileCallMatch[1];
+  const workerDefinitionRegex = new RegExp(
+    `${escapeRegExp(reconcileWorkerVar)}=async ([A-Za-z_$][\\w$]*)=>\\{`,
+    "g",
+  );
+  const workerDefinitionMatches = [...reconcilerPrefix.matchAll(workerDefinitionRegex)];
+  if (
+    workerDefinitionMatches.length !== 1 ||
+    workerDefinitionMatches[0].index == null
+  ) {
+    console.warn(
+      "WARN: Expected one bundled plugin reconcile worker definition — skipping stale snapshot patch",
+    );
+    return currentSource;
+  }
+  const workerDefinitionMatch = workerDefinitionMatches[0];
+
+  const workerArgumentVar = workerDefinitionMatch[1];
+  const workerPrefix = reconcilerPrefix.slice(workerDefinitionMatch.index);
+  const destructiveReconcileRegex =
+    /try\{([A-Za-z_$][\w$]*)=await ([A-Za-z_$][\w$]*)\(\{appServerConnection:/;
+  const destructiveReconcileMatch = workerPrefix.match(destructiveReconcileRegex);
+  if (destructiveReconcileMatch == null || destructiveReconcileMatch.index == null) {
+    console.warn(
+      "WARN: Could not find bundled plugin destructive reconcile boundary — skipping stale snapshot patch",
+    );
+    return currentSource;
+  }
+
+  const insertionIndex =
+    match.index +
+    workerDefinitionMatch.index +
+    destructiveReconcileMatch.index +
+    "try{".length;
+  const reconcileCallIndex = match.index + reconcileCallMatch.index;
+  const reconcileCallPrefix = `await ${reconcileWorkerVar}({`;
+  const reconcilePropertyIndex = reconcileCallIndex + reconcileCallPrefix.length;
+  const hashAssignment = `${latestHashVar}=${capturedHashVar};`;
+  const hashAssignmentIndex = reconcilerPrefix.indexOf(hashAssignment);
+  if (hashAssignmentIndex < 0) {
+    console.warn(
+      "WARN: Could not find bundled plugin reconcile hash assignment — skipping stale snapshot patch",
+    );
+    return currentSource;
+  }
+  const globalHashInsertionIndex =
+    match.index + hashAssignmentIndex + hashAssignment.length;
+  if (
+    !(
+      globalHashInsertionIndex < reconcilePropertyIndex &&
+      reconcilePropertyIndex < insertionIndex
+    )
+  ) {
+    console.warn(
+      "WARN: Bundled plugin reconcile insertion order drifted — skipping stale snapshot patch",
+    );
+    return currentSource;
+  }
+
+  const guardedSource =
+    currentSource.slice(0, insertionIndex) +
+    `if(${workerArgumentVar}.codexLinuxReconcileSnapshot!==globalThis.__codexLinuxBundledPluginReconcileSnapshot)return;${marker}` +
+    currentSource.slice(insertionIndex);
+  const propertySource =
+    guardedSource.slice(0, reconcilePropertyIndex) +
+    `codexLinuxReconcileSnapshot:${capturedHashVar},` +
+    guardedSource.slice(reconcilePropertyIndex);
+  return (
+    propertySource.slice(0, globalHashInsertionIndex) +
+    `globalThis.__codexLinuxBundledPluginReconcileSnapshot=${capturedHashVar};` +
+    propertySource.slice(globalHashInsertionIndex)
+  );
+}
+
+function applyBrowserUseNodeReplApprovalPatch(currentSource) {
+  let patchedSource = currentSource;
+  let patchedTrustedHashes = false;
+  const hasTrustedHashesRuntimeBuilder =
+    /(?<!async )function [A-Za-z_$][\w$]*\(\{(?=[^{}]*nodePath:)(?=[^{}]*nodeReplPath:)(?=[^{}]*shouldUseWslPaths:)[^{}]*trustedBrowserClientSha256s:[A-Za-z_$][\w$]*(?:=\[\])?[^{}]*\}\)\{/.test(currentSource);
+
+  const runtimeBuilderTrustedHashesRegex =
+    /(?<!async )function ([A-Za-z_$][\w$]*)\(\{(?=[^{}]*nodePath:)(?=[^{}]*nodeReplPath:)(?=[^{}]*shouldUseWslPaths:)([^{}]*?trustedBrowserClientSha256s:)([A-Za-z_$][\w$]*)([^{}]*?\})\)\{(?![A-Za-z_$][\w$]*=codexLinuxTrustedBrowserClientSha256s\()/g;
   if (
     requireName(patchedSource, "node:fs") != null &&
     requireName(patchedSource, "node:path") != null &&
     requireName(patchedSource, "node:crypto") != null
   ) {
     patchedSource = patchedSource.replace(
-      runtimeFactoryTrustedHashesRegex,
-      (match, runtimeFactoryVar, runtimeFactoryMethod, configPrefix, trustedHashesVar, configSuffix) => {
+      runtimeBuilderTrustedHashesRegex,
+      (
+        _match,
+        functionName,
+        configPrefix,
+        trustedHashesVar,
+        configSuffix,
+      ) => {
         patchedTrustedHashes = true;
-        return `${runtimeFactoryVar}.${runtimeFactoryMethod}({${configPrefix}codexLinuxTrustedBrowserClientSha256s(${trustedHashesVar})${configSuffix})`;
+        return `function ${functionName}({${configPrefix}${trustedHashesVar}${configSuffix}){${trustedHashesVar}=codexLinuxTrustedBrowserClientSha256s(${trustedHashesVar});`;
       },
     );
   }
 
-  const currentRuntimeConfigRegex =
-    new RegExp(String.raw`([A-Za-z_$][\w$]*)\.(${runtimeFactoryMethods})\(\{([^{}]*?)nodeReplPath:([^,{}]+)(,)(?!tools:\{js:\{approval_mode:\`approve\`\}\})`, "g");
-  const currentRuntimeConfigAlreadyApprovedRegex =
-    new RegExp(String.raw`[A-Za-z_$][\w$]*\.(?:${runtimeFactoryMethods})\(\{[^{}]*?nodeReplPath:[^,{}]+,tools:\{js:\{approval_mode:\`approve\`\}\},`);
-  let patchedAnyCurrentRuntimeConfig = false;
-  patchedSource = patchedSource.replace(
-    currentRuntimeConfigRegex,
-    (_match, runtimeFactoryVar, runtimeFactoryMethod, configPrefix, nodeReplPathVar, comma) => {
-      patchedAnyCurrentRuntimeConfig = true;
-      return `${runtimeFactoryVar}.${runtimeFactoryMethod}({${configPrefix}nodeReplPath:${nodeReplPathVar}${comma}tools:{js:{approval_mode:\`approve\`}},`;
-    },
-  );
-
-  // 26.623+: the browser-use node_repl mcp server config is emitted as a
-  // standalone object literal `{args:[],command:VAR,env:VAR,startup_timeout_sec:120}`
-  // (env is now a hoisted variable, not the old inline `env:{...}` literal) inside
-  // a separate `src-*.js` chunk. Insert the js auto-approval there.
+  // The node_repl MCP server config is a standalone object literal in a
+  // separate build chunk. Insert the js auto-approval there.
   const mcpServerConfigRegex =
     /(\[`mcp_servers\.\$\{[A-Za-z_$][\w$]*\}`\]:\{args:\[\],command:[A-Za-z_$][\w$]*,env:[A-Za-z_$][\w$]*,)(startup_timeout_sec:120\})/g;
   const mcpServerConfigAlreadyApprovedRegex =
@@ -61,19 +231,6 @@ function applyBrowserUseNodeReplApprovalPatch(currentSource) {
     (_match, configPrefix, configSuffix) => {
       patchedAnyMcpServerConfig = true;
       return `${configPrefix}tools:{js:{approval_mode:\`approve\`}},${configSuffix}`;
-    },
-  );
-
-  const trustedHashesRegex =
-    /trustedBrowserClientSha256s:([^,{}]+)\|\|([^,{}]+)\?([A-Za-z_$][\w$]*):\[\]/g;
-  patchedSource = patchedSource.replace(
-    trustedHashesRegex,
-    (match, browserUseEnabledVar, nativePipeEnabledVar, trustedHashesVar) => {
-      if (match.includes("codexLinuxTrustedBrowserClientSha256s(")) {
-        return match;
-      }
-      patchedTrustedHashes = true;
-      return `trustedBrowserClientSha256s:${browserUseEnabledVar}||${nativePipeEnabledVar}?codexLinuxTrustedBrowserClientSha256s(${trustedHashesVar}):[]`;
     },
   );
 
@@ -88,15 +245,7 @@ function applyBrowserUseNodeReplApprovalPatch(currentSource) {
       console.warn(
         "WARN: Could not find fs/path/crypto aliases — skipping Linux Browser Use trusted hash patch",
       );
-      patchedSource = patchedSource.replace(
-        /trustedBrowserClientSha256s:([^,{}]+)\|\|([^,{}]+)\?codexLinuxTrustedBrowserClientSha256s\(([A-Za-z_$][\w$]*)\):\[\]/g,
-        "trustedBrowserClientSha256s:$1||$2?$3:[]",
-      );
-      patchedSource = patchedSource.replace(
-        /trustedBrowserClientSha256s:codexLinuxTrustedBrowserClientSha256s\(([A-Za-z_$][\w$]*)\)/g,
-        "trustedBrowserClientSha256s:$1",
-      );
-      patchedTrustedHashes = false;
+      return currentSource;
     } else {
       const helper =
         `function codexLinuxTrustedBrowserClientSha256s(__codexHashes,__codexResourcesPath=process.resourcesPath){if(process.platform!==\`linux\`)return __codexHashes;let __codexTrustedHashes=Array.isArray(__codexHashes)?[...__codexHashes]:[],__codexBasePath=__codexResourcesPath??"";if(__codexBasePath.length===0)return Array.from(new Set(__codexTrustedHashes));for(let __codexPluginName of[\`browser\`,\`chrome\`])try{let __codexBrowserClientPath=(0,${pathVar}.join)(__codexBasePath,\`plugins\`,\`openai-bundled\`,\`plugins\`,__codexPluginName,\`scripts\`,\`browser-client.mjs\`);(0,${fsVar}.existsSync)(__codexBrowserClientPath)&&__codexTrustedHashes.push((0,${cryptoVar}.createHash)(\`sha256\`).update((0,${fsVar}.readFileSync)(__codexBrowserClientPath)).digest(\`hex\`))}catch{}return Array.from(new Set(__codexTrustedHashes))}`;
@@ -114,8 +263,7 @@ function applyBrowserUseNodeReplApprovalPatch(currentSource) {
   if (
     !patchedTrustedHashes &&
     !patchedSource.includes("codexLinuxTrustedBrowserClientSha256s(") &&
-    patchedSource.includes("NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S") &&
-    /trustedBrowserClientSha256s:[^,{}]+\|\|/.test(patchedSource)
+    hasTrustedHashesRuntimeBuilder
   ) {
     console.warn(
       "WARN: Could not find Browser Use trusted hash insertion point — skipping Linux Browser Use trusted hash patch",
@@ -125,9 +273,6 @@ function applyBrowserUseNodeReplApprovalPatch(currentSource) {
   if (
     patchedSource === currentSource &&
     patchedSource.includes("startup_timeout_sec:120") &&
-    !patchedSource.includes(approvalPatch) &&
-    !patchedAnyCurrentRuntimeConfig &&
-    !currentRuntimeConfigAlreadyApprovedRegex.test(patchedSource) &&
     !patchedAnyMcpServerConfig &&
     !mcpServerConfigAlreadyApprovedRegex.test(patchedSource) &&
     !patchedTrustedHashes &&
@@ -141,10 +286,8 @@ function applyBrowserUseNodeReplApprovalPatch(currentSource) {
   return patchedSource;
 }
 
-// 26.623+: the node_repl mcp config (and the NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S
-// trusted-hash code) was re-chunked out of the main bundle into a sibling
-// `.vite/build/src-*.js` chunk. Scan every build chunk that carries either marker so
-// the approval patch reaches whichever chunk now hosts the config.
+// The trusted-hash setup and node_repl config can live in different build chunks.
+// Scan every chunk carrying either marker so each patch reaches its current host.
 function applyBrowserUseNodeReplApprovalAssets(extractedDir) {
   const buildDir = path.join(extractedDir, ".vite", "build");
   if (!fs.existsSync(buildDir)) {
@@ -161,7 +304,6 @@ function applyBrowserUseNodeReplApprovalAssets(extractedDir) {
         const source = fs.readFileSync(candidate, "utf8");
         return (
           source.includes("startup_timeout_sec:120") ||
-          source.includes("NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S") ||
           source.includes("trustedBrowserClientSha256s")
         );
       } catch {
@@ -326,7 +468,7 @@ function buildLinuxExternalOpenHelpers() {
     `return __codexEnv}` +
     `function codexLinuxLaunchExternalUrl(__codexUrl){return new Promise((__codexResolve,__codexReject)=>{let __codexSettled=!1,__codexTimer;try{let __codexChild=require(\`node:child_process\`).spawn(\`xdg-open\`,[__codexUrl],{detached:!0,stdio:\`ignore\`,windowsHide:!0,env:codexLinuxExternalOpenEnv()});__codexTimer=setTimeout(()=>{__codexSettled=!0,__codexChild.unref?.(),__codexResolve()},400),__codexTimer.unref?.(),__codexChild.on(\`error\`,__codexError=>{__codexSettled||(clearTimeout(__codexTimer),__codexReject(__codexError))}),__codexChild.on(\`close\`,__codexCode=>{__codexSettled||(clearTimeout(__codexTimer),__codexCode===0?__codexResolve():__codexReject(Error(\`Linux external open failed\`)))})}catch(__codexError){clearTimeout(__codexTimer),__codexReject(__codexError)}})}` +
     `function codexLinuxOpenExternalWithFallback(__codexOriginalOpenExternal,__codexUrl){return codexLinuxLaunchExternalUrl(__codexUrl).catch(()=>__codexOriginalOpenExternal(__codexUrl))}` +
-    `function codexLinuxPatchExternalOpen(__codexElectron){if(process.platform!==\`linux\`||__codexElectron?.shell==null||typeof __codexElectron.shell.openExternal!==\`function\`)return __codexElectron;if(__codexElectron.shell.openExternal.__codexLinuxExternalOpenPatched)return __codexElectron;let __codexOriginalOpenExternal=__codexElectron.shell.openExternal.bind(__codexElectron.shell);async function __codexOpenExternal(__codexUrl,__codexOptions){if(typeof __codexUrl===\`string\`&&__codexOptions==null)return codexLinuxOpenExternalWithFallback(__codexOriginalOpenExternal,__codexUrl);return __codexOriginalOpenExternal(__codexUrl,__codexOptions)}__codexOpenExternal.__codexLinuxExternalOpenPatched=!0,__codexElectron.shell.openExternal=__codexOpenExternal;return __codexElectron}`
+    `function codexLinuxPatchExternalOpen(__codexElectron){if(process.platform!==\`linux\`||__codexElectron?.shell==null||typeof __codexElectron.shell.openExternal!==\`function\`)return __codexElectron;if(__codexElectron.shell.openExternal.__codexLinuxExternalOpenPatched)return __codexElectron;if(process.env.CODEX_LINUX_DISABLE_EXTERNAL_OPEN_PATCH===\`1\`)return __codexElectron;let __codexOriginalOpenExternal=__codexElectron.shell.openExternal.bind(__codexElectron.shell);async function __codexOpenExternal(__codexUrl,__codexOptions){if(typeof __codexUrl===\`string\`&&__codexOptions==null)return codexLinuxOpenExternalWithFallback(__codexOriginalOpenExternal,__codexUrl);return __codexOriginalOpenExternal(__codexUrl,__codexOptions)}__codexOpenExternal.__codexLinuxExternalOpenPatched=!0,__codexElectron.shell.openExternal=__codexOpenExternal;return __codexElectron}`
   );
 }
 
@@ -371,6 +513,8 @@ function applyLinuxExternalOpenEnvPatch(currentSource) {
 module.exports = {
   applyBrowserUseNodeReplApprovalPatch,
   applyBrowserUseNodeReplApprovalAssets,
+  applyLinuxBundledPluginCopyPermissionsPatch,
+  applyLinuxBundledPluginReconcileStaleSnapshotPatch,
   applyLinuxExternalOpenEnvPatch,
   applyLinuxBrowserUseRouteLivenessPatch,
   applyLinuxChromeExtensionStatusPatch,

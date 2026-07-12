@@ -1,5 +1,5 @@
 {
-  description = "Codex Desktop for Linux installer";
+  description = "ChatGPT Desktop for Linux installer";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -63,6 +63,7 @@
             in
               !(pkgs.lib.hasSuffix "/.codex" pathStr || pkgs.lib.hasInfix "/.codex/" pathStr));
         };
+        nixLinuxFeatures = import ./nix/linux-features.nix { lib = pkgs.lib; };
         computerUseBuildSource = pkgs.runCommandLocal "codex-computer-use-linux-source" { } ''
           mkdir -p "$out"
           cp ${./Cargo.lock} "$out/Cargo.lock"
@@ -80,11 +81,11 @@
         '';
 
         codexDmg = pkgs.fetchurl {
-          url = "https://persistent.oaistatic.com/codex-app-prod/Codex.dmg";
-          hash = "sha256-MKL+mR5Ibx7W1SUWeWOXM1aNIN7cDXHJieggC8cRxGw=";
+          url = "https://persistent.oaistatic.com/codex-app-prod/ChatGPT.dmg";
+          hash = "sha256-pmoGRf1N5vTyLnXKh77bFYWutX80V6PfVVCb+NoRCHk=";
         };
 
-        codexVersion = "26.623.141536";
+        codexVersion = "26.707.51957";
         electronVersion = "42.1.0";
         electronPlatform =
           {
@@ -156,6 +157,38 @@
             install -Dm0755 "$release_dir/codex-computer-use-linux" "$out/bin/codex-computer-use-linux"
             install -Dm0755 "$release_dir/codex-computer-use-cosmic" "$out/bin/codex-computer-use-cosmic"
             install -Dm0755 "$release_dir/codex-chrome-extension-host" "$out/bin/codex-chrome-extension-host"
+            runHook postInstall
+          '';
+        };
+
+        codexMcpHelperReaper = pkgs.rustPlatform.buildRustPackage {
+          pname = "codex-mcp-helper-reaper";
+          version = "0.1.0";
+          src = ./linux-features/mcp-helper-reaper/reaper;
+
+          cargoLock = {
+            lockFile = ./linux-features/mcp-helper-reaper/reaper/Cargo.lock;
+          };
+        };
+
+        codexGlobalDictationBinary = pkgs.rustPlatform.buildRustPackage {
+          pname = "codex-global-dictation-linux";
+          version = "0.1.0";
+          src = ./global-dictation-linux;
+
+          cargoLock = {
+            lockFile = ./global-dictation-linux/Cargo.lock;
+          };
+
+          doCheck = false;
+
+          installPhase = ''
+            runHook preInstall
+            release_dir="target/''${CARGO_BUILD_TARGET:-${pkgs.stdenv.hostPlatform.rust.rustcTarget}}/release"
+            if [ ! -d "$release_dir" ]; then
+              release_dir="target/release"
+            fi
+            install -Dm0755 "$release_dir/codex-global-dictation-linux" "$out/bin/codex-global-dictation-linux"
             runHook postInstall
           '';
         };
@@ -261,6 +294,7 @@
           libxi
           libxtst
           libxscrnsaver
+          libnotify
           libglvnd
           systemd
           wayland
@@ -286,6 +320,11 @@
           systemd
           xdg-utils
         ]);
+        globalDictationRuntimePath = pkgs.lib.makeBinPath (with pkgs; [
+          xdotool
+          xinput
+          xmodmap
+        ]);
 
         patchNixInstalledApp = installDir: ''
           # Patch generated scripts for NixOS systems without /bin/bash.
@@ -293,9 +332,12 @@
             ${pkgs.gnused}/bin/sed -i '1s|^#!/bin/bash$|#!${pkgs.bash}/bin/bash|' "${installDir}/start.sh"
             if ! grep -q "NixOS Electron library path" "${installDir}/start.sh"; then
               # shellcheck disable=SC2016
-              ${pkgs.gnused}/bin/sed -i '2i# NixOS Electron library path for dlopen()ed GL/EGL libraries.\nexport LD_LIBRARY_PATH="${electronLibPath}:${runtimeLibPath}:''${LD_LIBRARY_PATH:-}"' "${installDir}/start.sh"
+              ${pkgs.gnused}/bin/sed -i '/^codex_capture_original_ld_library_path$/a\
+# NixOS Electron library path for dlopen()ed GL/EGL libraries.\
+export LD_LIBRARY_PATH="${electronLibPath}:${runtimeLibPath}''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"\
+codex_nixos_add_runtime_library_dirs' "${installDir}/start.sh"
             fi
-            if ! grep -q "codex_nixos_add_runtime_library_dirs" "${installDir}/start.sh"; then
+            if ! grep -q "codex_nixos_add_runtime_library_dirs()" "${installDir}/start.sh"; then
               # shellcheck disable=SC2016
               ${pkgs.gnused}/bin/sed -i '/^set -euo pipefail$/a\
 \
@@ -317,9 +359,7 @@ codex_nixos_add_runtime_library_dirs() {\
     done\
 \
     export LD_LIBRARY_PATH\
-}\
-\
-codex_nixos_add_runtime_library_dirs' "${installDir}/start.sh"
+}' "${installDir}/start.sh"
             fi
             if ! grep -q "Browser Use bundled marketplace metadata" "${installDir}/start.sh"; then
               ${pkgs.python3}/bin/python3 - "${installDir}/start.sh" <<'PY'
@@ -391,7 +431,8 @@ PY
           });
 
         enabledFeatureIds = { enableComputerUseUi ? false, linuxFeatureIds ? [ ] }:
-          pkgs.lib.optionals enableComputerUseUi [ "computer-use-ui" ] ++ linuxFeatureIds;
+          pkgs.lib.optionals enableComputerUseUi [ "computer-use-ui" ]
+          ++ nixLinuxFeatures.normalize linuxFeatureIds;
 
         packageSuffix = args:
           let
@@ -420,6 +461,7 @@ PY
             pkgs.patchelf
             pkgs.python3
             pkgs.unzip
+            pkgs.util-linux
           ];
 
           dontConfigure = true;
@@ -455,6 +497,12 @@ PY
             export CODEX_LINUX_COMPUTER_USE_BACKEND_SOURCE="${codexComputerUseBinaries}/bin/codex-computer-use-linux"
             export CODEX_LINUX_COMPUTER_USE_COSMIC_SOURCE="${codexComputerUseBinaries}/bin/codex-computer-use-cosmic"
             export CODEX_CHROME_EXTENSION_HOST_SOURCE="${codexComputerUseBinaries}/bin/codex-chrome-extension-host"
+            ${pkgs.lib.optionalString (builtins.elem "mcp-helper-reaper" linuxFeatureIds) ''
+            export CODEX_MCP_HELPER_REAPER_SOURCE="${codexMcpHelperReaper}/bin/codex-mcp-helper-reaper"
+            ''}
+            ${pkgs.lib.optionalString (builtins.elem "global-dictation" linuxFeatureIds) ''
+            export CODEX_GLOBAL_DICTATION_LINUX_SOURCE="${codexGlobalDictationBinary}/bin/codex-global-dictation-linux"
+            ''}
             mkdir -p "$HOME" "$npm_config_cache" "$CARGO_HOME"
 
             source_dir="$TMPDIR/codex-source"
@@ -482,12 +530,20 @@ PY
           '';
         };
 
-        mkCodexDesktop = { enableComputerUseUi ? false, linuxFeatureIds ? [ ] }:
+        buildCodexDesktop = { enableComputerUseUi ? false, linuxFeatureIds ? [ ] }:
         let
-          featureArgs = { inherit enableComputerUseUi linuxFeatureIds; };
-          payload = mkCodexDesktopPayload {
-            inherit enableComputerUseUi linuxFeatureIds;
+          normalizedLinuxFeatureIds = nixLinuxFeatures.normalize linuxFeatureIds;
+          featureArgs = {
+            inherit enableComputerUseUi;
+            linuxFeatureIds = normalizedLinuxFeatureIds;
           };
+          payload = mkCodexDesktopPayload {
+            inherit enableComputerUseUi;
+            linuxFeatureIds = normalizedLinuxFeatureIds;
+          };
+          payloadLauncherPath = launcherPath + pkgs.lib.optionalString
+            (builtins.elem "global-dictation" normalizedLinuxFeatureIds)
+            ":${globalDictationRuntimePath}";
         in
         pkgs.stdenv.mkDerivation {
           pname = "codex-desktop${packageSuffix featureArgs}";
@@ -523,10 +579,30 @@ PY
               --unpack "{*.node,*.so,*.dylib}"
             rm -rf "$resources_dir/app-extracted"
 
-            if [ -f "$resources_dir/node_repl" ]; then
-              patchelf --set-interpreter "$(cat ${pkgs.stdenv.cc}/nix-support/dynamic-linker)" \
-                --set-rpath "${pkgs.lib.makeLibraryPath [ pkgs.stdenv.cc.cc.lib pkgs.glibc ]}" \
-                "$resources_dir/node_repl"
+            for node_repl_binary in \
+              "$resources_dir/node_repl" \
+              "$resources_dir/node_repl.codex-linux-original"; do
+              if [ -f "$node_repl_binary" ] \
+                  && [ "$(dd if="$node_repl_binary" bs=1 count=4 2>/dev/null | od -An -tx1 | tr -d ' \n')" = "7f454c46" ]; then
+                patchelf --set-interpreter "$(cat ${pkgs.stdenv.cc}/nix-support/dynamic-linker)" \
+                  --set-rpath "${pkgs.lib.makeLibraryPath [ pkgs.stdenv.cc.cc.lib pkgs.glibc ]}" \
+                  "$node_repl_binary"
+              fi
+            done
+
+            if [ -f "$resources_dir/node_repl.codex-linux-original" ]; then
+              node_repl_interpreter="$(patchelf --print-interpreter \
+                "$resources_dir/node_repl.codex-linux-original")"
+              node_repl_rpath="$(patchelf --print-rpath \
+                "$resources_dir/node_repl.codex-linux-original")"
+              case "$node_repl_interpreter" in
+                /nix/store/*) ;;
+                *) echo "node_repl backup has non-Nix interpreter: $node_repl_interpreter" >&2; exit 1 ;;
+              esac
+              case "$node_repl_rpath" in
+                *"/nix/store/"*) ;;
+                *) echo "node_repl backup has non-Nix RPATH: $node_repl_rpath" >&2; exit 1 ;;
+              esac
             fi
 
             ${patchNixInstalledApp "$out/opt/codex-desktop"}
@@ -541,9 +617,7 @@ PY
               --replace-fail "/usr/share/applications/codex-desktop.desktop" "$out/share/applications/codex-desktop.desktop"
 
             makeWrapper "$out/opt/codex-desktop/start.sh" "$out/bin/codex-desktop" \
-              --prefix PATH : "${launcherPath}" \
-              --prefix LD_LIBRARY_PATH : "${electronLibPath}" \
-              --prefix LD_LIBRARY_PATH : "${runtimeLibPath}" \
+              --prefix PATH : "${payloadLauncherPath}" \
               --prefix PATH : "/run/current-system/sw/bin" \
               --prefix PATH : "/etc/profiles/per-user/$(whoami)/bin"
 
@@ -556,9 +630,9 @@ PY
                 featureIds = enabledFeatureIds featureArgs;
               in
               if featureIds == [ ] then
-                "Codex Desktop for Linux"
+                "ChatGPT Desktop for Linux"
               else
-                "Codex Desktop for Linux with ${pkgs.lib.concatStringsSep ", " featureIds} enabled";
+                "ChatGPT Desktop for Linux with ${pkgs.lib.concatStringsSep ", " featureIds} enabled";
             homepage = "https://github.com/ilysenko/codex-desktop-linux";
             license = pkgs.lib.licenses.mit;
             platforms = pkgs.lib.platforms.linux;
@@ -566,19 +640,30 @@ PY
           };
         };
 
-        codexDesktop = mkCodexDesktop { };
+        codexDesktop = pkgs.lib.makeOverridable buildCodexDesktop { };
 
-        codexDesktopComputerUseUi = mkCodexDesktop {
+        codexDesktopComputerUseUi = codexDesktop.override {
           enableComputerUseUi = true;
         };
 
-        codexDesktopRemoteMobileControl = mkCodexDesktop {
+        codexDesktopRemoteMobileControl = codexDesktop.override {
           linuxFeatureIds = [ "remote-mobile-control" ];
         };
 
-        codexDesktopComputerUseUiRemoteMobileControl = mkCodexDesktop {
+        codexDesktopComputerUseUiRemoteMobileControl = codexDesktop.override {
           enableComputerUseUi = true;
           linuxFeatureIds = [ "remote-mobile-control" ];
+        };
+
+        codexDesktopNixFeatureCheck = codexDesktop.override {
+          linuxFeatureIds = [
+            "appshots"
+            "global-dictation"
+            "mcp-helper-reaper"
+            "node-repl-reaper"
+            "open-target-discovery"
+            "persistent-status-panel"
+          ];
         };
 
         installer = pkgs.writeShellApplication {
@@ -630,6 +715,13 @@ PY
           codex-desktop-remote-mobile-control = codexDesktopRemoteMobileControl;
           codex-desktop-computer-use-ui-remote-mobile-control = codexDesktopComputerUseUiRemoteMobileControl;
           installer = installer;
+        };
+
+        checks = {
+          nix-linux-features-evaluation = import ./nix/linux-features-test.nix {
+            inherit pkgs self system;
+          };
+          nix-linux-features-multi-feature = codexDesktopNixFeatureCheck;
         };
 
         apps.default = {

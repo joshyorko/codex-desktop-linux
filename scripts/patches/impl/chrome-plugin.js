@@ -11,53 +11,11 @@ const {
   readDirectoryNames,
 } = require("../lib/assets.js");
 
-function hasChromePluginLiteral(source) {
-  return /(?:`chrome`|"chrome"|'chrome')/.test(source);
-}
-
-function isChromeNameExpr(nameExpr, chromeNameVar) {
-  return /^(?:`chrome`|"chrome"|'chrome')$/.test(nameExpr) ||
-    nameExpr === chromeNameVar;
-}
-
-function chromeNamePatterns(chromeNameVar) {
-  const namePatterns = [String.raw`\`chrome\``, "\"chrome\"", "'chrome'"];
-  if (chromeNameVar != null) {
-    namePatterns.push(chromeNameVar);
-  }
-  return namePatterns;
-}
-
-function hasLinuxChromeAvailability(source) {
-  return source.includes("process.platform===`linux`");
-}
-
-function hasChromeAutoInstallWithLinuxAvailability(source, chromeNameVar) {
-  const namePatterns = chromeNamePatterns(chromeNameVar);
-  return new RegExp(
-    String.raw`\{(?=[^{}]*installWhenMissing:!0)(?=[^{}]*name:(?:${namePatterns.join("|")}))(?=[^{}]*process\.platform===\`linux\`)[^{}]*(?:isEnabled|isAvailable):[^{}]*\}`,
-  ).test(source);
-}
-
 function applyLinuxChromePluginAutoInstallPatch(currentSource) {
-  if (!hasChromePluginLiteral(currentSource)) {
-    console.warn(
-      "WARN: Could not find Chrome plugin gate literal — skipping Linux Chrome plugin auto-install patch",
-    );
-    return currentSource;
-  }
-
-  const chromeNameVar = currentSource.match(/([A-Za-z_$][\w$]*)=(?:`chrome`|"chrome"|'chrome')/)?.[1] ?? null;
-  const nameExpressionPattern = String.raw`(?:[A-Za-z_$][\w$]*|` +
-    String.raw`\`chrome\`|"chrome"|'chrome')`;
   const gateRegex =
-    new RegExp(
-      String.raw`\{([^{}]*?)(installWhenMissing:!0,)?name:(${nameExpressionPattern}),([^{}]*?)(isEnabled|isAvailable):\(\{([^}]*)\}\)=>([^{}]*?externalBrowserUseAllowed[^{}]*?)(,migrate:[A-Za-z_$][\w$]*)?\}`,
-      "g",
-    );
+    /\{([^{}]*?)(installWhenMissing:!0,)?name:([A-Za-z_$][\w$]*\.[A-Za-z_$][\w$]*),([^{}]*?syncInstallStateWithChromeExtension:!0,isAvailable:\(\{buildFlavor:([A-Za-z_$][\w$]*),features:([A-Za-z_$][\w$]*)\}\)=>)((?:process\.platform===`linux`\|\|\()?\6\.externalBrowserUseAllowed&&[A-Za-z_$][\w$]*\.[A-Za-z_$][\w$]*\(\5\)\)?)\}/g;
 
   let sawChromeGate = false;
-  let sawAlreadyInstalledGate = false;
   const patched = currentSource.replace(
     gateRegex,
     (
@@ -66,21 +24,15 @@ function applyLinuxChromePluginAutoInstallPatch(currentSource) {
       installWhenMissing,
       nameExpr,
       middleFields,
-      availabilityProp,
-      paramsText,
+      _buildFlavorVar,
+      _featuresVar,
       expression,
-      migrateSuffix = "",
     ) => {
-      if (!isChromeNameExpr(nameExpr, chromeNameVar)) {
-        return gateSource;
-      }
-
       sawChromeGate = true;
       const hasInstallWhenMissing = installWhenMissing != null ||
         prefix.includes("installWhenMissing:!0");
-      const hasLinuxAvailability = hasLinuxChromeAvailability(expression);
+      const hasLinuxAvailability = expression.startsWith("process.platform===`linux`||(");
       if (hasInstallWhenMissing && hasLinuxAvailability) {
-        sawAlreadyInstalledGate = true;
         return gateSource;
       }
 
@@ -88,16 +40,12 @@ function applyLinuxChromePluginAutoInstallPatch(currentSource) {
       const availabilityExpression = hasLinuxAvailability
         ? expression
         : `process.platform===\`linux\`||(${expression})`;
-      return `{${prefix}${installWhenMissingField}name:${nameExpr},${middleFields}${availabilityProp}:({${paramsText}})=>${availabilityExpression}${migrateSuffix}}`;
+      return `{${prefix}${installWhenMissingField}name:${nameExpr},${middleFields}${availabilityExpression}}`;
     },
   );
 
-  if (patched !== currentSource || (sawChromeGate && sawAlreadyInstalledGate)) {
+  if (sawChromeGate) {
     return patched;
-  }
-
-  if (hasChromeAutoInstallWithLinuxAvailability(currentSource, chromeNameVar)) {
-    return currentSource;
   }
 
   if (currentSource.includes("externalBrowserUseAllowed")) {
@@ -111,8 +59,26 @@ function applyLinuxChromePluginAutoInstallPatch(currentSource) {
 }
 
 function applyLinuxChromeNativeHostRuntimePatch(currentSource) {
-  if (currentSource.includes("codexLinuxChromeNativeHostRuntimeFile")) {
-    return applyChromePluginAppServerCodexRuntimePatch(currentSource, "") ?? currentSource;
+  if (
+    currentSource.includes("codexLinuxChromePluginAppServerSourcePath") &&
+    currentSource.includes("codexLinuxChromeNativeHostRuntimeFile")
+  ) {
+    return currentSource;
+  }
+
+  let helper = "";
+  if (!currentSource.includes("codexLinuxChromeNativeHostRuntimeFile")) {
+    const fsVar = requireName(currentSource, "node:fs");
+    const pathVar = requireName(currentSource, "node:path");
+    if (fsVar == null || pathVar == null) {
+      console.warn(
+        "WARN: Could not find fs/path aliases — skipping Linux Chrome native host runtime patch",
+      );
+      return currentSource;
+    }
+
+    helper =
+      `function codexLinuxChromeNativeHostRuntimeFile(e,t){if(process.platform!==\`linux\`||e==null)return null;for(let n of t){let t=(0,${pathVar}.join)(e,...n);try{if((0,${fsVar}.statSync)(t).isFile())return t}catch{}}return null}function codexLinuxChromeNativeHostRuntimeEnv(e){if(process.platform!==\`linux\`)return null;let t=process.env[e];if(t==null||t.length===0)return null;try{return(0,${fsVar}.statSync)(t).isFile()?t:null}catch{return null}}function codexLinuxChromeNativeHostRuntimePath(e){if(process.platform!==\`linux\`)return null;for(let t of(process.env.PATH??\`\`).split(\`:\`)){if(t.length===0)continue;let n=(0,${pathVar}.join)(t,e);try{if((0,${fsVar}.statSync)(n).isFile())return n}catch{}}return null}function codexLinuxChromeNativeHostRuntimeEntry(e,t){return e==null?null:{path:e,source:t}}`;
   }
 
   const fsVar = requireName(currentSource, "node:fs");
@@ -124,16 +90,16 @@ function applyLinuxChromeNativeHostRuntimePatch(currentSource) {
     return currentSource;
   }
 
-  const helper =
-    `function codexLinuxChromeNativeHostRuntimeFile(e,t){if(process.platform!==\`linux\`||e==null)return null;for(let n of t){let t=(0,${pathVar}.join)(e,...n);try{if((0,${fsVar}.statSync)(t).isFile())return t}catch{}}return null}function codexLinuxChromeNativeHostRuntimeEnv(e){if(process.platform!==\`linux\`)return null;let t=process.env[e];if(t==null||t.length===0)return null;try{return(0,${fsVar}.statSync)(t).isFile()?t:null}catch{return null}}function codexLinuxChromeNativeHostRuntimePath(e){if(process.platform!==\`linux\`)return null;for(let t of(process.env.PATH??\`\`).split(\`:\`)){if(t.length===0)continue;let n=(0,${pathVar}.join)(t,e);try{if((0,${fsVar}.statSync)(n).isFile())return n}catch{}}return null}function codexLinuxChromeNativeHostRuntimeEntry(e,t){return e==null?null:{path:e,source:t}}`;
-  const modernRuntimeResolverPatch = applyModernChromeNativeHostRuntimePatch(
-    currentSource,
-    helper,
-  );
-  if (modernRuntimeResolverPatch != null) {
-    const appServerRuntimePatch = applyChromePluginAppServerRuntimePatch(modernRuntimeResolverPatch, "") ??
-      modernRuntimeResolverPatch;
-    return applyChromePluginAppServerCodexRuntimePatch(appServerRuntimePatch, "") ?? appServerRuntimePatch;
+  const sourcePathPatched = applyLinuxChromePluginAppServerSourcePathPatch(patchedSource);
+  if (sourcePathPatched !== patchedSource) {
+    patchedSource = sourcePathPatched;
+    changed = true;
+  }
+  takePatch(applyModernChromeNativeHostRuntimePatch(patchedSource, helper));
+  takePatch(applyChromePluginCodexAppServerRuntimePatch(patchedSource, helper));
+  takePatch(applyChromePluginAppServerRuntimePatch(patchedSource, helper));
+  if (changed) {
+    return patchedSource;
   }
 
   const missingRuntimeMessage =
@@ -212,7 +178,33 @@ function applyLinuxChromeNativeHostRuntimePatch(currentSource) {
   return currentSource.replace(originalPrefix, replacement);
 }
 
-function applyChromePluginAppServerCodexRuntimePatch(currentSource, helper) {
+function applyLinuxChromePluginAppServerSourcePathPatch(currentSource) {
+  const marker = "codexLinuxChromePluginAppServerSourcePath";
+  const isolationRoot = currentSource.indexOf(".plugin-appserver");
+  if (currentSource.includes(marker) || isolationRoot === -1) {
+    return currentSource;
+  }
+
+  const isolationSource = currentSource.slice(isolationRoot, isolationRoot + 12_000);
+  const syncFunctionRegex =
+    /async function ([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*)\)\{(?=let [A-Za-z_$][\w$]*=\2\.nativeHostName===)/;
+  const match = isolationSource.match(syncFunctionRegex);
+  if (match == null) {
+    console.warn(
+      "WARN: Could not find Chrome plugin app-server isolation function — Linux CLI path may not be relocatable",
+    );
+    return currentSource;
+  }
+
+  const [functionStart, , configVar] = match;
+  const helper = `function ${marker}(e){return e.codexCliPath}`;
+  const functionIndex = isolationRoot + match.index;
+  return currentSource.slice(0, functionIndex) +
+    `${helper}${functionStart}if(process.platform===\`linux\`)return ${marker}(${configVar});` +
+    currentSource.slice(functionIndex + functionStart.length);
+}
+
+function applyChromePluginCodexAppServerRuntimePatch(currentSource, helper) {
   if (!currentSource.includes("Missing bundled Electron Codex runtime required to sync Chrome plugin app server")) {
     return null;
   }

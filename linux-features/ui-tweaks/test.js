@@ -12,6 +12,21 @@ const {
   loadLinuxFeaturePatchDescriptors,
 } = require("../../scripts/lib/linux-features.js");
 const {
+  ADVANCED_MENU_VIEW_PATTERN,
+  DYNAMIC_POWER_EFFORTS_RUNTIME_MARKER,
+  GPT_56_ALLOWLIST_MARKER,
+  INLINE_MODEL_LIST_RUNTIME_MARKER,
+  MODEL_ALLOWLIST_MARKER,
+  MODEL_PICKER_ALLOWLIST_ASSET_PATTERN,
+  MODEL_PICKER_MENU_ASSET_PATTERN,
+  MODEL_PICKER_STATE_ASSET_PATTERN,
+  SIMPLE_MENU_VIEW_PATTERN,
+  applyDefaultAdvancedViewPatch,
+  applyDynamicSupportedReasoningEffortsPatch,
+  applyGpt56AllowlistPatch,
+  applyInlineModelListPatch,
+} = require("./patches/model-picker-model-list.js");
+const {
   DEFAULT_PROJECT_NAME_STYLE,
   PROJECTS_SIDEBAR_ASSET_PATTERN,
   PROJECT_NAME_SELECTOR,
@@ -21,13 +36,84 @@ const {
   descriptors: patches,
   sidebarProjectNameCss,
 } = require("./patches/sidebar-project-name.js");
+const {
+  ENGLISH_REASONING_LABELS,
+  ZH_CN_LOCALE_ASSET_PATTERN,
+  applyEnglishReasoningLabels,
+} = require("./patches/reasoning-effort-labels.js");
 
 function projectBundleFixture() {
   return [
-    "function Hd(){return {id:`sidebarElectron.projectsNavLink`,defaultMessage:`Projects`}}",
     "function row(){let j=Pn(`group/folder-row group relative flex h-[var(--height-token-row)] text-sm text-token-foreground`);",
-    "let V=(0,Iy.jsx)(`span`,{className:`min-w-0 truncate pr-1`,children:p});return [j,V]}",
+    "let V=(0,Iy.jsx)(`span`,{className:`text-fade-truncate pr-1`,children:p});return [j,V]}",
   ].join("");
+}
+
+function modelPickerStateBundleFixture() {
+  return [
+    "function picker(){",
+    "vz=wu(`composer-model-picker-menu-view-v1`,`simple`);",
+    "}",
+  ].join("");
+}
+
+function modelPickerMenuBundleFixture() {
+  return [
+    "function menu(){",
+    "id:`composer.intelligenceDropdown.model.title`;",
+    `const allowed=${MODEL_ALLOWLIST_MARKER};`,
+    "let ue=fragment;let de=ue,fe;",
+    "id:`composer.intelligenceDropdown.model.rowLabel`;",
+    "id:`composer.intelligenceDropdown.effort.title`;",
+    "let we=(0,c6.jsxs)(c6.Fragment,{children:[ye,effort]});",
+    "}",
+  ].join("");
+}
+
+function modelPickerPowerBundleFixture() {
+  return [
+    "function ARe(e){let t=PRe(FRe,e);if(t.length>=4)return t;let n=PRe(IRe,e);return n.length>=4?n:[]}",
+    "function MRe(e){return e?.flatMap(({displayName:e,model:t,supportedReasoningEfforts:n})=>{let r=e==null?`Custom`:e,i=n.flatMap(({reasoningEffort:e})=>[e]);return(i.length>0?i:[`medium`]).map(e=>({id:`${t}:${e}`,model:t,modelLabel:r,reasoningEffort:e}))})??[]}",
+    "function PRe(e,t){return e.flatMap((e,n)=>t?.some(t=>t.model===e.model&&t.supportedReasoningEfforts.some(({reasoningEffort:t})=>t===e.reasoningEffort))?[{...e,powerSettingIndex:n}]:[])}",
+    "var FRe=[{id:`gpt-5.6-terra:low`,model:`gpt-5.6-terra`,modelLabel:`5.6 Terra`,reasoningEffort:`low`},{id:`gpt-5.6-sol:low`,model:`gpt-5.6-sol`,modelLabel:`5.6 Sol`,reasoningEffort:`low`},{id:`gpt-5.6-sol:medium`,model:`gpt-5.6-sol`,modelLabel:`5.6 Sol`,reasoningEffort:`medium`},{id:`gpt-5.6-sol:high`,model:`gpt-5.6-sol`,modelLabel:`5.6 Sol`,reasoningEffort:`high`},{id:`gpt-5.6-sol:xhigh`,model:`gpt-5.6-sol`,modelLabel:`5.6 Sol`,reasoningEffort:`xhigh`},{id:`gpt-5.6-sol:ultra`,model:`gpt-5.6-sol`,modelLabel:`5.6 Sol`,reasoningEffort:`ultra`}];",
+    "var IRe=[{id:`gpt-5.6-terra:low`,model:`gpt-5.6-terra`,modelLabel:`5.6 Terra`,reasoningEffort:`low`},{id:`gpt-5.6-terra:medium`,model:`gpt-5.6-terra`,modelLabel:`5.6 Terra`,reasoningEffort:`medium`},{id:`gpt-5.6-terra:high`,model:`gpt-5.6-terra`,modelLabel:`5.6 Terra`,reasoningEffort:`high`},{id:`gpt-5.6-terra:xhigh`,model:`gpt-5.6-terra`,modelLabel:`5.6 Terra`,reasoningEffort:`xhigh`}];",
+  ].join("");
+}
+
+function filteredGpt56Models(enabledReasoningEfforts) {
+  const enabled = new Set(enabledReasoningEfforts);
+  return [
+    {
+      displayName: "GPT-5.6-Terra",
+      model: "gpt-5.6-terra",
+      supportedReasoningEfforts: ["low", "medium", "high", "xhigh"]
+        .filter((reasoningEffort) => enabled.has(reasoningEffort))
+        .map((reasoningEffort) => ({ reasoningEffort })),
+    },
+    {
+      displayName: "GPT-5.6-Sol",
+      model: "gpt-5.6-sol",
+      supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"]
+        .filter((reasoningEffort) => enabled.has(reasoningEffort))
+        .map((reasoningEffort) => ({ reasoningEffort })),
+    },
+  ];
+}
+
+function simplifiedChineseLocaleFixture() {
+  const labels = {
+    "composer.mode.local.reasoning.none.label": "无",
+    "composer.mode.local.reasoning.minimal.label": "极低",
+    "composer.mode.local.reasoning.low.label": "轻度",
+    "composer.mode.local.reasoning.medium.label": "中",
+    "composer.mode.local.reasoning.high.label": "高",
+    "composer.mode.local.reasoning.xhigh.label": "极高",
+    "composer.mode.local.reasoning.max.label": "最高",
+    "composer.mode.local.reasoning.ultra.label": "极高",
+  };
+  return Object.entries(labels)
+    .map(([key, value]) => `"${key}":\`${value}\``)
+    .join(",");
 }
 
 function applyPatchTwice(source, context) {
@@ -74,21 +160,228 @@ test("ui-tweaks is discoverable and disabled until listed in features.json", () 
     const descriptors = loadLinuxFeaturePatchDescriptors({ featuresRoot });
     assert.deepEqual(
       descriptors.map((descriptor) => [descriptor.id, descriptor.phase, descriptor.ciPolicy]),
-      [["feature:ui-tweaks:sidebar-project-name-style", "webview-asset", "optional"]],
+      [
+        ["feature:ui-tweaks:sidebar-project-name-style", "webview-asset", "optional"],
+        ["feature:ui-tweaks:model-picker-default-advanced-view", "webview-asset", "optional"],
+        ["feature:ui-tweaks:model-picker-include-gpt-5-6", "webview-asset", "optional"],
+        ["feature:ui-tweaks:model-picker-inline-model-list", "webview-asset", "optional"],
+        [
+          "feature:ui-tweaks:model-picker-dynamic-supported-reasoning-efforts",
+          "webview-asset",
+          "optional",
+        ],
+        ["feature:ui-tweaks:reasoning-effort-labels-english", "webview-asset", "optional"],
+      ],
     );
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
 });
 
+test("model picker descriptors target the current state and menu bundles", () => {
+  assert.match(
+    "app-initial~app-main~page-hSvsQcNf.js",
+    MODEL_PICKER_STATE_ASSET_PATTERN,
+  );
+  assert.match(
+    "app-initial~app-main~new-thread-panel-page~onboarding-page~projects-index-page~appgen-libra~ggy53w99-CqMu8hJo.js",
+    MODEL_PICKER_ALLOWLIST_ASSET_PATTERN,
+  );
+  assert.match(
+    "app-initial~app-main~new-thread-panel-page~onboarding-page~projects-index-page~appgen-libra~lpb6mnim-BqYcBFmq.js",
+    MODEL_PICKER_MENU_ASSET_PATTERN,
+  );
+  assert.doesNotMatch(
+    "app-initial~app-main~new-thread-panel-page~appgen-library-page~hotkey-window-thread-page~ho~iufn7mg3-MXsOJYYa.js",
+    MODEL_PICKER_STATE_ASSET_PATTERN,
+  );
+  assert.doesNotMatch(
+    "app-initial~app-main~onboarding-page~hotkey-window-thread-page~quick-chat-window-page~chatg~k0ede4gb-C17KDkOa.js",
+    MODEL_PICKER_ALLOWLIST_ASSET_PATTERN,
+  );
+  assert.doesNotMatch(
+    "app-initial~app-main~onboarding-page~hotkey-window-thread-page~quick-chat-window-page~chatg~k0ede4gb-C17KDkOa.js",
+    MODEL_PICKER_MENU_ASSET_PATTERN,
+  );
+});
+
+test("model picker opens advanced view and renders model choices inline", () => {
+  const stateSource = modelPickerStateBundleFixture();
+  const menuSource = modelPickerMenuBundleFixture();
+  const patchedState = applyDefaultAdvancedViewPatch(stateSource);
+  const allowlistedMenu = applyGpt56AllowlistPatch(menuSource);
+  const patchedMenu = applyInlineModelListPatch(allowlistedMenu);
+
+  assert.match(patchedState, ADVANCED_MENU_VIEW_PATTERN);
+  assert.doesNotMatch(patchedState, SIMPLE_MENU_VIEW_PATTERN);
+  assert.match(patchedMenu, new RegExp(GPT_56_ALLOWLIST_MARKER.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.doesNotMatch(patchedMenu, new RegExp(MODEL_ALLOWLIST_MARKER.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.match(patchedMenu, new RegExp(INLINE_MODEL_LIST_RUNTIME_MARKER));
+  assert.match(patchedMenu, /children:\[de,\/\*codex-linux-inline-model-list\*\//);
+  assert.equal(applyDefaultAdvancedViewPatch(patchedState), patchedState);
+  assert.equal(applyGpt56AllowlistPatch(patchedMenu), patchedMenu);
+  assert.equal(applyInlineModelListPatch(patchedMenu), patchedMenu);
+});
+
+test("GPT-5.6 allowlist behavior admits only visible GPT-5.6 models", () => {
+  const evaluateAvailability = ({ model, hidden, availableModels }) => {
+    const patchedExpression = applyGpt56AllowlistPatch(`return ${MODEL_ALLOWLIST_MARKER};`);
+    return Function("l", "t", "n", patchedExpression)(
+      true,
+      new Set(availableModels),
+      { model, hidden },
+    );
+  };
+
+  assert.equal(
+    evaluateAvailability({ model: "gpt-5.6-sol", hidden: false, availableModels: [] }),
+    true,
+  );
+  assert.equal(
+    evaluateAvailability({ model: "gpt-5.6-sol", hidden: true, availableModels: [] }),
+    false,
+  );
+  assert.equal(
+    evaluateAvailability({ model: "gpt-5.5-codex", hidden: false, availableModels: [] }),
+    false,
+  );
+  assert.equal(
+    evaluateAvailability({
+      model: "gpt-5.5-codex",
+      hidden: false,
+      availableModels: ["gpt-5.5-codex"],
+    }),
+    true,
+  );
+});
+
+test("GPT-5.6 Power slider follows reasoning efforts enabled in settings", () => {
+  const source = modelPickerPowerBundleFixture();
+  const patched = applyDynamicSupportedReasoningEffortsPatch(source);
+  const resolvePowerSelections = Function(`${patched};return ARe;`)();
+
+  assert.match(patched, new RegExp(DYNAMIC_POWER_EFFORTS_RUNTIME_MARKER));
+  assert.equal(applyDynamicSupportedReasoningEffortsPatch(patched), patched);
+  assert.deepEqual(
+    resolvePowerSelections(filteredGpt56Models(["low", "medium", "high", "xhigh", "max"]))
+      .map(({ id }) => id),
+    [
+      "gpt-5.6-terra:low",
+      "gpt-5.6-sol:low",
+      "gpt-5.6-sol:medium",
+      "gpt-5.6-sol:high",
+      "gpt-5.6-sol:xhigh",
+      "gpt-5.6-sol:max",
+    ],
+  );
+  assert.deepEqual(
+    resolvePowerSelections(filteredGpt56Models(["low", "medium", "high", "xhigh"]))
+      .map(({ id }) => id),
+    [
+      "gpt-5.6-terra:low",
+      "gpt-5.6-sol:low",
+      "gpt-5.6-sol:medium",
+      "gpt-5.6-sol:high",
+      "gpt-5.6-sol:xhigh",
+    ],
+  );
+});
+
+test("GPT-5.6 Power slider effort patch fails soft when upstream markers drift", () => {
+  const source = "function modelPickerPowerSelections(){return []}";
+  const { value, warnings } = withCapturedWarns(() =>
+    applyDynamicSupportedReasoningEffortsPatch(source, { warnOnMissingMarkers: true }),
+  );
+
+  assert.equal(value, source);
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /Could not find the supported reasoning effort mapper/);
+});
+
+test("model picker tweak can be disabled through feature settings", () => {
+  const stateSource = modelPickerStateBundleFixture();
+  const menuSource = modelPickerMenuBundleFixture();
+  const context = {
+    feature: {
+      settings: {
+        tweaks: {
+          modelPicker: {
+            showModelsByDefault: {
+              enabled: false,
+            },
+          },
+        },
+      },
+    },
+  };
+
+  assert.equal(applyDefaultAdvancedViewPatch(stateSource, context), stateSource);
+  assert.equal(applyGpt56AllowlistPatch(menuSource, context), menuSource);
+  assert.equal(applyInlineModelListPatch(menuSource, context), menuSource);
+  assert.equal(
+    applyDynamicSupportedReasoningEffortsPatch(modelPickerPowerBundleFixture(), context),
+    modelPickerPowerBundleFixture(),
+  );
+});
+
+test("model picker drift warns and leaves the asset unchanged", () => {
+  const source = "console.log('model picker drifted');";
+  const { value, warnings } = withCapturedWarns(() =>
+    applyDefaultAdvancedViewPatch(source, { warnOnMissingMarkers: true }),
+  );
+
+  assert.equal(value, source);
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /^WARN: Could not find the persisted model picker view marker/);
+});
+
+test("reasoning effort labels stay in English in the Simplified Chinese locale", () => {
+  const source = simplifiedChineseLocaleFixture();
+  const patched = applyEnglishReasoningLabels(source);
+
+  for (const [key, label] of Object.entries(ENGLISH_REASONING_LABELS)) {
+    assert.match(patched, new RegExp(`"${key.replaceAll(".", "\\.")}":\\\`${label}\\\``));
+  }
+  assert.equal(applyEnglishReasoningLabels(patched), patched);
+  assert.match("zh-CN-BPHwMaw8.js", ZH_CN_LOCALE_ASSET_PATTERN);
+  assert.doesNotMatch("zh-TW-rBlCyjlT.js", ZH_CN_LOCALE_ASSET_PATTERN);
+});
+
+test("English reasoning effort labels can be disabled", () => {
+  const source = simplifiedChineseLocaleFixture();
+  const context = {
+    feature: {
+      settings: {
+        tweaks: {
+          reasoning: {
+            keepEffortLabelsEnglish: {
+              enabled: false,
+            },
+          },
+        },
+      },
+    },
+  };
+
+  assert.equal(applyEnglishReasoningLabels(source, context), source);
+});
+
 test("sidebar project descriptor targets only the current project sidebar asset", () => {
   assert.match(
-    "app-initial~app-main~remote-conversation-page~projects-index-page-By2_tGIM.js",
+    "app-initial~app-main~projects-index-page~remote-conversation-page-CFT2LLOB.js",
+    PROJECTS_SIDEBAR_ASSET_PATTERN,
+  );
+  assert.doesNotMatch(
+    "app-initial~app-main~page-BF1QkwFT.js",
+    PROJECTS_SIDEBAR_ASSET_PATTERN,
+  );
+  assert.doesNotMatch(
+    "app-initial~app-main~automations-page-BcHjEK7e.js",
     PROJECTS_SIDEBAR_ASSET_PATTERN,
   );
   assert.doesNotMatch("projects-index-page-TFjtVwC4.js", PROJECTS_SIDEBAR_ASSET_PATTERN);
   assert.doesNotMatch(
-    "app-initial~app-main~remote-conversation-page~projects-index-page~hotkey-window-thread-page~hc7acb17-B7QwUDa9.js",
+    "app-initial~app-main~remote-conversation-page~projects-index-page-By2_tGIM.js",
     PROJECTS_SIDEBAR_ASSET_PATTERN,
   );
 });

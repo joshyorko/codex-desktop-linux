@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 #[derive(Debug, Parser)]
 #[command(name = "codex-update-manager")]
-#[command(about = "Local update manager for Codex Desktop on Linux")]
+#[command(about = "Local update manager for ChatGPT Desktop on Linux")]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Commands,
@@ -49,6 +49,11 @@ pub enum Commands {
         print_path: bool,
     },
     Status {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Print read-only post-update/runtime diagnostics for support and smoke checks.
+    Diagnose {
         #[arg(long)]
         json: bool,
     },

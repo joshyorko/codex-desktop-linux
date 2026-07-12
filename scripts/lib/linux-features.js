@@ -560,9 +560,26 @@ function modeString(mode) {
 function enabledLinuxFeatureInstallPlan(options = {}) {
   const resources = [];
   const runtimeHooks = [];
+  const installTargetOwners = new Map([
+    [STAGED_FEATURE_MANIFEST_RELATIVE_PATH, "Linux feature staging framework"],
+  ]);
+  const claimInstallTarget = (target, owner) => {
+    for (const [existingTarget, existingOwner] of installTargetOwners) {
+      const duplicate = target === existingTarget;
+      const overlap = duplicate
+        || target.startsWith(`${existingTarget}/`)
+        || existingTarget.startsWith(`${target}/`);
+      if (overlap) {
+        const kind = duplicate ? "Duplicate" : "Overlapping";
+        throw new Error(`${kind} Linux feature install target '${target}': ${owner} conflicts with '${existingTarget}' from ${existingOwner}`);
+      }
+    }
+    installTargetOwners.set(target, owner);
+  };
   for (const feature of loadEnabledLinuxFeatures(options)) {
     for (const [index, resource] of normalizeEntryList(feature.manifest.resources, "resource", feature).entries()) {
       const target = normalizeInstallTarget(resource.target, feature.id);
+      claimInstallTarget(target, `resource ${index + 1} for feature '${feature.id}'`);
       resources.push({
         id: feature.id,
         source: resource.source,
@@ -583,6 +600,8 @@ function enabledLinuxFeatureInstallPlan(options = {}) {
       }
       for (const [index, entry] of normalizeEntryList(hookSpec, `runtimeHooks.${hookKey}`, feature).entries()) {
         const name = `${feature.id}-${entry.name ?? path.basename(entry.source)}`;
+        const target = [".codex-linux", runtimeHook.dir, name].join("/");
+        claimInstallTarget(target, `runtimeHooks.${hookKey} ${index + 1} for feature '${feature.id}'`);
         runtimeHooks.push({
           id: feature.id,
           key: hookKey,
@@ -590,7 +609,7 @@ function enabledLinuxFeatureInstallPlan(options = {}) {
           name,
           mode: parseFileMode(entry.mode, runtimeHook.executable ? 0o755 : 0o644),
           dir: runtimeHook.dir,
-          target: [".codex-linux", runtimeHook.dir, name].join("/"),
+          target,
           index,
         });
       }
@@ -616,7 +635,110 @@ function chmodRecursive(target, mode) {
   }
 }
 
-function copyInstallFile(source, target, mode) {
+function pathStaysInside(root, candidate) {
+  const relative = path.relative(root, candidate);
+  return (
+    relative === "" ||
+    (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative))
+  );
+}
+
+function assertNoSymbolicLinks(target, label) {
+  const stat = fs.lstatSync(target);
+  if (stat.isSymbolicLink()) {
+    throw new Error(`${label} must not contain symbolic links`);
+  }
+  if (!stat.isDirectory()) {
+    return;
+  }
+  for (const name of fs.readdirSync(target)) {
+    assertNoSymbolicLinks(path.join(target, name), label);
+  }
+}
+
+function assertNoSymbolicLinksIfPresent(target, label) {
+  try {
+    assertNoSymbolicLinks(target, label);
+  } catch (error) {
+    if (error?.code !== "ENOENT") {
+      throw error;
+    }
+  }
+}
+
+function assertNoInstallPathSymbolicLinks(installDir, relativePath, label) {
+  let current = installDir;
+  for (const part of relativePathParts(relativePath)) {
+    current = path.join(current, part);
+    try {
+      const stat = fs.lstatSync(current);
+      if (stat.isSymbolicLink()) {
+        throw new Error(`${label} must not contain symbolic links`);
+      }
+    } catch (error) {
+      if (error?.code === "ENOENT") {
+        return;
+      }
+      throw error;
+    }
+  }
+}
+
+function assertInstallParentInside(installDir, target, label) {
+  const parent = path.dirname(target);
+  const relativeParent = path.relative(installDir, parent);
+  assertInstallPathInsideIfPresent(installDir, relativeParent, label);
+  fs.mkdirSync(parent, { recursive: true });
+  const installRoot = fs.realpathSync(installDir);
+  const realParent = fs.realpathSync(parent);
+  if (!pathStaysInside(installRoot, realParent)) {
+    throw new Error(`${label} must stay inside the install directory`);
+  }
+  if (relativeParent !== "" && !relativeParent.startsWith("..") && !path.isAbsolute(relativeParent)) {
+    assertNoInstallPathSymbolicLinks(installDir, relativeParent, label);
+  }
+}
+
+function assertInstallPathInsideIfPresent(installDir, relativePath, label) {
+  fs.mkdirSync(installDir, { recursive: true });
+  const installRoot = fs.realpathSync(installDir);
+  const parts = relativePathParts(relativePath);
+  for (let index = parts.length; index >= 0; index -= 1) {
+    const candidate = index === 0
+      ? installDir
+      : path.join(installDir, ...parts.slice(0, index));
+    try {
+      const realCandidate = fs.realpathSync(candidate);
+      if (!pathStaysInside(installRoot, realCandidate)) {
+        throw new Error(`${label} must stay inside the install directory`);
+      }
+      break;
+    } catch (error) {
+      if (error?.code !== "ENOENT") {
+        throw error;
+      }
+    }
+  }
+  assertNoInstallPathSymbolicLinks(installDir, relativePath, label);
+}
+
+function installRelativeDirectoryExists(installDir, relativePath, label) {
+  const { normalized, resolved } = resolveInstallRelativePath(installDir, relativePath, label);
+  assertInstallPathInsideIfPresent(installDir, normalized, label);
+  try {
+    return fs.lstatSync(resolved).isDirectory();
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      return false;
+    }
+    throw error;
+  }
+}
+
+function copyInstallFile(installDir, source, target, mode) {
+  assertNoSymbolicLinks(source, "Linux feature source");
+  assertInstallParentInside(installDir, target, "Linux feature target");
+  assertNoSymbolicLinksIfPresent(target, "Linux feature target");
   fs.mkdirSync(path.dirname(target), { recursive: true });
   fs.cpSync(source, target, { recursive: true, force: true });
   if (mode != null) {
@@ -682,6 +804,11 @@ function removeInstallRelativePath(installDir, relativePath) {
   if (normalized === STAGED_FEATURE_MANIFEST_RELATIVE_PATH) {
     return;
   }
+  assertInstallPathInsideIfPresent(
+    installDir,
+    normalized,
+    "Linux feature staged artifact target",
+  );
   fs.rmSync(resolved, { recursive: true, force: true });
 }
 
@@ -700,13 +827,14 @@ function removeLegacyDeclarativeRuntimeHooks(installDir, options = {}) {
     return;
   }
   for (const runtimeHook of Object.values(RUNTIME_HOOK_DIRS)) {
-    const hookDir = path.join(installDir, ".codex-linux", runtimeHook.dir);
-    if (!isDirectory(hookDir)) {
+    const hookDirRelative = [".codex-linux", runtimeHook.dir].join("/");
+    const hookDir = path.join(installDir, hookDirRelative);
+    if (!installRelativeDirectoryExists(installDir, hookDirRelative, "Linux feature runtime hook directory")) {
       continue;
     }
     for (const name of fs.readdirSync(hookDir)) {
       if (featureIds.some((id) => name.startsWith(`${id}-`))) {
-        fs.rmSync(path.join(hookDir, name), { recursive: true, force: true });
+        removeInstallRelativePath(installDir, path.join(hookDirRelative, name));
       }
     }
   }
@@ -735,12 +863,12 @@ function stageEnabledLinuxFeatureInstall(appDir, options = {}) {
     removePreviouslyStagedArtifacts(installDir, previousManifest);
   }
   for (const resource of plan.resources) {
-    copyInstallFile(resource.source, path.join(installDir, resource.target), resource.mode);
+    copyInstallFile(installDir, resource.source, path.join(installDir, resource.target), resource.mode);
     console.error(`Staged Linux feature resource: ${resource.id} -> ${resource.target}`);
   }
   for (const hook of plan.runtimeHooks) {
     const target = path.join(installDir, hook.target);
-    copyInstallFile(hook.source, target, hook.mode);
+    copyInstallFile(installDir, hook.source, target, hook.mode);
     console.error(`Staged Linux feature ${hook.key} hook: ${hook.id} -> ${path.relative(installDir, target)}`);
   }
   writeStagedFeatureManifest(installDir, plan);

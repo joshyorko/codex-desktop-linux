@@ -1403,122 +1403,7 @@ function hasLocalPatchSymbolDeclaration(source, symbol) {
   );
 }
 
-function findComputerUsePlatformGateFindings(inventory) {
-  const findings = [];
-  const nativeAppsQueryGatePattern =
-    /([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)&&\(([A-Za-z_$][\w$]*)===`macOS`\|\|\3===`windows`(?!\|\|\3===`linux`)\)/g;
-  const nativeAppMentionSectionPattern =
-    /([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)===`macOS`\|\|\2===`windows`(?!\|\|\2===`linux`)/g;
-  const nativeAppSettingsCardPattern =
-    /if\(([A-Za-z_$][\w$]*)&&\(([A-Za-z_$][\w$]*)===`macOS`\|\|\2===`windows`(?!\|\|\2===`linux`)\)\)for\(let ([A-Za-z_$][\w$]*) of ([A-Za-z_$][\w$]*)\)\{/g;
-  const nativeAppIconQueryGatePattern =
-    /([A-Za-z_$][\w$]*)=\(([A-Za-z_$][\w$]*)===`macOS`\|\|\2===`windows`(?!\|\|\2===`linux`)\)&&([A-Za-z_$][\w$]*)!=null&&\3!==``/g;
-  const pluginRegistrationRolloutGatePattern =
-    /(?:isEnabled|isAvailable):\(\{features:([A-Za-z_$][\w$]*),platform:([A-Za-z_$][\w$]*)\}\)=>\(\2===`darwin`\|\|\2===`linux`\)&&\1\.computerUse/g;
-  for (const file of inventory.files) {
-    if (file.text == null) {
-      continue;
-    }
-    if (file.text.includes("`native-desktop-apps`") && file.text.includes("nativeApps:")) {
-      for (const match of file.text.matchAll(nativeAppsQueryGatePattern)) {
-        const nextSource = file.text.slice(match.index + match[0].length, match.index + match[0].length + 1400);
-        if (!nextSource.includes("`native-desktop-apps`") || !nextSource.includes("nativeApps:")) {
-          continue;
-        }
-        findings.push({
-          path: file.relativePath,
-          reason: "Computer Use native app query is still gated to macOS/Windows after Linux patching",
-          snippet: textSnippet(file.text, match[0]),
-          symbol: "computer-use-native-apps-linux-gate",
-        });
-      }
-    }
-    if (
-      file.text.includes("computerUsePlugin:") &&
-      file.text.includes("chromeAppPlugins:") &&
-      file.text.includes("microsoftExcelAppPlugins:")
-    ) {
-      for (const match of file.text.matchAll(nativeAppMentionSectionPattern)) {
-        const nextSource = file.text.slice(match.index + match[0].length, match.index + match[0].length + 1600);
-        if (
-          !nextSource.includes("computerUsePlugin:") ||
-          !nextSource.includes("chromeAppPlugins:") ||
-          !nextSource.includes("microsoftExcelAppPlugins:")
-        ) {
-          continue;
-        }
-        findings.push({
-          path: file.relativePath,
-          reason: "Computer Use composer native-app mention section is still gated to macOS/Windows after Linux patching",
-          snippet: textSnippet(file.text, match[0]),
-          symbol: "computer-use-composer-native-app-mentions-linux-gate",
-        });
-      }
-    }
-    if (
-      file.text.includes("appControlId") &&
-      file.text.includes("toggleAriaLabel") &&
-      file.text.includes("plugin.installed")
-    ) {
-      for (const match of file.text.matchAll(nativeAppSettingsCardPattern)) {
-        const nextSource = file.text.slice(match.index + match[0].length, match.index + match[0].length + 1800);
-        if (
-          !nextSource.includes("appControlId") ||
-          !nextSource.includes("toggleAriaLabel") ||
-          !nextSource.includes("plugin.installed")
-        ) {
-          continue;
-        }
-        findings.push({
-          path: file.relativePath,
-          reason: "Computer Use settings native app cards are still gated to macOS/Windows after Linux patching",
-          snippet: textSnippet(file.text, match[0]),
-          symbol: "computer-use-settings-native-app-card-linux-gate",
-        });
-      }
-    }
-    if (file.text.includes("`computer-use-native-desktop-app-icon`")) {
-      for (const match of file.text.matchAll(nativeAppIconQueryGatePattern)) {
-        const nextSource = file.text.slice(match.index + match[0].length, match.index + match[0].length + 1200);
-        if (!nextSource.includes("`computer-use-native-desktop-app-icon`")) {
-          continue;
-        }
-        findings.push({
-          path: file.relativePath,
-          reason: "Computer Use native app icon query is still gated to macOS/Windows after Linux patching",
-          snippet: textSnippet(file.text, match[0]),
-          symbol: "computer-use-native-app-icon-linux-gate",
-        });
-      }
-    }
-    if (file.text.includes("installWhenMissing:!0")) {
-      for (const match of file.text.matchAll(pluginRegistrationRolloutGatePattern)) {
-        findings.push({
-          path: file.relativePath,
-          reason: "Linux Computer Use plugin registration still depends on the upstream rollout flag",
-          snippet: textSnippet(file.text, match[0]),
-          symbol: "computer-use-plugin-registration-rollout-gate",
-        });
-      }
-    }
-    if (
-      file.text.includes("computer-use-plugin-icon-linux.png") &&
-      file.text.includes("availablePlugins.some") &&
-      file.text.includes("plugin?.name") &&
-      !file.text.includes("e.plugin?.installed===!0&&e.plugin?.enabled===!0")
-    ) {
-      findings.push({
-        path: file.relativePath,
-        reason: "Synthetic Linux Computer Use settings plugin can be masked by an unavailable upstream entry",
-        snippet: textSnippet(file.text, "computer-use-plugin-icon-linux.png"),
-        symbol: "computer-use-settings-synthetic-plugin-mask",
-      });
-    }
-  }
-  return findings;
-}
-
-function findPostPatchIntegrityFindings(inventory, options = {}) {
+function findPostPatchIntegrityFindings(inventory) {
   const findings = [];
   for (const file of inventory.files) {
     if (file.text == null) {
@@ -1536,9 +1421,6 @@ function findPostPatchIntegrityFindings(inventory, options = {}) {
         symbol,
       });
     }
-  }
-  if (options.includeComputerUsePlatformGates === true) {
-    findings.push(...findComputerUsePlatformGateFindings(inventory));
   }
   return findings.sort((a, b) => `${a.symbol}:${a.path}`.localeCompare(`${b.symbol}:${b.path}`));
 }
@@ -3153,8 +3035,6 @@ module.exports = {
   compareMaps,
   extractProtectedSurfaces,
   findPostPatchIntegrityFindings,
-  mergeProvenance,
-  prepareRequiredPatchPreflightApp,
   renderActionPlanMarkdown,
   renderDriftMarkdown,
   resolveBaselinePath,
