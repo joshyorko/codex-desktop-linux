@@ -2,7 +2,7 @@
 "use strict";
 
 const assert = require("node:assert/strict");
-const { spawn, spawnSync } = require("node:child_process");
+const { spawnSync } = require("node:child_process");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
@@ -289,19 +289,6 @@ function syntheticCurrentStatusWaitBundle() {
   ].join("");
 }
 
-function syntheticCurrentAppServerManagerStatusBundle() {
-  return [
-    "var q={error(){}};var SP={},CP={},xP=new WeakMap;",
-    "function j5t(e,t){let n=xP.get(e);n??(n=new Map,xP.set(e,n));let r=(n.get(t)??0)+1;return n.set(t,r),r}",
-    "function M5t(e,t,n){return xP.get(e)?.get(t)===n}",
-    "function O5t(e,t,n){n?.status===`connected`&&e.set(CP,t,!1),e.set(SP,t,n)}",
-    "function D5t(e,t){let n=t.getHostId(),r=j5t(e,n),i=e.get(SP,n);t.addNotificationCallback(`remoteControl/status/changed`,({params:t})=>{M5t(e,n,r)&&O5t(e,n,t)}),t.sendRequest(`remoteControl/status/read`,void 0).then(t=>{e.get(SP,n)===i&&M5t(e,n,r)&&O5t(e,n,t)}).catch(t=>{M5t(e,n,r)&&q.error(`Failed to read remote-control status`,{safe:{},sensitive:{error:t}})})}",
-    "function A5t(e,t,{ignoreCurrentError:n=!1}={}){return new Promise((n,r)=>{let a=!1,o,s=e=>{a||(a=!0,clearTimeout(c),o?.(),e instanceof Error?r(e):n(e))},c=setTimeout(()=>{s(Error(`Timed out waiting for remote control to connect`))},F5t);o=e.watch(()=>{})})}",
-    "function V5t(e){return e.subscribe(`remoteControl/status/changed`,()=>{})}",
-    "var F5t,SP,CP,wP;F5t=5e3,SP=va(G,e=>null),CP=va(G,e=>!1),wP=ya(G,(e,{get:t})=>t(SP,e));",
-  ].join("");
-}
-
 function syntheticAppMainActiveStatusBundle() {
   return [
     "function pS({latestTurnStatus:e,resumeState:t,streamRole:n,threadRuntimeStatus:r}){return n==null?t===`needs_resume`?`needs-resume`:`read-only`:n.role===`follower`?`follower`:r?.type===`active`||e===`inProgress`?`active`:`inactive`}",
@@ -367,7 +354,6 @@ function captureWarnings(fn) {
 
 const COLD_START_TEST_ENV_KEYS = [
   "CODEX_HOME",
-  "CODEX_LINUX_APP_ID",
   "CODEX_LINUX_APP_DIR",
   "CODEX_REMOTE_CONTROL_CODEX_PATH",
   "CODEX_REMOTE_CONTROL_CODEX_RELEASE",
@@ -414,68 +400,6 @@ function writeDesktopAppServerRemoteControlMarker(appDir) {
   const marker = path.join(appDir, ".codex-linux", "desktop-app-server-remote-control-enabled");
   fs.mkdirSync(path.dirname(marker), { recursive: true });
   fs.writeFileSync(marker, "desktop-app-server-remote-control\n");
-}
-
-function processAlive(pid) {
-  try {
-    process.kill(pid, 0);
-    const status = fs.readFileSync(`/proc/${pid}/status`, "utf8");
-    if (/^State:\s+Z\b/m.test(status)) {
-      return false;
-    }
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function sleepSync(ms) {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
-}
-
-function waitForProcessAlive(pid, timeoutMs = 2000) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (processAlive(pid)) {
-      return true;
-    }
-    sleepSync(25);
-  }
-  return false;
-}
-
-function waitForProcessExit(pid, timeoutMs = 3000) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (!processAlive(pid)) {
-      return true;
-    }
-    sleepSync(25);
-  }
-  return false;
-}
-
-function spawnRemoteControlAppServer({ appDir, appId, codexPath }) {
-  const appServerScript = path.join(appDir, "app-server");
-  fs.writeFileSync(
-    appServerScript,
-    "process.on('SIGTERM', () => process.exit(0));\nsetInterval(() => {}, 1000);\n",
-  );
-  return spawn("bash", [
-    "-c",
-    'exec -a "$0" "$1" app-server --remote-control --analytics-default-enabled',
-    codexPath,
-    process.execPath,
-  ], {
-    cwd: appDir,
-    detached: false,
-    env: {
-      ...process.env,
-      CODEX_LINUX_APP_DIR: appDir,
-      CODEX_LINUX_APP_ID: appId,
-    },
-    stdio: "ignore",
-  });
 }
 
 test("remote mobile control feature stays disabled until listed in features.json", () => {
@@ -709,92 +633,6 @@ test("remote mobile cold-start hook skips daemon when Desktop app-server owns re
   }
 });
 
-test("remote mobile cold-start hook reaps stale Desktop remote-control app-server from previous app dir", () => {
-  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "codex-remote-mobile-cold-start-"));
-  let appServer;
-  try {
-    const home = path.join(tempRoot, "home");
-    const codexHome = path.join(tempRoot, "codex-home");
-    const currentAppDir = path.join(tempRoot, "package", "share", "codex-desktop", "app");
-    const staleAppDir = path.join(tempRoot, "package.old", "share", "codex-desktop", "app");
-    const fakeCodex = path.join(tempRoot, "bin", "codex");
-    const appId = `codex-desktop-test-${process.pid}`;
-
-    fs.mkdirSync(home, { recursive: true });
-    fs.mkdirSync(currentAppDir, { recursive: true });
-    fs.mkdirSync(staleAppDir, { recursive: true });
-    fs.mkdirSync(path.dirname(fakeCodex), { recursive: true });
-    writeDesktopAppServerRemoteControlMarker(currentAppDir);
-    fs.writeFileSync(
-      fakeCodex,
-      "#!/usr/bin/env sh\ntrap 'exit 0' TERM INT\nwhile :; do sleep 1; done\n",
-    );
-    fs.chmodSync(fakeCodex, 0o755);
-
-    appServer = spawnRemoteControlAppServer({ appDir: staleAppDir, appId, codexPath: fakeCodex });
-    assert.equal(waitForProcessAlive(appServer.pid), true, "fake stale app-server did not start");
-
-    const result = runColdStartHook({
-      CODEX_HOME: codexHome,
-      CODEX_LINUX_APP_DIR: currentAppDir,
-      CODEX_LINUX_APP_ID: appId,
-      CODEX_REMOTE_CONTROL_RUNTIME_AUTO_INSTALL_DISABLED: "1",
-      HOME: home,
-    });
-
-    assert.equal(result.status, 0, result.stderr || result.stdout);
-    assert.match(result.stdout, /Stopping stale Desktop remote-control app-server/);
-    assert.equal(waitForProcessExit(appServer.pid), true, "stale app-server was not reaped");
-  } finally {
-    if (appServer != null && processAlive(appServer.pid)) {
-      appServer.kill("SIGKILL");
-    }
-    fs.rmSync(tempRoot, { recursive: true, force: true });
-  }
-});
-
-test("remote mobile cold-start hook preserves current Desktop remote-control app-server", () => {
-  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "codex-remote-mobile-cold-start-"));
-  let appServer;
-  try {
-    const home = path.join(tempRoot, "home");
-    const codexHome = path.join(tempRoot, "codex-home");
-    const currentAppDir = path.join(tempRoot, "package", "share", "codex-desktop", "app");
-    const fakeCodex = path.join(tempRoot, "bin", "codex");
-    const appId = `codex-desktop-test-${process.pid}`;
-
-    fs.mkdirSync(home, { recursive: true });
-    fs.mkdirSync(currentAppDir, { recursive: true });
-    fs.mkdirSync(path.dirname(fakeCodex), { recursive: true });
-    writeDesktopAppServerRemoteControlMarker(currentAppDir);
-    fs.writeFileSync(
-      fakeCodex,
-      "#!/usr/bin/env sh\ntrap 'exit 0' TERM INT\nwhile :; do sleep 1; done\n",
-    );
-    fs.chmodSync(fakeCodex, 0o755);
-
-    appServer = spawnRemoteControlAppServer({ appDir: currentAppDir, appId, codexPath: fakeCodex });
-    assert.equal(waitForProcessAlive(appServer.pid), true, "fake current app-server did not start");
-
-    const result = runColdStartHook({
-      CODEX_HOME: codexHome,
-      CODEX_LINUX_APP_DIR: currentAppDir,
-      CODEX_LINUX_APP_ID: appId,
-      CODEX_REMOTE_CONTROL_RUNTIME_AUTO_INSTALL_DISABLED: "1",
-      HOME: home,
-    });
-
-    assert.equal(result.status, 0, result.stderr || result.stdout);
-    assert.doesNotMatch(result.stdout, /Stopping stale Desktop remote-control app-server/);
-    assert.equal(processAlive(appServer.pid), true, "current app-server was reaped");
-  } finally {
-    if (appServer != null && processAlive(appServer.pid)) {
-      appServer.kill("SIGKILL");
-    }
-    fs.rmSync(tempRoot, { recursive: true, force: true });
-  }
-});
-
 test("remote mobile cold-start hook removes dead standalone daemon pid files when Desktop app-server owns remote-control", () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "codex-remote-mobile-cold-start-"));
   try {
@@ -960,15 +798,6 @@ test("remote mobile control feature exposes opt-in main-bundle and webview patch
     assert.ok(statusWaitDescriptor);
     assert.equal(statusWaitDescriptor.pattern.test(UNIFIED_REMOTE_CONVERSATION_ASSET), true);
     assert.equal(statusWaitDescriptor.pattern.test(OLD_APP_SERVER_MANAGER_ASSET), false);
-
-    const currentStatusBundle =
-      "app-initial~app-main~pull-request-code-review~onboarding-page~hotkey-window-thread-page~cha~b76hmflu-y0KJWbm3.js";
-    assert.equal(statusGuardDescriptor.pattern.test(currentStatusBundle), true);
-    const statusWaitDescriptor = descriptors.find((descriptor) =>
-      descriptor.id === "feature:remote-mobile-control:linux-remote-control-status-wait"
-    );
-    assert.ok(statusWaitDescriptor);
-    assert.equal(statusWaitDescriptor.pattern.test(currentStatusBundle), true);
 
     const hydrationDescriptor = descriptors.find((descriptor) =>
       descriptor.id === "feature:remote-mobile-control:linux-remote-mobile-conversation-hydration"

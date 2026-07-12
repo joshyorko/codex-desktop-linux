@@ -13,14 +13,6 @@ const {
   linuxSettingsKeys,
 } = require("../lib/settings-keys.js");
 
-function inferNodeModuleAliasByShape(currentSource, methodName) {
-  const methodPattern = new RegExp(
-    `(?:let|,)\\s*([A-Za-z_$][\\w$]*)=\\{\\s*(?:default:\\s*)?\\{?\\s*${escapeRegExp(methodName)}\\(`,
-    "u",
-  );
-  return currentSource.match(methodPattern)?.[1] ?? null;
-}
-
 // Launch-action patches keep second launches, hotkey windows, and persisted
 // Linux settings coordinated with the generated launcher.
 const linuxQuitStateHelpers =
@@ -109,7 +101,6 @@ function applyLinuxSettingsPersistencePatch(currentSource) {
 }
 
 function buildSemanticLinuxLaunchActionPatch({
-  currentSource,
   setterVar,
   deepLinksVar,
   fallbackFn,
@@ -142,22 +133,10 @@ function buildSemanticLinuxLaunchActionPatch({
 
   const ensureHostWindowCall = hostExpr == null ? `${windowManagerVar}.ensureHostWindow()` : `${windowManagerVar}.ensureHostWindow(${hostExpr})`;
   const createFreshWindow = freshWindowExpr ?? ((pathExpr) => `${windowManagerVar}.${createFreshWindowMethod}(${pathExpr})`);
-  const pathRequireExpr = "require(`node:path`)";
-  const fsRequireExpr = "require(`node:fs`)";
-  const netRequireExpr = "require(`node:net`)";
-  const pathAlias = inferModuleAlias(currentSource, "node:path")
-    ?? inferNodeModuleAliasByShape(currentSource, "dirname");
-  const fsAlias = inferModuleAlias(currentSource, "node:fs")
-    ?? inferNodeModuleAliasByShape(currentSource, "mkdirSync");
-  const netAlias = inferModuleAlias(currentSource, "node:net")
-    ?? inferNodeModuleAliasByShape(currentSource, "createServer");
-  const pathModuleExpr = currentSource.includes(pathRequireExpr) || pathAlias == null ? pathRequireExpr : `${pathAlias}.default??${pathAlias}`;
-  const fsModuleExpr = currentSource.includes(fsRequireExpr) || fsAlias == null ? fsRequireExpr : `${fsAlias}.default??${fsAlias}`;
-  const netModuleExpr = currentSource.includes(netRequireExpr) || netAlias == null ? netRequireExpr : `${netAlias}.default??${netAlias}`;
   const defaultSocket =
-    `codexLinuxDefaultLaunchActionSocket=()=>{let e=codexLinuxLaunchActionAppId(),t=codexLinuxLaunchActionInstanceId(),n=process.env.XDG_RUNTIME_DIR?.trim(),codexLinuxPathModule=${pathModuleExpr};if(n&&n.length>0)return t?codexLinuxPathModule.join(n,e,\`instances\`,t,\`launch-action.sock\`):codexLinuxPathModule.join(n,e,\`launch-action.sock\`);let r=process.env.XDG_STATE_HOME?.trim(),i=process.env.HOME?.trim();if((!r||r.length===0)&&i&&i.length>0)r=codexLinuxPathModule.join(i,\`.local\`,\`state\`);if(!r||r.length===0)return null;return t?codexLinuxPathModule.join(r,e,\`instances\`,t,\`launch-action.sock\`):codexLinuxPathModule.join(r,e,\`launch-action.sock\`)}`;
+    "codexLinuxDefaultLaunchActionSocket=()=>{let e=codexLinuxLaunchActionAppId(),t=codexLinuxLaunchActionInstanceId(),n=process.env.XDG_RUNTIME_DIR?.trim(),r=require(`node:path`);if(n&&n.length>0)return t?r.join(n,e,`instances`,t,`launch-action.sock`):r.join(n,e,`launch-action.sock`);let i=process.env.XDG_STATE_HOME?.trim(),a=process.env.HOME?.trim();if((!i||i.length===0)&&a&&a.length>0)i=r.join(a,`.local`,`state`);if(!i||i.length===0)return null;return t?r.join(i,e,`instances`,t,`launch-action.sock`):r.join(i,e,`launch-action.sock`)}";
   const startSocket =
-    `codexLinuxStartLaunchActionSocket=()=>{if(process.platform!==\`linux\`)return;try{let e=process.env.CODEX_DESKTOP_LAUNCH_ACTION_SOCKET?.trim()||codexLinuxDefaultLaunchActionSocket();if(!e||!codexLinuxIsWarmStartEnabled())return;let codexLinuxPathModule=${pathModuleExpr},codexLinuxFsModule=${fsModuleExpr},codexLinuxNetModule=${netModuleExpr};codexLinuxFsModule.mkdirSync(codexLinuxPathModule.dirname(e),{recursive:!0,mode:448}),codexLinuxFsModule.rmSync(e,{force:!0});let a=codexLinuxNetModule.createServer(t=>{let n=\`\`,r=!1,i=()=>{if(r)return;r=!0;let i=[];try{let e=JSON.parse(n.trim());Array.isArray(e.argv)&&(i=e.argv.filter(e=>typeof e===\`string\`))}catch(e){t.end?.(\`error\\n\`);return}codexLinuxHandleLaunchActionArgs(i).then(e=>e?void 0:${fallbackFn}()).then(()=>{t.end?.(\`ok\\n\`)}).catch(e=>{${reporterVar}.reportNonFatal(e instanceof Error?e:\`Failed to handle Linux launch action socket\`,{kind:\`linux-launch-action-socket-failed\`}),t.end?.(\`error\\n\`)})};t.on(\`error\`,e=>{${reporterVar}.reportNonFatal(e instanceof Error?e:\`Failed Linux launch action socket client\`,{kind:\`linux-launch-action-socket-client-error\`})}),t.setEncoding?.(\`utf8\`),t.on(\`data\`,e=>{n+=e,n.includes(\`\\n\`)?i():n.length>65536&&t.destroy()}),t.on(\`end\`,i)});a.on(\`error\`,e=>{${reporterVar}.reportNonFatal(e instanceof Error?e:\`Failed Linux launch action socket\`,{kind:\`linux-launch-action-socket-error\`})}),a.listen(e),${disposableVar}.add(()=>{a.close(),codexLinuxFsModule.rmSync(e,{force:!0})})}catch(e){${reporterVar}.reportNonFatal(e instanceof Error?e:\`Failed to start Linux launch action socket\`,{kind:\`linux-launch-action-socket-start-failed\`})}}`;
+    `codexLinuxStartLaunchActionSocket=()=>{if(process.platform!==\`linux\`)return;try{let e=process.env.CODEX_DESKTOP_LAUNCH_ACTION_SOCKET?.trim()||codexLinuxDefaultLaunchActionSocket();if(!e||!codexLinuxIsWarmStartEnabled())return;let n=require(\`node:path\`),r=require(\`node:fs\`),i=require(\`node:net\`);r.mkdirSync(n.dirname(e),{recursive:!0,mode:448}),r.rmSync(e,{force:!0});let a=i.createServer(t=>{let n=\`\`,r=!1,i=()=>{if(r)return;r=!0;let i=[];try{let e=JSON.parse(n.trim());Array.isArray(e.argv)&&(i=e.argv.filter(e=>typeof e===\`string\`))}catch(e){t.end?.(\`error\\n\`);return}codexLinuxHandleLaunchActionArgs(i).then(e=>e?void 0:${fallbackFn}()).then(()=>{t.end?.(\`ok\\n\`)}).catch(e=>{${reporterVar}.reportNonFatal(e instanceof Error?e:\`Failed to handle Linux launch action socket\`,{kind:\`linux-launch-action-socket-failed\`}),t.end?.(\`error\\n\`)})};t.on(\`error\`,e=>{${reporterVar}.reportNonFatal(e instanceof Error?e:\`Failed Linux launch action socket client\`,{kind:\`linux-launch-action-socket-client-error\`})}),t.setEncoding?.(\`utf8\`),t.on(\`data\`,e=>{n+=e,n.includes(\`\\n\`)?i():n.length>65536&&t.destroy()}),t.on(\`end\`,i)});a.on(\`error\`,e=>{${reporterVar}.reportNonFatal(e instanceof Error?e:\`Failed Linux launch action socket\`,{kind:\`linux-launch-action-socket-error\`})}),a.listen(e),${disposableVar}.add(()=>{a.close(),r.rmSync(e,{force:!0})})}catch(e){${reporterVar}.reportNonFatal(e instanceof Error?e:\`Failed to start Linux launch action socket\`,{kind:\`linux-launch-action-socket-start-failed\`})}}`;
   return `${quitState}codexLinuxGetSetting=e=>process.platform!==\`linux\`||${globalStateExpr}.get(e)!==!1,codexLinuxIsTrayEnabled=()=>codexLinuxGetSetting(\`${linuxSettingsKeys.systemTray}\`),codexLinuxIsWarmStartEnabled=()=>codexLinuxGetSetting(\`${linuxSettingsKeys.warmStart}\`),codexLinuxIsPromptWindowEnabled=()=>codexLinuxGetSetting(\`${linuxSettingsKeys.promptWindow}\`),codexLinuxLaunchActionAppId=()=>{let e=process.env.CODEX_LINUX_APP_ID||process.env.CODEX_APP_ID||\`codex-desktop\`;return/^[A-Za-z0-9._-]+$/.test(e)?e:\`codex-desktop\`},codexLinuxLaunchActionInstanceId=()=>{let e=process.env.CODEX_LINUX_INSTANCE_ID?.trim();return e&&/^[A-Za-z0-9._-]+$/.test(e)?e:null},${defaultSocket},${openerFn}=async(e,t)=>{${windowManagerVar}.hotkeyWindowLifecycleManager.hide();let ${currentWindowVar}=${getPrimaryWindowCall},${createdWindowVar}=${currentWindowVar}??await ${createFreshWindow("e")};${createdWindowVar}!=null&&(${notificationPrefix}${currentWindowVar}!=null&&t.navigateExistingWindow&&${routeVar}.navigateToRoute(${createdWindowVar},e),${focusFn}(${createdWindowVar}))},codexLinuxGetHotkeyWindowController=()=>typeof ${windowManagerVar}.hotkeyWindowLifecycleManager.ensureHotkeyWindowController===\`function\`?${windowManagerVar}.hotkeyWindowLifecycleManager.ensureHotkeyWindowController():${windowManagerVar}.hotkeyWindowLifecycleManager,codexLinuxShowHotkeyWindow=async()=>{let e=codexLinuxGetHotkeyWindowController();typeof e.openHome===\`function\`?await e.openHome():typeof e.show===\`function\`?await e.show():await ${ensureHostWindowCall}},codexLinuxOpenQuickChat=async()=>{${windowManagerVar}.hotkeyWindowLifecycleManager.hide();let e=${getPrimaryWindowCall},t=e??await ${createFreshWindow("`/`")};t!=null&&(${windowManagerVar}.windowManager.sendMessageToWindow(t,{type:\`new-quick-chat\`}),${focusFn}(t))},codexLinuxHasDeepLink=e=>Array.isArray(e)&&e.some(e=>typeof e===\`string\`&&(e.startsWith(\`codex://\`)||e.startsWith(\`codex-browser-sidebar://\`))),codexLinuxHandleLaunchActionArgs=async e=>(typeof codexLinuxIsQuitInProgress===\`function\`&&codexLinuxIsQuitInProgress())?!0:codexLinuxHasDeepLink(e)&&${deepLinksVar}.deepLinks.queueProcessArgs(e)?!0:Array.isArray(e)&&(e.includes(\`--prompt-chat\`)||e.includes(\`--hotkey-window\`))?(codexLinuxIsPromptWindowEnabled()?(await codexLinuxShowHotkeyWindow(),!0):!1):Array.isArray(e)&&e.includes(\`--quick-chat\`)?(await codexLinuxOpenQuickChat(),!0):Array.isArray(e)&&e.includes(\`--new-chat\`)?(await ${openerFn}(\`/\`,{navigateExistingWindow:!0}),!0):!1,codexLinuxHandleLaunchActionArgsFallback=(e,t)=>{if(typeof codexLinuxIsQuitInProgress===\`function\`&&codexLinuxIsQuitInProgress())return;codexLinuxHandleLaunchActionArgs(e).then(e=>{e||t()}).catch(e=>{${reporterVar}.reportNonFatal(e instanceof Error?e:\`Failed to handle Linux launch action\`,{kind:\`linux-launch-action-failed\`}),t()})},codexLinuxPrewarmHotkeyWindow=()=>{if(!codexLinuxIsPromptWindowEnabled())return;try{let e=codexLinuxGetHotkeyWindowController();typeof e.prewarm===\`function\`&&e.prewarm()}catch(e){${reporterVar}.reportNonFatal(e instanceof Error?e:\`Failed to prewarm Linux hotkey window\`,{kind:\`linux-hotkey-window-prewarm-failed\`})}},${startSocket}${directHandler};${startup}`;
 }
 
@@ -232,7 +211,6 @@ function applyCurrentSemanticLinuxLaunchActionArgsPatch(currentSource) {
       /([A-Za-z_$][\w$]*)\.desktopNotificationManager\.dismissByNavigationPath\(e\)/,
     )?.[1] ?? null;
     const replacement = buildSemanticLinuxLaunchActionPatch({
-      currentSource,
       setterVar,
       deepLinksVar,
       fallbackFn,

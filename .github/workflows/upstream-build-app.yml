@@ -1,0 +1,257 @@
+name: Upstream Build App
+
+on:
+  schedule:
+    - cron: '30 * * * *'
+  pull_request:
+    paths:
+      - install.sh
+      - Makefile
+      - scripts/patch-linux-window-ui.js
+      - scripts/patch-linux-window-ui.test.js
+      - scripts/patches/**
+      - scripts/ci/validate-patch-report.js
+      - scripts/ci/upstream-dmg-*.js
+      - scripts/validate-upstream-dmg.js
+      - scripts/lib/candidate-install.sh
+      - scripts/lib/patch-validation.js
+      - scripts/lib/upstream-dmg-acceptance.js
+      - scripts/lib/upstream-dmg-release-profile.js
+      - .github/workflows/upstream-build-app.yml
+  push:
+    branches:
+      - main
+    paths:
+      - install.sh
+      - Makefile
+      - scripts/patch-linux-window-ui.js
+      - scripts/patch-linux-window-ui.test.js
+      - scripts/patches/**
+      - scripts/ci/validate-patch-report.js
+      - scripts/ci/upstream-dmg-*.js
+      - scripts/validate-upstream-dmg.js
+      - scripts/lib/candidate-install.sh
+      - scripts/lib/patch-validation.js
+      - scripts/lib/upstream-dmg-acceptance.js
+      - scripts/lib/upstream-dmg-release-profile.js
+      - .github/workflows/upstream-build-app.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: upstream-dmg-acceptance-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  UPSTREAM_DMG_URL: https://persistent.oaistatic.com/codex-app-prod/ChatGPT.dmg
+  UPSTREAM_DMG_PATH: /tmp/codex-upstream-ci/Codex.dmg
+  DMG_CACHE_SCHEMA_VERSION: v1
+
+jobs:
+  build-app-upstream-dmg:
+    name: Build App Against Upstream DMG
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Install build dependencies
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y p7zip-full make g++ python3 curl unzip
+
+      - name: Capture upstream DMG metadata
+        id: upstream-metadata
+        run: |
+          set -euo pipefail
+
+          headers_file="$(mktemp)"
+          trap 'rm -f "$headers_file"' EXIT
+
+          curl -fsSLI "$UPSTREAM_DMG_URL" > "$headers_file"
+
+          # Match header names case-insensitively without gawk's IGNORECASE,
+          # which is a no-op under mawk (the default awk on ubuntu runners).
+          last_modified="$(awk 'tolower($0) ~ /^last-modified:/ {sub(/\r$/,""); sub(/^[^:]+: /,""); print; exit}' "$headers_file")"
+          etag="$(awk 'tolower($0) ~ /^etag:/ {sub(/\r$/,""); sub(/^[^:]+: /,""); gsub(/"/,""); print; exit}' "$headers_file")"
+          content_length="$(awk 'tolower($0) ~ /^content-length:/ {sub(/\r$/,""); sub(/^[^:]+: /,""); print; exit}' "$headers_file")"
+
+          if [ -z "$last_modified" ]; then
+            last_modified="unknown"
+          fi
+          if [ -z "$etag" ]; then
+            etag="no-etag"
+          fi
+          if [ -z "$content_length" ]; then
+            content_length="unknown"
+          fi
+
+          cache_segment="$(printf '%s|%s|%s\n' "$last_modified" "$etag" "$content_length" | sha256sum | cut -d' ' -f1)"
+
+          {
+            echo "last_modified=$last_modified"
+            echo "etag=$etag"
+            echo "content_length=$content_length"
+            echo "cache_segment=$cache_segment"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Restore cached upstream DMG
+        id: dmg-cache
+        uses: actions/cache@v4
+        with:
+          path: /tmp/codex-upstream-ci/Codex.dmg
+          key: upstream-dmg-${{ env.DMG_CACHE_SCHEMA_VERSION }}-${{ steps.upstream-metadata.outputs.cache_segment }}
+
+      - name: Download upstream DMG
+        if: steps.dmg-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p "$(dirname "$UPSTREAM_DMG_PATH")"
+          curl -fL --retry 3 -o "$UPSTREAM_DMG_PATH" "$UPSTREAM_DMG_URL"
+
+      - name: Record local DMG fingerprint
+        id: local-dmg
+        run: |
+          set -euo pipefail
+
+          test -s "$UPSTREAM_DMG_PATH"
+
+          dmg_sha256="$(sha256sum "$UPSTREAM_DMG_PATH" | cut -d' ' -f1)"
+          dmg_size_bytes="$(stat -c '%s' "$UPSTREAM_DMG_PATH")"
+          tested_at_utc="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+
+          {
+            echo "sha256=$dmg_sha256"
+            echo "size_bytes=$dmg_size_bytes"
+            echo "tested_at_utc=$tested_at_utc"
+          } >> "$GITHUB_OUTPUT"
+
+          cat > upstream-dmg-metadata.json <<JSON
+          {
+            "url": "$UPSTREAM_DMG_URL",
+            "path": "$UPSTREAM_DMG_PATH",
+            "last_modified": "${{ steps.upstream-metadata.outputs.last_modified }}",
+            "etag": "${{ steps.upstream-metadata.outputs.etag }}",
+            "content_length": "${{ steps.upstream-metadata.outputs.content_length }}",
+            "sha256": "$dmg_sha256",
+            "size_bytes": "$dmg_size_bytes",
+            "tested_at_utc": "$tested_at_utc",
+            "cache_schema_version": "${{ env.DMG_CACHE_SCHEMA_VERSION }}"
+          }
+          JSON
+
+      - name: Build app from upstream DMG
+        id: acceptance-build
+        continue-on-error: true
+        env:
+          CODEX_ACCEPTANCE_DECISION_JSON: ${{ github.workspace }}/upstream-dmg-decision.json
+          CODEX_ACCEPTANCE_OVERRIDE: '0'
+          CODEX_ACCEPTANCE_SOURCE: github-actions
+          CODEX_UPSTREAM_DMG_METADATA_JSON: ${{ github.workspace }}/upstream-dmg-metadata.json
+          REBUILD_REPORT_DIR: ${{ github.workspace }}/upstream-acceptance
+        run: make build-app DMG=/tmp/codex-upstream-ci/Codex.dmg
+
+      - name: Upload upstream DMG metadata artifact
+        # The transactional installer records a decision before returning a
+        # rejected status, so diagnostics remain available on failed runs.
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: upstream-dmg-metadata
+          path: |
+            upstream-dmg-metadata.json
+            upstream-dmg-decision.json
+            upstream-acceptance/**/*.json
+          if-no-files-found: ignore
+
+      - name: Record missing decision in the summary
+        if: always()
+        run: |
+          if [ ! -f upstream-dmg-decision.json ]; then
+            echo "## Upstream DMG acceptance" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "No decision artifact was produced; the run is inconclusive." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Enforce shared acceptance decision
+        if: always()
+        run: |
+          test -f upstream-dmg-decision.json
+          verdict="$(node -e 'console.log(require("./upstream-dmg-decision.json").verdict)')"
+          case "$verdict" in
+            accepted|accepted_with_warnings) exit 0 ;;
+            *) echo "Upstream DMG verdict: $verdict" >&2; exit 1 ;;
+          esac
+
+  reconcile-upstream-dmg-issue:
+    name: Reconcile Upstream DMG Drift Issue
+    needs: build-app-upstream-dmg
+    if: always() && github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      issues: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download acceptance artifact
+        id: download
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: upstream-dmg-metadata
+          path: acceptance-artifact
+
+      - name: Capture current upstream identity
+        id: current-identity
+        if: steps.download.outcome == 'success' && hashFiles('acceptance-artifact/upstream-dmg-decision.json') != ''
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          headers_file="$(mktemp)"
+          trap 'rm -f "$headers_file"' EXIT
+          curl -fsSLI "$UPSTREAM_DMG_URL" > "$headers_file"
+          node - "$headers_file" > current-upstream-identity.json <<'NODE'
+          const fs = require("node:fs");
+          const headers = fs.readFileSync(process.argv[2], "utf8").split(/\r?\n/);
+          const metadata = {};
+          for (const line of headers) {
+            const match = line.match(/^([^:]+):\s*(.*)$/);
+            if (!match) continue;
+            const key = match[1].toLowerCase();
+            if (key === "etag") metadata.etag = match[2].replace(/^"|"$/g, "");
+            if (key === "last-modified") metadata.last_modified = match[2];
+            if (key === "content-length") metadata.content_length = match[2];
+          }
+          process.stdout.write(`${JSON.stringify(metadata, null, 2)}\n`);
+          NODE
+
+      - name: Create, update, or close the drift issue
+        if: steps.current-identity.outcome == 'success'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const { httpIdentity } = require('./scripts/lib/upstream-dmg-acceptance.js');
+            const { reconcileUpstreamDmgIssue } = require('./scripts/ci/upstream-dmg-issue.js');
+            const decision = JSON.parse(fs.readFileSync('acceptance-artifact/upstream-dmg-decision.json', 'utf8'));
+            const currentMetadata = JSON.parse(fs.readFileSync('current-upstream-identity.json', 'utf8'));
+            const result = await reconcileUpstreamDmgIssue({
+              github,
+              repo: context.repo,
+              decision,
+              currentHttpIdentityKey: httpIdentity(currentMetadata)?.key ?? null,
+            });
+            core.info(`Upstream DMG issue reconciliation: ${JSON.stringify(result)}`);

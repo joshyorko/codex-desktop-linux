@@ -206,10 +206,10 @@ impl ReadAloudLinux {
         params: &ReadAloudParams,
     ) -> std::result::Result<BackendCommand, ReadAloudOutput> {
         if let Some(command) = env_trimmed("CODEX_LINUX_READ_ALOUD_COMMAND") {
-            if let Some(command_path) = resolve_command(&command) {
+            if command_exists(&command) {
                 return Ok(BackendCommand {
                     name: "custom".to_string(),
-                    command: command_path.display().to_string(),
+                    command,
                     args: Vec::new(),
                     envs: Vec::new(),
                     stdin: true,
@@ -221,15 +221,9 @@ impl ReadAloudLinux {
         let kokoro = kokoro_config(params);
         let missing = kokoro.missing();
         if missing.is_empty() {
-            let runner = resolve_command(&kokoro.runner)
-                .map(|path| path.display().to_string())
-                .unwrap_or_else(|| kokoro.runner.clone());
-            let audio_player = resolve_command("aplay")
-                .map(|path| path.display().to_string())
-                .unwrap_or_else(|| "aplay".to_string());
             return Ok(BackendCommand {
                 name: "kokoro".to_string(),
-                command: runner,
+                command: kokoro.runner.clone(),
                 args: Vec::new(),
                 envs: vec![
                     (
@@ -256,10 +250,6 @@ impl ReadAloudLinux {
                         "CODEX_LINUX_READ_ALOUD_KOKORO_LANG".to_string(),
                         kokoro.lang,
                     ),
-                    (
-                        "CODEX_LINUX_READ_ALOUD_AUDIO_PLAYER".to_string(),
-                        audio_player,
-                    ),
                 ],
                 stdin: true,
                 note: "Using the staged Kokoro ONNX runner.".to_string(),
@@ -267,20 +257,20 @@ impl ReadAloudLinux {
         }
 
         if native_fallback_enabled() {
-            if let Some(command) = resolve_command("spd-say") {
+            if command_exists("spd-say") {
                 return Ok(BackendCommand {
                     name: "spd-say".to_string(),
-                    command: command.display().to_string(),
+                    command: "spd-say".to_string(),
                     args: spd_say_args(),
                     envs: Vec::new(),
                     stdin: false,
                     note: "Using native spd-say fallback.".to_string(),
                 });
             }
-            if let Some(command) = resolve_command("espeak-ng") {
+            if command_exists("espeak-ng") {
                 return Ok(BackendCommand {
                     name: "espeak-ng".to_string(),
-                    command: command.display().to_string(),
+                    command: "espeak-ng".to_string(),
                     args: vec![
                         "-v".to_string(),
                         env_trimmed("CODEX_LINUX_READ_ALOUD_VOICE")
@@ -758,43 +748,11 @@ fn resolve_command(command: &str) -> Option<PathBuf> {
         let path = PathBuf::from(command);
         return is_executable(&path).then_some(path);
     }
-    command_search_dirs()
-        .into_iter()
-        .map(|dir| dir.join(command))
-        .find(|candidate| is_executable(candidate))
-}
-
-fn command_search_dirs() -> Vec<PathBuf> {
-    let mut dirs = Vec::new();
-    if let Some(path) = env::var_os("PATH") {
-        dirs.extend(env::split_paths(&path));
-    }
-    if let Some(extra_dirs) = env::var_os("CODEX_LINUX_READ_ALOUD_COMMAND_DIRS") {
-        dirs.extend(env::split_paths(&extra_dirs));
-    }
-    let use_standard_dirs = env_trimmed("CODEX_LINUX_READ_ALOUD_STANDARD_COMMAND_DIRS")
-        .map(|value| {
-            !matches!(
-                value.to_ascii_lowercase().as_str(),
-                "0" | "false" | "off" | "no"
-            )
-        })
-        .unwrap_or(true);
-    if use_standard_dirs {
-        dirs.extend(
-            [
-                "/usr/local/bin",
-                "/usr/bin",
-                "/bin",
-                "/usr/sbin",
-                "/sbin",
-                "/home/linuxbrew/.linuxbrew/bin",
-            ]
-            .into_iter()
-            .map(PathBuf::from),
-        );
-    }
-    dirs
+    env::var_os("PATH").and_then(|path| {
+        env::split_paths(&path)
+            .map(|dir| dir.join(command))
+            .find(|candidate| is_executable(candidate))
+    })
 }
 
 fn is_executable(path: &Path) -> bool {
@@ -912,33 +870,6 @@ mod tests {
     #[test]
     fn command_resolution_accepts_absolute_executable() {
         assert!(resolve_command("/bin/sh").is_some() || resolve_command("/usr/bin/sh").is_some());
-    }
-
-    #[test]
-    fn command_resolution_uses_extra_dirs_when_path_is_sparse() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        let previous_path = env::var_os("PATH");
-        let previous_extra_dirs = env::var_os("CODEX_LINUX_READ_ALOUD_COMMAND_DIRS");
-        let unique = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let root = env::temp_dir().join(format!(
-            "codex-read-aloud-command-path-{}-{unique}",
-            std::process::id()
-        ));
-        fs::create_dir_all(&root).unwrap();
-        let command = root.join("codex-fake-say");
-        fs::write(&command, "#!/bin/sh\nexit 0\n").unwrap();
-        fs::set_permissions(&command, fs::Permissions::from_mode(0o755)).unwrap();
-        env::set_var("PATH", "");
-        env::set_var("CODEX_LINUX_READ_ALOUD_COMMAND_DIRS", &root);
-
-        assert_eq!(resolve_command("codex-fake-say"), Some(command));
-
-        let _ = fs::remove_dir_all(&root);
-        restore_env("PATH", previous_path);
-        restore_env("CODEX_LINUX_READ_ALOUD_COMMAND_DIRS", previous_extra_dirs);
     }
 
     #[test]

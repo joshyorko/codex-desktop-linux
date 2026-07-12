@@ -48,9 +48,14 @@ pub fn plan_reap(
         .values()
         .filter(|process| process.ppid == parent_pid)
         .collect::<Vec<_>>();
-    for process in &direct_children {
-        if let Some(signature) = helper_signature(process, server_specs, app_dir) {
-            groups.entry(signature).or_default().push(*process);
+    let parent_is_shared_app_server = processes
+        .get(&parent_pid)
+        .is_some_and(is_shared_codex_app_server);
+    if !parent_is_shared_app_server {
+        for process in &direct_children {
+            if let Some(signature) = helper_signature(process, server_specs, app_dir) {
+                groups.entry(signature).or_default().push(*process);
+            }
         }
     }
 
@@ -84,6 +89,7 @@ pub fn plan_reap(
         &mut seen_stale_pids,
         &direct_children,
         app_dir,
+        parent_is_shared_app_server,
     );
     candidates.sort_by(|left, right| {
         left.signature
@@ -115,8 +121,15 @@ fn append_generation_reap_candidates(
     seen_stale_pids: &mut BTreeSet<i32>,
     direct_children: &[&ProcInfo],
     app_dir: Option<&Path>,
+    parent_is_shared_app_server: bool,
 ) {
-    append_app_generation_reap_candidates(candidates, seen_stale_pids, direct_children, app_dir);
+    append_app_generation_reap_candidates(
+        candidates,
+        seen_stale_pids,
+        direct_children,
+        app_dir,
+        parent_is_shared_app_server,
+    );
     append_deleted_mcp_generation_reap_candidates(candidates, seen_stale_pids, direct_children);
 }
 
@@ -125,11 +138,17 @@ fn append_app_generation_reap_candidates(
     seen_stale_pids: &mut BTreeSet<i32>,
     direct_children: &[&ProcInfo],
     app_dir: Option<&Path>,
+    parent_is_shared_app_server: bool,
 ) {
     let Some(app_dir) = app_dir else {
         return;
     };
     let mut groups: BTreeMap<String, Vec<&ProcInfo>> = BTreeMap::new();
+    let current_generation_pid = direct_children
+        .iter()
+        .filter(|process| looks_like_app_helper(process, Some(app_dir)))
+        .max_by_key(|process| (process.start_time, process.pid))
+        .map(|process| process.pid);
     for process in direct_children {
         if !is_helper_candidate(process) {
             continue;
@@ -137,6 +156,34 @@ fn append_app_generation_reap_candidates(
         if let Some(signature) = app_generation_signature(process, app_dir) {
             groups.entry(signature).or_default().push(*process);
         }
+    }
+
+    if parent_is_shared_app_server {
+        let Some(current_generation_pid) = current_generation_pid else {
+            return;
+        };
+        for process in direct_children {
+            if process.pid == current_generation_pid
+                || !is_helper_candidate(process)
+                || looks_like_app_helper(process, Some(app_dir))
+            {
+                continue;
+            }
+            let Some(signature) = app_generation_signature(process, app_dir) else {
+                continue;
+            };
+            let signature = signature
+                .strip_prefix("app-generation:")
+                .unwrap_or(&signature);
+            push_reap_candidate(
+                candidates,
+                seen_stale_pids,
+                process.pid,
+                current_generation_pid,
+                format!("app-generation:stale:{signature}"),
+            );
+        }
+        return;
     }
 
     for (signature, members) in groups {
@@ -413,6 +460,17 @@ pub fn is_codex_process(process: &ProcInfo) -> bool {
         .and_then(OsStr::to_str)
         .unwrap_or(argv0);
     process.comm == "codex" || name == "codex" || name.starts_with("codex-")
+}
+
+fn is_shared_codex_app_server(process: &ProcInfo) -> bool {
+    process_name(process) == "codex-app-server"
+        || (process_name(process) == "codex"
+            && process.argv.get(1).is_some_and(|arg| arg == "-c")
+            && process
+                .argv
+                .get(2)
+                .is_some_and(|arg| arg == "features.code_mode_host=true")
+            && process.argv.get(3).is_some_and(|arg| arg == "app-server"))
 }
 
 fn is_codex_non_owner_process(process: &ProcInfo) -> bool {
@@ -1175,6 +1233,79 @@ mod tests {
                     .to_string(),
             }]
         );
+    }
+
+    #[test]
+    fn keeps_duplicate_helpers_under_shared_desktop_app_server() {
+        let mut processes = BTreeMap::new();
+        let app_dir = "/opt/codex-desktop/current/share/codex-desktop/app";
+        let current_helper = format!("{app_dir}/resources/current-helper");
+        let stale_helper = "/opt/codex-desktop/old/share/codex-desktop/app/resources/stale-helper";
+        processes.insert(
+            100,
+            proc(
+                100,
+                1,
+                10,
+                &[
+                    "codex",
+                    "-c",
+                    "features.code_mode_host=true",
+                    "app-server",
+                    "--remote-control",
+                ],
+                "/app",
+            ),
+        );
+        processes.insert(
+            101,
+            proc(101, 100, 20, &[current_helper.as_str(), "serve"], "/repo"),
+        );
+        processes.insert(
+            102,
+            proc(102, 100, 30, &[current_helper.as_str(), "serve"], "/repo"),
+        );
+        processes.insert(103, proc(103, 100, 40, &[stale_helper, "serve"], "/repo"));
+        let specs = vec![ServerSpec {
+            name: "code-index".to_string(),
+            command: current_helper,
+            args: vec!["serve".to_string()],
+            cwd: None,
+        }];
+
+        assert_eq!(
+            plan_reap(100, &processes, &specs, Some(Path::new(app_dir))),
+            vec![ReapCandidate {
+                stale_pid: 103,
+                keep_pid: 102,
+                signature: "app-generation:stale:resources/stale-helper\u{0}serve".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn does_not_treat_later_app_server_argument_as_shared_parent() {
+        let mut processes = BTreeMap::new();
+        processes.insert(
+            100,
+            proc(100, 1, 10, &["codex", "resume", "app-server"], "/app"),
+        );
+        processes.insert(
+            101,
+            proc(101, 100, 20, &["/tmp/example-helper", "serve"], "/repo"),
+        );
+        processes.insert(
+            102,
+            proc(102, 100, 30, &["/tmp/example-helper", "serve"], "/repo"),
+        );
+        let specs = vec![ServerSpec {
+            name: "code-index".to_string(),
+            command: "/tmp/example-helper".to_string(),
+            args: vec!["serve".to_string()],
+            cwd: None,
+        }];
+
+        assert_eq!(plan_reap(100, &processes, &specs, None).len(), 1);
     }
 
     #[test]

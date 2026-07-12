@@ -252,8 +252,8 @@ function meter(label, value, color) {
 
 function terminalSize() {
   return {
-    width: Math.max(72, process.stdout.columns || 120),
-    height: Math.max(20, process.stdout.rows || 36),
+    width: Math.max(96, process.stdout.columns || 120),
+    height: Math.max(28, process.stdout.rows || 36),
   };
 }
 
@@ -483,36 +483,13 @@ class HostManager {
     return `${palette.bgSoft}${palette.blue}▰${palette.ink}${body}${palette.blue}▰${palette.reset}`;
   }
 
-  renderButtonRows(width) {
-    const buttons = [
-      ["refresh  r", "refresh"],
-      [this.filter === "stale" ? "show all  f" : "stale only  f", "filter"],
-      [this.includeOnline ? "lock live  o" : "unlock live  o", "online"],
-      ["copy id  c", "copy"],
-      ["delete  d", "delete"],
-      ["quit q", "quit"],
-    ];
-    let out = "";
-    let x = 2;
-    let y = 4;
-    for (const [text, action] of buttons) {
-      const w = visibleLength(`▰ ${text} ▰`);
-      if (x > 2 && x + w > width - 1) {
-        x = 2;
-        y += 1;
-      }
-      out += line(x, y, this.button(text, action, x, y));
-      x += w + 2;
-    }
-    return { out, bottom: y };
-  }
-
   render() {
     const { width, height } = terminalSize();
-    const twoPane = width >= 104;
-    const leftW = twoPane ? Math.max(58, Math.floor(width * 0.58)) : width - 3;
-    const rightX = leftW + 3;
-    const rightW = twoPane ? width - rightX - 1 : 0;
+    const leftW = Math.max(58, Math.floor(width * 0.58));
+    const rightX = leftW + 2;
+    const rightW = width - rightX - 1;
+    const listTop = 7;
+    const listH = height - 11;
     const hosts = this.visibleHosts;
     const selectedHost = this.selectedHost();
     this.hotspots = [];
@@ -525,23 +502,17 @@ class HostManager {
     const syncText = this.pending ? `${palette.yellow}${this.spinner()} syncing${palette.reset}` : `${palette.green}● live${palette.reset}`;
     out += line(width - strip(syncText).length - 2, 1, `${palette.bgDeep}${syncText}${palette.reset}`);
 
-    const buttons = this.renderButtonRows(width);
-    out += buttons.out;
+    let bx = 2;
+    out += line(bx, 4, this.button("refresh  r", "refresh", bx, 4)); bx += 15;
+    out += line(bx, 4, this.button(this.filter === "stale" ? "show all  f" : "stale only  f", "filter", bx, 4)); bx += 18;
+    out += line(bx, 4, this.button(this.includeOnline ? "lock live  o" : "unlock live  o", "online", bx, 4)); bx += 18;
+    out += line(bx, 4, this.button("copy id  c", "copy", bx, 4)); bx += 15;
+    out += line(bx, 4, this.button("delete  d", "delete", bx, 4)); bx += 14;
+    out += line(bx, 4, this.button("quit q", "quit", bx, 4));
 
-    const listTop = buttons.bottom + 3;
-    const listH = Math.max(5, height - listTop - 4);
-    const boxY = listTop - 1;
-
-    out += box(2, boxY, leftW - 2, listH + 2, ` Hosts ${hosts.length}/${this.hosts.length} `, palette.cyan);
-    if (twoPane) out += box(rightX, boxY, rightW, listH + 2, " Selected Host ", palette.violet);
-
-    const usableListW = Math.max(24, leftW - 6);
-    const nameW = usableListW < 54 ? Math.max(12, usableListW - 28) : 22;
-    const stateW = usableListW < 44 ? 8 : 12;
-    const clientW = usableListW < 54 ? 0 : 18;
-    const seenW = usableListW < 44 ? 8 : 12;
-    const judgmentW = Math.max(0, usableListW - nameW - stateW - clientW - seenW);
-    out += line(4, listTop, `${palette.panel}${palette.dim}${fit("Name", nameW)}${fit("State", stateW)}${clientW > 0 ? fit("Client", clientW) : ""}${fit("Seen", seenW)}${fit("Judgment", judgmentW)}${palette.reset}`);
+    out += box(2, 6, leftW - 2, listH + 2, ` Hosts ${hosts.length}/${this.hosts.length} `, palette.cyan);
+    out += box(rightX, 6, rightW, listH + 2, " Selected Host ", palette.violet);
+    out += line(4, 7, `${palette.panel}${palette.dim}${fit("Name", 22)}${fit("State", 12)}${fit("Client", 18)}${fit("Seen", 12)}Judgment${palette.reset}`);
 
     const rows = hosts.slice(0, listH);
     rows.forEach((host, index) => {
@@ -549,11 +520,11 @@ class HostManager {
       const hot = index === this.selected;
       const rowBg = hot ? palette.rowHot : palette.row;
       this.hotspots.push({ type: "row", index, x: 3, x2: leftW - 2, y, y2: y });
-      const name = fit(hostName(host), nameW);
-      const status = fit(statusPill(host), stateW);
-      const kind = clientW > 0 ? fit(host.client_type || "unknown", clientW) : "";
-      const last = fit(formatAge(host.last_seen_at), seenW);
-      const hint = fit(risk(host, this.hosts), judgmentW);
+      const name = fit(hostName(host), 22);
+      const status = fit(statusPill(host), 12);
+      const kind = fit(host.client_type || "unknown", 18);
+      const last = fit(formatAge(host.last_seen_at), 12);
+      const hint = fit(risk(host, this.hosts), Math.max(8, leftW - 70));
       const cursor = hot ? `${palette.white}› ${palette.reset}` : "  ";
       out += line(3, y, `${rowBg}${cursor}${hot ? palette.bold : ""}${name}${status}${palette.ink}${kind}${last}${palette.dim}${hint}${palette.reset}`);
     });
@@ -566,10 +537,9 @@ class HostManager {
       offline: this.hosts.filter((host) => !host.online).length,
       stale: this.hosts.filter((host) => !host.online && !host.last_seen_at).length,
     };
-    const statsLine = `${meter("online", stats.online, palette.green)}  ${meter("offline", stats.offline, palette.yellow)}  ${meter("never-seen", stats.stale, palette.red)}  ${badge(this.includeOnline ? "live delete unlocked" : "live delete locked", this.includeOnline ? palette.yellow : palette.green)}  ${badge(this.filter === "stale" ? "stale view" : "all hosts", palette.blue)}`;
-    out += line(4, height - 3, fit(strip(statsLine), width - 6));
+    out += line(4, height - 3, `${meter("online", stats.online, palette.green)}  ${meter("offline", stats.offline, palette.yellow)}  ${meter("never-seen", stats.stale, palette.red)}  ${badge(this.includeOnline ? "live delete unlocked" : "live delete locked", this.includeOnline ? palette.yellow : palette.green)}  ${badge(this.filter === "stale" ? "stale view" : "all hosts", palette.blue)}`);
 
-    if (twoPane && selectedHost) {
+    if (selectedHost) {
       const hostRisk = risk(selectedHost, this.hosts);
       const titleColor = selectedHost.online ? palette.green : palette.yellow;
       out += line(rightX + 2, listTop, `${palette.panel}${titleColor}${palette.bold}${fit(hostName(selectedHost), Math.max(12, rightW - 20))}${palette.reset}${selectedHost.online ? badge("ONLINE", palette.green) : badge("OFFLINE", palette.yellow)}`);
@@ -593,7 +563,7 @@ class HostManager {
       runtime.forEach(([key, value], index) => {
         out += line(rightX + 2, listTop + 11 + index, `${palette.dim}${fit(key, 12)}${palette.reset}${fit(value, rightW - 16)}`);
       });
-    } else if (twoPane) {
+    } else {
       out += line(rightX + 2, listTop, `${palette.dim}Select a host to inspect it.${palette.reset}`);
     }
 

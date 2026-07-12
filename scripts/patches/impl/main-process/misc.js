@@ -87,11 +87,11 @@ function applyLinuxWorkerFileManagerPatch(currentSource) {
   const block = findCallBlock(currentSource, "id:`fileManager`");
   if (block == null) {
     console.warn("Failed to apply Linux Worker File Manager Patch");
-    return applyLinuxWorkerOpenTargetFallbackPatch(currentSource);
+    return currentSource;
   }
 
   if (block.text.includes("linux:{")) {
-    return applyLinuxWorkerOpenTargetFallbackPatch(currentSource);
+    return currentSource;
   }
 
   const fsVar = requireName(currentSource, "node:fs");
@@ -127,38 +127,7 @@ function applyLinuxWorkerFileManagerPatch(currentSource) {
     return currentSource;
   }
 
-  return applyLinuxWorkerOpenTargetFallbackPatch(patchedSource);
-}
-
-function applyLinuxWorkerOpenTargetFallbackPatch(currentSource) {
-  if (currentSource.includes("function codexLinuxWorkerOpenTargetFallback(")) {
-    return currentSource;
-  }
-
-  const fsVar = requireName(currentSource, "node:fs");
-  const pathVar = requireName(currentSource, "node:path");
-  if (fsVar == null || pathVar == null) {
-    return currentSource;
-  }
-
-  const registryLookupPattern =
-    /function ([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*)\)\{let ([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)\.get\(\2\);if\(\3==null\)throw Error\(`Unknown open target "\$\{\2\}"`\);return \3\}/;
-  const match = currentSource.match(registryLookupPattern);
-  if (match == null) {
-    return currentSource;
-  }
-
-  const [, lookupFn, targetVar, targetConfigVar, registryVar] = match;
-  const helper =
-    `function codexLinuxWorkerOpenTargetDirs(){if(process.platform!==\`linux\`)return[];let e=process.env.HOME||\`/nonexistent\`,t=[];for(let e of [process.env.HOMEBREW_PREFIX,process.env.LINUXBREW_PREFIX])e&&${pathVar}.isAbsolute(e)&&t.push(${pathVar}.join(e,\`bin\`));for(let e of (process.env.PATH||\`\`).split(\`:\`))e&&${pathVar}.isAbsolute(e)&&t.push(e);t.push(${pathVar}.join(e,\`.local/bin\`),${pathVar}.join(e,\`bin\`),${pathVar}.join(e,\`.linuxbrew/bin\`),${pathVar}.join(e,\`.local/share/JetBrains/Toolbox/scripts\`),${pathVar}.join(e,\`.local/share/flatpak/exports/bin\`),\`/home/linuxbrew/.linuxbrew/bin\`,\`/var/home/linuxbrew/.linuxbrew/bin\`);let n=new Set;return t.filter(e=>e&&${pathVar}.isAbsolute(e)&&!n.has(e)&&(n.add(e),!0))}` +
-    `function codexLinuxWorkerFindExecutable(e){if(process.platform!==\`linux\`||!e)return null;for(let t of codexLinuxWorkerOpenTargetDirs()){let n=${pathVar}.join(t,e);try{if(${fsVar}.existsSync(n)&&${fsVar}.statSync(n).isFile())try{${fsVar}.accessSync(n,${fsVar}.constants?.X_OK??1);return n}catch{}}catch{}}return null}` +
-    `function codexLinuxWorkerFirstExecutable(e){for(let t of e){let e=codexLinuxWorkerFindExecutable(t);if(e)return e}return null}` +
-    `function codexLinuxWorkerTerminalCommand(){return codexLinuxWorkerFirstExecutable([\`x-terminal-emulator\`,\`gnome-terminal\`,\`kgx\`,\`konsole\`,\`xfce4-terminal\`,\`mate-terminal\`,\`lxterminal\`,\`tilix\`,\`alacritty\`,\`kitty\`,\`ghostty\`,\`wezterm\`,\`foot\`,\`terminology\`,\`xterm\`])}` +
-    `function codexLinuxWorkerOpenTargetFallback(e){if(process.platform!==\`linux\`||typeof e!==\`string\`)return null;let t={vscode:[\`VS Code\`,\`apps/vscode.png\`,\`editor\`,[\`code\`]],vscodeInsiders:[\`VS Code Insiders\`,\`apps/vscode-insiders.png\`,\`editor\`,[\`code-insiders\`]],zed:[\`Zed\`,\`apps/zed.png\`,\`editor\`,[\`zed\`]],antigravity:[\`Antigravity\`,\`apps/antigravity.png\`,\`editor\`,[\`antigravity\`]]}[e];if(t){let[n,r,i,a]=t;return{id:e,label:n,icon:r,kind:i,detect:()=>codexLinuxWorkerFirstExecutable(a),args:e=>[e],supportsSsh:!0}}if(e===\`terminal\`)return{id:e,label:\`Terminal\`,icon:\`apps/terminal.png\`,kind:\`terminal\`,detect:()=>codexLinuxWorkerTerminalCommand(),args:e=>[e]};if(e.startsWith(\`linux-desktop-\`))return{id:e,label:\`Linux desktop app\`,icon:\`apps/vscode.png\`,kind:\`editor\`,detect:()=>e,args:e=>[e]};return null}`;
-  const replacement =
-    `${helper}function ${lookupFn}(${targetVar}){let ${targetConfigVar}=${registryVar}.get(${targetVar})??codexLinuxWorkerOpenTargetFallback(${targetVar});if(${targetConfigVar}==null)throw Error(\`Unknown open target "\${${targetVar}}"\`);return ${targetConfigVar}}`;
-
-  return currentSource.replace(registryLookupPattern, replacement);
+  return patchedSource;
 }
 
 function patchLinuxWorkerFileManagerTarget(extractedDir) {

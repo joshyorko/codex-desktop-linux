@@ -202,7 +202,6 @@ async function startRemoteControlBackend() {
     sawEnrollmentProof: false,
     sawWebsocketProof: false,
     sawInitialize: false,
-    deletedEnvIds: new Set(),
   };
 
   const server = http.createServer(async (request, response) => {
@@ -230,22 +229,8 @@ async function startRemoteControlBackend() {
             arch: "x64",
             app_server_version: "0.130.0",
           },
-          {
-            env_id: "env_2",
-            display_name: "Offline Fixture",
-            host_name: "offline-fixture",
-            online: false,
-            os: "linux",
-            arch: "x64",
-            app_server_version: "0.130.0",
-          },
-        ].filter((environment) => !state.deletedEnvIds.has(environment.env_id)),
+        ],
       });
-      return;
-    }
-    if (request.method === "DELETE" && url.pathname === "/backend-api/codex/remote/control/environments/env_2") {
-      state.deletedEnvIds.add("env_2");
-      send(200, { ok: true });
       return;
     }
     if (request.method === "POST" && url.pathname === "/backend-api/codex/remote/control/client/enroll/start") {
@@ -573,21 +558,6 @@ async function main() {
 
     const refresh = await bridge(serveState.url, token, "refresh-remote-control-connections");
     assert.equal(refresh.remoteControlConnections[0]?.hostId, "remote-control:env_1");
-    assert.equal(
-      refresh.remoteControlConnections.some((connection) => connection.hostId === "remote-control:env_2"),
-      true,
-    );
-
-    await assert.rejects(
-      () => bridge(serveState.url, token, "delete-remote-control-environment", { envId: "env_1" }),
-      /Only offline remote control environments can be deleted/,
-    );
-    const deleted = await bridge(serveState.url, token, "delete-remote-control-environment", { envId: "env_2" });
-    assert.equal(backend.state.deletedEnvIds.has("env_2"), true);
-    assert.equal(
-      deleted.remoteControlConnections.some((connection) => connection.hostId === "remote-control:env_2"),
-      false,
-    );
 
     const authorization = await bridge(serveState.url, token, "authorize-remote-control-connections");
     assert.equal(authorization.authorized, true);

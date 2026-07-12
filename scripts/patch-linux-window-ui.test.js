@@ -4337,8 +4337,8 @@ test("adds Linux launch actions through current setSecondInstanceArgsHandler bun
   assert.match(launchPatched, /codexLinuxDefaultLaunchActionSocket=\(\)=>/);
   assert.match(launchPatched, /process\.env\.CODEX_DESKTOP_LAUNCH_ACTION_SOCKET\?\.trim\(\)\|\|codexLinuxDefaultLaunchActionSocket\(\)/);
   assert.match(launchPatched, /process\.env\.CODEX_LINUX_INSTANCE_ID\?\.trim\(\)/);
-  assert.match(launchPatched, /let codexLinuxPathModule=require\(`node:path`\),codexLinuxFsModule=require\(`node:fs`\),codexLinuxNetModule=require\(`node:net`\);codexLinuxFsModule\.mkdirSync\(codexLinuxPathModule\.dirname\(e\)/);
-  assert.match(launchPatched, /let a=codexLinuxNetModule\.createServer/);
+  assert.match(launchPatched, /let n=require\(`node:path`\),r=require\(`node:fs`\),i=require\(`node:net`\);r\.mkdirSync\(n\.dirname\(e\)/);
+  assert.match(launchPatched, /let a=i\.createServer/);
   assert.doesNotMatch(launchPatched, /f\.default\.createServer/);
   assert.doesNotMatch(launchPatched, /o\.mkdirSync\(i\.default\.dirname\(e\)/);
   assert.match(launchPatched, /R\.desktopNotificationManager\.dismissByNavigationPath\(e\)/);
@@ -4363,8 +4363,8 @@ test("uses collision-safe modules for launch-action socket in shadowed startup s
   const patched = applyPatchTwice(applyLinuxLaunchActionArgsPatch, source);
 
   assert.match(patched, /codexLinuxStartLaunchActionSocket=\(\)=>\{if\(process\.platform!==`linux`\)return;try\{/);
-  assert.match(patched, /let codexLinuxPathModule=require\(`node:path`\),codexLinuxFsModule=require\(`node:fs`\),codexLinuxNetModule=require\(`node:net`\);codexLinuxFsModule\.mkdirSync\(codexLinuxPathModule\.dirname\(e\)/);
-  assert.match(patched, /let a=codexLinuxNetModule\.createServer/);
+  assert.match(patched, /let n=require\(`node:path`\),r=require\(`node:fs`\),i=require\(`node:net`\);r\.mkdirSync\(n\.dirname\(e\)/);
+  assert.match(patched, /let a=i\.createServer/);
   assert.match(patched, /t\.on\(`error`,e=>\{g\.reportNonFatal\(e instanceof Error\?e:`Failed Linux launch action socket client`,\{kind:`linux-launch-action-socket-client-error`\}\)\}\)/);
   assert.doesNotMatch(patched, /o\.mkdirSync/);
   assert.doesNotMatch(patched, /f\.default\.createServer/);
@@ -7127,34 +7127,47 @@ test("reports missing Computer Use plugin gate as optional drift", () => {
   }
 });
 
-test("preserves upstream Computer Use desktop feature rollout", () => {
+test("enables Computer Use desktop features on Linux", () => {
   const patched = applyPatchTwice(
     applyLinuxComputerUseFeaturePatch,
     computerUseFeatureBundleFixture(),
   );
 
-  assert.equal(patched, computerUseFeatureBundleFixture());
+  assert.match(
+    patched,
+    /return n===`linux`\?\{\.\.\.e,computerUse:!0,computerUseNodeRepl:!0\}:n!==`win32`\|\|t\.CODEX_ELECTRON_ENABLE_WINDOWS_COMPUTER_USE!==`1`\?e:\{\.\.\.e,computerUse:!0,computerUseNodeRepl:!0\}/,
+  );
+  assert.match(patched, /CODEX_ELECTRON_ENABLE_WINDOWS_COMPUTER_USE/);
 });
 
-test("preserves current Computer Use desktop feature rollout", () => {
+test("enables current Computer Use desktop features on Linux", () => {
   const patched = applyPatchTwice(
     applyLinuxComputerUseFeaturePatch,
     currentComputerUseFeatureBundleFixture(),
   );
 
-  assert.equal(patched, currentComputerUseFeatureBundleFixture());
+  assert.match(
+    patched,
+    /let a=i===`linux`\?\{\.\.\.e,computerUse:!0,computerUseNodeRepl:!0\}:i===`win32`&&r\.CODEX_ELECTRON_ENABLE_WINDOWS_COMPUTER_USE===`1`\?\{\.\.\.e,computerUse:!0,computerUseNodeRepl:!0\}:e,o=n===t\.D\.Dev\?be\(r\):null;return o==null\?a:\{\.\.\.a,\.\.\.o\}/,
+  );
+  assert.match(patched, /CODEX_ELECTRON_ENABLE_WINDOWS_COMPUTER_USE/);
 });
 
-test("preserves nested current Computer Use desktop feature rollout", () => {
+test("enables nested current Computer Use desktop features on Linux", () => {
   const source =
     "function Ve(e,{buildFlavor:t=n.F.resolve(),env:r=p.default.env,platform:i=p.default.platform}={}){let a=i===`darwin`&&!n.F.isInternal(t)&&e.computerUseNodeRepl!=null?{...e,computerUseNodeRepl:!1}:e,o=i===`win32`&&e.computerUse===!0?{...a,computerUseNodeRepl:!0}:a,s=i===`win32`&&r.CODEX_ELECTRON_ENABLE_WINDOWS_COMPUTER_USE===`1`?{...o,computerUse:!0,computerUseNodeRepl:!0}:o,c=t===n.F.Dev?He(r):null;return c==null?{...s,deviceAttestation:ve({platform:i})}:{...s,...c,deviceAttestation:ve({platform:i})}}";
 
   const patched = applyPatchTwice(applyLinuxComputerUseFeaturePatch, source);
 
-  assert.equal(patched, source);
+  assert.match(
+    patched,
+    /,s=i===`linux`\?\{\.\.\.o,computerUse:!0,computerUseNodeRepl:!0\}:i===`win32`&&r\.CODEX_ELECTRON_ENABLE_WINDOWS_COMPUTER_USE===`1`\?\{\.\.\.o,computerUse:!0,computerUseNodeRepl:!0\}:o,/,
+  );
+  assert.match(patched, /i===`darwin`&&!n\.F\.isInternal\(t\)/);
+  assert.match(patched, /i===`win32`&&e\.computerUse===!0/);
 });
 
-test("does not patch unrelated Computer Use desktop feature gates", () => {
+test("patches all Computer Use desktop feature gates in one pass", () => {
   const patchedFeature =
     "function A(e,{env:t=process.env,platform:n=process.platform}={}){return n===`linux`?{...e,computerUse:!0,computerUseNodeRepl:!0}:n!==`win32`||t.CODEX_ELECTRON_ENABLE_WINDOWS_COMPUTER_USE!==`1`?e:{...e,computerUse:!0,computerUseNodeRepl:!0}}";
   const unpatchedFeature =
@@ -7162,7 +7175,11 @@ test("does not patch unrelated Computer Use desktop feature gates", () => {
 
   const patched = applyLinuxComputerUseFeaturePatch(`${patchedFeature}${unpatchedFeature}`);
 
-  assert.equal(patched, `${patchedFeature}${unpatchedFeature}`);
+  assert.equal((patched.match(/===`linux`/g) || []).length, 2);
+  assert.doesNotMatch(
+    patched,
+    /function B\(e,\{env:r=process\.env,platform:i=process\.platform\}=\{\}\)\{return i!==`win32`/,
+  );
 });
 
 test("shows Computer Use plugin UI on Linux without the upstream rollout flag", () => {
@@ -8216,7 +8233,10 @@ test("patchMainBundleSource applies Computer Use feature patch when settings.jso
 
     const patched = patchMainBundleSource(source, null);
 
-    assert.doesNotMatch(patched, /return n===`linux`\?\{\.\.\.e,computerUse:!0/);
+    assert.match(
+      patched,
+      /return n===`linux`\?\{\.\.\.e,computerUse:!0,computerUseNodeRepl:!0\}/,
+    );
   });
 });
 

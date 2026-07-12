@@ -299,8 +299,60 @@ function applyLinuxComputerUsePluginGatePatch(currentSource) {
 }
 
 function applyLinuxComputerUseFeaturePatch(currentSource) {
-  // Linux backend support must not manufacture feature availability. Preserve
-  // the upstream rollout, entitlement, and server response exactly.
+  const patchedFeaturePattern =
+    /function [A-Za-z_$][\w$]*\([A-Za-z_$][\w$]*,\{env:[A-Za-z_$][\w$]*=process\.env,platform:[A-Za-z_$][\w$]*=process\.platform\}=\{\}\)\{return [A-Za-z_$][\w$]*===`linux`\?\{\.\.\.[A-Za-z_$][\w$]*,computerUse:!0,computerUseNodeRepl:!0\}:/;
+  const currentPatchedFeaturePattern =
+    /let [A-Za-z_$][\w$]*=[A-Za-z_$][\w$]*===`linux`\?\{\.\.\.[A-Za-z_$][\w$]*,computerUse:!0,computerUseNodeRepl:!0\}:[A-Za-z_$][\w$]*===`win32`&&[A-Za-z_$][\w$]*\.CODEX_ELECTRON_ENABLE_WINDOWS_COMPUTER_USE===`1`\?\{\.\.\.[A-Za-z_$][\w$]*,computerUse:!0,computerUseNodeRepl:!0\}:[A-Za-z_$][\w$]*,/;
+  const currentChainedPatchedFeaturePattern =
+    /,[A-Za-z_$][\w$]*=[A-Za-z_$][\w$]*===`linux`\?\{\.\.\.[A-Za-z_$][\w$]*,computerUse:!0,computerUseNodeRepl:!0\}:[A-Za-z_$][\w$]*===`win32`&&[A-Za-z_$][\w$]*\.CODEX_ELECTRON_ENABLE_WINDOWS_COMPUTER_USE===`1`\?\{\.\.\.[A-Za-z_$][\w$]*,computerUse:!0,computerUseNodeRepl:!0\}:[A-Za-z_$][\w$]*,/;
+  const windowsOnlyFeaturePattern =
+    /function ([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*),\{env:([A-Za-z_$][\w$]*)=process\.env,platform:([A-Za-z_$][\w$]*)=process\.platform\}=\{\}\)\{return \4!==`win32`\|\|\3\.CODEX_ELECTRON_ENABLE_WINDOWS_COMPUTER_USE!==`1`\?\2:\{\.\.\.\2,computerUse:!0,computerUseNodeRepl:!0\}\}/g;
+  const currentWindowsOnlyFeaturePattern =
+    /let ([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)===`win32`&&([A-Za-z_$][\w$]*)\.CODEX_ELECTRON_ENABLE_WINDOWS_COMPUTER_USE===`1`\?\{\.\.\.([A-Za-z_$][\w$]*),computerUse:!0,computerUseNodeRepl:!0\}:\4,/g;
+  const chainedWindowsOnlyFeaturePattern =
+    /,([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)===`win32`&&([A-Za-z_$][\w$]*)\.CODEX_ELECTRON_ENABLE_WINDOWS_COMPUTER_USE===`1`\?\{\.\.\.([A-Za-z_$][\w$]*),computerUse:!0,computerUseNodeRepl:!0\}:\4,/g;
+
+  let changed = false;
+  let patchedSource = currentSource.replace(
+    windowsOnlyFeaturePattern,
+    (_, fnName, featuresVar, envVar, platformVar) => {
+      changed = true;
+      return `function ${fnName}(${featuresVar},{env:${envVar}=process.env,platform:${platformVar}=process.platform}={}){return ${platformVar}===\`linux\`?{...${featuresVar},computerUse:!0,computerUseNodeRepl:!0}:${platformVar}!==\`win32\`||${envVar}.CODEX_ELECTRON_ENABLE_WINDOWS_COMPUTER_USE!==\`1\`?${featuresVar}:{...${featuresVar},computerUse:!0,computerUseNodeRepl:!0}}`;
+    },
+  );
+  patchedSource = patchedSource.replace(
+    currentWindowsOnlyFeaturePattern,
+    (_, gateVar, platformVar, envVar, featuresVar) => {
+      changed = true;
+      return `let ${gateVar}=${platformVar}===\`linux\`?{...${featuresVar},computerUse:!0,computerUseNodeRepl:!0}:${platformVar}===\`win32\`&&${envVar}.CODEX_ELECTRON_ENABLE_WINDOWS_COMPUTER_USE===\`1\`?{...${featuresVar},computerUse:!0,computerUseNodeRepl:!0}:${featuresVar},`;
+    },
+  );
+  patchedSource = patchedSource.replace(
+    chainedWindowsOnlyFeaturePattern,
+    (_, gateVar, platformVar, envVar, featuresVar) => {
+      changed = true;
+      return `,${gateVar}=${platformVar}===\`linux\`?{...${featuresVar},computerUse:!0,computerUseNodeRepl:!0}:${platformVar}===\`win32\`&&${envVar}.CODEX_ELECTRON_ENABLE_WINDOWS_COMPUTER_USE===\`1\`?{...${featuresVar},computerUse:!0,computerUseNodeRepl:!0}:${featuresVar},`;
+    },
+  );
+
+  if (changed) {
+    return patchedSource;
+  }
+
+  if (
+    patchedFeaturePattern.test(currentSource) ||
+    currentPatchedFeaturePattern.test(currentSource) ||
+    currentChainedPatchedFeaturePattern.test(currentSource)
+  ) {
+    return currentSource;
+  }
+
+  if (currentSource.includes("CODEX_ELECTRON_ENABLE_WINDOWS_COMPUTER_USE")) {
+    console.warn(
+      "WARN: Could not find Computer Use desktop feature gate — skipping Linux Computer Use feature patch",
+    );
+  }
+
   return currentSource;
 }
 
@@ -450,7 +502,7 @@ function applyLinuxComputerUseRendererAvailabilityPatch(currentSource) {
     ) => {
       const contextStart = Math.max(0, offset - 1200);
       const context = patchedSource.slice(contextStart, offset + match.length);
-      if (!context.includes(computerUseFeatureNeedle) && !context.includes("featureName:`windows_computer_use`")) {
+      if (!context.includes(computerUseFeatureNeedle)) {
         return match;
       }
       availabilityGateFound = true;
@@ -535,56 +587,6 @@ function applyLinuxComputerUseRendererAvailabilityPatch(currentSource) {
     );
   }
 
-  const nativeAppsQueryGatePattern =
-    /([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)&&\(([A-Za-z_$][\w$]*)===`macOS`\|\|\3===`windows`(?!\|\|\3===`linux`)\)/g;
-  patchedSource = patchedSource.replace(
-    nativeAppsQueryGatePattern,
-    (match, availableVar, enabledVar, platformVar, offset) => {
-      const nextSource = patchedSource.slice(offset + match.length, offset + match.length + 1400);
-      if (
-        !nextSource.includes("`native-desktop-apps`") ||
-        !nextSource.includes("nativeApps:") ||
-        !nextSource.includes("isLoading:")
-      ) {
-        return match;
-      }
-      nativeAppsGateChanged = true;
-      return `${availableVar}=${enabledVar}&&(${platformVar}===\`macOS\`||${platformVar}===\`windows\`||${platformVar}===\`linux\`)`;
-    },
-  );
-
-  const nativeAppSettingsCardPattern =
-    /if\(([A-Za-z_$][\w$]*)&&\(([A-Za-z_$][\w$]*)===`macOS`\|\|\2===`windows`(?!\|\|\2===`linux`)\)\)for\(let ([A-Za-z_$][\w$]*) of ([A-Za-z_$][\w$]*)\)\{/g;
-  patchedSource = patchedSource.replace(
-    nativeAppSettingsCardPattern,
-    (match, enabledVar, platformVar, itemVar, appsVar, offset) => {
-      const nextSource = patchedSource.slice(offset + match.length, offset + match.length + 1800);
-      if (
-        !nextSource.includes("appControlId") ||
-        !nextSource.includes("toggleAriaLabel") ||
-        !nextSource.includes("plugin.installed")
-      ) {
-        return match;
-      }
-      nativeAppsGateChanged = true;
-      return `if(${enabledVar}&&(${platformVar}===\`macOS\`||${platformVar}===\`windows\`||${platformVar}===\`linux\`))for(let ${itemVar} of ${appsVar}){`;
-    },
-  );
-
-  const nativeAppIconQueryGatePattern =
-    /([A-Za-z_$][\w$]*)=\(([A-Za-z_$][\w$]*)===`macOS`\|\|\2===`windows`(?!\|\|\2===`linux`)\)&&([A-Za-z_$][\w$]*)!=null&&\3!==``/g;
-  patchedSource = patchedSource.replace(
-    nativeAppIconQueryGatePattern,
-    (match, availableVar, platformVar, appPathVar, offset) => {
-      const nextSource = patchedSource.slice(offset + match.length, offset + match.length + 1200);
-      if (!nextSource.includes("`computer-use-native-desktop-app-icon`")) {
-        return match;
-      }
-      nativeAppsGateChanged = true;
-      return `${availableVar}=(${platformVar}===\`macOS\`||${platformVar}===\`windows\`||${platformVar}===\`linux\`)&&${appPathVar}!=null&&${appPathVar}!==\`\``;
-    },
-  );
-
   if (availabilityChanged || nativeAppsGateChanged || availabilityAlreadyPatched()) {
     return patchedSource;
   }
@@ -602,9 +604,6 @@ function applyLinuxComputerUseRendererAvailabilityPatch(currentSource) {
 function applyLinuxComputerUseInstallFlowPatch(currentSource) {
   const currentRequiredFeaturesObjectPattern =
     /([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)\(\{areRequiredFeaturesEnabled:([A-Za-z_$][\w$]*),enabled:([A-Za-z_$][\w$]*),isAnyFeatureLoading:([A-Za-z_$][\w$]*),isComputerUseGateEnabled:([A-Za-z_$][\w$]*),isHostCompatiblePlatform:([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*)\),isPlatformLoading:([A-Za-z_$][\w$]*),windowType:`electron`\}\)/g;
-  const hasComputerUseInstallFlowFeature = (source) =>
-    source.includes("featureName:`computer_use`") ||
-    source.includes("featureName:`windows_computer_use`");
 
   let changed = false;
   let patchedSource = currentSource;
@@ -626,7 +625,7 @@ function applyLinuxComputerUseInstallFlowPatch(currentSource) {
     ) => {
       const contextStart = Math.max(0, offset - 1200);
       const context = patchedSource.slice(contextStart, offset + match.length);
-      if (!hasComputerUseInstallFlowFeature(context)) {
+      if (!context.includes("featureName:`computer_use`")) {
         return match;
       }
       changed = true;
@@ -644,7 +643,7 @@ function applyLinuxComputerUseInstallFlowPatch(currentSource) {
     return currentSource;
   }
 
-  if (hasComputerUseInstallFlowFeature(currentSource)) {
+  if (currentSource.includes("featureName:`computer_use`")) {
     console.warn(
       "WARN: Could not find Computer Use install flow gate — skipping Linux Computer Use install flow patch",
     );

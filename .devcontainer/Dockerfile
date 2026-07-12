@@ -8,8 +8,6 @@ ARG NODE_VERSION=22.22.2
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PATH="/usr/local/cargo/bin:${PATH}"
 
-SHELL ["/bin/bash", "-o", "pipefail", "-c"]
-
 RUN apt-get update -qq \
     && apt-get install -y --no-install-recommends \
         bash \
@@ -50,39 +48,6 @@ RUN set -eux; \
     node --version; \
     npm --version; \
     corepack enable
-
-RUN set -eux; \
-    if command -v 7zz >/dev/null 2>&1 && 7zz 2>&1 | grep -qm 1 "7-Zip"; then \
-        echo "7zz already available at $(command -v 7zz)"; \
-    else \
-        arch="$(dpkg --print-architecture)"; \
-        case "$arch" in \
-            amd64) sevenzip_arch="x64" ;; \
-            arm64) sevenzip_arch="arm64" ;; \
-            *) echo "Unsupported architecture for 7zz bootstrap: $arch" >&2; exit 1 ;; \
-        esac; \
-        tmpdir="$(mktemp -d)"; \
-        trap 'rm -rf "$tmpdir"' EXIT; \
-        found=0; \
-        for candidate in 2601 2600 2500 2409; do \
-            candidate_tag="${candidate:0:2}.${candidate:2:2}"; \
-            candidate_url="https://github.com/ip7z/7zip/releases/download/${candidate_tag}/7z${candidate}-linux-${sevenzip_arch}.tar.xz"; \
-            if curl -fsL --retry 2 --retry-delay 2 -o "$tmpdir/7z.tar.xz" "$candidate_url" \
-                && tar -tf "$tmpdir/7z.tar.xz" 7zz >/dev/null 2>&1; then \
-                found=1; \
-                echo "Installing 7zz ${candidate} from ${candidate_url}"; \
-                tar -C "$tmpdir" -xf "$tmpdir/7z.tar.xz" 7zz; \
-                install -m 755 "$tmpdir/7zz" /usr/local/bin/7zz; \
-                break; \
-            fi; \
-            rm -f "$tmpdir/7z.tar.xz"; \
-        done; \
-        if [ "$found" -ne 1 ]; then \
-            echo "Could not find a known-good 7zz tarball for architecture '$arch'." >&2; \
-            exit 1; \
-        fi; \
-    fi; \
-    /usr/local/bin/7zz --help >/dev/null
 
 RUN if ! getent group "$USER_GID" >/dev/null; then groupadd --gid "$USER_GID" "$USERNAME"; fi \
     && if ! getent passwd "$USER_UID" >/dev/null; then useradd --uid "$USER_UID" --gid "$USER_GID" -m "$USERNAME" --shell /bin/bash; fi \

@@ -48,7 +48,7 @@ const WEB_MODE_API_PREFIXES = [
   "/wham/",
 ];
 
-const BUNDLED_PLUGIN_NAMES = ["browser", "chrome", "computer-use", "read-aloud"];
+const BUNDLED_PLUGIN_NAMES = ["browser-use", "chrome", "computer-use"];
 const SHUTDOWN_TIMEOUT_MS = 3000;
 const REMOTE_CONTROL_ENROLLMENTS_KEY = "electron-remote-control-client-enrollments";
 const REMOTE_CONTROL_PROTOCOL_VERSION = "3";
@@ -3565,18 +3565,16 @@ function patchWebModeProjectlessOutputDirectory(source) {
 
 function patchWebModeAssetSource(target, source) {
   const basename = path.basename(target);
-  const extension = path.extname(basename);
-  let patched = source;
-  if (extension === ".js" || extension === ".mjs") {
-    patched = patchWebModeStatsigGateDefaults(patched);
-  }
   if (basename.startsWith("electron-menu-shortcuts-")) {
-    patched = patched.replaceAll("t?.bindings.filter", "t?.bindings?.filter");
+    return source.replaceAll("t?.bindings.filter", "t?.bindings?.filter");
+  }
+  if (basename.startsWith("src-")) {
+    return patchWebModeStatsigGateDefaults(source);
   }
   if (basename.startsWith("reply-")) {
-    patched = patchWebModeProjectlessOutputDirectory(patched);
+    return patchWebModeProjectlessOutputDirectory(source);
   }
-  return patched;
+  return source;
 }
 
 function shouldServeSpaFallback(requestPath) {
@@ -3945,80 +3943,27 @@ async function syncBundledMarketplace(args, pluginNames) {
       : [];
   }
 
-  const manifestMetadataForPlugin = async (pluginName, fallbackCategory = "Productivity") => {
-    const pluginJsonPath = path.join(sourceRoot, "plugins", pluginName, ".codex-plugin", "plugin.json");
-    if (!(await exists(pluginJsonPath))) {
-      return null;
-    }
-    let category = fallbackCategory;
-    let manifestInterface = null;
-    const manifestFields = {};
-    try {
-      const manifest = await readJsonFile(pluginJsonPath);
-      manifestInterface =
-        manifest?.interface != null && typeof manifest.interface === "object" && !Array.isArray(manifest.interface)
-          ? manifest.interface
-          : null;
-      category = manifestInterface?.category || category;
-      for (const key of ["version", "description", "homepage", "license"]) {
-        if (typeof manifest?.[key] === "string" && manifest[key].length > 0) {
-          manifestFields[key] = manifest[key];
-        }
-      }
-      if (manifest?.author != null && typeof manifest.author === "object" && !Array.isArray(manifest.author)) {
-        manifestFields.author = manifest.author;
-      }
-      if (Array.isArray(manifest?.keywords)) {
-        manifestFields.keywords = manifest.keywords;
-      }
-    } catch {
-      // Keep the generated marketplace usable even if a local manifest drifts.
-    }
-    return {
-      category,
-      ...manifestFields,
-      ...(manifestInterface != null ? { interface: manifestInterface } : {}),
-    };
-  };
-
-  marketplace.plugins = await Promise.all(
-    marketplace.plugins.map(async (plugin) => {
-      const pluginName = plugin?.name;
-      if (typeof pluginName !== "string" || !allowedPlugins.has(pluginName)) {
-        return plugin;
-      }
-      const manifestMetadata = await manifestMetadataForPlugin(pluginName, plugin?.category || "Productivity");
-      if (manifestMetadata == null) {
-        return plugin;
-      }
-      const pluginInterface =
-        plugin?.interface != null && typeof plugin.interface === "object" && !Array.isArray(plugin.interface)
-          ? plugin.interface
-          : null;
-      return {
-        ...manifestMetadata,
-        ...plugin,
-        ...(manifestMetadata.interface != null || pluginInterface != null
-          ? { interface: { ...(manifestMetadata.interface || {}), ...(pluginInterface || {}) } }
-          : {}),
-      };
-    }),
-  );
-
   const marketplacePluginNames = new Set(marketplace.plugins.map((plugin) => plugin?.name).filter(Boolean));
   for (const pluginName of pluginNames) {
     if (marketplacePluginNames.has(pluginName)) {
       continue;
     }
-    const manifestMetadata = await manifestMetadataForPlugin(pluginName);
-    if (manifestMetadata == null) {
+    const pluginJsonPath = path.join(sourceRoot, "plugins", pluginName, ".codex-plugin", "plugin.json");
+    if (!(await exists(pluginJsonPath))) {
       continue;
+    }
+    let category = "Productivity";
+    try {
+      const manifest = await readJsonFile(pluginJsonPath);
+      category = manifest?.interface?.category || category;
+    } catch {
+      // Keep the generated marketplace usable even if a local manifest drifts.
     }
     marketplace.plugins.push({
       name: pluginName,
       source: { source: "local", path: `./plugins/${pluginName}` },
       policy: { installation: "AVAILABLE", authentication: "ON_INSTALL" },
-      ...manifestMetadata,
+      category,
     });
   }
   marketplace.plugins = marketplace.plugins.filter((plugin) => allowedPlugins.has(plugin?.name));

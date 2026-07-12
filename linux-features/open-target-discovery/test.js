@@ -13,8 +13,8 @@ const {
   applyNativeOpenTargetSelectionPatch,
   applyOpenInTargetCommandPatch,
   applyOpenInTargetRegistryCommandPatch,
-  applyOpenInTargetsAvailablePatch,
   applyOpenInTargetsBridgeDetectionPatch,
+  applyOpenInTargetsAvailabilityPatch,
   applyOpenInTargetsDirectoryModePatch,
   descriptors,
 } = require("./patch.js");
@@ -133,40 +133,8 @@ function createSpawnRecorder({ failCommands = [], recordOptions = false, execFil
   };
 }
 
-function hideExecutablePaths(hiddenPaths) {
-  const hidden = new Set(hiddenPaths);
-  const isHidden = (target) => hidden.has(String(target));
-  const enoent = (target) => Object.assign(new Error(`ENOENT: no such file or directory, '${target}'`), {
-    code: "ENOENT",
-    path: target,
-  });
-  return new Proxy(fs, {
-    get(target, prop, receiver) {
-      if (prop === "existsSync") {
-        return (file) => !isHidden(file) && fs.existsSync(file);
-      }
-      if (prop === "statSync") {
-        return (file, ...args) => {
-          if (isHidden(file)) throw enoent(file);
-          return fs.statSync(file, ...args);
-        };
-      }
-      if (prop === "accessSync") {
-        return (file, ...args) => {
-          if (isHidden(file)) throw enoent(file);
-          return fs.accessSync(file, ...args);
-        };
-      }
-      return Reflect.get(target, prop, receiver);
-    },
-  });
-}
-
-function requireStub(spawnRecorder = createSpawnRecorder(), openPathCalls = [], moduleOverrides = {}) {
+function requireStub(spawnRecorder = createSpawnRecorder(), openPathCalls = []) {
   return (name) => {
-    if (Object.prototype.hasOwnProperty.call(moduleOverrides, name)) {
-      return moduleOverrides[name];
-    }
     if (name === "node:fs") return fs;
     if (name === "node:path") return path;
     if (name === "node:url") return { pathToFileURL };
@@ -185,11 +153,11 @@ function requireStub(spawnRecorder = createSpawnRecorder(), openPathCalls = [], 
   };
 }
 
-function evaluatePatched(source, env, expression, spawnRecorder, openPathCalls, moduleOverrides) {
+function evaluatePatched(source, env, expression, spawnRecorder, openPathCalls) {
   const patched = applyPatchTwice(applyMainBundlePatch, source);
   assert.doesNotThrow(() => new Function("require", "process", `${patched};return ${expression};`));
   return new Function("require", "process", `${patched};return ${expression};`)(
-    requireStub(spawnRecorder, openPathCalls, moduleOverrides),
+    requireStub(spawnRecorder, openPathCalls),
     { platform: "linux", env },
   );
 }
@@ -604,7 +572,14 @@ test("open-target discovery falls back to the Exec command", async () => {
     const editorCommand = makeExecutable(path.join(tmp, "toolbox", "bin"), "workspace-agent");
     const desktopFile = path.join(appsDir, "workspace-agent.desktop");
     const projectDir = path.join(tmp, "project");
-    const spawnRecorder = createSpawnRecorder();
+    const spawnRecorder = createSpawnRecorder({
+      failCommands: [
+        "/home/linuxbrew/.linuxbrew/bin/gio",
+        "/home/linuxbrew/.linuxbrew/bin/gtk-launch",
+        "/var/home/linuxbrew/.linuxbrew/bin/gio",
+        "/var/home/linuxbrew/.linuxbrew/bin/gtk-launch",
+      ],
+    });
     fs.mkdirSync(appsDir, { recursive: true });
     fs.mkdirSync(projectDir, { recursive: true });
     fs.writeFileSync(
@@ -629,22 +604,11 @@ test("open-target discovery falls back to the Exec command", async () => {
       },
       "Xg.find((target)=>target.platforms.linux?.label===`Workspace Agent`).platforms.linux",
       spawnRecorder,
-      undefined,
-      {
-        "node:fs": hideExecutablePaths([
-          "/home/linuxbrew/.linuxbrew/bin/gio",
-          "/home/linuxbrew/.linuxbrew/bin/gtk-launch",
-          "/var/home/linuxbrew/.linuxbrew/bin/gio",
-          "/var/home/linuxbrew/.linuxbrew/bin/gtk-launch",
-        ]),
-      },
     );
 
     await platform.open({ command: editorCommand, path: projectDir });
 
-    assert.deepEqual(spawnRecorder.calls, [
-      { command: editorCommand, args: ["--goto", projectDir] },
-    ]);
+    assert.deepEqual(spawnRecorder.calls.at(-1), { command: editorCommand, args: ["--goto", projectDir] });
   });
 });
 
@@ -1302,7 +1266,6 @@ test("open-target discovery native selector includes available directory-capable
     { target: "terminal", available: true, kind: "terminal" },
     { target: "vscode", available: true, kind: "editor" },
     { target: "linux-desktop-kate", available: true, kind: "editor" },
-    { target: "linux-desktop-agent", appPath: "/usr/share/applications/agent.desktop", available: false, kind: "editor" },
     { target: "linux-desktop-hidden", available: false, kind: "editor" },
   ];
 
@@ -1469,32 +1432,19 @@ test("open-target discovery participates in feature loading and patch reports", 
         fs.mkdirSync(assetsDir, { recursive: true });
         fs.writeFileSync(path.join(buildDir, "main.js"), openTargetsBundle);
         fs.writeFileSync(path.join(tempApp, "package.json"), JSON.stringify({ name: "codex" }));
-        const sharedBundleName =
-          "app-initial~app-main~worktree-init-v2-page~remote-conversati~appgen-publication-terms-route~remote-conversation.js";
-        fs.writeFileSync(
-          path.join(assetsDir, sharedBundleName),
-          openTargetSelectionBundle,
-        );
 
         const report = createPatchReport();
         captureWarns(() => patchExtractedApp(tempApp, { report }));
         const patched = fs.readFileSync(path.join(buildDir, "main.js"), "utf8");
-        const patchedSelection = fs.readFileSync(path.join(assetsDir, sharedBundleName), "utf8");
 
         assert.match(patched, /linux:\{label:`Terminal`/);
         assert.match(patched, /\.\.\.codexLinuxDiscoveredIdeTargets\(\)/);
-        assert.match(patchedSelection, /codexLinuxDirectoryOpenTarget/);
         assert.ok(
           report.patches.some((patch) =>
             patch.name === "feature:open-target-discovery:main-bundle-open-target-discovery" &&
             patch.status === "applied",
           ),
         );
-        const webviewPatch = report.patches.find(
-          (patch) => patch.name === "feature:open-target-discovery:webview-native-open-target-selection",
-        );
-        assert.ok(webviewPatch);
-        assert.equal(webviewPatch.status, "applied");
       } finally {
         fs.rmSync(tempApp, { recursive: true, force: true });
       }

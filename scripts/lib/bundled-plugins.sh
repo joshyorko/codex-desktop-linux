@@ -1,5 +1,5 @@
 #!/bin/bash
-# Bundled-plugin staging — Browser Use, Chrome, Sites, Linux Computer Use, manifests, marketplace.
+# Bundled-plugin staging — Browser Use, Chrome, Linux Computer Use, manifests, marketplace.
 #
 # Sourced by install.sh. Do not run directly.
 # shellcheck shell=bash
@@ -1389,37 +1389,12 @@ stage_browser_plugin_from_upstream() {
     return 0
 }
 
-stage_sites_plugin_from_upstream() {
-    local source_plugin="$1"
-    local target_plugins="$2"
-    local target_plugin="$target_plugins/sites"
-
-    if [ ! -d "$source_plugin" ]; then
-        info "Sites bundled plugin resources not present in upstream app; skipping Sites"
-        return 1
-    fi
-
-    if [ ! -f "$source_plugin/.codex-plugin/plugin.json" ] || [ ! -f "$source_plugin/.app.json" ]; then
-        warn "Sites plugin manifest or app connector metadata not found in upstream app; skipping Sites"
-        return 1
-    fi
-
-    rm -rf "$target_plugin"
-    cp -R "$source_plugin" "$target_plugin"
-    remove_macos_sidecar_files "$target_plugin"
-    normalize_plugin_script_executable_modes "$target_plugin"
-
-    info "Sites plugin staged from upstream DMG"
-    return 0
-}
-
 write_bundled_plugins_marketplace() {
     local source="$1"
     local destination="$2"
     local include_browser="$3"
     local include_chrome="$4"
     local include_computer_use="$5"
-    local include_sites="$6"
 
     shift 5
 
@@ -1436,79 +1411,9 @@ const portablePluginNames = process.argv.slice(7);
 const marketplace = JSON.parse(fs.readFileSync(sourcePath, "utf8"));
 const sourcePlugins = marketplace.plugins || [];
 const plugins = [];
-const marketplaceRoot = path.resolve(path.dirname(destinationPath), "..", "..");
-
-function readStagedPluginManifest(pluginName) {
-  const manifestPath = path.join(
-    marketplaceRoot,
-    "plugins",
-    pluginName,
-    ".codex-plugin",
-    "plugin.json",
-  );
-  try {
-    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
-    return manifest != null && typeof manifest === "object" && !Array.isArray(manifest) ? manifest : null;
-  } catch (_err) {
-    return null;
-  }
-}
-
-function synthesizeLocalMarketplacePlugin(pluginName, fallbackCategory) {
-  const manifest = readStagedPluginManifest(pluginName);
-  const manifestInterface =
-    manifest?.interface != null && typeof manifest.interface === "object" && !Array.isArray(manifest.interface)
-      ? manifest.interface
-      : null;
-  const name =
-    typeof manifest?.name === "string" && manifest.name.length > 0 ? manifest.name : pluginName;
-  const category =
-    typeof manifestInterface?.category === "string" && manifestInterface.category.length > 0
-      ? manifestInterface.category
-      : fallbackCategory;
-  const entry = {
-    name,
-    source: {
-      source: "local",
-      path: `./plugins/${pluginName}`,
-    },
-    policy: {
-      installation: "AVAILABLE",
-      authentication: "ON_INSTALL",
-    },
-    category,
-  };
-  for (const key of ["version", "description", "homepage", "license"]) {
-    if (typeof manifest?.[key] === "string" && manifest[key].length > 0) {
-      entry[key] = manifest[key];
-    }
-  }
-  if (manifest?.author != null && typeof manifest.author === "object" && !Array.isArray(manifest.author)) {
-    entry.author = manifest.author;
-  }
-  if (Array.isArray(manifest?.keywords)) {
-    entry.keywords = manifest.keywords;
-  }
-  if (manifestInterface != null) {
-    entry.interface = manifestInterface;
-  }
-  return entry;
-}
-
-function requireRealBundledPlugin(pluginName) {
-  const plugin = sourcePlugins.find((entry) => entry?.name === pluginName);
-  if (plugin == null || plugin.source?.source !== "local" || plugin.source.path !== `./plugins/${pluginName}`) {
-    throw new Error(`Bundled marketplace has no real ${pluginName} plugin entry`);
-  }
-  const manifestPath = path.resolve(path.dirname(destinationPath), "..", "..", plugin.source.path, ".codex-plugin", "plugin.json");
-  const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
-  if (manifest.name !== pluginName || typeof manifest.version !== "string" || manifest.version.length === 0) {
-    throw new Error(`Staged ${pluginName} manifest identity or version is invalid`);
-  }
-  return plugin;
-}
 
 if (includeBrowser) {
+  const marketplaceRoot = path.resolve(path.dirname(destinationPath), "..", "..");
   const browser = sourcePlugins.find((plugin) => {
     if (plugin == null || typeof plugin !== "object") {
       return false;
@@ -1618,11 +1523,18 @@ if (includeChrome) {
 }
 
 if (includeComputerUse) {
-  plugins.push(requireRealBundledPlugin("computer-use"));
-}
-
-if (includeSites) {
-  plugins.push(requireRealBundledPlugin("sites"));
+  plugins.push({
+    name: "computer-use",
+    source: {
+      source: "local",
+      path: "./plugins/computer-use",
+    },
+    policy: {
+      installation: "AVAILABLE",
+      authentication: "ON_INSTALL",
+    },
+    category: "Productivity",
+  });
 }
 
 for (const name of portablePluginNames) {
@@ -1669,7 +1581,6 @@ install_bundled_plugin_resources() {
     local source_marketplace="$bundled_source_root/.agents/plugins/marketplace.json"
     local source_browser_plugin=""
     local source_chrome_plugin="$upstream_resources/plugins/openai-bundled/plugins/chrome"
-    local source_sites_plugin="$upstream_resources/plugins/openai-bundled/plugins/sites"
     local resources_dir="$INSTALL_DIR/resources"
     local bundled_plugins_dir="$resources_dir/plugins/openai-bundled"
     local include_browser=0
@@ -1708,10 +1619,6 @@ install_bundled_plugin_resources() {
 
     if stage_chrome_plugin_from_upstream "$source_chrome_plugin" "$bundled_plugins_dir/plugins"; then
         include_chrome=1
-    fi
-
-    if stage_sites_plugin_from_upstream "$source_sites_plugin" "$bundled_plugins_dir/plugins"; then
-        include_sites=1
     fi
 
     if stage_linux_computer_use_plugin "$bundled_plugins_dir/plugins"; then

@@ -6,7 +6,6 @@ const { spawnSync } = require("node:child_process");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
-const vm = require("node:vm");
 const test = require("node:test");
 const {
   applyAppMainRoutePatch,
@@ -37,12 +36,6 @@ function twice(fn, source) {
   const patched = fn(source);
   assert.equal(fn(patched), patched);
   return patched;
-}
-
-function writeExecutable(filePath, contents = "#!/bin/sh\nexit 0\n") {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, contents);
-  fs.chmodSync(filePath, 0o755);
 }
 
 function captureWarnings(fn) {
@@ -178,9 +171,8 @@ test("webview runtime appends only once", () => {
   const patched = twice(applyIndexRuntimePatch, "console.log(`index`);");
   assert.match(patched, /codexLinuxReadAloudClick/);
   assert.match(patched, /vscode:\/\/codex\/"\+METHOD/);
-  assert.match(patched, /bridge-entry/);
-  assert.match(patched, /bridge-response/);
-  assert.doesNotMatch(patched, /codex-message-from-view/);
+  assert.match(patched, /codex-message-from-view/);
+  assert.match(patched, /__codexForwardedViaBridge/);
   assert.match(patched, /Starting voice/);
   assert.match(patched, /kokoro-explicit-v5/);
   assert.match(patched, /codexLinuxConversationIsSpeaking/);
@@ -196,118 +188,6 @@ test("webview runtime appends only once", () => {
   assert.doesNotMatch(patched, /no-voices/);
   assert.doesNotMatch(patched, /completed===false/);
   assert.doesNotThrow(() => new Function("window", "localStorage", patched));
-});
-
-test("current DMG bridge carries a button click to the main handler and response", async () => {
-  const patched = applyIndexRuntimePatch("console.log(`index`);");
-  const messages = [];
-  const customEvents = [];
-  const context = {
-    console: { log() {}, info: (...args) => messages.push(args), warn: (...args) => messages.push(args) },
-    setTimeout,
-    clearTimeout,
-    CustomEvent: class CustomEvent {},
-    MessageEvent: class MessageEvent {
-      constructor(type, init) {
-        this.type = type;
-        this.data = init.data;
-      }
-    },
-    document: {
-      head: { appendChild() {} },
-      getElementById() { return null; },
-      createElement() { return { style: {}, setAttribute() {} }; },
-    },
-    window: {
-      addEventListener(type, handler) {
-        if (type === "message") context.onMessage = handler;
-      },
-      dispatchEvent(event) {
-        customEvents.push(event);
-      },
-      electronBridge: {
-        async sendMessageFromView(payload) {
-          messages.push(["bridge-entry", payload.type, payload.url]);
-          const body = JSON.parse(payload.body);
-          assert.deepEqual(body, { action: "speak", source: "button", text: "Hello from current DMG" });
-          context.onMessage({
-            data: {
-              type: "fetch-response",
-              responseType: "success",
-              requestId: payload.requestId,
-              status: 200,
-              bodyJsonString: JSON.stringify({ started: true, backend: "kokoro" }),
-            },
-          });
-        },
-      },
-    },
-  };
-  context.globalThis = context;
-  vm.createContext(context);
-  vm.runInContext(patched, context);
-
-  const button = {
-    dataset: {},
-    setAttribute() {},
-    blur() {},
-  };
-  await context.codexLinuxReadAloudClick({ content: "ignored" }, "Hello from current DMG", "conversation-1", button);
-  assert.ok(messages.some(([kind]) => kind === "bridge-entry"));
-  assert.equal(customEvents.length, 0, "current DMG uses preload bridge, not the legacy DOM fallback");
-});
-
-test("missing current bridge fails boundedly without a DOM fallback", async () => {
-  const harness = runtimeHarness();
-  await harness.context.codexLinuxReadAloudClick({}, "bridge missing", "conversation-2", harness.button);
-  assert.equal(harness.customEvents.length, 0);
-  assert.ok(harness.messages.some(([kind]) => kind === "[linux-read-aloud] bridge-unavailable"));
-  assert.equal(harness.button.dataset.codexLinuxReadAloudState, "error");
-});
-
-test("rejected current bridge fails boundedly and reports bridge-error", async () => {
-  const harness = runtimeHarness(() => Promise.reject(new Error("ipc unavailable")));
-  await harness.context.codexLinuxReadAloudClick({}, "bridge rejected", "conversation-3", harness.button);
-  assert.equal(harness.customEvents.length, 0);
-  assert.ok(harness.messages.some(([kind]) => kind === "[linux-read-aloud] bridge-error"));
-  assert.equal(harness.button.dataset.codexLinuxReadAloudState, "error");
-});
-
-test("successful fetch-response consumes the response and enters speaking state", async () => {
-  let requestId;
-  const harness = runtimeHarness(async (payload) => {
-    if (payload.type === "fetch") requestId = payload.requestId;
-    harness.context.onMessage({
-      data: {
-        type: "fetch-response",
-        responseType: "success",
-        requestId,
-        status: 200,
-        bodyJsonString: JSON.stringify({ spoken: true, backend: "kokoro" }),
-      },
-    });
-  });
-  await harness.context.codexLinuxReadAloudClick({}, "response success", "conversation-4", harness.button);
-  assert.match(requestId, /^codex-linux-read-aloud-/);
-  assert.equal(harness.button.dataset.codexLinuxReadAloudState, "speaking");
-  assert.ok(harness.messages.some(([kind]) => kind === "[linux-read-aloud] bridge-response"));
-});
-
-test("error fetch-response clears the pending request and enters error state", async () => {
-  const harness = runtimeHarness(async (payload) => {
-    harness.context.onMessage({
-      data: {
-        type: "fetch-response",
-        responseType: "error",
-        requestId: payload.requestId,
-        status: 432,
-        error: "handler unavailable",
-      },
-    });
-  });
-  await harness.context.codexLinuxReadAloudClick({}, "response error", "conversation-5", harness.button);
-  assert.equal(harness.button.dataset.codexLinuxReadAloudState, "error");
-  assert.ok(harness.messages.some(([kind]) => kind === "[linux-read-aloud] bridge-response"));
 });
 
 test("kokoro stdin runner compiles and makes a bounded first streaming chunk", (t) => {
@@ -497,8 +377,6 @@ test("main handler stores a chosen Kokoro model folder", async () => {
     fs.mkdirSync(path.dirname(python), { recursive: true });
     fs.writeFileSync(python, "");
     fs.chmodSync(python, 0o755);
-    const commandDir = path.join(root, "bin");
-    writeExecutable(path.join(commandDir, "aplay"));
 
     const source = [
       "let e=require(`node:child_process`),f=require(`node:fs`),p=require(`node:path`),o=require(`node:os`);",
@@ -530,13 +408,7 @@ test("main handler stores a chosen Kokoro model folder", async () => {
     };
     const processStub = {
       platform: "linux",
-      env: {
-        HOME: root,
-        PATH: "",
-        XDG_CONFIG_HOME: configHome,
-        CODEX_LINUX_READ_ALOUD_COMMAND_DIRS: commandDir,
-        CODEX_LINUX_READ_ALOUD_STANDARD_COMMAND_DIRS: "0",
-      },
+      env: { HOME: root, XDG_CONFIG_HOME: configHome },
       resourcesPath,
     };
     const result = await new Function(
@@ -588,12 +460,7 @@ test("main handler reports when a chosen Kokoro model folder is not speakable ye
     };
     const processStub = {
       platform: "linux",
-      env: {
-        HOME: root,
-        PATH: "",
-        XDG_CONFIG_HOME: configHome,
-        CODEX_LINUX_READ_ALOUD_STANDARD_COMMAND_DIRS: "0",
-      },
+      env: { HOME: root, XDG_CONFIG_HOME: configHome },
       resourcesPath: path.join(root, "resources"),
     };
     const result = await new Function(
@@ -632,8 +499,6 @@ test("main handler honors Linux app-specific settings paths", async () => {
     fs.mkdirSync(path.dirname(python), { recursive: true });
     fs.writeFileSync(python, "");
     fs.chmodSync(python, 0o755);
-    const commandDir = path.join(root, "bin");
-    writeExecutable(path.join(commandDir, "aplay"));
 
     const source = [
       "let e=require(`node:child_process`),f=require(`node:fs`),p=require(`node:path`),o=require(`node:os`);",
@@ -662,14 +527,7 @@ test("main handler honors Linux app-specific settings paths", async () => {
     };
     const processStub = {
       platform: "linux",
-      env: {
-        HOME: root,
-        PATH: "",
-        XDG_CONFIG_HOME: configHome,
-        CODEX_LINUX_APP_ID: "codex-desktop-5",
-        CODEX_LINUX_READ_ALOUD_COMMAND_DIRS: commandDir,
-        CODEX_LINUX_READ_ALOUD_STANDARD_COMMAND_DIRS: "0",
-      },
+      env: { HOME: root, XDG_CONFIG_HOME: configHome, CODEX_LINUX_APP_ID: "codex-desktop-5" },
       resourcesPath,
     };
     const result = await new Function(
@@ -708,11 +566,7 @@ test("main handler reports missing Python during download setup", async () => {
     };
     const processStub = {
       platform: "linux",
-      env: {
-        HOME: root,
-        PATH: "",
-        CODEX_LINUX_READ_ALOUD_STANDARD_COMMAND_DIRS: "0",
-      },
+      env: { HOME: root },
       resourcesPath: path.join(root, "resources"),
     };
     const result = await new Function(
@@ -818,9 +672,6 @@ test("main handler enables native fallback by default but allows explicit disabl
 test("main handler treats the message button as an explicit speech request", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-read-aloud-main-"));
   try {
-    const commandDir = path.join(root, "bin");
-    const spdSay = path.join(commandDir, "spd-say");
-    writeExecutable(spdSay);
     const source = [
       "let e=require(`node:child_process`),f=require(`node:fs`),p=require(`node:path`),o=require(`node:os`);",
       "var h={handlers:{\"set-vs-context\":async()=>{},\"native-desktop-apps\":async()=>({apps:[]})}};",
@@ -830,7 +681,9 @@ test("main handler treats the message button as an explicit speech request", asy
     const requireStub = (name) => {
       if (name === "node:child_process") {
         return {
-          spawnSync: () => ({ status: 1 }),
+          spawnSync: (command, args) => ({
+            status: command === "which" && args?.[0] === "spd-say" ? 0 : 1,
+          }),
           spawn: (command, args, options) => {
             spawned.push({ command, args, options });
             return {
@@ -847,7 +700,7 @@ test("main handler treats the message button as an explicit speech request", asy
     };
     const processStub = {
       platform: "linux",
-      env: { HOME: root, PATH: "", CODEX_LINUX_READ_ALOUD_COMMAND_DIRS: commandDir },
+      env: { HOME: root },
       resourcesPath: path.join(root, "resources"),
     };
 
@@ -858,7 +711,7 @@ test("main handler treats the message button as an explicit speech request", asy
     )(requireStub, processStub);
     assert.equal(buttonResult.spoken, true);
     assert.equal(buttonResult.engine, "spd-say");
-    assert.ok(spawned.some((entry) => entry.command === spdSay && entry.args.includes("--")));
+    assert.ok(spawned.some((entry) => entry.command === "spd-say" && entry.args.includes("--")));
 
     const directResult = await new Function(
       "require",
@@ -875,9 +728,6 @@ test("main handler treats the message button as an explicit speech request", asy
 test("main handler passes the configured Kokoro Python to the runner", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-read-aloud-main-"));
   try {
-    const commandDir = path.join(root, "bin");
-    const aplay = path.join(commandDir, "aplay");
-    writeExecutable(aplay);
     const resourcesPath = path.join(root, "resources");
     const runner = path.join(resourcesPath, "read-aloud", "kokoro-stdin");
     fs.mkdirSync(path.dirname(runner), { recursive: true });
@@ -902,7 +752,9 @@ test("main handler passes the configured Kokoro Python to the runner", async () 
     const requireStub = (name) => {
       if (name === "node:child_process") {
         return {
-          spawnSync: () => ({ status: 1 }),
+          spawnSync: (command, args) => ({
+            status: command === "which" && args?.[0] === "aplay" ? 0 : 1,
+          }),
           spawn: (command, args, options) => {
             spawned.push({ command, args, options });
             return {
@@ -926,8 +778,6 @@ test("main handler passes the configured Kokoro Python to the runner", async () 
       platform: "linux",
       env: {
         HOME: root,
-        PATH: "",
-        CODEX_LINUX_READ_ALOUD_COMMAND_DIRS: commandDir,
         CODEX_LINUX_READ_ALOUD_ENABLED: "1",
         CODEX_LINUX_READ_ALOUD_KOKORO_PYTHON: python,
         CODEX_LINUX_READ_ALOUD_KOKORO_MODEL: model,
@@ -940,7 +790,6 @@ test("main handler passes the configured Kokoro Python to the runner", async () 
     assert.equal(result.engine, "kokoro");
     assert.equal(spawned[0]?.command, runner);
     assert.equal(spawned[0]?.options?.env?.CODEX_LINUX_READ_ALOUD_KOKORO_PYTHON, python);
-    assert.equal(spawned[0]?.options?.env?.CODEX_LINUX_READ_ALOUD_AUDIO_PLAYER, aplay);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -949,9 +798,6 @@ test("main handler passes the configured Kokoro Python to the runner", async () 
 test("main handler falls back to native speech without forcing spd-say voice type", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-read-aloud-main-"));
   try {
-    const commandDir = path.join(root, "bin");
-    const spdSay = path.join(commandDir, "spd-say");
-    writeExecutable(spdSay);
     const source = [
       "let e=require(`node:child_process`),f=require(`node:fs`),p=require(`node:path`),o=require(`node:os`);",
       "var h={handlers:{\"set-vs-context\":async()=>{},\"native-desktop-apps\":async()=>({apps:[]})}};",
@@ -961,7 +807,9 @@ test("main handler falls back to native speech without forcing spd-say voice typ
     const requireStub = (name) => {
       if (name === "node:child_process") {
         return {
-          spawnSync: () => ({ status: 1 }),
+          spawnSync: (command, args) => ({
+            status: command === "which" && args?.[0] === "spd-say" ? 0 : 1,
+          }),
           spawn: (command, args, options) => {
             spawned.push({ command, args, options });
             return {
@@ -982,18 +830,13 @@ test("main handler falls back to native speech without forcing spd-say voice typ
       `${patched};return codexLinuxReadAloudHandle({action:"speak",source:"button",text:"hello"});`,
     )(requireStub, {
       platform: "linux",
-      env: {
-        HOME: root,
-        PATH: "",
-        CODEX_LINUX_READ_ALOUD_COMMAND_DIRS: commandDir,
-        CODEX_LINUX_READ_ALOUD_ENABLED: "1",
-      },
+      env: { HOME: root, CODEX_LINUX_READ_ALOUD_ENABLED: "1" },
       resourcesPath: path.join(root, "resources"),
     });
 
     assert.equal(result.spoken, true);
     assert.equal(result.engine, "spd-say");
-    const speakCall = spawned.find((entry) => entry.command === spdSay && entry.args.includes("--"));
+    const speakCall = spawned.find((entry) => entry.command === "spd-say" && entry.args.includes("--"));
     assert.ok(speakCall);
     assert.equal(speakCall.args.includes("-t"), false);
   } finally {

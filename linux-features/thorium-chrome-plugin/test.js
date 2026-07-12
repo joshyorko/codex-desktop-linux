@@ -108,11 +108,6 @@ function getOpenChromeCommand(profileDirectory) {
 }
 `,
   );
-
-  fs.writeFileSync(
-    path.join(scriptsDir, "browser-client.mjs"),
-    'function codexLinuxChromeUserDataDirectories=()=>WF()==="linux"?[GF(VF(),".config","BraveSoftware","Brave-Browser"),GF(VF(),".config","google-chrome"),GF(VF(),".config","chromium")]:[Tc];',
-  );
 }
 
 function run(command, args, options = {}) {

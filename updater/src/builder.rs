@@ -16,7 +16,7 @@ use tracing::info;
 
 const UPDATE_BUILDER_MANIFEST: &str = ".codex-linux/update-builder-manifest.txt";
 
-const REQUIRED_BUNDLE_FILES: [(&str, &str); 20] = [
+const REQUIRED_BUNDLE_FILES: [(&str, &str); 23] = [
     ("Cargo.toml", "Cargo.toml"),
     ("Cargo.lock", "Cargo.lock"),
     ("computer-use-linux", "computer-use-linux"),
@@ -1026,14 +1026,19 @@ fi
             .join("scripts/patch-linux-window-ui.js")
             .exists());
         assert!(destination_root.join("launcher/webview-server.py").exists());
-        assert!(destination_root.join("launcher/web-mode-server.mjs").exists());
+        assert_fresh_patch_bundle(&destination_root);
+        assert!(destination_root
+            .join("launcher/web-mode-server.mjs")
+            .exists());
         assert!(destination_root
             .join("launcher/web-mode-bootstrap.js")
             .exists());
         assert!(destination_root
             .join("launcher/remote-control-hosts.mjs")
             .exists());
-        assert_fresh_patch_bundle(&destination_root);
+        assert!(destination_root
+            .join("scripts/patches/registry.js")
+            .exists());
         assert!(destination_root.join("computer-use-linux").exists());
         assert!(!destination_root.join("global-dictation-linux").exists());
         assert!(destination_root.join("read-aloud-linux").exists());

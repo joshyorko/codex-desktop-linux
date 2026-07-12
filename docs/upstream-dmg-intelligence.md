@@ -8,6 +8,13 @@ already extracted `.app`, inventories protected surfaces, and writes a JSON plus
 Markdown battle report under `reports/upstream-dmg/<timestamp>/`. That directory
 is gitignored; check in only deliberate fixtures or registry changes.
 
+This report augments the shared release gate; it does not replace it. Release
+acceptance remains owned by `scripts/validate-upstream-dmg.js`, the required
+patch policies, release profile, and patch reports documented in
+`docs/upstream-dmg-acceptance.md`. Platform-gate, new-capability, and runtime
+diagnostics provide additional evidence and may make the local verdict stricter,
+but they cannot turn a blocked shared acceptance result into an accepted one.
+
 ## Commands
 
 Current upstream-vs-cached baseline check, using the repo devcontainer image:
@@ -202,7 +209,7 @@ It classifies gates separately from protected-surface drift:
 - `needs-review`: high-signal but ambiguous feature gate that must be triaged
   before accepting release drift.
 
-## Acceptance Gate
+## Diagnostic Review
 
 The automated tests use synthetic `.app` fixtures and `app.asar.extracted`
 directories so normal verification does not rebuild Electron or require the real

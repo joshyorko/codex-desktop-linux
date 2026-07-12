@@ -60,10 +60,9 @@ What it changes:
 - Updates Remote settings and mobile setup copy so the experimental Linux flow
   is not described as Mac-only.
 - Stages `.codex-linux/cold-start.d/remote-mobile-control`, a feature-owned
-  cold-start hook that starts the remote-control app-server daemon through the
-  launcher-resolved `CODEX_CLI_PATH` when available. It falls back to the
-  upstream managed standalone runtime only when no normal Codex CLI is
-  available or `CODEX_REMOTE_CONTROL_CODEX_PATH` explicitly selects one.
+  cold-start hook that provisions the upstream managed standalone daemon runtime
+  when it is missing, then starts the managed app-server daemon with
+  `remote-control start`.
 
 Remote mobile daemon requirement:
 
@@ -76,22 +75,11 @@ feature uses the upstream managed standalone daemon runtime at:
 ~/.codex/packages/standalone/current/codex
 ```
 
-If that fallback binary is missing, the feature's cold-start hook runs the
-upstream standalone installer with `CODEX_INSTALL_DIR` pointed at a private bin
-directory under `~/.codex/packages/standalone/.bin`. That satisfies the managed
-daemon layout without changing `CODEX_CLI_PATH`, creating `~/.local/bin/codex`,
-or adding PATH blocks to your shell profile.
-
-When `CODEX_CLI_PATH` points outside the standalone runtime and an older
-standalone daemon is still recorded in `~/.codex/app-server-daemon`, the hook
-stops that stale daemon before starting the selected CLI. This avoids
-terminal/desktop split-brain where `codex` attaches to daemon state owned by a
-different runtime.
-
-For older or interrupted installs that leaked the standalone runtime into the
-interactive shell, the cold-start hook also removes `~/.local/bin/codex` when
-that symlink resolves inside `~/.codex/packages/standalone`. User-managed
-`codex` binaries or symlinks outside that standalone runtime are left alone.
+If that binary is missing, the feature's cold-start hook runs the upstream
+standalone installer with `CODEX_INSTALL_DIR` pointed at a private bin directory
+under `~/.codex/packages/standalone/.bin`. That satisfies the managed daemon
+layout without changing `CODEX_CLI_PATH`, creating `~/.local/bin/codex`, or
+adding PATH blocks to your shell profile.
 
 The hook is launched best-effort in the background by the generic launcher hook
 runner. When the system `timeout` command is available, the installer/start path
@@ -131,8 +119,8 @@ package layering, or base-OS mutation. The private `.bin` directory is only a
 launcher-owned target for the installer symlink; it is not prepended to the
 user's persistent shell `PATH`.
 
-Set `CODEX_REMOTE_CONTROL_RUNTIME_AUTO_INSTALL_DISABLED=1` to disable fallback
-standalone runtime provisioning.
+Set `CODEX_REMOTE_CONTROL_RUNTIME_AUTO_INSTALL_DISABLED=1` to disable that
+runtime provisioning and only use an already-installed standalone runtime.
 
 To force a specific daemon binary without affecting the interactive CLI, set:
 
@@ -140,10 +128,9 @@ To force a specific daemon binary without affecting the interactive CLI, set:
 CODEX_REMOTE_CONTROL_CODEX_PATH=/path/to/standalone/codex
 ```
 
-To force Desktop to use Homebrew while the daemon uses standalone, set
-`CODEX_CLI_PATH` to the Brew binary and set `CODEX_REMOTE_CONTROL_CODEX_PATH`
-to the standalone binary. Leaving `CODEX_REMOTE_CONTROL_CODEX_PATH` unset keeps
-the daemon on the same CLI path as Desktop.
+To keep Desktop using Homebrew while the daemon uses standalone, set
+`CODEX_CLI_PATH` to the Brew binary and leave
+`CODEX_REMOTE_CONTROL_CODEX_PATH` unset or pointed at the standalone binary.
 
 KDE Plasma smoke check:
 

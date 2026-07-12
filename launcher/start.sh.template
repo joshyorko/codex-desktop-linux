@@ -649,46 +649,6 @@ raise SystemExit(0 if enabled else 1)
 PY
 }
 
-computer_use_ui_seed_requested() {
-    early_truthy_env_value "${CODEX_LINUX_ENABLE_COMPUTER_USE_UI:-}" && return 0
-    [ -f "$SCRIPT_DIR/.codex-linux/remote-mobile-control-enabled" ] && return 0
-    return 1
-}
-
-seed_self_hosted_computer_use_ui_setting() {
-    computer_use_ui_seed_requested || return 0
-
-    python3 - "$APP_SETTINGS_FILE" <<'PY'
-import json
-import os
-import sys
-
-settings_path = sys.argv[1]
-key = "codex-linux-computer-use-ui-enabled"
-
-try:
-    with open(settings_path, "r", encoding="utf-8") as handle:
-        data = json.load(handle)
-except FileNotFoundError:
-    data = {}
-except (OSError, json.JSONDecodeError):
-    raise SystemExit(0)
-
-if not isinstance(data, dict) or key in data:
-    raise SystemExit(0)
-
-data[key] = True
-settings_dir = os.path.dirname(settings_path)
-if settings_dir:
-    os.makedirs(settings_dir, exist_ok=True)
-tmp_path = f"{settings_path}.tmp-{os.getpid()}"
-with open(tmp_path, "w", encoding="utf-8") as handle:
-    json.dump(data, handle, indent=2, sort_keys=True)
-    handle.write("\n")
-os.replace(tmp_path, settings_path)
-PY
-}
-
 load_packaged_runtime_helper() {
     if [ -f "$PACKAGED_RUNTIME_HELPER" ]; then
         # shellcheck disable=SC1090
@@ -3812,7 +3772,6 @@ export_feature_runtime_env
 load_packaged_runtime_helper
 prepend_managed_node_runtime_to_path
 source_feature_env_files
-seed_self_hosted_computer_use_ui_setting
 if [ "$LAUNCHER_DIAGNOSE_SCALING" -eq 1 ]; then
     print_scaling_diagnostics
     exit 0

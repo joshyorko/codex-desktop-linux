@@ -92,39 +92,6 @@ install_remote_mobile_control_runtime() {
     fi
 }
 
-resolve_remote_mobile_control_codex() {
-    local codex_home="$1"
-
-    if [ -n "${CODEX_REMOTE_CONTROL_CODEX_PATH:-}" ]; then
-        printf '%s\n' "$CODEX_REMOTE_CONTROL_CODEX_PATH"
-        return 0
-    fi
-
-    if [ -n "${CODEX_CLI_PATH:-}" ] && [ -x "$CODEX_CLI_PATH" ]; then
-        printf '%s\n' "$CODEX_CLI_PATH"
-        return 0
-    fi
-
-    if command -v codex >/dev/null 2>&1; then
-        command -v codex
-        return 0
-    fi
-
-    printf '%s\n' "$codex_home/packages/standalone/current/codex"
-}
-
-path_inside_dir() {
-    local candidate="$1"
-    local dir="$2"
-
-    [ -n "$candidate" ] || return 1
-    [ -n "$dir" ] || return 1
-    case "$candidate" in
-        "$dir"|"$dir"/*) return 0 ;;
-        *) return 1 ;;
-    esac
-}
-
 remote_mobile_control_daemon_pid() {
     local pid_file="$1"
 
@@ -152,164 +119,6 @@ cleanup_stale_remote_mobile_daemon_state() {
     done
 }
 
-remote_mobile_process_mentions_path() {
-    local pid="$1"
-    local needle="$2"
-    local cmdline=""
-
-    [ -n "$pid" ] || return 1
-    [ -n "$needle" ] || return 1
-    [ -r "/proc/$pid/cmdline" ] || return 1
-    cmdline="$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null || true)"
-    case "$cmdline" in
-        *"$needle"*) return 0 ;;
-        *) return 1 ;;
-    esac
-}
-
-remote_mobile_proc_is_current_user() {
-    local pid="$1"
-    local uid=""
-
-    [ -r "/proc/$pid/status" ] || return 1
-    uid="$(awk '/^Uid:/ {print $2; exit}' "/proc/$pid/status" 2>/dev/null || true)"
-    [ "$uid" = "$(id -u)" ]
-}
-
-remote_mobile_proc_env_value() {
-    local pid="$1"
-    local key="$2"
-    local entry=""
-
-    [ -r "/proc/$pid/environ" ] || return 1
-    while IFS= read -r -d '' entry; do
-        case "$entry" in
-            "$key="*)
-                printf '%s\n' "${entry#*=}"
-                return 0
-                ;;
-        esac
-    done < "/proc/$pid/environ"
-    return 1
-}
-
-remote_mobile_proc_start_time() {
-    local pid="$1"
-    local stat_line=""
-    local rest=""
-
-    stat_line="$(cat "/proc/$pid/stat" 2>/dev/null)" || return 1
-    rest="${stat_line##*) }"
-    # shellcheck disable=SC2086
-    set -- $rest
-    [ -n "${20:-}" ] || return 1
-    printf '%s\n' "$20"
-}
-
-remote_mobile_is_remote_control_app_server() {
-    local pid="$1"
-    local argv=()
-    local arg=""
-    local has_remote_control=0
-
-    [ -r "/proc/$pid/cmdline" ] || return 1
-    mapfile -d '' -t argv < "/proc/$pid/cmdline" 2>/dev/null || return 1
-    [ "${argv[1]:-}" = "app-server" ] || return 1
-    case "${argv[0]##*/}" in
-        codex|codex-*) ;;
-        *) return 1 ;;
-    esac
-    for arg in "${argv[@]:2}"; do
-        [ "$arg" = "--remote-control" ] && has_remote_control=1
-    done
-    [ "$has_remote_control" -eq 1 ]
-}
-
-remote_mobile_should_reap_desktop_app_server() {
-    local pid="$1"
-    local current_app_dir="${CODEX_LINUX_APP_DIR:-}"
-    local current_app_id="${CODEX_LINUX_APP_ID:-}"
-    local owner_app_dir=""
-    local owner_app_id=""
-
-    [ -n "$current_app_dir" ] || return 1
-    [ -n "$current_app_id" ] || return 1
-    [ "$pid" != "$$" ] || return 1
-    [ -d "/proc/$pid" ] || return 1
-    remote_mobile_proc_is_current_user "$pid" || return 1
-    remote_mobile_is_remote_control_app_server "$pid" || return 1
-
-    owner_app_dir="$(remote_mobile_proc_env_value "$pid" CODEX_LINUX_APP_DIR 2>/dev/null || true)"
-    [ -n "$owner_app_dir" ] || return 1
-    [ "$owner_app_dir" != "$current_app_dir" ] || return 1
-
-    owner_app_id="$(remote_mobile_proc_env_value "$pid" CODEX_LINUX_APP_ID 2>/dev/null || true)"
-    [ -n "$owner_app_id" ] || return 1
-    [ "$owner_app_id" = "$current_app_id" ]
-}
-
-remote_mobile_proc_identity_matches() {
-    local pid="$1"
-    local expected_start_time="$2"
-    local expected_app_dir="$3"
-    local start_time=""
-    local app_dir=""
-
-    [ -d "/proc/$pid" ] || return 1
-    remote_mobile_is_remote_control_app_server "$pid" || return 1
-    start_time="$(remote_mobile_proc_start_time "$pid" 2>/dev/null || true)"
-    [ -n "$start_time" ] && [ "$start_time" = "$expected_start_time" ] || return 1
-    app_dir="$(remote_mobile_proc_env_value "$pid" CODEX_LINUX_APP_DIR 2>/dev/null || true)"
-    [ "$app_dir" = "$expected_app_dir" ]
-}
-
-reap_stale_desktop_remote_control_app_servers() {
-    local proc=""
-    local pid=""
-    local owner_app_dir=""
-    local start_time=""
-    local entries=()
-    local entry=""
-    local still_running=0
-
-    for proc in /proc/[0-9]*/cmdline; do
-        [ -r "$proc" ] || continue
-        pid="${proc#/proc/}"
-        pid="${pid%/cmdline}"
-        remote_mobile_should_reap_desktop_app_server "$pid" || continue
-        owner_app_dir="$(remote_mobile_proc_env_value "$pid" CODEX_LINUX_APP_DIR 2>/dev/null || true)"
-        start_time="$(remote_mobile_proc_start_time "$pid" 2>/dev/null || true)"
-        [ -n "$owner_app_dir" ] && [ -n "$start_time" ] || continue
-        echo "Stopping stale Desktop remote-control app-server pid=$pid app_dir=$owner_app_dir"
-        kill "$pid" 2>/dev/null || continue
-        entries+=("$pid:$start_time:$owner_app_dir")
-    done
-
-    [ "${#entries[@]}" -gt 0 ] || return 0
-    for _ in $(seq 1 40); do
-        still_running=0
-        for entry in "${entries[@]}"; do
-            pid="${entry%%:*}"
-            if kill -0 "$pid" 2>/dev/null; then
-                still_running=1
-                break
-            fi
-        done
-        [ "$still_running" -eq 0 ] && return 0
-        sleep 0.05
-    done
-
-    for entry in "${entries[@]}"; do
-        pid="${entry%%:*}"
-        start_time="${entry#*:}"
-        start_time="${start_time%%:*}"
-        owner_app_dir="${entry#*:*:}"
-        remote_mobile_proc_identity_matches "$pid" "$start_time" "$owner_app_dir" || continue
-        echo "WARN: stale Desktop remote-control app-server still running after SIGTERM; sending SIGKILL pid=$pid app_dir=$owner_app_dir"
-        kill -9 "$pid" 2>/dev/null || true
-    done
-}
-
 desktop_app_server_remote_control_enabled() {
     local app_dir="${CODEX_LINUX_APP_DIR:-}"
     local marker=""
@@ -323,55 +132,10 @@ desktop_app_server_remote_control_enabled() {
     [ -f "$marker" ]
 }
 
-stop_stale_standalone_remote_mobile_daemon() {
-    local codex_home="$1"
-    local daemon_codex="$2"
-    local standalone_root="$3"
-    local standalone_codex="$4"
-    local daemon_pid=""
-    local daemon_codex_resolved=""
-    local daemon_exe=""
-    local stop_codex=""
-
-    daemon_codex_resolved="$(readlink -f "$daemon_codex" 2>/dev/null || true)"
-    [ -n "$daemon_codex_resolved" ] || daemon_codex_resolved="$daemon_codex"
-    if path_inside_dir "$daemon_codex_resolved" "$standalone_root"; then
-        return 0
-    fi
-
-    daemon_pid="$(remote_mobile_control_daemon_pid "$codex_home/app-server-daemon/app-server.pid" || true)"
-    [ -n "$daemon_pid" ] || return 0
-    kill -0 "$daemon_pid" 2>/dev/null || return 0
-
-    daemon_exe="$(readlink -f "/proc/$daemon_pid/exe" 2>/dev/null || true)"
-    if ! path_inside_dir "$daemon_exe" "$standalone_root" &&
-        ! remote_mobile_process_mentions_path "$daemon_pid" "$standalone_root"; then
-        return 0
-    fi
-
-    echo "Stopping stale remote mobile control standalone daemon pid=$daemon_pid before switching to $daemon_codex"
-    if [ -x "$standalone_codex" ]; then
-        stop_codex="$standalone_codex"
-    else
-        stop_codex="$daemon_codex"
-    fi
-    "$stop_codex" remote-control stop || \
-        echo "Remote mobile control could not stop stale standalone daemon pid=$daemon_pid; continuing best-effort"
-}
-
 remote_mobile_control_main() {
     local codex_home="${CODEX_HOME:-$HOME/.codex}"
-    local standalone_codex="$codex_home/packages/standalone/current/codex"
-    local standalone_root
-    local daemon_codex
-
-    standalone_root="$(readlink -f "$codex_home/packages/standalone" 2>/dev/null || true)"
-    [ -n "$standalone_root" ] || standalone_root="$codex_home/packages/standalone"
 
     cleanup_remote_mobile_control_interactive_symlink "$codex_home"
-    if desktop_app_server_remote_control_enabled; then
-        reap_stale_desktop_remote_control_app_servers
-    fi
 
     if truthy_env_value "${CODEX_REMOTE_CONTROL_DAEMON_AUTOSTART_DISABLED:-}"; then
         echo "Remote mobile control daemon autostart disabled by CODEX_REMOTE_CONTROL_DAEMON_AUTOSTART_DISABLED"
@@ -384,21 +148,15 @@ remote_mobile_control_main() {
     fi
     if desktop_app_server_remote_control_enabled; then
         cleanup_stale_remote_mobile_daemon_state "$codex_home"
-        daemon_codex="$(resolve_remote_mobile_control_codex "$codex_home")"
-        stop_stale_standalone_remote_mobile_daemon "$codex_home" "$daemon_codex" "$standalone_root" "$standalone_codex"
         echo "Remote mobile control daemon autostart skipped; Desktop app-server launches with remote-control enabled"
         return 0
     fi
 
-    daemon_codex="$(resolve_remote_mobile_control_codex "$codex_home")"
+    local standalone_codex="${CODEX_REMOTE_CONTROL_CODEX_PATH:-$codex_home/packages/standalone/current/codex}"
 
-    if [ ! -x "$daemon_codex" ]; then
+    if [ ! -x "$standalone_codex" ]; then
         if [ -n "${CODEX_REMOTE_CONTROL_CODEX_PATH:-}" ]; then
             echo "Remote mobile control daemon runtime override is not executable: $CODEX_REMOTE_CONTROL_CODEX_PATH"
-            return 0
-        fi
-        if [ "$daemon_codex" != "$standalone_codex" ]; then
-            echo "Remote mobile control daemon runtime is not executable: $daemon_codex"
             return 0
         fi
         if truthy_env_value "${CODEX_REMOTE_CONTROL_RUNTIME_AUTO_INSTALL_DISABLED:-}"; then
@@ -410,18 +168,16 @@ remote_mobile_control_main() {
             echo "Brew or another CLI can remain the interactive Codex CLI; remote mobile control uses CODEX_REMOTE_CONTROL_CODEX_PATH separately."
             return 0
         fi
-        if [ ! -x "$daemon_codex" ]; then
-            echo "Remote mobile control standalone runtime installer completed but $daemon_codex is still missing"
+        if [ ! -x "$standalone_codex" ]; then
+            echo "Remote mobile control standalone runtime installer completed but $standalone_codex is still missing"
             return 0
         fi
     fi
 
-    stop_stale_standalone_remote_mobile_daemon "$codex_home" "$daemon_codex" "$standalone_root" "$standalone_codex"
-
-    if "$daemon_codex" remote-control start; then
-        echo "Remote mobile control daemon is ready via $daemon_codex"
+    if "$standalone_codex" remote-control start; then
+        echo "Remote mobile control daemon is ready via $standalone_codex"
     else
-        echo "Remote mobile control daemon start failed via $daemon_codex; Android remote hosts may remain disconnected."
+        echo "Remote mobile control daemon start failed via $standalone_codex; Android remote hosts may remain disconnected."
     fi
 }
 

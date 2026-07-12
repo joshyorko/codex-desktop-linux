@@ -7,36 +7,6 @@ model="${CODEX_LINUX_READ_ALOUD_KOKORO_MODEL:-$data_home/kokoro/kokoro-v1.0.onnx
 voices="${CODEX_LINUX_READ_ALOUD_KOKORO_VOICES:-$data_home/kokoro/voices-v1.0.bin}"
 runner_dir="$(cd "$(dirname "$0")" && pwd)"
 
-resolve_command() {
-    case "$1" in
-        */*)
-            [ -x "$1" ] && printf '%s\n' "$1"
-            return
-            ;;
-    esac
-
-    search_path="${PATH:-}"
-    if [ -n "${CODEX_LINUX_READ_ALOUD_COMMAND_DIRS:-}" ]; then
-        search_path="${search_path:+$search_path:}$CODEX_LINUX_READ_ALOUD_COMMAND_DIRS"
-    fi
-    case "${CODEX_LINUX_READ_ALOUD_STANDARD_COMMAND_DIRS:-1}" in
-        0|false|off|no) ;;
-        *) search_path="${search_path:+$search_path:}/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/home/linuxbrew/.linuxbrew/bin" ;;
-    esac
-
-    old_ifs="$IFS"
-    IFS=:
-    for dir in $search_path; do
-        [ -n "$dir" ] || continue
-        if [ -x "$dir/$1" ]; then
-            IFS="$old_ifs"
-            printf '%s\n' "$dir/$1"
-            return
-        fi
-    done
-    IFS="$old_ifs"
-}
-
 if [ -z "${XDG_RUNTIME_DIR:-}" ]; then
     uid="$(id -u 2>/dev/null || true)"
     if [ -n "$uid" ] && { [ -S "/run/user/$uid/pipewire-0" ] || [ -S "/run/user/$uid/pulse/native" ]; }; then
@@ -56,13 +26,11 @@ fi
     echo "Kokoro voices file not found: $voices" >&2
     exit 66
 }
-audio_player="$(resolve_command "${CODEX_LINUX_READ_ALOUD_AUDIO_PLAYER:-aplay}")"
-[ -n "$audio_player" ] || {
+command -v aplay >/dev/null 2>&1 || {
     echo "aplay not found" >&2
     exit 127
 }
 
 export CODEX_LINUX_READ_ALOUD_KOKORO_MODEL="$model"
 export CODEX_LINUX_READ_ALOUD_KOKORO_VOICES="$voices"
-export CODEX_LINUX_READ_ALOUD_AUDIO_PLAYER="$audio_player"
 exec "$python_bin" "$runner_dir/kokoro_stdin.py"

@@ -356,12 +356,12 @@ bootstrap_7zz() {
     trap "rm -rf '$tmpdir'" EXIT
 
     # Try pinned versions newest-first by downloading the tarball directly.
-    # Validate the archive contents instead of relying on a separate HEAD probe.
-    local -a versions=(2601 2600 2500 2409)
-    local version="" url="" candidate_url candidate_tag
+    # Some CI/container networks handle 7-zip.org HEAD requests inconsistently,
+    # so validate the archive contents instead of relying on a separate probe.
+    local -a versions=(2600 2500 2409)
+    local version="" url="" candidate_url
     for candidate in "${versions[@]}"; do
-        candidate_tag="${candidate:0:2}.${candidate:2:2}"
-        candidate_url="https://github.com/ip7z/7zip/releases/download/${candidate_tag}/7z${candidate}-linux-${sevenzip_arch}.tar.xz"
+        candidate_url="https://www.7-zip.org/a/7z${candidate}-linux-${sevenzip_arch}.tar.xz"
         if curl -fsL --retry 2 --retry-delay 2 -o "$tmpdir/7z.tar.xz" "$candidate_url" \
             && tar -tf "$tmpdir/7z.tar.xz" 7zz >/dev/null 2>&1; then
             version="$candidate"
