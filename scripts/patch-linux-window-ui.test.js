@@ -2631,6 +2631,46 @@ test("does not treat unrelated Linux userAgent checks as opaque window patches",
   ]);
 });
 
+test("patches the latest primary BrowserWindow options and titlebar shape", () => {
+  const source = [
+    "async createWindow(e={}){let{title:t,appearance:o=`primary`,focusable:m}=e,D=z9({appearance:o,platform:process.platform}),M=new c.BrowserWindow({title:t,...m===void 0?{}:{focusable:m},...process.platform===`win32`||process.platform===`linux`?{autoHideMenuBar:!0}:{},...D})}",
+    "function j9(e=1){return{color:k9,symbolColor:c.nativeTheme.shouldUseDarkColors?Ane:kne,height:Math.round(One*e)}}function z9({appearance:e,platform:n,windowZoom:r=1}){switch(e){case`quickChat`:case`primary`:return n===`darwin`?{titleBarStyle:`hiddenInset`,trafficLightPosition:A9(r)}:n===`win32`||n===`linux`?{titleBarStyle:`hidden`,titleBarOverlay:j9(r)}:{titleBarStyle:`default`}}}",
+  ].join("");
+
+  const patched = applyPatchTwice(
+    (value) => applyLinuxNativeTitlebarPatch(applyLinuxWindowOptionsPatch(value)),
+    source,
+  );
+
+  assert.match(patched, /o===`primary`\?\{focusable:!0\}/);
+  assert.match(patched, /codexLinuxTitleBarOverlay/);
+});
+
+test("patches the latest avatar overlay pointer policy shape", () => {
+  const patched = applyPatchTwice(
+    applyLinuxAvatarOverlayMousePassthroughPatch,
+    currentAvatarOverlayBundleFixture(),
+  );
+
+  assert.match(patched, /codexLinuxIsI3Session/);
+  assert.doesNotMatch(patched, /WARN: Could not find avatar overlay/);
+});
+
+test("patches the latest tray icon fallback shape", () => {
+  const source = [
+    "let c=require(`electron`);",
+    "function K9(e,t,n){let r=x_(e,t),i=c.nativeTheme.shouldUseDarkColorsForSystemIntegratedUI?r.dark:r.light,a=[...c.app.isPackaged?[(0,u.join)(process.resourcesPath,i)]:[],(0,u.join)(n,`electron`,`src`,`icons`,i)];for(let e of a){let t=c.nativeImage.createFromPath(e);if(!t.isEmpty())return t}return null}",
+    "async function sre(e,t,n){let r=K9(e,t,n);return r==null?{defaultIcon:await c.app.getFileIcon(process.execPath,{size:`small`}),chronicleRunningIcon:null}:{defaultIcon:r,chronicleRunningIcon:null}}",
+  ].join("");
+
+  const patched = applyPatchTwice(
+    (value) => applyLinuxTrayPatch(value, "app.png"),
+    source,
+  );
+
+  assert.match(patched, /codexLinuxTrayIcon/);
+});
+
 test("adds Linux avatar overlay mouse passthrough recovery", () => {
   const patched = applyPatchTwice(
     applyLinuxAvatarOverlayMousePassthroughPatch,

@@ -142,6 +142,29 @@ function applyLinuxPrimaryFocusablePatch(currentSource) {
     },
   );
 
+  const currentPrimaryFocusableRegex =
+    /\.\.\.([A-Za-z_$][\w$]*)===void 0\?\{\}:\{focusable:\1\},(?=\.\.\.process\.platform===`win32`\|\|process\.platform===`linux`\?)/g;
+  const currentAppearanceAlias = currentSource.match(
+    /(?:async\s+)?createWindow\([^)]*\)\{let\{[^}]*appearance:([A-Za-z_$][\w$]*)/,
+  )?.[1] ?? null;
+  patchedSource = patchedSource.replace(
+    currentPrimaryFocusableRegex,
+    (match, focusableAlias, offset) => {
+      const context = currentSource.slice(Math.max(0, offset - 3000), offset);
+      const appearanceAlias =
+        currentAppearanceAlias ??
+        findCreateWindowAppearanceAlias(currentSource, offset) ??
+        context.match(/createWindow\([^)]*\)\{let\{[^}]*appearance:([A-Za-z_$][\w$]*)/)?.[1] ??
+        null;
+      if (appearanceAlias == null) {
+        skippedAny = true;
+        return match;
+      }
+      patchedAny = true;
+      return `...process.platform===\`linux\`&&${appearanceAlias}===\`primary\`?{focusable:!0}:${match}`;
+    },
+  );
+
   const focusableDirectRegex =
     /focusable:([A-Za-z_$][\w$]*),(\.\.\.process\.platform===`win32`\?)/g;
   patchedSource = patchedSource.replace(
@@ -190,6 +213,58 @@ function applyLinuxPrimaryFocusablePatch(currentSource) {
 }
 
 function applyLinuxNativeTitlebarPatch(currentSource) {
+  const currentPrimaryTitlebarBranchRegex =
+    /([A-Za-z_$][\w$]*)===`win32`\|\|\1===`linux`\?\{titleBarStyle:`hidden`,titleBarOverlay:([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*)\)/g;
+  let currentShapePatched = false;
+  let currentOverlayAlias = null;
+  let currentShapeSource = currentSource.replace(
+    currentPrimaryTitlebarBranchRegex,
+    (match, platformAlias, overlayAlias, zoomAlias, offset) => {
+      const prefix = currentSource.slice(Math.max(0, offset - 1200), offset);
+      if (!prefix.includes("case`quickChat`:case`primary`")) {
+        return match;
+      }
+      const overlayFunctionRegex = new RegExp(
+        `function ${escapeRegExp(overlayAlias)}\\([^)]*\\)\\{return\\{color:([A-Za-z_$][\\w$]*)`,
+      );
+      const overlayFunctionMatch = currentSource.match(overlayFunctionRegex);
+      if (overlayFunctionMatch == null) {
+        return match;
+      }
+      currentShapePatched = true;
+      currentOverlayAlias = overlayAlias;
+      return `${platformAlias}===\`win32\`?{titleBarStyle:\`hidden\`,titleBarOverlay:${overlayAlias}(${zoomAlias})}:${platformAlias}===\`linux\`?{titleBarStyle:\`hidden\`,titleBarOverlay:${LINUX_TITLEBAR_OVERLAY_HELPER}(${zoomAlias})`;
+    },
+  );
+  if (currentShapePatched) {
+    const helperMatch = currentSource.match(
+      /function ([A-Za-z_$][\w$]*)\([^)]*\)\{return\{color:([A-Za-z_$][\w$]*),symbolColor:([A-Za-z_$][\w$]*)\.nativeTheme\.shouldUseDarkColors\?([A-Za-z_$][\w$]*):([A-Za-z_$][\w$]*),height:Math\.round\(([A-Za-z_$][\w$]*)\*([A-Za-z_$][\w$]*)\)\}\}/,
+    );
+    if (helperMatch != null) {
+      const [, , lightBackgroundAlias, electronAlias, lightSymbolAlias, darkSymbolAlias] = helperMatch;
+      currentShapeSource = ensureLinuxTitlebarOverlayHelper(
+        currentShapeSource,
+        helperMatch[0],
+        linuxTitlebarOverlayHelperSource(
+          electronAlias,
+          lightBackgroundAlias,
+          lightSymbolAlias,
+          darkSymbolAlias,
+        ),
+      );
+    }
+    currentShapeSource = currentShapeSource
+      .replaceAll(
+        `setTitleBarOverlay(${currentOverlayAlias}(this.windowZooms.get(e.id)))`,
+        `setTitleBarOverlay(process.platform===\`linux\`?${LINUX_TITLEBAR_OVERLAY_HELPER}(this.windowZooms.get(e.id)):${currentOverlayAlias}(this.windowZooms.get(e.id)))`,
+      )
+      .replaceAll(
+        `setTitleBarOverlay(${currentOverlayAlias}(t))`,
+        `setTitleBarOverlay(process.platform===\`linux\`?${LINUX_TITLEBAR_OVERLAY_HELPER}(t):${currentOverlayAlias}(t))`,
+      );
+    return currentShapeSource;
+  }
+
   const patchedPrimaryTitlebarRegex = new RegExp(
     `===\`linux\`\\?\\{titleBarStyle:\`hidden\`,titleBarOverlay:${LINUX_TITLEBAR_OVERLAY_HELPER}\\(([A-Za-z_$][\\w$]*)\\)\\}`,
   );

@@ -119,6 +119,8 @@ function applyLinuxTrayPatch(currentSource, iconPathExpression) {
       `for(let e of o){let t=${electronVar}.nativeImage.createFromPath(e);if(!t.isEmpty())return{defaultIcon:t,chronicleRunningIcon:null}}${linuxIconFallback}return{defaultIcon:await ${electronVar}.app.getFileIcon(process.execPath,{size:${legacyGetFileIconSize}}),chronicleRunningIcon:null}}`;
     const trayIconFallbackRegex =
       /for\(let ([A-Za-z_$][\w$]*) of ([A-Za-z_$][\w$]*)\)\{let ([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)\.nativeImage\.createFromPath\(\1\);if\(!\3\.isEmpty\(\)\)return\{defaultIcon:\3,chronicleRunningIcon:null\}\}return\{defaultIcon:await \4\.app\.getFileIcon\(process\.execPath,\{size:((?:process\.platform===`win32`\?`small`:`normal`)|`small`|`normal`)\}\),chronicleRunningIcon:null\}\}/;
+    const currentTrayIconFallbackRegex =
+      /return ([A-Za-z_$][\w$]*)==null\?\{defaultIcon:await ([A-Za-z_$][\w$]*)\.app\.getFileIcon\(process\.execPath,\{size:([^}]+)\}\),chronicleRunningIcon:null\}:\{defaultIcon:\1,chronicleRunningIcon:null\}/g;
     if (
       patchedSource.includes(`nativeImage.createFromPath(${packagedTrayIconPathExpression})`) ||
       patchedSource.includes(`nativeImage.createFromPath(${packagedAppIconPathExpression})`)
@@ -131,6 +133,17 @@ function applyLinuxTrayPatch(currentSource, iconPathExpression) {
         trayIconFallbackRegex,
         (_match, iconPathVar, candidatesVar, imageVar, electronAlias, sizeExpression) =>
           `for(let ${iconPathVar} of ${candidatesVar}){let ${imageVar}=${electronAlias}.nativeImage.createFromPath(${iconPathVar});if(!${imageVar}.isEmpty())return{defaultIcon:${imageVar},chronicleRunningIcon:null}}if(process.platform===\`linux\`){let __codexLinuxTrayIcon=${electronAlias}.nativeImage.createFromPath(${packagedTrayIconPathExpression});if(!__codexLinuxTrayIcon.isEmpty())return{defaultIcon:__codexLinuxTrayIcon,chronicleRunningIcon:null};let __codexLinuxAppIcon=${electronAlias}.nativeImage.createFromPath(${packagedAppIconPathExpression});if(!__codexLinuxAppIcon.isEmpty())return{defaultIcon:__codexLinuxAppIcon,chronicleRunningIcon:null};let __codexLinuxUpstreamTrayIcon=${electronAlias}.nativeImage.createFromPath(${iconPathExpression});if(!__codexLinuxUpstreamTrayIcon.isEmpty())return{defaultIcon:__codexLinuxUpstreamTrayIcon,chronicleRunningIcon:null}}return{defaultIcon:await ${electronAlias}.app.getFileIcon(process.execPath,{size:${sizeExpression}}),chronicleRunningIcon:null}}`,
+      );
+    } else if (currentTrayIconFallbackRegex.test(patchedSource)) {
+      patchedSource = patchedSource.replace(
+        currentTrayIconFallbackRegex,
+        (_match, iconVar, electronAlias, sizeExpression, offset) => {
+          const context = patchedSource.slice(Math.max(0, offset - 1400), offset);
+          if (!context.includes("shouldUseDarkColorsForSystemIntegratedUI") || !context.includes("function K9")) {
+            return _match;
+          }
+          return `return ${iconVar}==null?{defaultIcon:process.platform===\`linux\`?(()=>{let __codexLinuxTrayIcon=${electronAlias}.nativeImage.createFromPath(${packagedTrayIconPathExpression});if(!__codexLinuxTrayIcon.isEmpty())return __codexLinuxTrayIcon;let __codexLinuxAppIcon=${electronAlias}.nativeImage.createFromPath(${packagedAppIconPathExpression});if(!__codexLinuxAppIcon.isEmpty())return __codexLinuxAppIcon;return null})():null??await ${electronAlias}.app.getFileIcon(process.execPath,{size:${sizeExpression}}),chronicleRunningIcon:null}:{defaultIcon:${iconVar},chronicleRunningIcon:null}`;
+        },
       );
     } else {
       console.warn("WARN: Could not find tray icon fallback — skipping Linux tray icon patch");
