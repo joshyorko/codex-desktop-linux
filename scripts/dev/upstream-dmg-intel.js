@@ -24,9 +24,12 @@ Build an upstream DMG intelligence report without mutating codex-app/.
 
 Options:
   --candidate PATH       Candidate Codex.dmg, extracted .app, or extracted app resources directory
+  --candidate-url URL    Provenance URL for the candidate DMG
+  --patch-preflight      Run required and protected Linux parity patches against a temporary extracted copy
   --baseline PATH        Optional known-good baseline DMG or extracted .app; defaults to ./Codex.dmg when different
   --no-baseline          Do a candidate-only scan even when ./Codex.dmg exists
   --patch-report PATH    Optional patch-report.json to fold patch blockers/review items into drift-report.json
+  --runtime-snapshot PATH JSON runtime evidence for release 26.707.31428 diagnostics
   --registry PATH        Protected surface registry (default: scripts/dev/upstream-dmg-protected-surfaces.json)
   --output-dir DIR       Exact output directory (default: reports/upstream-dmg/<timestamp>)
   --timestamp VALUE      Timestamp slug used when --output-dir is omitted
@@ -40,9 +43,12 @@ function parseArgs(argv) {
     autoBaseline: true,
     baselinePath: null,
     candidatePath: null,
+    candidateUrl: null,
+    patchPreflight: false,
     outputDir: null,
     failOnBlockers: false,
     patchReportPath: null,
+    runtimeSnapshotPath: null,
     registryPath: defaultRegistryPath,
     timestamp: null,
   };
@@ -51,6 +57,10 @@ function parseArgs(argv) {
     const arg = argv[index];
     if (arg === "--candidate") {
       args.candidatePath = argv[++index];
+    } else if (arg === "--candidate-url") {
+      args.candidateUrl = argv[++index];
+    } else if (arg === "--patch-preflight") {
+      args.patchPreflight = true;
     } else if (arg === "--baseline") {
       args.baselinePath = argv[++index];
     } else if (arg === "--no-baseline") {
@@ -58,6 +68,8 @@ function parseArgs(argv) {
       args.baselinePath = null;
     } else if (arg === "--patch-report") {
       args.patchReportPath = argv[++index];
+    } else if (arg === "--runtime-snapshot") {
+      args.runtimeSnapshotPath = argv[++index];
     } else if (arg === "--registry") {
       args.registryPath = argv[++index];
     } else if (arg === "--output-dir") {
@@ -99,16 +111,35 @@ function buildDecision({ driftReport, protectedSurfaces }) {
   const surfaceDrift = driftReport.surfaceDrift ?? [];
   const blockers = surfaceDrift.filter((item) => BLOCKING_CLASSIFICATIONS.has(item.classification));
   const reviewItems = surfaceDrift.filter((item) => !BLOCKING_CLASSIFICATIONS.has(item.classification));
+  const linuxParityGateBlockers = driftReport.platformGateSummary?.blockingCount ?? 0;
+  const platformGateReviewItems = driftReport.platformGateSummary?.reviewCount ?? 0;
+  const newCapabilityIssueCandidates = driftReport.newCapabilitySummary?.issueCandidateCount ?? 0;
+  const requiredPatchPreflight = driftReport.requiredPatchPreflight ?? null;
+  const requiredPatchPreflightBlocked = requiredPatchPreflight?.status === "blocked" ||
+    (Number.isInteger(requiredPatchPreflight?.exitCode) && requiredPatchPreflight.exitCode !== 0);
   const protectedSurfaceStatusCounts = statusCounts(protectedSurfaces.surfaces ?? []);
+  const runtimeRegressionCount = (driftReport.runtimeDiagnostics ?? []).filter((entry) => entry.status === "runtime-regression").length;
+  const runtimeEvidenceRequiredCount = (driftReport.runtimeDiagnostics ?? []).filter((entry) =>
+    entry.status === "evidence-required" && entry.snapshotProvided === true).length;
   const allProtectedSurfacesPresent =
     (protectedSurfaces.surfaces ?? []).length > 0 &&
     (protectedSurfaces.surfaces ?? []).every((surface) => surface.status === "PRESENT");
-  const acceptance = blockers.length > 0 ? "blocked" : (reviewItems.length > 0 ? "review" : "accepted");
+  const blockerCount = blockers.length + linuxParityGateBlockers + runtimeRegressionCount + (requiredPatchPreflightBlocked ? 1 : 0);
+  const reviewCount = reviewItems.length + platformGateReviewItems + newCapabilityIssueCandidates + runtimeEvidenceRequiredCount;
+  const acceptance = blockerCount > 0 ? "blocked" : (reviewCount > 0 ? "review" : "accepted");
 
   return {
     acceptance,
-    blockersCount: blockers.length,
-    reviewItemsCount: reviewItems.length,
+    blockersCount: blockerCount,
+    reviewItemsCount: reviewCount,
+    protectedSurfaceBlockersCount: blockers.length,
+    linuxParityGateBlockersCount: linuxParityGateBlockers,
+    requiredPatchPreflightBlocked,
+    requiredPatchPreflightExitCode: requiredPatchPreflight?.exitCode ?? null,
+    runtimeRegressionCount,
+    runtimeEvidenceRequiredCount,
+    platformGateReviewItemsCount: platformGateReviewItems,
+    newCapabilityIssueCandidatesCount: newCapabilityIssueCandidates,
     allProtectedSurfacesPresent,
     protectedSurfaceStatusCounts,
     blockerClassifications: [...new Set(blockers.map((item) => item.classification))].sort(),
@@ -130,6 +161,9 @@ function main(argv = process.argv.slice(2)) {
   if (args.patchReportPath != null) {
     requireReadable("Patch report", args.patchReportPath);
   }
+  if (args.runtimeSnapshotPath != null) {
+    requireReadable("Runtime snapshot", args.runtimeSnapshotPath);
+  }
 
   const registry = JSON.parse(fs.readFileSync(args.registryPath, "utf8"));
   const reports = buildIntelReports({
@@ -141,6 +175,9 @@ function main(argv = process.argv.slice(2)) {
     registry,
     repoRoot,
     timestamp: args.timestamp,
+    provenance: args.candidateUrl ? { candidate: { url: args.candidateUrl } } : null,
+    runPatchPreflight: args.patchPreflight,
+    runtimeSnapshot: args.runtimeSnapshotPath == null ? null : JSON.parse(fs.readFileSync(args.runtimeSnapshotPath, "utf8")),
   });
   const decision = buildDecision({
     driftReport: reports.driftReport,
@@ -151,9 +188,12 @@ function main(argv = process.argv.slice(2)) {
     outputDir: reports.outputDir,
     inventory: path.join(reports.outputDir, "inventory.json"),
     protectedSurfaces: path.join(reports.outputDir, "protected-surfaces.json"),
+    platformGates: path.join(reports.outputDir, "platform-gates.json"),
+    newCapabilities: path.join(reports.outputDir, "new-capabilities.json"),
     driftReport: path.join(reports.outputDir, "drift-report.json"),
     driftMarkdown: path.join(reports.outputDir, "drift-report.md"),
     substrateActionPlan: path.join(reports.outputDir, "substrate-action-plan.md"),
+    runtimeDiagnostics: path.join(reports.outputDir, "runtime-diagnostics.json"),
     baselineSource: reports.driftReport.baselineSource,
     classificationCounts: reports.driftReport.classificationCounts,
     decision,
@@ -161,7 +201,7 @@ function main(argv = process.argv.slice(2)) {
   process.stdout.write(`${JSON.stringify(summary, null, 2)}\n`);
   if (args.failOnBlockers && decision.blockersCount > 0) {
     console.error(
-      `Upstream DMG intelligence found ${decision.blockersCount} protected-surface acceptance blocker(s).`,
+      `Upstream DMG intelligence found ${decision.blockersCount} Linux acceptance blocker(s).`,
     );
     return 2;
   }

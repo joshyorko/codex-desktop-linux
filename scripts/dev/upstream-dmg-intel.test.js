@@ -6,12 +6,21 @@ const os = require("node:os");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 const test = require("node:test");
+const { buildDecision } = require("./upstream-dmg-intel.js");
 
 const {
   buildIntelReports,
   compareProtectedSurfaces,
   createInventory,
+  createNewCapabilityMap,
+  createPlatformGateMap,
+  createRuntimeRegressionDiagnostics,
+  extractVersionMetadata,
   extractProtectedSurfaces,
+  findPostPatchIntegrityFindings,
+  mergeProvenance,
+  prepareRequiredPatchPreflightApp,
+  runRequiredPatchPreflight,
   renderActionPlanMarkdown,
   resolveBaselinePath,
 } = require("../lib/upstream-dmg-intel.js");
@@ -51,38 +60,6 @@ const registry = {
       linuxSubstrate: {
         requiredPaths: ["computer-use-linux/src/bin/codex-chrome-extension-host.rs"],
       },
-    },
-    {
-      id: "work_louder_control_surface",
-      title: "Work Louder control-surface bundle hooks",
-      category: "native",
-      pathPatterns: [
-        "codex-micro-service.*\\.js$",
-        "@worklouder/(device-kit-oai|wl-device-kit)/package\\.json$",
-        "(^|/)node-hid/package\\.json$",
-        "(^|/)node-hid/prebuilds/[^/]+/node-napi-v[0-9]+\\.node$",
-      ],
-      patchNamePatterns: ["work.*louder", "micro", "hid", "control.*surface"],
-      requiredEvidence: [
-        {
-          id: "micro-service-entrypoint",
-          pathPatterns: ["codex-micro-service.*\\.js$"],
-          contentNeedles: ["@worklouder/device-kit-oai", "DeviceType", "Project2077"],
-        },
-        {
-          id: "work-louder-device-kits",
-          pathPatterns: ["@worklouder/(device-kit-oai|wl-device-kit)"],
-          contentNeedles: ["@worklouder/device-kit-oai", "@worklouder/wl-device-kit", "node-hid"],
-        },
-        {
-          id: "hid-runtime-package",
-          pathPatterns: ["(^|/)node-hid/package\\.json$", "(^|/)node-hid/prebuilds/"],
-          contentNeedles: ["node-hid"],
-          nativeBinaryPatterns: [
-            "(^|/)node-hid/prebuilds/[^/]+/node-napi-v[0-9]+\\.node$",
-          ],
-        },
-      ],
     },
     {
       id: "dictation_transcript_finalization",
@@ -183,59 +160,267 @@ function writeFile(filePath, content, mode) {
   fs.writeFileSync(filePath, content, mode == null ? undefined : { mode });
 }
 
-function writeWorkLouderControlSurface({ asarExtracted, includeHid = true, resources }) {
-  const deviceKit = path.join(
-    resources,
-    "app.asar.unpacked/node_modules/@worklouder/device-kit-oai",
-  );
-  const wlKit = path.join(deviceKit, "node_modules/@worklouder/wl-device-kit");
-  const hid = path.join(wlKit, "node_modules/node-hid");
-
-  writeFile(
-    path.join(asarExtracted, ".vite/build/codex-micro-service-fixture.js"),
-    [
-      "import { DeviceType, WLDeviceDiscovery } from '@worklouder/device-kit-oai';",
-      "const device = DeviceType.Project2077;",
-      "WLDeviceDiscovery.start(device);",
-      "require('node-hid');",
-    ].join("\n"),
-  );
-  writeJson(path.join(deviceKit, "package.json"), {
-    name: "@worklouder/device-kit-oai",
-    dependencies: {
-      "@worklouder/wl-device-kit": "1.0.0",
-    },
-  });
-  writeFile(
-    path.join(deviceKit, "dist/index.js"),
-    "export { DeviceType, WLDeviceDiscovery } from '@worklouder/wl-device-kit';",
-  );
-  writeJson(path.join(wlKit, "package.json"), {
-    name: "@worklouder/wl-device-kit",
-    dependencies: {
-      "node-hid": "3.1.0",
-    },
-  });
-  writeFile(
-    path.join(wlKit, "dist/index.js"),
-    [
-      "const HID = require('node-hid');",
-      "export const DeviceType = { Project2077: 'Project2077' };",
-      "export class WLDeviceDiscovery { static start() { return HID; } }",
-    ].join(" "),
-  );
-  if (includeHid) {
-    writeJson(path.join(hid, "package.json"), {
-      name: "node-hid",
-      version: "3.1.0",
-    });
-    writeFile(
-      path.join(hid, "prebuilds/HID-darwin-arm64/node-napi-v4.node"),
-      "Mach-O node-hid Project2077",
-      0o755,
-    );
+function writeAsar(filePath, fileContents) {
+  const root = { files: {} };
+  const payloads = [];
+  let offset = 0;
+  for (const [relativePath, content] of Object.entries(fileContents).sort(([left], [right]) => left.localeCompare(right))) {
+    const payload = Buffer.from(content);
+    const parts = relativePath.split("/");
+    let files = root.files;
+    for (const part of parts.slice(0, -1)) {
+      files[part] ??= { files: {} };
+      files = files[part].files;
+    }
+    files[parts.at(-1)] = { offset: String(offset), size: payload.length };
+    payloads.push(payload);
+    offset += payload.length;
   }
+
+  const headerJson = Buffer.from(JSON.stringify(root));
+  const picklePayloadSize = Math.ceil((4 + headerJson.length + 1) / 4) * 4;
+  const headerSize = 4 + picklePayloadSize;
+  const archive = Buffer.alloc(8 + headerSize + offset);
+  archive.writeUInt32LE(4, 0);
+  archive.writeUInt32LE(headerSize, 4);
+  archive.writeUInt32LE(picklePayloadSize, 8);
+  archive.writeUInt32LE(headerJson.length, 12);
+  headerJson.copy(archive, 16);
+  let payloadOffset = 8 + headerSize;
+  for (const payload of payloads) {
+    payload.copy(archive, payloadOffset);
+    payloadOffset += payload.length;
+  }
+  writeFile(filePath, archive);
 }
+
+test("prepares raw app.asar contents for required patch preflight", () =>
+  withTempDir((workspace) => {
+    const appDir = path.join(workspace, "Codex.app");
+    const resourcesDir = path.join(appDir, "Contents/Resources");
+    const asarPath = path.join(resourcesDir, "app.asar");
+    const targetDir = path.join(workspace, "preflight");
+    const mainSource = "let marker=`current-main-bundle`;";
+    writeAsar(asarPath, {
+      ".vite/build/main-test.js": mainSource,
+      "package.json": JSON.stringify({ name: "codex-desktop" }),
+    });
+
+    prepareRequiredPatchPreflightApp({ appDir, targetDir });
+
+    assert.equal(
+      fs.readFileSync(path.join(targetDir, ".vite/build/main-test.js"), "utf8"),
+      mainSource,
+    );
+    assert.equal(fs.existsSync(path.join(resourcesDir, "app.asar.extracted")), false);
+    assert.equal(fs.existsSync(asarPath), true);
+  }));
+
+test("rejects extracted-app symlinks without writing through them during patch preflight", () =>
+  withTempDir((workspace) => {
+    const appDir = path.join(workspace, "Codex.app");
+    const extractedDir = path.join(appDir, "Contents/Resources/app.asar.extracted");
+    const targetDir = path.join(workspace, "preflight");
+    const victim = path.join(workspace, "outside-victim.js");
+    writeFile(victim, "outside content");
+    writeFile(path.join(extractedDir, ".vite/build/main.js"), "const safe = true;");
+    fs.symlinkSync(victim, path.join(extractedDir, ".vite/build/escaped.js"));
+    const originalVictim = fs.readFileSync(victim, "utf8");
+
+    assert.throws(
+      () => prepareRequiredPatchPreflightApp({ appDir, targetDir }),
+      /symlink/i,
+    );
+    assert.equal(fs.readFileSync(victim, "utf8"), originalVictim);
+  }));
+
+test("keeps Linux parity gates blocked when required patches look applied but preflight failed", () =>
+  withTempDir((workspace) => {
+    const candidateApp = createFixtureApp(workspace, "candidate");
+    writeFile(
+      path.join(candidateApp, "Contents/Resources/webview/assets/computer-use-current.js"),
+      "function zN(e){let {enabled:n}=e,{platform:r}=pi(),a=n&&(r===`macOS`||r===`windows`);return {computerUsePlugin:w}}",
+    );
+    const patchFindings = [
+      "linux-computer-use-ui-feature",
+      "linux-computer-use-plugin-gate",
+      "linux-computer-use-native-desktop-apps",
+      "linux-computer-use-ui-availability",
+      "linux-computer-use-install-flow",
+    ].map((name) => ({ name, status: "applied" }));
+
+    const platformGateMap = createPlatformGateMap({
+      inventory: createInventory({ registry, sourcePath: candidateApp }),
+      patchFindings,
+      requiredPatchPreflight: { status: "blocked", exitCode: 1 },
+    });
+
+    assert.ok(platformGateMap.gates.some((gate) =>
+      gate.linuxSurfaceId === "computer_use_plugin" && gate.category === "linux-parity-drift"));
+  }));
+
+test("requires production Computer Use inspection proof before marking a gate patched", () =>
+  withTempDir((workspace) => {
+    const candidateApp = createFixtureApp(workspace, "candidate");
+    writeFile(
+      path.join(candidateApp, "Contents/Resources/webview/assets/computer-use-current.js"),
+      "function zN(e){let {enabled:n}=e,{platform:r}=pi(),a=n&&(r===`macOS`||r===`windows`);return {computerUsePlugin:w}}",
+    );
+    const patchFindings = [
+      "linux-computer-use-ui-feature",
+      "linux-computer-use-plugin-gate",
+      "linux-computer-use-native-desktop-apps",
+      "linux-computer-use-ui-availability",
+      "linux-computer-use-install-flow",
+    ].map((name) => ({ name, status: "applied" }));
+    const platformGateMap = createPlatformGateMap({
+      inventory: createInventory({ registry, sourcePath: candidateApp }),
+      patchFindings,
+      requiredPatchPreflight: { status: "pass", exitCode: 0 },
+    });
+
+    assert.ok(platformGateMap.gates.some((gate) =>
+      gate.linuxSurfaceId === "computer_use_plugin" && gate.category === "linux-parity-drift"));
+  }));
+
+test("treats a nonzero required-patch child as an acceptance blocker even with applied findings", () => {
+  const decision = buildDecision({
+    driftReport: {
+      surfaceDrift: [],
+      platformGateSummary: { blockingCount: 0, reviewCount: 0 },
+      newCapabilitySummary: { issueCandidateCount: 0 },
+      requiredPatchPreflight: { status: "blocked", exitCode: 1, findings: [{ status: "applied" }] },
+    },
+    protectedSurfaces: { surfaces: [{ status: "PRESENT" }] },
+  });
+
+  assert.equal(decision.acceptance, "blocked");
+  assert.equal(decision.requiredPatchPreflightBlocked, true);
+  assert.equal(decision.requiredPatchPreflightExitCode, 1);
+});
+
+test("surfaces an unselected required patch failure from the preflight child", () =>
+  withTempDir((workspace) => {
+    const appDir = path.join(workspace, "Codex.app");
+    writeFile(path.join(appDir, ".vite/build/main.js"), "const candidate = true;");
+    const repoRoot = path.join(workspace, "repo");
+    const scriptPath = path.join(repoRoot, "scripts/patch-linux-window-ui.js");
+    const requiredNames = [
+      "linux-window-options", "linux-native-titlebar", "linux-avatar-overlay-mouse-passthrough",
+      "linux-tray", "main-process-ui", "linux-computer-use-ui-feature",
+      "linux-computer-use-plugin-gate", "linux-computer-use-native-desktop-apps",
+      "linux-computer-use-ui-availability", "linux-computer-use-install-flow",
+      "feature:read-aloud:main-handler", "feature:read-aloud:assistant-runtime",
+      "feature:read-aloud:settings-toggle", "feature:read-aloud-mcp:linux-read-aloud-plugin-gate",
+    ];
+    writeFile(scriptPath, [
+      "const fs=require('node:fs');",
+      "const reportPath=process.argv[process.argv.indexOf('--report-json')+1];",
+      `fs.writeFileSync(reportPath,JSON.stringify({patches:[...${JSON.stringify(requiredNames)}.map(name=>({name,status:'applied'})),{name:'unexpected-required-patch',status:'failed-required',ciPolicy:'required-upstream',reason:'drift'},{name:'unscoped-failed-required',status:'failed-required',reason:'drift'}]}));`,
+    ].join(""));
+
+    const result = runRequiredPatchPreflight({
+      inventory: { source: { appDir } },
+      repoRoot,
+      workDir: path.join(workspace, "work"),
+    });
+
+    assert.equal(result.status, "blocked");
+    assert.ok(result.findings.some((finding) => finding.name === "unexpected-required-patch"));
+    assert.ok(result.findings.some((finding) => finding.name === "unscoped-failed-required"));
+  }));
+
+test("reports runtime regressions as evidence-bound diagnostics without inventing fixes", () => {
+  const diagnostics = createRuntimeRegressionDiagnostics({
+    runtimeSnapshot: {
+      release: "26.707.31428",
+      provenance: { source: "Luna fixture", capturedAt: "2026-07-10T00:00:00Z" },
+      computerUse: { pluginId: "computer-use@openai-bundled", installed: true, enabled: true, mentionAvailable: false, rollout: "unknown", entitlement: "unproven" },
+      browser: { registryInstalled: true, registryEnabled: true, settingsAvailable: false, initiallyOmitted: true, queueReconciled: true },
+      dictation: { supported: false },
+      chronicle: { enabled: true, backendState: "stopped", uiState: "Paused" },
+      linuxFeatures: { settingsRouteAvailable: false },
+      reaper: { resumeSucceeded: false },
+    },
+  });
+
+  assert.deepEqual(diagnostics.map((entry) => entry.id), [
+    "computer-use-mention", "browser-settings-reconciliation", "dictation-availability",
+    "chronicle-runtime-state", "linux-features-settings-route", "reaper-cli-resume",
+  ]);
+  assert.ok(diagnostics.every((entry) => entry.status === "runtime-regression"));
+  assert.ok(diagnostics.every((entry) => entry.ownerPath && entry.hypothesis && entry.evidenceGap && entry.observedEvidence));
+  assert.ok(createRuntimeRegressionDiagnostics({ runtimeSnapshot: { computerUse: { mentionAvailable: false } } })
+    .every((entry) => entry.status === "evidence-required"));
+  assert.ok(createRuntimeRegressionDiagnostics({ runtimeSnapshot: {
+    release: "26.707.31428", provenance: {},
+    computerUse: { pluginId: "computer-use@openai-bundled", installed: true, enabled: true, mentionAvailable: false, rollout: "unknown", entitlement: "unproven" },
+  } }).every((entry) => entry.status === "evidence-required"));
+  const partial = createRuntimeRegressionDiagnostics({ runtimeSnapshot: {
+    release: "26.707.31428", provenance: { source: "partial fixture", capturedAt: "2026-07-10T00:00:00Z" },
+    computerUse: { pluginId: "computer-use@openai-bundled", installed: true, enabled: true, mentionAvailable: true, rollout: "unknown", entitlement: "unproven" },
+  } });
+  assert.equal(partial.find((entry) => entry.id === "computer-use-mention").status, "observed");
+  assert.equal(partial.find((entry) => entry.id === "browser-settings-reconciliation").status, "evidence-required");
+  const observed = createRuntimeRegressionDiagnostics({ runtimeSnapshot: {
+    release: "26.707.31428", provenance: { source: "control fixture", capturedAt: "2026-07-10T00:00:00Z" },
+    computerUse: { pluginId: "computer-use@openai-bundled", installed: true, enabled: true, mentionAvailable: true, rollout: "unknown", entitlement: "unproven" },
+    browser: { registryInstalled: true, registryEnabled: true, settingsAvailable: true, initiallyOmitted: false, queueReconciled: false },
+    dictation: { supported: true }, chronicle: { enabled: true, backendState: "stopped", uiState: "Stopped" },
+    linuxFeatures: { settingsRouteAvailable: true }, reaper: { resumeSucceeded: true },
+  } });
+  assert.ok(observed.every((entry) => entry.status === "observed"));
+});
+
+test("inventories raw app.asar entries with normalized archive paths", () =>
+  withTempDir((workspace) => {
+    const appDir = path.join(workspace, "Codex.app");
+    writeAsar(path.join(appDir, "Contents/Resources/app.asar"), {
+      ".vite/build/main-test.js": "let marker=`current-main-bundle`;",
+    });
+
+    const inventory = createInventory({ sourcePath: appDir });
+
+    assert.ok(
+      inventory.files.some(
+        (file) => file.relativePath === "Contents/Resources/app.asar/.vite/build/main-test.js",
+      ),
+    );
+    assert.equal(
+      inventory.files.some((file) => file.relativePath.includes(".vite/build/.vite/build")),
+      false,
+    );
+  }));
+
+test("default Read Aloud surface protects the current assistant render contract", () =>
+  withTempDir((workspace) => {
+    const appDir = path.join(workspace, "Codex.app");
+    const assetPath = path.join(
+      appDir,
+      "Contents/Resources/app.asar.extracted/webview/assets",
+      "app-initial~app-main~onboarding-page-zcfEkMl-.js",
+    );
+    writeFile(
+      assetPath,
+      "return (0,Z.jsx)(Xa,{item:a,assistantCopyText:i,conversationId:l,renderCodeBlocksAsWritingBlocks:ge})",
+    );
+    const defaultRegistry = JSON.parse(
+      fs.readFileSync(path.join(__dirname, "upstream-dmg-protected-surfaces.json"), "utf8"),
+    );
+    const inventory = createInventory({ registry: defaultRegistry, sourcePath: appDir });
+
+    const protectedSurfaces = extractProtectedSurfaces({
+      inventory,
+      registry: defaultRegistry,
+      repoRoot: path.resolve(__dirname, "../.."),
+    });
+    const readAloud = protectedSurfaces.surfaces.find(
+      (surface) => surface.id === "read_aloud_capability",
+    );
+
+    assert.equal(readAloud.status, "PRESENT");
+    assert.deepEqual(readAloud.missingAnchors, []);
+  }));
 
 function createFixtureApp(root, variant = "baseline") {
   const appDir = path.join(root, `${variant}.app`);
@@ -267,14 +452,6 @@ function createFixtureApp(root, variant = "baseline") {
       path.join(asarExtracted, "future-skysight-bridge.js"),
       "ipcMain.handle('futureSkysightBridge', () => sky_snapshot_v2())",
     );
-  }
-
-  if (variant === "candidate" || variant === "missing-work-louder-hid") {
-    writeWorkLouderControlSurface({
-      asarExtracted,
-      includeHid: variant !== "missing-work-louder-hid",
-      resources,
-    });
   }
 
   if (variant !== "candidate") {
@@ -349,6 +526,48 @@ function createFixtureApp(root, variant = "baseline") {
   );
 
   return appDir;
+}
+
+function addSitesPlugin(appDir) {
+  const sitesPlugin = path.join(
+    appDir,
+    "Contents/Resources/plugins/openai-bundled/plugins/sites",
+  );
+  writeJson(path.join(sitesPlugin, ".app.json"), {
+    apps: {
+      sites: {
+        id: "connector_20205bf7d4e99a89d7154bb849718324",
+      },
+    },
+  });
+  writeJson(path.join(sitesPlugin, ".codex-plugin/plugin.json"), {
+    name: "sites",
+    version: "0.1.21",
+    description: "Build and deploy websites with Sites.",
+    skills: "./skills/",
+    apps: "./.app.json",
+    interface: {
+      displayName: "Sites",
+      shortDescription: "Build and deploy websites with Sites",
+      termsOfServiceURL: "https://openai.com/policies/chatgpt-sites-terms/",
+      category: "Productivity",
+    },
+  });
+  writeFile(
+    path.join(sitesPlugin, "skills/sites-building/SKILL.md"),
+    "Use Sites to build and deploy websites.",
+  );
+}
+
+function writeBundledPlugin(appDir, pluginId, manifest = {}) {
+  const pluginRoot = path.join(appDir, "Contents/Resources/plugins/openai-bundled/plugins", pluginId);
+  writeJson(path.join(pluginRoot, ".codex-plugin/plugin.json"), {
+    id: pluginId,
+    name: pluginId,
+    version: "1.0.0",
+    ...manifest,
+  });
+  return pluginRoot;
 }
 
 function findClassification(driftReport, surfaceId, classification) {
@@ -435,62 +654,6 @@ test("marks Chronicle settings toggle surface partial when the Memory master tog
       surface.missingAnchors
         .find((anchor) => anchor.id === "memory-master-toggle-chronicle-disable")
         .missingNeedles.includes("chronicleDisable"),
-    );
-  }));
-
-test("tracks Work Louder control-surface hooks when the service, kits, and HID runtime are bundled", () =>
-  withTempDir((workspace) => {
-    const appDir = createFixtureApp(workspace, "candidate");
-    const protectedSurfaces = extractProtectedSurfaces({
-      inventory: createInventory({ registry, sourcePath: appDir }),
-      registry,
-      repoRoot: process.cwd(),
-    });
-    const surface = protectedSurfaces.surfacesById.work_louder_control_surface;
-
-    assert.equal(surface.status, "PRESENT");
-    assert.equal(surface.linuxSubstrate.status, "UNKNOWN");
-    assert.ok(
-      surface.satisfiedAnchors.some((anchor) => anchor.id === "micro-service-entrypoint"),
-    );
-    assert.ok(
-      surface.satisfiedAnchors.some((anchor) => anchor.id === "work-louder-device-kits"),
-    );
-    assert.ok(
-      surface.satisfiedAnchors.some((anchor) => anchor.id === "hid-runtime-package"),
-    );
-    assert.ok(
-      surface.evidence.some((entry) => entry.path.includes("codex-micro-service-fixture.js")),
-    );
-    assert.ok(
-      surface.requiredAnchors
-        .find((anchor) => anchor.id === "hid-runtime-package")
-        .matchedPaths.some((entryPath) => entryPath.includes("node-hid/prebuilds")),
-    );
-  }));
-
-test("marks Work Louder control-surface hooks partial when the HID runtime disappears", () =>
-  withTempDir((workspace) => {
-    const appDir = createFixtureApp(workspace, "missing-work-louder-hid");
-    const protectedSurfaces = extractProtectedSurfaces({
-      inventory: createInventory({ registry, sourcePath: appDir }),
-      registry,
-      repoRoot: process.cwd(),
-    });
-    const surface = protectedSurfaces.surfacesById.work_louder_control_surface;
-
-    assert.equal(surface.status, "PARTIAL");
-    assert.ok(
-      surface.satisfiedAnchors.some((anchor) => anchor.id === "micro-service-entrypoint"),
-    );
-    assert.ok(
-      surface.satisfiedAnchors.some((anchor) => anchor.id === "work-louder-device-kits"),
-    );
-    assert.ok(surface.missingAnchors.some((anchor) => anchor.id === "hid-runtime-package"));
-    assert.ok(
-      surface.missingAnchors
-        .find((anchor) => anchor.id === "hid-runtime-package")
-        .missingNeedles.some((needle) => needle.startsWith("nativeBinary:")),
     );
   }));
 
@@ -644,6 +807,457 @@ test("folds patch-report post-patch integrity findings into candidate-only repor
     assert.equal(finding.findingCount, 1);
     assert.equal(finding.findings[0].path, "webview/assets/settings-page-patched.js");
   }));
+
+test("detects post-patch Computer Use gates left Darwin/Windows-only", () =>
+  withTempDir((workspace) => {
+    const candidateApp = createFixtureApp(workspace, "candidate");
+    const assetsDir = path.join(candidateApp, "Contents/Resources/webview/assets");
+    writeFile(
+      path.join(assetsDir, "use-native-apps-current.js"),
+      "function zN(e){let t=(0,BN.c)(9),{enabled:n}=e,{platform:r,isLoading:i}=pi(),a=n&&(r===`macOS`||r===`windows`),o;t[0]===Symbol.for(`react.memo_cache_sentinel`)?(o={order:`usage`},t[0]=o):o=t[0];let s;t[1]===a?s=t[2]:(s={params:o,queryConfig:{enabled:a,staleTime:m.FIVE_MINUTES,refetchOnWindowFocus:!1}},t[1]=a,t[2]=s);let c=Ne(`native-desktop-apps`,s),l;t[3]!==c||t[4]!==a?(l=a?c.data?.apps??[]:[],t[3]=c,t[4]=a,t[5]=l):l=t[5];let u=i||a&&c.isLoading,d;return t[6]!==l||t[7]!==u?(d={nativeApps:l,isLoading:u},t[6]=l,t[7]=u,t[8]=d):d=t[8],d}",
+    );
+    writeFile(
+      path.join(assetsDir, "composer-computer-use-current.js"),
+      "function z2e(){let T=s===`macOS`||s===`windows`,E=T?U2e(C):[],D=T&&l?C.filter(Tie):[],O=T&&l?C.filter(lae):[],N=D2e({chromeAppPlugins:E,computerUsePlugin:w,microsoftExcelAppPlugins:D,microsoftPowerPointAppPlugins:O,onPluginMentionInserted:M,pluginMentionLabels:x,query:r});return N}",
+    );
+    writeFile(
+      path.join(assetsDir, "computer-use-settings-current.js"),
+      "r===`linux`&&!v.availablePlugins.some(e=>e.plugin?.name===on||e.plugin?.id?.split(`@`)[0]===on)&&(v={...v,availablePlugins:[...v.availablePlugins,{marketplaceName:`openai-curated`,marketplacePath:y,logoPath:new URL(`computer-use-plugin-icon-linux.png`,import.meta.url).href,logoDarkPath:new URL(`computer-use-plugin-icon-linux.png`,import.meta.url).href,plugin:{id:on,name:on,installed:!0,enabled:!0}}]});",
+    );
+    writeFile(
+      path.join(assetsDir, "computer-use-settings-card-current.js"),
+      "function Rt(){let b=flag,r=platform,O=[getApp()],F=[];if(b&&(r===`macOS`||r===`windows`))for(let e of O){if(e.plugin==null)continue;let t=e.plugin;F.push({id:e.appControlId,label:e.toggleAriaLabel,installed:t.plugin.installed,enabled:t.plugin.enabled})}return F}",
+    );
+    writeFile(
+      path.join(assetsDir, "computer-use-native-icon-current.js"),
+      "function nI(e){let t=(0,rI.c)(10),{appPath:n}=e,{platform:r,isLoading:i}=pi(),a=(r===`macOS`||r===`windows`)&&n!=null&&n!==``,o=n??``;let u=Ne(`computer-use-native-desktop-app-icon`,l),d=a?u.data?.iconSmall??null:null;return d}",
+    );
+    writeFile(
+      path.join(candidateApp, "Contents/Resources/app.asar.extracted/.vite/build/main-computer-use.js"),
+      "var bs=[{autoInstallOptOutKey:n.js(n.ws),installWhenMissing:!0,name:n.ws,isAvailable:({features:e,platform:t})=>(t===`darwin`||t===`linux`)&&e.computerUse,migrate:Ko}];",
+    );
+
+    const inventory = createInventory({ registry, sourcePath: candidateApp });
+
+    assert.equal(
+      findPostPatchIntegrityFindings(inventory).some((finding) =>
+        finding.symbol.startsWith("computer-use-"),
+      ),
+      false,
+    );
+    const findings = findPostPatchIntegrityFindings(inventory, {
+      includeComputerUsePlatformGates: true,
+    });
+    assert.deepEqual(
+      findings.map((finding) => finding.symbol).filter((symbol) => symbol.startsWith("computer-use-")).sort(),
+      [
+        "computer-use-composer-native-app-mentions-linux-gate",
+        "computer-use-native-app-icon-linux-gate",
+        "computer-use-native-apps-linux-gate",
+        "computer-use-plugin-registration-rollout-gate",
+        "computer-use-settings-native-app-card-linux-gate",
+        "computer-use-settings-synthetic-plugin-mask",
+      ],
+    );
+  }));
+
+test("categorizes platform gates for Linux parity, unsupported features, and review candidates", () =>
+  withTempDir((workspace) => {
+    const candidateApp = createFixtureApp(workspace, "candidate");
+    const assetsDir = path.join(candidateApp, "Contents/Resources/webview/assets");
+    writeFile(
+      path.join(assetsDir, "computer-use-current.js"),
+      "function zN(e){let {enabled:n}=e,{platform:r}=pi(),a=n&&(r===`macOS`||r===`windows`);let c=Ne(`native-desktop-apps`,{queryConfig:{enabled:a}});return {nativeApps:c.data?.apps??[],computerUsePlugin:w}}",
+    );
+    writeFile(
+      path.join(assetsDir, "computer-use-settings-B1QCeMSP.js"),
+      "function settings(){let b=flag,r=platform,O=[getApp()],F=[];if(b&&(r===`macOS`||r===`windows`))for(let e of O){if(e.plugin==null)continue;let t=e.plugin;F.push({id:e.appControlId,label:e.toggleAriaLabel,installed:t.plugin.installed,enabled:t.plugin.enabled})}return F}",
+    );
+    writeFile(
+      path.join(assetsDir, "computer-use-native-icon-current.js"),
+      "function nI(e){let t=(0,rI.c)(10),{appPath:n}=e,{platform:r,isLoading:i}=pi(),a=(r===`macOS`||r===`windows`)&&n!=null&&n!==``,o=n??``;let u=Ne(`computer-use-native-desktop-app-icon`,l),d=a?u.data?.iconSmall??null:null;return d}",
+    );
+    writeFile(
+      path.join(assetsDir, "office-current.js"),
+      "function z2e(){let T=s===`macOS`||s===`windows`;return D2e({microsoftExcelAppPlugins:D,microsoftPowerPointAppPlugins:O,onPluginMentionInserted:M})}",
+    );
+    writeFile(
+      path.join(assetsDir, "hotkey-current.js"),
+      "function hotkeys(){return process.platform===`darwin`||process.platform===`win32`?{setToggleHotkey:()=>true,syncCommandKeybindings:()=>true}:null}",
+    );
+    writeFile(
+      path.join(assetsDir, "agi-skysight-supreme.js"),
+      "function supreme(){let ok=p===`macOS`||p===`windows`;return ok?`AGI Intelligence 9000 Skysight Supreme native desktop sidecar`:null}",
+    );
+    writeFile(
+      path.join(assetsDir, "titlebar-current.js"),
+      "function titlebar(){return process.platform===`darwin`||process.platform===`win32`?{titleBarStyle:`hiddenInset`,trafficLightPosition:{x:12,y:12}}:{}}",
+    );
+
+    const platformGateMap = createPlatformGateMap({
+      inventory: createInventory({ registry, sourcePath: candidateApp }),
+    });
+    const byCategory = new Map(platformGateMap.gates.map((gate) => [gate.category, gate]));
+
+    assert.ok(byCategory.get("linux-parity-drift"));
+    assert.equal(byCategory.get("linux-parity-drift").linuxSurfaceId, "computer_use_plugin");
+    assert.ok(
+      platformGateMap.gates
+        .filter((gate) => gate.path.includes("computer-use"))
+        .every((gate) => gate.category === "linux-parity-drift"),
+    );
+    assert.ok(
+      platformGateMap.gates.some(
+        (gate) =>
+          gate.feature === "Computer Use settings native app cards" &&
+          gate.patchTarget === "scripts/patches/impl/computer-use.js",
+      ),
+    );
+    assert.ok(
+      platformGateMap.gates.some(
+        (gate) =>
+          gate.feature === "Computer Use native app icons" &&
+          gate.patchTarget === "scripts/patches/impl/computer-use.js",
+      ),
+    );
+    assert.ok(byCategory.get("platform-specific-unsupported"));
+    assert.match(byCategory.get("platform-specific-unsupported").recommendation, /macOS\/Windows-only/);
+    assert.ok(
+      platformGateMap.gates.some(
+        (gate) =>
+          gate.category === "platform-specific-unsupported" &&
+          gate.feature === "Global hotkey/keybinding integration",
+      ),
+    );
+    assert.ok(byCategory.get("new-upstream-capability"));
+    assert.match(byCategory.get("new-upstream-capability").feature, /Unmapped/);
+    assert.ok(byCategory.get("expected-platform-native"));
+    assert.equal(platformGateMap.blockingCount, 3);
+  }));
+
+test("does not treat generic Computer Use mentions as Linux parity drift without exact contracts", () =>
+  withTempDir((workspace) => {
+    const candidateApp = createFixtureApp(workspace, "candidate");
+    const assetsDir = path.join(candidateApp, "Contents/Resources/webview/assets");
+    writeFile(
+      path.join(assetsDir, "computer-use-marketing-current.js"),
+      "function teaser(){let allowed=p===`macOS`||p===`windows`;return allowed?`computer use desktop preview`:null}",
+    );
+
+    const platformGateMap = createPlatformGateMap({
+      inventory: createInventory({ registry, sourcePath: candidateApp }),
+    });
+    const gate = platformGateMap.gates.find((entry) =>
+      entry.path.endsWith("computer-use-marketing-current.js"),
+    );
+
+    assert.ok(gate);
+    assert.equal(gate.category, "needs-review");
+  }));
+
+test("records a negated Darwin/Linux predicate as excluding Linux", () =>
+  withTempDir((workspace) => {
+    const candidateApp = createFixtureApp(workspace, "candidate");
+    writeFile(
+      path.join(candidateApp, "Contents/Resources/webview/assets/darwin-linux-negation.js"),
+      "function nativeOnly(){return process.platform!==`linux`&&process.platform!==`darwin`?{setToggleHotkey:()=>true}:null}",
+    );
+
+    const gate = createPlatformGateMap({
+      inventory: createInventory({ registry, sourcePath: candidateApp }),
+    }).gates.find((entry) => entry.path.endsWith("darwin-linux-negation.js"));
+
+    assert.ok(gate);
+    assert.equal(gate.excludesLinux, true);
+    assert.deepEqual(gate.platforms, ["win32"]);
+    assert.notEqual(gate.category, "already-linux-enabled");
+    assert.equal(gate.category, "platform-specific-unsupported");
+  }));
+
+test("marks Computer Use platform gates covered only after a production preflight proves each raw gate", () =>
+  withTempDir((workspace) => {
+    const candidateApp = path.join(workspace, "candidate.app");
+    writeFile(
+      path.join(candidateApp, ".vite/build/computer-use-current.js"),
+      "function zN(e){let {enabled:n}=e,{platform:r}=pi(),a=n&&(r===`macOS`||r===`windows`);let c=Ne(`native-desktop-apps`,{queryConfig:{enabled:a}});return {nativeApps:c.data?.apps??[],computerUsePlugin:w}}",
+    );
+    const requiredNames = [
+      "linux-computer-use-ui-feature",
+      "linux-computer-use-plugin-gate",
+      "linux-computer-use-native-desktop-apps",
+      "linux-computer-use-ui-availability",
+      "linux-computer-use-install-flow",
+      "linux-window-options",
+      "linux-native-titlebar",
+      "linux-avatar-overlay-mouse-passthrough",
+      "linux-tray",
+      "main-process-ui",
+      "feature:read-aloud:main-handler",
+      "feature:read-aloud:assistant-runtime",
+      "feature:read-aloud:settings-toggle",
+      "feature:read-aloud-mcp:linux-read-aloud-plugin-gate",
+    ];
+    const repoRoot = path.join(workspace, "repo");
+    writeFile(path.join(repoRoot, "scripts/patch-linux-window-ui.js"), [
+      "const fs=require('node:fs'),path=require('node:path');",
+      "const target=process.argv.at(-1),reportPath=process.argv[process.argv.indexOf('--report-json')+1];",
+      "const file=path.join(target,'.vite/build/computer-use-current.js');",
+      "fs.writeFileSync(file,fs.readFileSync(file,'utf8').replace('r===`macOS`||r===`windows`','r===`macOS`||r===`windows`||r===`linux`'));",
+      `fs.writeFileSync(reportPath,JSON.stringify({patches:${JSON.stringify(requiredNames)}.map(name=>({name,status:'applied'})),postPatchIntegrity:{findings:[]}}));`,
+    ].join(""));
+    const preflight = runRequiredPatchPreflight({
+      inventory: { source: { appDir: candidateApp } },
+      repoRoot,
+      workDir: path.join(workspace, "work"),
+    });
+    const inventory = createInventory({ registry, sourcePath: candidateApp });
+
+    const covered = createPlatformGateMap({
+      inventory,
+      patchFindings: preflight.findings,
+      requiredPatchPreflight: preflight,
+    });
+    const computerUseGates = covered.gates.filter(
+      (gate) => gate.linuxSurfaceId === "computer_use_plugin",
+    );
+
+    assert.ok(computerUseGates.length > 0);
+    assert.ok(computerUseGates.every((gate) => gate.category === "patched-linux-parity"));
+    assert.ok(preflight.computerUseInspection.gateProofs.every((proof) =>
+      proof.gateId != null && proof.path != null && proof.gate != null && proof.status === "verified"));
+    assert.equal(covered.blockingCount, 0);
+
+    const failed = createPlatformGateMap({
+      inventory,
+      patchFindings: preflight.findings.map((finding) =>
+        finding.name === "linux-computer-use-install-flow"
+          ? { ...finding, status: "skipped-optional" }
+          : finding,
+      ),
+      requiredPatchPreflight: preflight,
+    });
+    assert.ok(
+      failed.gates.some(
+        (gate) =>
+          gate.linuxSurfaceId === "computer_use_plugin" &&
+          gate.category === "linux-parity-drift",
+      ),
+    );
+    assert.ok(failed.blockingCount > 0);
+  }));
+
+test("maps Chronicle and Skysight platform gates to the record-and-replay Linux owners", () =>
+  withTempDir((workspace) => {
+    const candidateApp = createFixtureApp(workspace, "candidate");
+    const assetsDir = path.join(candidateApp, "Contents/Resources/webview/assets");
+    writeFile(
+      path.join(assetsDir, "chronicle-settings-current.js"),
+      "function chronicle(){let allowed=p===`macOS`||p===`windows`;return allowed&&chronicleSidecarPresent&&chronicleSidecarProcessState&&rememberConsentAccepted?o.mutateAsync({enabled:!0}):chronicleDisable?.()}",
+    );
+    writeFile(
+      path.join(assetsDir, "skysight-controls-current.js"),
+      "function skysight(){return process.platform===`darwin`||process.platform===`win32`?{status:`linux-record-replay-skysight-status`,snapshot:`skysight_snapshot`,tool:`event_stream_start`}:null}",
+    );
+
+    const platformGateMap = createPlatformGateMap({
+      inventory: createInventory({ registry, sourcePath: candidateApp }),
+    });
+    const chronicleGate = platformGateMap.gates.find((entry) =>
+      entry.path.endsWith("chronicle-settings-current.js"),
+    );
+    const skysightGate = platformGateMap.gates.find((entry) =>
+      entry.path.endsWith("skysight-controls-current.js"),
+    );
+
+    assert.ok(chronicleGate);
+    assert.equal(chronicleGate.category, "linux-parity-drift");
+    assert.equal(chronicleGate.feature, "Chronicle settings toggle paths");
+    assert.equal(chronicleGate.patchTarget, "linux-features/record-and-replay/patch.js");
+
+    assert.ok(skysightGate);
+    assert.equal(skysightGate.category, "linux-parity-drift");
+    assert.equal(skysightGate.feature, "Skysight controls and bridge");
+    assert.equal(
+      skysightGate.patchTarget,
+      "linux-features/record-and-replay/patch.js and record-replay-linux/src/mcp.rs",
+    );
+  }));
+
+test("keeps review-only platform gates out of new capability candidates", () => {
+  const capabilityMap = createNewCapabilityMap({
+    mapDrift: { mode: "baselineComparison" },
+    platformGateMap: {
+      gates: [
+        {
+          id: "review-gate",
+          category: "needs-review",
+          confidence: "low",
+          feature: "Unclassified platform gate",
+          issueCandidate: false,
+          recommendation: "Review manually.",
+          patchTarget: "manual review",
+          path: "assets/review.js",
+          gate: "p===`macOS`||p===`windows`",
+        },
+        {
+          id: "new-gate",
+          category: "new-upstream-capability",
+          confidence: "medium",
+          feature: "New native capability",
+          issueCandidate: true,
+          recommendation: "Create a Linux feature issue.",
+          patchTarget: "linux-features/new-native-capability",
+          path: "assets/new.js",
+          gate: "p===`macOS`||p===`windows`",
+        },
+      ],
+    },
+  });
+
+  assert.ok(capabilityMap.capabilities.some((capability) => capability.id === "platform-gate:new-gate"));
+  assert.ok(!capabilityMap.capabilities.some((capability) => capability.id === "platform-gate:review-gate"));
+});
+
+test("keeps framework, app-shell, plugin, and dependency binaries out of feature candidates", () => {
+  const capabilityMap = createNewCapabilityMap({
+    mapDrift: {
+      mode: "baselineComparison",
+      nativeBinaryDrift: {
+        added: [
+          "Contents/Frameworks/Codex Framework.framework/Versions/150.0.7871.101/Helpers/browser_crashpad_handler",
+          "Contents/MacOS/Codex",
+          "Contents/Resources/plugins/openai-bundled/plugins/chrome/extension-host/macos/arm64/ChatGPT for Chrome",
+          "Contents/Resources/app.asar.unpacked/node_modules/example/build/Release/example.node",
+          "Contents/Resources/codex-code-mode-host",
+        ],
+      },
+    },
+    platformGateMap: { gates: [] },
+  });
+
+  assert.deepEqual(
+    capabilityMap.capabilities.filter((capability) => capability.type === "native-binary").map((capability) => capability.path),
+    ["Contents/Resources/codex-code-mode-host"],
+  );
+});
+
+test("reports Sites as a cross-platform entitlement-gated capability with a staging recommendation", () =>
+  withTempDir((workspace) => {
+    const baselineApp = createFixtureApp(workspace, "baseline");
+    const candidateApp = createFixtureApp(workspace, "candidate");
+    const outputDir = path.join(workspace, "sites-report");
+    addSitesPlugin(candidateApp);
+
+    const reports = buildIntelReports({
+      baselinePath: baselineApp,
+      candidatePath: candidateApp,
+      outputDir,
+      registry,
+      repoRoot: process.cwd(),
+    });
+    const sitesCapability = reports.newCapabilityMap.capabilities.find(
+      (capability) => capability.name === "Sites",
+    );
+    const driftMarkdown = fs.readFileSync(path.join(outputDir, "drift-report.md"), "utf8");
+
+    assert.ok(sitesCapability);
+    assert.equal(sitesCapability.category, "cross-platform-entitlement-gated");
+    assert.equal(sitesCapability.version, "0.1.21");
+    assert.equal(sitesCapability.platformLabel, "cross-platform");
+    assert.match(
+      sitesCapability.entitlementLabel,
+      /connector_20205bf7d4e99a89d7154bb849718324/,
+    );
+    assert.equal(sitesCapability.patchTarget, "scripts/lib/bundled-plugins.sh");
+    assert.match(sitesCapability.recommendation, /staging issue/i);
+    assert.match(driftMarkdown, /\| Sites \| 0\.1\.21 \| plugin \| cross-platform-entitlement-gated \|/);
+    assert.match(
+      driftMarkdown,
+      /connector_20205bf7d4e99a89d7154bb849718324/,
+    );
+    assert.doesNotMatch(driftMarkdown, /\[object Object\]/);
+    assert.match(driftMarkdown, /\| --- \| --- \| --- \| --- \|/);
+  }));
+
+test("emits app, Electron, CLI, and bundled-plugin version deltas", () => {
+  const metadata = extractVersionMetadata([
+    {
+      relativePath: "Contents/Resources/vendor/Info.plist",
+      text: "CFBundleShortVersionString 3.2.1 CFBundleVersion 99",
+    },
+    {
+      relativePath: "Contents/Resources/node_modules/canvas/package.json",
+      text: '{"version":"3.2.1","dependencies":{"electron":"40.0.0"}}',
+    },
+    {
+      relativePath: "Contents/Resources/codex",
+      nativeStrings: ["unrelated protocol version 2.0"],
+    },
+    {
+      relativePath: "Contents/Info.plist",
+      text: "CFBundleShortVersionString 1.2.3 CFBundleVersion 456",
+    },
+    {
+      relativePath: "package.json",
+      source: "asar",
+      text: '{"name":"openai-codex-electron","version":"26.623.141536","devDependencies":{"electron":"42.1.0"}}',
+    },
+    {
+      relativePath: "Contents/Resources/codex",
+      nativeStrings: ["codex-cli version 0.99.1"],
+    },
+    {
+      relativePath: "Contents/Resources/plugins/openai-bundled/plugins/sites/.codex-plugin/plugin.json",
+      text: '{"version":"0.1.21"}',
+    },
+  ]);
+
+  assert.equal(metadata.cfBundleShortVersionString, "1.2.3");
+  assert.equal(metadata.cfBundleVersion, "456");
+  assert.equal(metadata.appPackageVersion, "26.623.141536");
+  assert.equal(metadata.electronVersion, "42.1.0");
+  assert.equal(metadata.codexCliVersion, "0.99.1");
+  assert.equal(metadata.bundledPluginVersions.sites, "0.1.21");
+});
+
+test("candidate URL augments detected DMG provenance without dropping hashes", () => {
+  assert.deepEqual(
+    mergeProvenance(
+      {
+        candidate: { bytes: 123, sha256: "candidate-sha", etag: "etag", lastModified: "today", url: null },
+        baseline: { bytes: 100, sha256: "baseline-sha", etag: null, lastModified: null, url: null },
+      },
+      { candidate: { url: "https://example.test/Codex.dmg" } },
+    ),
+    {
+      candidate: {
+        bytes: 123,
+        sha256: "candidate-sha",
+        etag: "etag",
+        lastModified: "today",
+        url: "https://example.test/Codex.dmg",
+      },
+      baseline: { bytes: 100, sha256: "baseline-sha", etag: null, lastModified: null, url: null },
+    },
+  );
+});
+
+test("production registry protects Sites and exact remote-mobile contracts", () => {
+  const productionRegistry = JSON.parse(
+    fs.readFileSync(path.join(process.cwd(), "scripts/dev/upstream-dmg-protected-surfaces.json"), "utf8"),
+  );
+  const sites = productionRegistry.surfaces.find((surface) => surface.id === "sites_plugin");
+  const remoteMobile = productionRegistry.surfaces.find((surface) => surface.id === "remote_mobile_control");
+
+  assert.ok(sites);
+  assert.deepEqual(sites.pluginIds, ["sites"]);
+  assert.ok(sites.linuxSubstrate.requiredPaths.includes("scripts/lib/bundled-plugins.sh"));
+  assert.ok(remoteMobile);
+  assert.ok(remoteMobile.contentNeedles.includes("set-remote-control-connections-enabled"));
+  assert.ok(remoteMobile.contentNeedles.includes("remote_control_connections"));
+  assert.ok(!remoteMobile.contentNeedles.includes("mobile"));
+  assert.ok(!remoteMobile.contentNeedles.includes("control"));
+});
 
 test("keeps drift report evidence compact and marks hashed asset churn", () => {
   const baseline = {
@@ -812,6 +1426,8 @@ printf '00000000 T _SkyComputerUseClient\\n'
       "bridge-map.json",
       "plugin-map.json",
       "native-binary-map.json",
+      "platform-gates.json",
+      "new-capabilities.json",
       "map-drift.json",
       "drift-report.json",
       "drift-report.md",
@@ -833,9 +1449,16 @@ printf '00000000 T _SkyComputerUseClient\\n'
     const nativeBinaryMap = JSON.parse(
       fs.readFileSync(path.join(reports.outputDir, "native-binary-map.json"), "utf8"),
     );
+    const platformGateMap = JSON.parse(
+      fs.readFileSync(path.join(reports.outputDir, "platform-gates.json"), "utf8"),
+    );
+    const newCapabilityMap = JSON.parse(
+      fs.readFileSync(path.join(reports.outputDir, "new-capabilities.json"), "utf8"),
+    );
     const mapDrift = JSON.parse(
       fs.readFileSync(path.join(reports.outputDir, "map-drift.json"), "utf8"),
     );
+    const driftMarkdown = fs.readFileSync(path.join(reports.outputDir, "drift-report.md"), "utf8");
     const actionPlan = fs.readFileSync(path.join(reports.outputDir, "substrate-action-plan.md"), "utf8");
     const skyDrift = findClassification(driftReport, "sky_computer_use_client", "MOVED");
     assert.ok(findClassification(driftReport, "chronicle_sidecar", "NEW_UPSTREAM_CAPABILITY"));
@@ -845,6 +1468,10 @@ printf '00000000 T _SkyComputerUseClient\\n'
     assert.ok(skyDrift.evidenceDrift.addedPathSamples.length > 0);
     assert.equal(skyDrift.evidenceDrift.addedEvidence, undefined);
     assert.ok(inventory.files.every((file) => file.text == null && file.nativeStrings == null));
+    assert.ok(Array.isArray(platformGateMap.gates));
+    assert.ok(newCapabilityMap.capabilities.some((capability) => capability.type === "mcp-tool"));
+    assert.match(driftMarkdown, /## New Capability Candidates/);
+    assert.match(driftMarkdown, /## Linux Parity Drift/);
     assert.ok(
       nativeBinaryMap.binaries.some((binary) =>
         binary.protectedStringHits.some((hit) => hit.needle === "recording_controls"),
@@ -942,7 +1569,6 @@ test("CLI loads the checked-in registry and writes the report bundle", () =>
     assert.equal(protectedSurfaces.surfacesById.record_and_replay_plugin.status, "PRESENT");
     assert.equal(protectedSurfaces.surfacesById.codex_chronicle.status, "PRESENT");
     assert.equal(protectedSurfaces.surfacesById.chronicle_settings_toggles.status, "PRESENT");
-    assert.equal(protectedSurfaces.surfacesById.work_louder_control_surface.status, "PRESENT");
   }));
 
 test("CLI exits nonzero with --fail-on-blockers when acceptance blockers are present", () =>
@@ -968,8 +1594,39 @@ test("CLI exits nonzero with --fail-on-blockers when acceptance blockers are pre
     const summary = JSON.parse(result.stdout);
     assert.equal(summary.decision.acceptance, "blocked");
     assert.ok(summary.decision.blockersCount > 0);
-    assert.match(result.stderr, /protected-surface acceptance blocker/);
+    assert.match(result.stderr, /Linux acceptance blocker/);
     assert.ok(fs.existsSync(path.join(outputDir, "drift-report.json")));
+  }));
+
+test("CLI writes release-bound runtime diagnostics and action-plan evidence", () =>
+  withTempDir((workspace) => {
+    const candidateApp = createFixtureApp(workspace, "candidate");
+    const outputDir = path.join(workspace, "runtime-report");
+    const snapshotPath = path.join(workspace, "runtime-snapshot.json");
+    writeJson(snapshotPath, {
+      release: "26.707.31428",
+      provenance: { source: "focused fixture", capturedAt: "2026-07-10T00:00:00Z" },
+      computerUse: { pluginId: "computer-use@openai-bundled", installed: true, enabled: true, mentionAvailable: false, rollout: "unknown", entitlement: "unproven" },
+      browser: { registryInstalled: true, registryEnabled: true, settingsAvailable: false, initiallyOmitted: true, queueReconciled: true },
+      dictation: { supported: false },
+      chronicle: { enabled: true, backendState: "not-started", uiState: "Paused" },
+      linuxFeatures: { settingsRouteAvailable: false },
+      reaper: { resumeSucceeded: false },
+    });
+    const result = spawnSync(process.execPath, [
+      path.join(process.cwd(), "scripts/dev/upstream-dmg-intel.js"), "--candidate", candidateApp,
+      "--output-dir", outputDir, "--runtime-snapshot", snapshotPath,
+    ], { encoding: "utf8" });
+
+    assert.equal(result.status, 0, result.stderr);
+    const summary = JSON.parse(result.stdout);
+    assert.equal(summary.decision.acceptance, "blocked");
+    assert.equal(summary.decision.runtimeRegressionCount, 6);
+    const diagnostics = JSON.parse(fs.readFileSync(path.join(outputDir, "runtime-diagnostics.json"), "utf8"));
+    assert.equal(diagnostics.length, 6);
+    assert.ok(diagnostics.every((entry) => entry.release === "26.707.31428" && entry.status === "runtime-regression"));
+    assert.match(fs.readFileSync(path.join(outputDir, "substrate-action-plan.md"), "utf8"), /Runtime diagnostics \(release 26\.707\.31428\)/);
+    assert.equal(JSON.parse(fs.readFileSync(path.join(outputDir, "drift-report.json"), "utf8")).runtimeHealth.mcpHelperReaper.status, "REGRESSION");
   }));
 
 test("CLI keeps optional patch-report skips review-only under --fail-on-blockers", () =>
