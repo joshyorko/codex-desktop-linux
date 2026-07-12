@@ -185,11 +185,14 @@ in
       };
 
       environmentFile = lib.mkOption {
-        type = lib.types.nullOr lib.types.path;
+        type = lib.types.nullOr lib.types.str;
         default = null;
         example = "/run/secrets/codex-remote-control.env";
         description = ''
-          Additional environment file as defined in {manpage}`systemd.exec(5)`.
+          Runtime path to an additional environment file as defined in
+          {manpage}`systemd.exec(5)`. Use a quoted runtime string. Nix path
+          literals or interpolations can copy contents into the Nix store
+          before module validation; store-backed values are rejected.
         '';
       };
 
@@ -234,6 +237,24 @@ in
       {
         assertion = !remoteCfg.enable || pkgs.stdenv.hostPlatform.isLinux;
         message = "`programs.codexDesktopLinux.remoteControl.enable` is only supported on Linux";
+      }
+      {
+        assertion =
+          remoteCfg.environmentFile == null
+          || lib.hasPrefix "/" (lib.removePrefix "-" remoteCfg.environmentFile);
+        message = ''
+          `programs.codexDesktopLinux.remoteControl.environmentFile` must be an
+          absolute runtime path, optionally prefixed with `-`
+        '';
+      }
+      {
+        assertion =
+          remoteCfg.environmentFile == null
+          || !lib.hasPrefix builtins.storeDir (lib.removePrefix "-" remoteCfg.environmentFile);
+        message = ''
+          `programs.codexDesktopLinux.remoteControl.environmentFile` must be a
+          runtime path outside the Nix store
+        '';
       }
     ];
 

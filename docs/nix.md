@@ -144,6 +144,14 @@ in
 }
 ```
 
+Set `remoteControl.environmentFile` to a quoted absolute runtime path such as
+`"/run/secrets/codex-remote-control.env"`. Prefix it with `-` only when systemd
+should ignore a missing file. Empty paths, relative paths, Nix path literals and
+strings that resolve inside the Nix store are rejected. Do not interpolate a
+path containing secrets: Nix can copy it into the store before module validation
+rejects the configuration. The referenced runtime file must be readable by the
+user service and should remain owner-only.
+
 Pinning `github:sadjow/codex-cli-nix` to a release tag or commit is
 recommended for fully reproducible configurations.
 
