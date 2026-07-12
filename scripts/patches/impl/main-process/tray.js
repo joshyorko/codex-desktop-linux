@@ -232,6 +232,8 @@ function applyLinuxTrayPatch(currentSource, iconPathExpression) {
     "this.tray.on(`click`,()=>{process.platform===`linux`?this.openNativeTrayMenu():this.onTrayButtonClick()}),this.tray.on(`right-click`,()=>{this.openNativeTrayMenu()})}";
   const trayClickPatch =
     "process.platform===`linux`&&this.setLinuxTrayContextMenu(),this.tray.on(`click`,()=>{process.platform===`linux`?this.openNativeTrayMenu():this.onTrayButtonClick()}),this.tray.on(`right-click`,()=>{this.openNativeTrayMenu()})}";
+  const trayPowerMonitorRefreshPatch =
+    `process.platform===\`linux\`&&(${electronVar}.powerMonitor.on(\`unlock-screen\`,()=>{this.setLinuxTrayContextMenu?.()}),${electronVar}.powerMonitor.on(\`resume\`,()=>{this.setLinuxTrayContextMenu?.()})),`;
   const canSetLinuxTrayContextMenu = patchedSource.includes("setLinuxTrayContextMenu(){");
   if (patchedSource.includes("process.platform===`linux`&&this.setLinuxTrayContextMenu(),this.tray.on(`click`")) {
     // Already patched.
@@ -244,6 +246,17 @@ function applyLinuxTrayPatch(currentSource, iconPathExpression) {
     patchedSource = patchedSource.replace(trayClickPatchWithoutContextSetup, trayClickPatch);
   } else {
     console.warn("WARN: Could not find tray click handler — skipping Linux tray menu click patch");
+  }
+
+  if (patchedSource.includes("powerMonitor.on(`unlock-screen`,()=>{this.setLinuxTrayContextMenu?.()})")) {
+    // Already patched.
+  } else if (canSetLinuxTrayContextMenu && patchedSource.includes(trayClickPatch)) {
+    patchedSource = patchedSource.replace(
+      trayClickPatch,
+      `${trayPowerMonitorRefreshPatch}${trayClickPatch}`,
+    );
+  } else {
+    console.warn("WARN: Could not find tray click handler — skipping Linux tray power-monitor refresh patch");
   }
 
   const trayMenuBuildNeedle =

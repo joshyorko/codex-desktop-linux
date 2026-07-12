@@ -3727,6 +3727,10 @@ test("adds Linux tray support including the platform guard", () => {
   );
   assert.match(
     patched,
+    /process\.platform===`linux`&&\(n\.powerMonitor\.on\(`unlock-screen`,\(\)=>\{this\.setLinuxTrayContextMenu\?\.\(\)\}\),n\.powerMonitor\.on\(`resume`,\(\)=>\{this\.setLinuxTrayContextMenu\?\.\(\)\}\)\),/,
+  );
+  assert.match(
+    patched,
     /openNativeTrayMenu\(\)\{if\(process\.platform===`linux`&&\(typeof codexLinuxIsQuitInProgress===`function`&&codexLinuxIsQuitInProgress\(\)\)\)return;/,
   );
   assert.match(patched, /if\(process\.platform===`linux`\)return;e\.once\(`menu-will-show`/);
