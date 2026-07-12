@@ -18,11 +18,15 @@ function replaceOnce(source, needle, replacement, patchName) {
 }
 
 function applyRemoteConnectionsVisibilityPatch(source) {
-  const patched = source.replace(
+  let patched = source.replace(
     /([A-Za-z_$][\w$]*)\(`4114442250`\)(?!\|\|navigator\.userAgent\.includes\(`Linux`\))/g,
     `($1(\`4114442250\`)||${LINUX_GATE})`,
   );
-  if (patched !== source || source.includes(`||${LINUX_GATE}`)) {
+  patched = patched.replace(
+    /([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*),`4114442250`\)(?!\|\|navigator\.userAgent\.includes\(`Linux`\))/g,
+    `($1($2,\`4114442250\`)||${LINUX_GATE})`,
+  );
+  if (patched !== source || source.includes(`\`4114442250\`)||${LINUX_GATE}`)) {
     return patched;
   }
   warn("Could not find remote connections Statsig gate", "remote control UI remote connections visibility patch");
@@ -38,7 +42,10 @@ function applyRemoteControlConnectionsVisibilityPatch(source) {
     /return\s+([A-Za-z_$][\w$]*)&&\(([A-Za-z_$][\w$]*)\?\.available\?\?!0\)&&\2\?\.accessRequired!==!0(?!&&navigator\.userAgent\.includes\(`Linux`\))/g,
     `return ($1||${LINUX_GATE})&&($2?.available??!0)&&$2?.accessRequired!==!0`,
   );
-  if (patched !== source || source.includes(`||${LINUX_GATE}`)) {
+  const alreadyPatched =
+    /return!![A-Za-z_$][\w$]*&&[A-Za-z_$][\w$]*\?\.available===!0\|\|navigator\.userAgent\.includes\(`Linux`\)/.test(source) ||
+    /return \([A-Za-z_$][\w$]*\|\|navigator\.userAgent\.includes\(`Linux`\)\)&&\([A-Za-z_$][\w$]*\?\.available\?\?!0\)&&[A-Za-z_$][\w$]*\?\.accessRequired!==!0/.test(source);
+  if (patched !== source || alreadyPatched) {
     return patched;
   }
   if (
@@ -60,7 +67,10 @@ function applyExperimentalFeaturesPatch(source) {
   if (source.includes(needle)) {
     return source.replace(needle, "");
   }
-  if (source.includes("e.name!==`realtime_conversation`&&e.name!==`chronicle`")) {
+  if (
+    source.includes("e.name!==`realtime_conversation`&&e.name!==`chronicle`") ||
+    source.includes("!e.name.startsWith(`realtime_`)&&e.name!==`chronicle`")
+  ) {
     return source;
   }
   if (source.includes("remote_control")) {
@@ -72,24 +82,6 @@ function applyExperimentalFeaturesPatch(source) {
   return source;
 }
 
-function applyMobileStatsigLinuxPatch(source, patchName) {
-  const patched = source.replace(
-    /([A-Za-z_$][\w$]*)\(`2798711298`\)(?!\|\|navigator\.userAgent\.includes\(`Linux`\))/g,
-    `($1(\`2798711298\`)||${LINUX_GATE})`,
-  );
-  if (patched !== source || source.includes(`||${LINUX_GATE}`)) {
-    return patched;
-  }
-  if (!source.includes("2798711298") && !source.includes("CODEX_MOBILE_SETUP_COMPLETED")) {
-    return source;
-  }
-  if (source.includes("remote-connection-visibility-")) {
-    return source;
-  }
-  warn("Could not find mobile Statsig gate", patchName);
-  return source;
-}
-
 module.exports = {
   descriptors: [
     {
@@ -97,7 +89,7 @@ module.exports = {
       phase: "webview-asset",
       order: 20500,
       ciPolicy: "optional",
-      pattern: /^remote-connection-visibility-.*\.js$/,
+      pattern: /^app-initial~app-main~(?:hotkey-window-new-thread-page~hotkey-window-home-page~composer-utility-bar|pull-request-code-review~onboarding-page~hotkey-window-thread-page~cha~b76hmflu)-.*\.js$/,
       missingDescription: "remote connection visibility bundle",
       skipDescription: "remote control UI remote connections visibility patch",
       apply: applyRemoteConnectionsVisibilityPatch,
@@ -107,7 +99,7 @@ module.exports = {
       phase: "webview-asset",
       order: 20510,
       ciPolicy: "optional",
-      pattern: /^(?:remote-control-connections-visibility|remote-connection-visibility)-.*\.js$/,
+      pattern: /^app-initial~app-main~new-thread-panel-page~appgen-library-page~hotkey-window-thread-page~ho~iufn7mg3-.*\.js$/,
       missingDescription: "remote control connections visibility bundle",
       skipDescription: "remote control UI remote control connections visibility patch",
       apply: applyRemoteControlConnectionsVisibilityPatch,
@@ -117,30 +109,10 @@ module.exports = {
       phase: "webview-asset",
       order: 20520,
       ciPolicy: "optional",
-      pattern: /^experimental-features-queries-.*\.js$/,
+      pattern: /^settings-route-state-.*\.js$/,
       missingDescription: "experimental features query bundle",
       skipDescription: "remote control UI experimental features patch",
       apply: applyExperimentalFeaturesPatch,
-    },
-    {
-      id: "nux-gate",
-      phase: "webview-asset",
-      order: 20530,
-      ciPolicy: "optional",
-      pattern: /^nux-gate-.*\.js$/,
-      missingDescription: "Codex mobile NUX gate bundle",
-      skipDescription: "remote control UI mobile NUX gate patch",
-      apply: (source) => applyMobileStatsigLinuxPatch(source, "remote control UI mobile NUX gate patch"),
-    },
-    {
-      id: "app-main",
-      phase: "webview-asset",
-      order: 20540,
-      ciPolicy: "optional",
-      pattern: /^app-main-.*\.js$/,
-      missingDescription: "Codex mobile app main bundle",
-      skipDescription: "remote control UI mobile app main patch",
-      apply: (source) => applyMobileStatsigLinuxPatch(source, "remote control UI mobile app main patch"),
     },
   ],
 };
