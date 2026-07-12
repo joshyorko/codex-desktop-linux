@@ -3630,11 +3630,11 @@ test("adds Linux tray support including the platform guard", () => {
   assert.match(patched, /setLinuxTrayContextMenu\(\)\{let e=n\.Menu\.buildFromTemplate/);
   assert.match(
     patched,
-    /process\.platform===`linux`&&this\.setLinuxTrayContextMenu\(\),this\.tray\.on\(`click`/,
+    /process\.platform===`linux`&&\(codexLinuxSetTrayController\(this\),this\.setLinuxTrayContextMenu\(\)\),this\.tray\.on\(`click`/,
   );
   assert.match(
     patched,
-    /process\.platform===`linux`&&\(n\.powerMonitor\.on\(`unlock-screen`,\(\)=>\{this\.setLinuxTrayContextMenu\?\.\(\)\}\),n\.powerMonitor\.on\(`resume`,\(\)=>\{this\.setLinuxTrayContextMenu\?\.\(\)\}\)\),/,
+    /codexLinuxTrayRecoveryHandler=\(\)=>\{let e=codexLinuxTrayController;e\?\.setLinuxTrayContextMenu\?\.\(\)\}/,
   );
   assert.match(
     patched,
@@ -3650,6 +3650,77 @@ test("adds Linux tray support including the platform guard", () => {
     /\(E\|\|process\.platform===`linux`&&\(typeof codexLinuxIsTrayEnabled!==`function`\|\|codexLinuxIsTrayEnabled\(\)\)\)&&oe\(\);/,
   );
   assert.doesNotMatch(patched, /process\.platform===`linux`&&codexLinuxIsTrayEnabled\(\)/);
+});
+
+test("refreshes only the live Linux tray controller after session recovery", () => {
+  const source = `${mainBundlePrefix}${trayBundleFixture()
+    .replace(
+      "this.tray={on(){},setContextMenu(){},popUpContextMenu(){}}",
+      "this.tray=globalThis.createTray()",
+    )
+    .replace("}}v&&", "}};v&&")
+    .replace(";E&&oe();", ";")}`;
+  const patched = applyPatchTwice(applyLinuxTrayPatch, source, null);
+  const powerMonitor = new EventEmitter();
+  const app = new EventEmitter();
+  const trays = [];
+  const context = {
+    E: false,
+    v: false,
+    e: { o: (value) => value },
+    process: { platform: "linux", resourcesPath: "", execPath: "" },
+    require: (name) => {
+      if (name !== "electron") {
+        return {};
+      }
+      return {
+        app,
+        powerMonitor,
+        Menu: { buildFromTemplate: () => ({}) },
+      };
+    },
+    createTray: () => {
+      const tray = {
+        destroyed: false,
+        menuSetCount: 0,
+        on() {},
+        setContextMenu() {
+          if (this.destroyed) {
+            throw new Error("destroyed tray");
+          }
+          this.menuSetCount += 1;
+        },
+        popUpContextMenu() {},
+        destroy() {
+          this.destroyed = true;
+        },
+      };
+      trays.push(tray);
+      return tray;
+    },
+  };
+
+  vm.runInNewContext(`${patched};globalThis.TrayController=pb;`, context);
+  const firstController = new context.TrayController();
+  const firstTray = trays[0];
+  firstTray.destroy();
+  const liveController = new context.TrayController();
+  const liveTray = trays[1];
+
+  assert.doesNotThrow(() => {
+    powerMonitor.emit("unlock-screen");
+    powerMonitor.emit("resume");
+  });
+  assert.equal(firstTray.menuSetCount, 1);
+  assert.equal(liveTray.menuSetCount, 3);
+
+  app.emit("before-quit");
+  powerMonitor.emit("unlock-screen");
+  assert.equal(liveTray.menuSetCount, 3);
+  assert.equal(powerMonitor.listenerCount("unlock-screen"), 0);
+  assert.equal(powerMonitor.listenerCount("resume"), 0);
+  assert.ok(firstController);
+  assert.ok(liveController);
 });
 
 test("uses collision-proof Linux tray icon variables when Electron alias is r", () => {

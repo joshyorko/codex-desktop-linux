@@ -215,6 +215,8 @@ function applyLinuxTrayPatch(currentSource, iconPathExpression) {
     "trayMenuThreads={runningThreads:[],unreadThreads:[],pinnedThreads:[],recentThreads:[],usageLimits:[]};constructor(";
   const trayContextMethodPatch =
     `trayMenuThreads={runningThreads:[],unreadThreads:[],pinnedThreads:[],recentThreads:[],usageLimits:[]};setLinuxTrayContextMenu(){let e=${electronVar}.Menu.buildFromTemplate(this.getNativeTrayMenuItems());this.tray.setContextMenu?.(e);return e}constructor(`;
+  const trayRecoveryHelpers =
+    `let codexLinuxTrayController=null,codexLinuxTrayRecoveryHandler=()=>{let e=codexLinuxTrayController;e?.setLinuxTrayContextMenu?.()},codexLinuxStopTrayRecovery=()=>{${electronVar}.powerMonitor.removeListener?.(\`unlock-screen\`,codexLinuxTrayRecoveryHandler),${electronVar}.powerMonitor.removeListener?.(\`resume\`,codexLinuxTrayRecoveryHandler),codexLinuxTrayController=null},codexLinuxTrayQuitHandler=()=>{codexLinuxStopTrayRecovery()},codexLinuxSetTrayController=e=>(codexLinuxTrayController=e,e);${electronVar}.powerMonitor.on(\`unlock-screen\`,codexLinuxTrayRecoveryHandler),${electronVar}.powerMonitor.on(\`resume\`,codexLinuxTrayRecoveryHandler),${electronVar}.app.once(\`before-quit\`,codexLinuxTrayQuitHandler);`;
   if (patchedSource.includes("setLinuxTrayContextMenu(){")) {
     patchedSource = patchedSource.replace(
       /setLinuxTrayContextMenu\(\)\{let e=[A-Za-z_$][\w$]*\.Menu\.buildFromTemplate\(this\.getNativeTrayMenuItems\(\)\);/,
@@ -226,16 +228,26 @@ function applyLinuxTrayPatch(currentSource, iconPathExpression) {
     console.warn("WARN: Could not find tray controller fields — skipping Linux tray context menu method patch");
   }
 
+  const canSetLinuxTrayContextMenu = patchedSource.includes("setLinuxTrayContextMenu(){");
+  if (!patchedSource.includes("codexLinuxTrayRecoveryHandler=")) {
+    const trayControllerClassMatch = patchedSource.match(
+      new RegExp(`var [A-Za-z_$][\\w$]*=class\\{${escapeRegExp(trayContextMethodNeedle.split("constructor(")[0])}`),
+    );
+    if (trayControllerClassMatch != null && trayControllerClassMatch.index != null) {
+      patchedSource =
+        `${patchedSource.slice(0, trayControllerClassMatch.index)}${trayRecoveryHelpers}${patchedSource.slice(trayControllerClassMatch.index)}`;
+    } else if (patchedSource.includes(trayContextMethodNeedle)) {
+      console.warn("WARN: Could not find tray controller class — skipping Linux tray power-monitor refresh patch");
+    }
+  }
+
   const trayClickNeedle =
     "this.tray.on(`click`,()=>{this.onTrayButtonClick()}),this.tray.on(`right-click`,()=>{this.openNativeTrayMenu()})}";
   const trayClickPatchWithoutContextSetup =
     "this.tray.on(`click`,()=>{process.platform===`linux`?this.openNativeTrayMenu():this.onTrayButtonClick()}),this.tray.on(`right-click`,()=>{this.openNativeTrayMenu()})}";
   const trayClickPatch =
-    "process.platform===`linux`&&this.setLinuxTrayContextMenu(),this.tray.on(`click`,()=>{process.platform===`linux`?this.openNativeTrayMenu():this.onTrayButtonClick()}),this.tray.on(`right-click`,()=>{this.openNativeTrayMenu()})}";
-  const trayPowerMonitorRefreshPatch =
-    `process.platform===\`linux\`&&(${electronVar}.powerMonitor.on(\`unlock-screen\`,()=>{this.setLinuxTrayContextMenu?.()}),${electronVar}.powerMonitor.on(\`resume\`,()=>{this.setLinuxTrayContextMenu?.()})),`;
-  const canSetLinuxTrayContextMenu = patchedSource.includes("setLinuxTrayContextMenu(){");
-  if (patchedSource.includes("process.platform===`linux`&&this.setLinuxTrayContextMenu(),this.tray.on(`click`")) {
+    "process.platform===`linux`&&(codexLinuxSetTrayController(this),this.setLinuxTrayContextMenu()),this.tray.on(`click`,()=>{process.platform===`linux`?this.openNativeTrayMenu():this.onTrayButtonClick()}),this.tray.on(`right-click`,()=>{this.openNativeTrayMenu()})}";
+  if (patchedSource.includes("process.platform===`linux`&&(codexLinuxSetTrayController(this),this.setLinuxTrayContextMenu()),this.tray.on(`click`")) {
     // Already patched.
   } else if (patchedSource.includes(trayClickNeedle)) {
     patchedSource = patchedSource.replace(
@@ -246,17 +258,6 @@ function applyLinuxTrayPatch(currentSource, iconPathExpression) {
     patchedSource = patchedSource.replace(trayClickPatchWithoutContextSetup, trayClickPatch);
   } else {
     console.warn("WARN: Could not find tray click handler — skipping Linux tray menu click patch");
-  }
-
-  if (patchedSource.includes("powerMonitor.on(`unlock-screen`,()=>{this.setLinuxTrayContextMenu?.()})")) {
-    // Already patched.
-  } else if (canSetLinuxTrayContextMenu && patchedSource.includes(trayClickPatch)) {
-    patchedSource = patchedSource.replace(
-      trayClickPatch,
-      `${trayPowerMonitorRefreshPatch}${trayClickPatch}`,
-    );
-  } else {
-    console.warn("WARN: Could not find tray click handler — skipping Linux tray power-monitor refresh patch");
   }
 
   const trayMenuBuildNeedle =
