@@ -8,6 +8,14 @@
 let
   cfg = config.programs.codexDesktopLinux;
   remoteCfg = cfg.remoteControl;
+  remoteEnvironmentFilePath =
+    if remoteCfg.environmentFile == null then null else lib.removePrefix "-" remoteCfg.environmentFile;
+  remoteEnvironmentFileSegments =
+    if remoteEnvironmentFilePath == null then [ ] else lib.drop 1 (lib.splitString "/" remoteEnvironmentFilePath);
+  remoteEnvironmentFileIsCanonical =
+    remoteEnvironmentFilePath != null
+    && lib.hasPrefix "/" remoteEnvironmentFilePath
+    && lib.all (segment: segment != "" && segment != "." && segment != "..") remoteEnvironmentFileSegments;
   system = pkgs.stdenv.hostPlatform.system;
   flakePackages = self.packages.${system};
   linuxFeatures = import ./linux-features.nix { inherit lib; };
@@ -241,16 +249,20 @@ in
       {
         assertion =
           remoteCfg.environmentFile == null
-          || lib.hasPrefix "/" (lib.removePrefix "-" remoteCfg.environmentFile);
+          || (!builtins.hasContext remoteCfg.environmentFile && remoteEnvironmentFileIsCanonical);
         message = ''
           `programs.codexDesktopLinux.remoteControl.environmentFile` must be an
-          absolute runtime path, optionally prefixed with `-`
+          absolute canonical runtime path without Nix store context, optionally
+          prefixed with `-`
         '';
       }
       {
         assertion =
           remoteCfg.environmentFile == null
-          || !lib.hasPrefix builtins.storeDir (lib.removePrefix "-" remoteCfg.environmentFile);
+          || (
+            remoteEnvironmentFilePath != builtins.storeDir
+            && !lib.hasPrefix "${builtins.storeDir}/" remoteEnvironmentFilePath
+          );
         message = ''
           `programs.codexDesktopLinux.remoteControl.environmentFile` must be a
           runtime path outside the Nix store

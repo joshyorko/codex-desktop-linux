@@ -210,6 +210,15 @@ let
     ""
     "secrets.env"
     "-secrets.env"
+    "//nix/store/example-secret"
+    "/run/../nix/store/example-secret"
+    "/nix//store/example-secret"
+    "/run/secrets/./codex-remote-control.env"
+    "/run/secrets/"
+  ];
+  contextEnvironmentFiles = [
+    "/run/secrets/${./linux-features-test.nix}"
+    "-/run/secrets/${./linux-features-test.nix}"
   ];
   homeManagerStoreEnvironmentFileAssertions = map (
     environmentFile:
@@ -235,6 +244,18 @@ let
       remoteControlConfigWithEnvironmentFile environmentFile
     )).config.assertions
   ) invalidRuntimeEnvironmentFiles;
+  homeManagerContextEnvironmentFileAssertions = map (
+    environmentFile:
+    (evalHomeManager (
+      remoteControlConfigWithEnvironmentFile environmentFile
+    )).config.assertions
+  ) contextEnvironmentFiles;
+  nixosContextEnvironmentFileAssertions = map (
+    environmentFile:
+    (evalNixOS (
+      remoteControlConfigWithEnvironmentFile environmentFile
+    )).config.assertions
+  ) contextEnvironmentFiles;
 in
 assert lib.assertMsg
   (linuxFeatures.normalize testFeatureIds == normalizedTestFeatureIds)
@@ -295,10 +316,16 @@ assert lib.assertMsg
   "NixOS accepted a store path for the remote-control environment file";
 assert lib.assertMsg
   (lib.all (assertions: !lib.all (item: item.assertion) assertions) homeManagerRuntimeEnvironmentFileAssertions)
-  "Home Manager accepted an empty or relative remote-control environment-file path";
+  "Home Manager accepted an empty, relative, or non-canonical remote-control environment-file path";
 assert lib.assertMsg
   (lib.all (assertions: !lib.all (item: item.assertion) assertions) nixosRuntimeEnvironmentFileAssertions)
-  "NixOS accepted an empty or relative remote-control environment-file path";
+  "NixOS accepted an empty, relative, or non-canonical remote-control environment-file path";
+assert lib.assertMsg
+  (lib.all (assertions: !lib.all (item: item.assertion) assertions) homeManagerContextEnvironmentFileAssertions)
+  "Home Manager accepted a context-bearing remote-control environment-file path";
+assert lib.assertMsg
+  (lib.all (assertions: !lib.all (item: item.assertion) assertions) nixosContextEnvironmentFileAssertions)
+  "NixOS accepted a context-bearing remote-control environment-file path";
 pkgs.runCommand "nix-linux-features-evaluation" { } ''
   touch "$out"
 ''
