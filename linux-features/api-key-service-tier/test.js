@@ -83,7 +83,7 @@ test("api-key-service-tier stays disabled until listed in features.json", () => 
   });
 });
 
-test("descriptors are optional and target only the two current app bundles", () => {
+test("descriptors are optional and target only the July 12 current app bundle", () => {
   assert.deepEqual(
     descriptors.map((descriptor) => [descriptor.id, descriptor.phase, descriptor.ciPolicy]),
     [
@@ -91,17 +91,15 @@ test("descriptors are optional and target only the two current app bundles", () 
       ["api-key-service-tier-fallback", "webview-asset", "optional"],
     ],
   );
+  const currentChunk =
+    "app-initial~app-main~new-thread-panel-page~appgen-library-page~hotkey-window-thread-page~ho~iufn7mg3-k1satKyX.js";
+  assert.equal(descriptors[0].pattern.test(currentChunk), true);
+  assert.equal(descriptors[1].pattern.test(currentChunk), true);
   assert.equal(
     descriptors[0].pattern.test(
       "app-initial~app-main~onboarding-page~hotkey-window-thread-page~quick-chat-window-page~chatg~k0ede4gb-C17KDkOa.js",
     ),
-    true,
-  );
-  assert.equal(
-    descriptors[1].pattern.test(
-      "app-initial~app-main~pull-request-code-review~onboarding-page~hotkey-window-thread-page~cha~b76hmflu-y0KJWbm3.js",
-    ),
-    true,
+    false,
   );
   assert.equal(descriptors[0].pattern.test("app-initial~app-main~onboarding-page-abc.js"), false);
   assert.equal(descriptors[1].pattern.test("app-initial~app-main~onboarding-page-abc.js"), false);
@@ -130,16 +128,10 @@ test("partial current drift is reported when the other exact target still applie
       fs.writeFileSync(
         path.join(
           assetsDir,
-          "app-initial~app-main~onboarding-page~hotkey-window-thread-page~quick-chat-window-page~chatg~k0ede4gb-drifted.js",
-        ),
-        "function driftedGateAndModel(){return `priority_mode reasoningEfforts`}",
-      );
-      fs.writeFileSync(
-        path.join(
-          assetsDir,
-          "app-initial~app-main~pull-request-code-review~onboarding-page~hotkey-window-thread-page~cha~b76hmflu-current.js",
+          "app-initial~app-main~new-thread-panel-page~appgen-library-page~hotkey-window-thread-page~ho~iufn7mg3-current.js",
         ),
         [
+          "function driftedGateAndModel(){return `priority_mode reasoningEfforts`}",
           "let defaultServiceTier=null;",
           "function pQ(e,t){return t==null?null:t===`fast`?mQ(e):e?.serviceTiers?.find(e=>e.id===t)??null}",
           "function tEe(e){return[{description:yQ.standardDescription,iconKind:null,label:yQ.standardLabel,tier:null,value:null},...(e?.serviceTiers??[]).map(e=>({description:eEe(e),iconKind:fQ(e.id,e.name),label:$Te(e),tier:e,value:e.id}))]}",
@@ -173,7 +165,7 @@ test("gate and model current contract fails closed when either side is missing",
       const assetsDir = path.join(tempApp, "webview", "assets");
       const targetPath = path.join(
         assetsDir,
-        "app-initial~app-main~onboarding-page~hotkey-window-thread-page~quick-chat-window-page~chatg~k0ede4gb-partial.js",
+        "app-initial~app-main~new-thread-panel-page~appgen-library-page~hotkey-window-thread-page~ho~iufn7mg3-partial.js",
       );
       const gateOnlySource =
         "const diagnostic=`codexLinuxApiKeyServiceTierModel`;function sxe(e){let t=(0,cxe.c)(6),n=X(os),r=e?.hostId??n,i=Cf(r),a=i?.authMethod===`chatgpt`,o=i?.authMethod??null,s;t[0]!==r||t[1]!==o?(s={authMethod:o,hostId:r},t[0]=r,t[1]=o,t[2]=s):s=t[2];let{data:c,isPending:l}=ye(is,s),u=!!i?.isLoading||a&&l,d=a&&!u&&c!=null&&c?.requirements?.featureRequirements?.fast_mode!==!1,f;return t[3]!==u||t[4]!==d?(f={isServiceTierAllowed:d,isLoading:u},t[3]=u,t[4]=d,t[5]=f):f=t[5],f}";
