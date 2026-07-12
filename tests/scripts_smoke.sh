@@ -5856,6 +5856,8 @@ EOF
     assert_contains "$REPO_DIR/launcher/start.sh.template" "sync_chrome_bundled_plugin_cache"
     assert_contains "$REPO_DIR/launcher/start.sh.template" "sync_read_aloud_bundled_plugin_cache"
     assert_contains "$REPO_DIR/launcher/start.sh.template" "make_tree_owner_writable"
+    assert_contains "$REPO_DIR/launcher/start.sh.template" "make_path_owner_trusted"
+    assert_contains "$REPO_DIR/launcher/start.sh.template" "make_tree_owner_trusted"
     assert_contains "$REPO_DIR/launcher/start.sh.template" "clear_bundled_marketplace_tmp_cache"
     assert_not_contains "$REPO_DIR/launcher/start.sh.template" "monitor_bundled_marketplace_tmp_permissions"
     assert_contains "$REPO_DIR/launcher/start.sh.template" "extension-id.json"
@@ -5974,10 +5976,132 @@ assertCacheLinks({
   body: functionBody("sync_read_aloud_bundled_plugin_cache", "resolve_browser_use_runtime_env"),
   plugin: "read-aloud",
 });
+const chromeBody = functionBody("sync_chrome_bundled_plugin_cache", "sync_computer_use_bundled_plugin_cache");
+for (const required of [
+  'make_path_owner_trusted',
+  'path_has_unsafe_write',
+  'tree_has_unsafe_write "$cache_plugin"',
+  'cache_was_untrusted=1',
+  'make_tree_owner_trusted "$tmp_plugin"',
+  'make_tree_owner_trusted "$cache_plugin"',
+  'write_chrome_native_host_manifests "$host_path" "$cache_root/latest"',
+]) {
+  if (!chromeBody.includes(required)) {
+    throw new Error(`Chrome plugin runtime cache sync missing ${required}`);
+  }
+}
+if (chromeBody.includes('make_tree_owner_trusted "$source_plugin"')) {
+  throw new Error("Chrome plugin sync must not bless an installed writable source tree");
+}
+const mkdirCacheParent = chromeBody.indexOf('mkdir -p "$cache_parent"');
+if (mkdirCacheParent === -1 || chromeBody.indexOf('"$cache_parent"', mkdirCacheParent) === -1) {
+  throw new Error("Chrome plugin runtime cache sync must harden newly created cache parents");
+}
 if (!launcher.includes('ln -sfnT "$target" "$link_path"')) {
   throw new Error("replace_symlink must replace plugin links as paths, not as directory children");
 }
 NODE
+
+    local trust_probe="$TMP_DIR/chrome-cache-permissions-probe.sh"
+    python3 - "$REPO_DIR/launcher/start.sh.template" "$trust_probe" <<'PY'
+import pathlib
+import re
+import sys
+
+launcher = pathlib.Path(sys.argv[1]).read_text()
+helpers = []
+for name in (
+    "make_tree_owner_writable",
+    "make_path_owner_trusted",
+    "make_tree_owner_trusted",
+    "path_has_unsafe_write",
+    "tree_has_unsafe_write",
+    "remove_tree_if_exists",
+):
+    match = re.search(rf"{name}\(\) \{{[\s\S]*?\n\}}\n", launcher)
+    if match is None:
+        raise SystemExit(f"missing {name}")
+    helpers.append(match.group(0))
+
+sync_match = re.search(
+    r"sync_chrome_bundled_plugin_cache\(\) \{[\s\S]*?\n\}\n\nsync_computer_use_bundled_plugin_cache\(\)",
+    launcher,
+)
+if sync_match is None:
+    raise SystemExit("missing Chrome cache sync")
+sync_function = sync_match.group(0).rsplit("\n\nsync_computer_use_bundled_plugin_cache()", 1)[0]
+
+pathlib.Path(sys.argv[2]).write_text(
+    """#!/usr/bin/env bash
+set -euo pipefail
+
+"""
+    + "\n".join(helpers)
+    + "\n"
+    + sync_function
+    + r'''
+root="$1"
+SCRIPT_DIR="$root/app"
+HOME="$root/home"
+CODEX_HOME="$HOME/.codex"
+source_plugin="$SCRIPT_DIR/resources/plugins/openai-bundled/plugins/chrome"
+cache_root="$CODEX_HOME/plugins/cache/openai-bundled/chrome"
+cache_plugin="$cache_root/26.test"
+
+chrome_extension_host_arch() { printf '%s\n' x64; }
+bundled_plugin_version() { printf '%s\n' 26.test; }
+replace_symlink() { ln -sfnT "$1" "$2"; }
+write_chrome_native_host_manifests() { :; }
+
+mkdir -p \
+  "$source_plugin/.codex-plugin" \
+  "$source_plugin/extension-host/linux/x64" \
+  "$source_plugin/scripts/node_modules" \
+  "$cache_plugin/.codex-plugin" \
+  "$cache_plugin/extension-host/linux/x64" \
+  "$cache_plugin/scripts/node_modules"
+printf '%s\n' '{"name":"chrome","version":"26.test"}' > "$source_plugin/.codex-plugin/plugin.json"
+printf '%s\n' trusted-host > "$source_plugin/extension-host/linux/x64/extension-host"
+printf '%s\n' trusted-client > "$source_plugin/scripts/browser-client.mjs"
+printf '%s\n' trusted-manifest > "$source_plugin/scripts/installManifest.mjs"
+printf '%s\n' trusted-module > "$source_plugin/scripts/node_modules/classic-level.mjs"
+chmod +x "$source_plugin/extension-host/linux/x64/extension-host"
+cp -R "$source_plugin/." "$cache_plugin/"
+printf '%s\n' tampered-module > "$cache_plugin/scripts/node_modules/classic-level.mjs"
+
+# Simulate a cache and relevant ancestor created under umask 0002. The four
+# files used by the old partial comparison still match, while an imported
+# module that was not compared has been changed.
+chmod 775 "$CODEX_HOME" "$CODEX_HOME/plugins" "$CODEX_HOME/plugins/cache" \
+  "$CODEX_HOME/plugins/cache/openai-bundled" "$cache_root" "$cache_plugin"
+chmod 664 "$cache_plugin/scripts/node_modules/classic-level.mjs"
+chmod -R go-w "$SCRIPT_DIR"
+
+sync_chrome_bundled_plugin_cache
+
+grep -qx trusted-module "$cache_plugin/scripts/node_modules/classic-level.mjs"
+for trusted_path in \
+  "$CODEX_HOME" \
+  "$CODEX_HOME/plugins" \
+  "$CODEX_HOME/plugins/cache" \
+  "$CODEX_HOME/plugins/cache/openai-bundled" \
+  "$cache_root"; do
+  if find "$trusted_path" -maxdepth 0 ! -type l -perm /022 -print -quit | grep -q .; then
+    echo "Chrome cache ancestor remained group/world writable: $trusted_path" >&2
+    exit 1
+  fi
+done
+if find "$cache_plugin" ! -type l -perm /022 -print -quit | grep -q .; then
+  echo "Chrome plugin cache remained group/world writable" >&2
+  exit 1
+fi
+test -L "$cache_root/latest"
+test "$(readlink "$cache_root/latest")" = 26.test
+'''
+)
+PY
+    chmod +x "$trust_probe"
+    "$trust_probe" "$TMP_DIR/chrome-cache-permissions"
 }
 
 test_launcher_cli_resolution_policy() {
@@ -7048,6 +7172,8 @@ test_chrome_plugin_staging() {
     assert_contains "$chrome_dir/skills/control-chrome/SKILL.md" "agent.browsers.list()"
     assert_contains "$chrome_dir/skills/control-chrome/SKILL.md" "browser.tabs.new()"
     assert_contains "$install_dir/resources/plugins/openai-bundled/.agents/plugins/marketplace.json" '"name": "chrome"'
+    [ -z "$(find "$install_dir/resources/plugins/openai-bundled" -perm /022 -print -quit)" ] \
+        || fail "Expected staged bundled plugin resources to reject group/other writes"
     assert_contains "$output_log" "Chrome plugin staged from upstream DMG"
 }
 
