@@ -332,6 +332,7 @@ test("surfaces an unselected required patch failure from the preflight child", (
 
 test("reports runtime regressions as evidence-bound diagnostics without inventing fixes", () => {
   const diagnostics = createRuntimeRegressionDiagnostics({
+    release: "26.707.31428",
     runtimeSnapshot: {
       release: "26.707.31428",
       provenance: { source: "Luna fixture", capturedAt: "2026-07-10T00:00:00Z" },
@@ -350,19 +351,19 @@ test("reports runtime regressions as evidence-bound diagnostics without inventin
   ]);
   assert.ok(diagnostics.every((entry) => entry.status === "runtime-regression"));
   assert.ok(diagnostics.every((entry) => entry.ownerPath && entry.hypothesis && entry.evidenceGap && entry.observedEvidence));
-  assert.ok(createRuntimeRegressionDiagnostics({ runtimeSnapshot: { computerUse: { mentionAvailable: false } } })
+  assert.ok(createRuntimeRegressionDiagnostics({ release: "26.707.31428", runtimeSnapshot: { computerUse: { mentionAvailable: false } } })
     .every((entry) => entry.status === "evidence-required"));
-  assert.ok(createRuntimeRegressionDiagnostics({ runtimeSnapshot: {
+  assert.ok(createRuntimeRegressionDiagnostics({ release: "26.707.31428", runtimeSnapshot: {
     release: "26.707.31428", provenance: {},
     computerUse: { pluginId: "computer-use@openai-bundled", installed: true, enabled: true, mentionAvailable: false, rollout: "unknown", entitlement: "unproven" },
   } }).every((entry) => entry.status === "evidence-required"));
-  const partial = createRuntimeRegressionDiagnostics({ runtimeSnapshot: {
+  const partial = createRuntimeRegressionDiagnostics({ release: "26.707.31428", runtimeSnapshot: {
     release: "26.707.31428", provenance: { source: "partial fixture", capturedAt: "2026-07-10T00:00:00Z" },
     computerUse: { pluginId: "computer-use@openai-bundled", installed: true, enabled: true, mentionAvailable: true, rollout: "unknown", entitlement: "unproven" },
   } });
   assert.equal(partial.find((entry) => entry.id === "computer-use-mention").status, "observed");
   assert.equal(partial.find((entry) => entry.id === "browser-settings-reconciliation").status, "evidence-required");
-  const observed = createRuntimeRegressionDiagnostics({ runtimeSnapshot: {
+  const observed = createRuntimeRegressionDiagnostics({ release: "26.707.31428", runtimeSnapshot: {
     release: "26.707.31428", provenance: { source: "control fixture", capturedAt: "2026-07-10T00:00:00Z" },
     computerUse: { pluginId: "computer-use@openai-bundled", installed: true, enabled: true, mentionAvailable: true, rollout: "unknown", entitlement: "unproven" },
     browser: { registryInstalled: true, registryEnabled: true, settingsAvailable: true, initiallyOmitted: false, queueReconciled: false },
@@ -431,6 +432,10 @@ function createFixtureApp(root, variant = "baseline") {
 
   writeJson(path.join(resources, "package.json"), {
     name: "codex-desktop",
+    version: variant === "candidate" ? "2026.7.3" : "2026.7.2",
+  });
+  writeJson(path.join(asarExtracted, "package.json"), {
+    name: "openai-codex-electron",
     version: variant === "candidate" ? "2026.7.3" : "2026.7.2",
   });
 
@@ -1011,9 +1016,16 @@ test("marks Computer Use platform gates covered only after a production prefligh
       workDir: path.join(workspace, "work"),
     });
     const inventory = createInventory({ registry, sourcePath: candidateApp });
+    const dmgInventory = {
+      ...inventory,
+      files: inventory.files.map((file) => ({
+        ...file,
+        relativePath: `Contents/Resources/app.asar/${file.relativePath}`,
+      })),
+    };
 
     const covered = createPlatformGateMap({
-      inventory,
+      inventory: dmgInventory,
       patchFindings: preflight.findings,
       requiredPatchPreflight: preflight,
     });
@@ -1028,7 +1040,7 @@ test("marks Computer Use platform gates covered only after a production prefligh
     assert.equal(covered.blockingCount, 0);
 
     const failed = createPlatformGateMap({
-      inventory,
+      inventory: dmgInventory,
       patchFindings: preflight.findings.map((finding) =>
         finding.name === "linux-computer-use-install-flow"
           ? { ...finding, status: "skipped-optional" }
@@ -1604,7 +1616,7 @@ test("CLI writes release-bound runtime diagnostics and action-plan evidence", ()
     const outputDir = path.join(workspace, "runtime-report");
     const snapshotPath = path.join(workspace, "runtime-snapshot.json");
     writeJson(snapshotPath, {
-      release: "26.707.31428",
+      release: "2026.7.3",
       provenance: { source: "focused fixture", capturedAt: "2026-07-10T00:00:00Z" },
       computerUse: { pluginId: "computer-use@openai-bundled", installed: true, enabled: true, mentionAvailable: false, rollout: "unknown", entitlement: "unproven" },
       browser: { registryInstalled: true, registryEnabled: true, settingsAvailable: false, initiallyOmitted: true, queueReconciled: true },
@@ -1624,8 +1636,8 @@ test("CLI writes release-bound runtime diagnostics and action-plan evidence", ()
     assert.equal(summary.decision.runtimeRegressionCount, 6);
     const diagnostics = JSON.parse(fs.readFileSync(path.join(outputDir, "runtime-diagnostics.json"), "utf8"));
     assert.equal(diagnostics.length, 6);
-    assert.ok(diagnostics.every((entry) => entry.release === "26.707.31428" && entry.status === "runtime-regression"));
-    assert.match(fs.readFileSync(path.join(outputDir, "substrate-action-plan.md"), "utf8"), /Runtime diagnostics \(release 26\.707\.31428\)/);
+    assert.ok(diagnostics.every((entry) => entry.release === "2026.7.3" && entry.status === "runtime-regression"));
+    assert.match(fs.readFileSync(path.join(outputDir, "substrate-action-plan.md"), "utf8"), /Runtime diagnostics \(release 2026\.7\.3\)/);
     assert.equal(JSON.parse(fs.readFileSync(path.join(outputDir, "drift-report.json"), "utf8")).runtimeHealth.mcpHelperReaper.status, "REGRESSION");
   }));
 

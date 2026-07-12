@@ -818,10 +818,19 @@ stage_bundled_marketplace_metadata() {
         echo "Bundled marketplace metadata sync failed; continuing with existing marketplace cache."
         return 0
     }
-    if cp "$source_marketplace" "$marketplace_temp" && \
-       chmod u+w "$marketplace_temp" && \
-       mv -fT -- "$marketplace_temp" "$marketplace_target"; then
-        return 0
+    if cp "$source_marketplace" "$marketplace_temp" && chmod u+w "$marketplace_temp"; then
+        if mv -fT -- "$marketplace_temp" "$marketplace_target"; then
+            return 0
+        fi
+        if [ -L "$marketplace_target" ] && python3 - "$marketplace_temp" "$marketplace_target" <<'PY'
+import os
+import sys
+
+os.replace(sys.argv[1], sys.argv[2])
+PY
+        then
+            return 0
+        fi
     fi
     rm -f -- "$marketplace_temp"
     echo "Bundled marketplace metadata sync failed; continuing with existing marketplace cache."

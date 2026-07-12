@@ -29,7 +29,7 @@ Options:
   --baseline PATH        Optional known-good baseline DMG or extracted .app; defaults to ./Codex.dmg when different
   --no-baseline          Do a candidate-only scan even when ./Codex.dmg exists
   --patch-report PATH    Optional patch-report.json to fold patch blockers/review items into drift-report.json
-  --runtime-snapshot PATH JSON runtime evidence for release 26.707.31428 diagnostics
+  --runtime-snapshot PATH JSON runtime evidence matching the candidate app release
   --registry PATH        Protected surface registry (default: scripts/dev/upstream-dmg-protected-surfaces.json)
   --output-dir DIR       Exact output directory (default: reports/upstream-dmg/<timestamp>)
   --timestamp VALUE      Timestamp slug used when --output-dir is omitted

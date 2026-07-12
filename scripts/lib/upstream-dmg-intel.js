@@ -205,6 +205,7 @@ function runRequiredPatchPreflight({ inventory, repoRoot, workDir } = {}) {
       gateId: gate.id,
       path: gate.path,
       gate: gate.gate,
+      feature: gate.feature,
       status: command.status === 0 && computerUseFindings.length === 0 &&
         !remainingComputerUseGates.some((remaining) =>
           remaining.path === gate.path && remaining.gate === gate.gate)
@@ -1794,6 +1795,13 @@ function createPlatformGateEntry({ file, gate, index, patternName }) {
   };
 }
 
+function normalizedPlatformGateProofPath(value) {
+  return normalizePath(value).replace(
+    /^Contents\/Resources\/app\.asar(?:\.extracted)?\//i,
+    "",
+  );
+}
+
 function createPlatformGateMap({ inventory, patchFindings = [], requiredPatchPreflight = null } = {}) {
   const gates = [];
   const seen = new Set();
@@ -1869,7 +1877,10 @@ function createPlatformGateMap({ inventory, patchFindings = [], requiredPatchPre
     const coverage = requiredPatches.map((name) => findingsByName.get(name) ?? { name, status: "not-recorded" });
     gate.patchPreflight = coverage.map(({ name, status }) => ({ name, status }));
     const gateProof = (requiredPatchPreflight?.computerUseInspection?.gateProofs ?? [])
-      .find((proof) => proof.gateId === gate.id && proof.path === gate.path && proof.gate === gate.gate);
+      .find((proof) =>
+        normalizedPlatformGateProofPath(proof.path) === normalizedPlatformGateProofPath(gate.path) &&
+        proof.gate === gate.gate &&
+        proof.feature === gate.feature);
     if (
       requiredPatchPreflight?.status === "pass" &&
       requiredPatchPreflight?.exitCode === 0 &&
@@ -2747,7 +2758,7 @@ function renderActionPlanMarkdown(driftReport, candidateProtected, mapDrift = nu
     return `${lines.join("\n")}\n`;
   }
   if (runtimeDiagnostics.length > 0) {
-    lines.push("## Runtime diagnostics (release 26.707.31428)");
+    lines.push(`## Runtime diagnostics (release ${runtimeDiagnostics[0].release})`);
     for (const diagnostic of runtimeDiagnostics) {
       lines.push(`- ${diagnostic.id}: ${diagnostic.status}; owner ${diagnostic.ownerPath}`);
       lines.push(`  Hypothesis: ${diagnostic.hypothesis}`);
@@ -2884,8 +2895,8 @@ function resolveBaselinePath({ autoBaseline = false, baselinePath = null, candid
   return defaultBaselinePath;
 }
 
-function createRuntimeRegressionDiagnostics({ runtimeSnapshot = null } = {}) {
-  const snapshotAccepted = runtimeSnapshot?.release === "26.707.31428" &&
+function createRuntimeRegressionDiagnostics({ release = "unknown", runtimeSnapshot = null } = {}) {
+  const snapshotAccepted = runtimeSnapshot?.release === release &&
     typeof runtimeSnapshot?.provenance?.source === "string" && runtimeSnapshot.provenance.source.trim().length > 0 &&
     typeof runtimeSnapshot?.provenance?.capturedAt === "string" && runtimeSnapshot.provenance.capturedAt.trim().length > 0;
   const checks = [
@@ -2901,7 +2912,7 @@ function createRuntimeRegressionDiagnostics({ runtimeSnapshot = null } = {}) {
     ownerPath,
     hypothesis,
     evidenceGap,
-    release: "26.707.31428",
+    release,
     snapshotRelease: runtimeSnapshot?.release ?? null,
     provenance: runtimeSnapshot?.provenance ?? null,
     snapshotProvided: runtimeSnapshot != null,
@@ -3057,7 +3068,9 @@ function buildIntelReports({
     driftReport.provenance = mergeProvenance(detectedProvenance, provenance);
     const featureStaging = createFeatureStagingInventory(repoRoot);
     driftReport.featureStaging = featureStaging;
-    const runtimeDiagnostics = createRuntimeRegressionDiagnostics({ runtimeSnapshot });
+    const runtimeRelease = candidateVersions.appPackageVersion ??
+      candidateVersions.cfBundleShortVersionString ?? "unknown";
+    const runtimeDiagnostics = createRuntimeRegressionDiagnostics({ release: runtimeRelease, runtimeSnapshot });
     driftReport.runtimeDiagnostics = runtimeDiagnostics;
     const reaperDiagnostic = runtimeDiagnostics.find((entry) => entry.id === "reaper-cli-resume");
     driftReport.runtimeHealth = {

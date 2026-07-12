@@ -7531,6 +7531,19 @@ test("keeps current Computer Use settings availability enabled on Linux", () => 
   );
 });
 
+test("enables current Computer Use settings cards and Chrome actions on Linux", () => {
+  const source =
+    "function Gt(e){let{computerUseAvailability:n,platform:r}=e,A=[{appControlId:`microsoft-excel-document-control-app`,toggleAriaLabel:X.microsoftExcelToggleAria,plugin:O}],R=[];if(x&&(r===`macOS`||r===`windows`))for(let e of A){if(e.plugin==null)continue;let t=e.plugin;R.push({...t.plugin.installed&&t.plugin.enabled?{kind:`app`,id:e.appControlId,toggleAriaLabel:i.formatMessage(e.toggleAriaLabel)}:{plugin:t}})}return R}" +
+    "function Yt(){let t=d(p),{platform:n}=y(),D=n===`macOS`||n===`windows`?(0,Q.jsx)(S,{onClick:()=>Te(`chrome-extension-settings-open`,{params:{extensionId:_}}),children:(0,Q.jsx)(U,{id:`settings.computerUse.chrome.removeExtension`,defaultMessage:`Remove extension`})}):null;return D}";
+
+  const patched = applyPatchTwice(applyLinuxComputerUseRendererAvailabilityPatch, source);
+
+  assert.match(patched, /if\(x&&\(r===`macOS`\|\|r===`windows`\|\|r===`linux`\)\)for/);
+  assert.match(patched, /D=n===`macOS`\|\|n===`windows`\|\|n===`linux`\?/);
+  assert.doesNotMatch(patched, /if\(x&&\(r===`macOS`\|\|r===`windows`\)\)for/);
+  assert.doesNotMatch(patched, /D=n===`macOS`\|\|n===`windows`\?/);
+});
+
 test("does not give synthetic Computer Use plugin cards an invalid marketplace directory path", () => {
   const source =
     "let {computerUseAvailability:availability,platform:platform}=state;" +

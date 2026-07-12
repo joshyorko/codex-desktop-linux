@@ -587,6 +587,41 @@ function applyLinuxComputerUseRendererAvailabilityPatch(currentSource) {
     );
   }
 
+  const settingsCardPattern =
+    /if\(([A-Za-z_$][\w$]*)&&\(([A-Za-z_$][\w$]*)===`macOS`\|\|\2===`windows`\)\)for\(let ([A-Za-z_$][\w$]*) of ([A-Za-z_$][\w$]*)\)\{/g;
+  patchedSource = patchedSource.replace(
+    settingsCardPattern,
+    (match, enabledVar, platformVar, itemVar, appsVar, offset) => {
+      const context = patchedSource.slice(offset + match.length, offset + match.length + 1800);
+      if (
+        !context.includes(`${itemVar}.appControlId`) ||
+        !context.includes(`${itemVar}.toggleAriaLabel`) ||
+        !context.includes("plugin.installed")
+      ) {
+        return match;
+      }
+      availabilityChanged = true;
+      return `if(${enabledVar}&&(${platformVar}===\`macOS\`||${platformVar}===\`windows\`||${platformVar}===\`linux\`))for(let ${itemVar} of ${appsVar}){`;
+    },
+  );
+
+  const chromeActionPattern =
+    /([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)===`macOS`\|\|\2===`windows`\?/g;
+  patchedSource = patchedSource.replace(
+    chromeActionPattern,
+    (match, actionVar, platformVar, offset) => {
+      const context = patchedSource.slice(offset, offset + 1500);
+      if (
+        !context.includes("`chrome-extension-settings-open`") ||
+        !context.includes("`settings.computerUse.chrome.removeExtension`")
+      ) {
+        return match;
+      }
+      availabilityChanged = true;
+      return `${actionVar}=${platformVar}===\`macOS\`||${platformVar}===\`windows\`||${platformVar}===\`linux\`?`;
+    },
+  );
+
   if (availabilityChanged || nativeAppsGateChanged || availabilityAlreadyPatched()) {
     return patchedSource;
   }
