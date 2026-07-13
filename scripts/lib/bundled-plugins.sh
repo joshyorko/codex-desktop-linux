@@ -1658,7 +1658,7 @@ install_bundled_plugin_resources() {
     local portable_plugin_names=""
     local portable_plugins=()
 
-    stage_upstream_bundled_skills "$upstream_resources/skills/skills" "$resources_dir/skills"
+    stage_upstream_bundled_skills "$upstream_resources/skills" "$resources_dir/skills"
 
     if [ ! -f "$source_marketplace" ]; then
         warn "Bundled plugin marketplace not found in upstream app; skipping bundled plugins"
