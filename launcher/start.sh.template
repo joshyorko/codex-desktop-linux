@@ -99,6 +99,7 @@ LAUNCHER_ARGS=()
 
 # Internal marker consumed by patched Electron bundles; never trust inheritance.
 unset CODEX_LINUX_MULTI_LAUNCH
+unset CODEX_LINUX_BUNDLED_SKILLS_ROOT
 
 early_truthy_env_value() {
     case "${1:-}" in
@@ -795,6 +796,65 @@ stage_bundled_marketplace_metadata() {
     fi
     rm -f -- "$marketplace_temp"
     echo "Bundled marketplace metadata sync failed; continuing with existing marketplace cache."
+}
+
+sync_bundled_skills_cache() {
+    local source_skills="$SCRIPT_DIR/resources/skills"
+    local cache_parent="${XDG_CACHE_HOME:-$HOME/.cache}/$CODEX_LINUX_APP_ID"
+    local cache_skills="$cache_parent/bundled-skills"
+    local cache_lock="$cache_parent/bundled-skills.lock"
+    local staging_skills="$cache_parent/.bundled-skills.tmp.$$"
+    local backup_skills="$cache_parent/.bundled-skills.backup.$$"
+
+    if [ ! -d "$source_skills" ]; then
+        unset CODEX_LINUX_BUNDLED_SKILLS_ROOT
+        return 0
+    fi
+
+    if ! mkdir -p "$cache_parent"; then
+        unset CODEX_LINUX_BUNDLED_SKILLS_ROOT
+        echo "Bundled skills cache directory is unavailable; bundled recommended skills may be unavailable."
+        return 0
+    fi
+    if (
+        flock 8 || exit 1
+        remove_tree_if_exists "$staging_skills" || exit 1
+        remove_tree_if_exists "$backup_skills" || exit 1
+        cp -R "$source_skills" "$staging_skills" || exit 1
+        make_tree_owner_writable "$staging_skills" || exit 1
+        find "$staging_skills" -type f -name '*:com.apple.*' -delete || exit 1
+
+        if [ -e "$cache_skills" ] || [ -L "$cache_skills" ]; then
+            mv -T -- "$cache_skills" "$backup_skills" || exit 1
+        else
+            backup_skills=""
+        fi
+        if ! mv -T -- "$staging_skills" "$cache_skills"; then
+            remove_tree_if_exists "$staging_skills" || true
+            if [ -n "$backup_skills" ]; then
+                mv -T -- "$backup_skills" "$cache_skills" || true
+            fi
+            exit 1
+        fi
+        if [ -n "$backup_skills" ]; then
+            remove_tree_if_exists "$backup_skills" || true
+        fi
+    ) 8>"$cache_lock"; then
+        CODEX_LINUX_BUNDLED_SKILLS_ROOT="$cache_skills"
+        export CODEX_LINUX_BUNDLED_SKILLS_ROOT
+        return 0
+    fi
+
+    remove_tree_if_exists "$staging_skills" || true
+    if [ -d "$cache_skills" ]; then
+        CODEX_LINUX_BUNDLED_SKILLS_ROOT="$cache_skills"
+        export CODEX_LINUX_BUNDLED_SKILLS_ROOT
+        echo "Bundled skills cache sync failed; continuing with the existing cache."
+        return 0
+    fi
+
+    unset CODEX_LINUX_BUNDLED_SKILLS_ROOT
+    echo "Bundled skills cache sync failed; bundled recommended skills may be unavailable."
 }
 
 sync_browser_use_bundled_plugin_cache() {
@@ -3960,6 +4020,12 @@ if needs_cold_start; then
     log_phase "launcher_lock_ready"
     refresh_launch_state_quick
     log_phase "launch_state_refreshed_under_lock"
+    # Warm launches hand off to the existing Electron process, which retains
+    # the cache root exported by its cold-start launcher.
+    if needs_cold_start; then
+        sync_bundled_skills_cache
+        log_phase "bundled_skills_cache_processed"
+    fi
     if [ "$LAUNCHER_LOCK_TIMED_OUT" -eq 1 ]; then
         reap_orphaned_runtime_processes
         detect_cross_install_conflict

@@ -4950,6 +4950,47 @@ test_launcher_extra_bundled_plugin_cache_rollback() {
         || fail "Expected failed first cache install to clean temporary and backup directories"
 }
 
+test_launcher_bundled_skills_cache() {
+    info "Checking launcher mirrors bundled skills into the user cache"
+    local workspace="$TMP_DIR/launcher-bundled-skills-cache"
+    local app_dir="$workspace/app"
+    local fake_home="$workspace/home"
+    local cache_home="$workspace/cache"
+    local source_skill="$app_dir/resources/skills/skills/.curated/hatch-pet"
+    local target_root="$cache_home/codex-desktop/bundled-skills"
+    local target_skill="$target_root/skills/.curated/hatch-pet"
+    local launcher_defs="$workspace/launcher-defs.sh"
+
+    mkdir -p "$source_skill" "$fake_home" "$cache_home"
+    printf '%s\n' '# Hatch Pet' > "$source_skill/SKILL.md"
+    sed '/^hydrate_graphical_session_env$/,$d' "$REPO_DIR/launcher/start.sh.template" > "$launcher_defs"
+
+    (
+        export HOME="$fake_home"
+        export XDG_CACHE_HOME="$cache_home"
+        export CODEX_LINUX_APP_ID="codex-desktop"
+        export CODEX_LINUX_APP_DISPLAY_NAME="Codex Desktop"
+        export CODEX_LINUX_WEBVIEW_PORT="5175"
+        exec 7>&1 8>&2
+        # shellcheck disable=SC1090
+        source "$launcher_defs"
+        exec 1>&7 2>&8
+        SCRIPT_DIR="$app_dir"
+
+        declare -F sync_bundled_skills_cache >/dev/null \
+            || fail "Expected launcher bundled skills cache sync function"
+        sync_bundled_skills_cache
+        [ "${CODEX_LINUX_BUNDLED_SKILLS_ROOT:-}" = "$target_root" ] \
+            || fail "Expected launcher to export the user-local bundled skills root"
+    )
+
+    assert_contains "$target_skill/SKILL.md" "# Hatch Pet"
+    assert_contains "$REPO_DIR/launcher/start.sh.template" "sync_bundled_skills_cache"
+    assert_contains "$REPO_DIR/launcher/start.sh.template" 'if ! mkdir -p "$cache_parent"; then'
+    assert_contains "$REPO_DIR/launcher/start.sh.template" 'flock 8 || exit 1'
+    assert_contains "$REPO_DIR/launcher/start.sh.template" 'log_phase "bundled_skills_cache_processed"'
+}
+
 test_launcher_extra_bundled_plugin_cache_concurrent_destination() {
     info "Checking extra bundled plugin cache concurrent destination handling"
     local workspace="$TMP_DIR/extra-bundled-plugin-cache-concurrent-destination"
@@ -5446,6 +5487,8 @@ if "trap 'exit 130' INT" not in source or "trap 'exit 143' TERM" not in source o
     raise SystemExit("launcher must cleanup through EXIT after INT/TERM/HUP")
 if not re.search(r'if needs_cold_start; then\s+acquire_launcher_lock\s+log_phase "launcher_lock_ready"\s+refresh_launch_state_quick\s+log_phase "launch_state_refreshed_under_lock"', source):
     raise SystemExit("launcher must do only a quick state refresh under the launcher lock")
+if not re.search(r'log_phase "launch_state_refreshed_under_lock".*?if needs_cold_start; then\s+sync_bundled_skills_cache\s+log_phase "bundled_skills_cache_processed"\s+fi', source, re.S):
+    raise SystemExit("bundled skills must synchronize only for the cold launcher holding launcher.lock")
 if 'CODEX_LAUNCHER_LOCK_WAIT_SECONDS:-5' not in source:
     raise SystemExit("launcher lock wait must default to 5 seconds so duplicate launches do not look hung")
 if 'flock -n 9' not in source or 'flock -w "$wait_seconds" 9' not in source:
@@ -9696,6 +9739,7 @@ main() {
     test_launcher_managed_node_handles_unset_path
     test_launcher_captures_original_ld_library_path_state
     test_packaged_runtime_keeps_managed_node_out_of_user_service_path
+    test_launcher_bundled_skills_cache
     test_launcher_extra_bundled_plugin_cache_rollback
     test_launcher_extra_bundled_plugin_cache_concurrent_destination
     test_launcher_rejects_missing_webview_entrypoint

@@ -60,6 +60,9 @@ const {
   applyLinuxExternalOpenEnvPatch,
 } = require("./patches/impl/main-process/browser.js");
 const {
+  applyLinuxBundledSkillsRootPatch,
+} = require("./patches/impl/main-process/bundled-skills.js");
+const {
   applyLinuxChromeNativeHostRuntimePatch,
   applyLinuxChromePluginAutoInstallPatch,
 } = require("./patches/impl/chrome-plugin.js");
@@ -938,6 +941,7 @@ test("default core patch descriptors are grouped and unique", () => {
     "browser-use-node-repl-approval",
     "linux-bundled-plugin-reconcile-stale-snapshot",
     "linux-bundled-plugin-copy-permissions",
+    "linux-bundled-skills-root",
     "linux-browser-use-route-liveness",
     "linux-chrome-extension-status",
     "linux-notification-actions",
@@ -7974,6 +7978,49 @@ test("patchMainBundleSource does not force the in-app browser panel visible", ()
   assert.equal(patched, source);
   assert.doesNotMatch(patched, /setBrowserVisibleForBrowserUse/);
   assert.doesNotMatch(patched, /codexLinuxBrowserUseAutoVisible/);
+});
+
+test("uses the launcher-provided bundled skills root on packaged Linux builds", () => {
+  const source =
+    "function HF(){let e=c.app.getAppPath();if(c.app.isPackaged)return u.join(process.resourcesPath,`skills`);let t=u.join(e,`assets`,`skills`);if(p.existsSync(t))return t;let n=u.join(e,`..`,`assets`,`skills`);return p.existsSync(n)?n:null}";
+
+  const patched = patchMainBundleSource(source, null);
+
+  assert.match(
+    patched,
+    /process\.platform===`linux`&&process\.env\.CODEX_LINUX_BUNDLED_SKILLS_ROOT/,
+  );
+  assert.equal(patchMainBundleSource(patched, null), patched);
+});
+
+test("does not mistake an unrelated bundled skills marker for an applied patch", () => {
+  const source =
+    "const marker=`CODEX_LINUX_BUNDLED_SKILLS_ROOT`;function HF(){let e=c.app.getAppPath();if(c.app.isPackaged)return u.join(process.resourcesPath,`skills`);return null}";
+
+  const { value, warnings } = captureWarns(() =>
+    applyLinuxBundledSkillsRootPatch(source),
+  );
+
+  assert.match(
+    value,
+    /process\.platform===`linux`&&process\.env\.CODEX_LINUX_BUNDLED_SKILLS_ROOT\?\.trim\(\)/,
+  );
+  assert.deepEqual(warnings, []);
+});
+
+test("leaves ambiguous bundled skills roots byte-identical with a warning", () => {
+  const resolver =
+    "function HF(){if(c.app.isPackaged)return u.join(process.resourcesPath,`skills`);return null}";
+  const source = `${resolver}${resolver}`;
+
+  const { value, warnings } = captureWarns(() =>
+    applyLinuxBundledSkillsRootPatch(source),
+  );
+
+  assert.equal(value, source);
+  assert.deepEqual(warnings, [
+    "WARN: Could not find packaged bundled skills root insertion point — skipping Linux bundled skills root patch",
+  ]);
 });
 
 test("detects Chrome extension installation from Linux browser profiles", () => {
