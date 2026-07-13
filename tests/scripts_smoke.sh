@@ -6851,7 +6851,7 @@ test_upstream_bundled_skills_staging() {
     local install_dir="$workspace/install"
     local output_log="$workspace/output.log"
     local source_skill="$app_dir/Contents/Resources/skills/skills/.curated/hatch-pet"
-    local target_skill="$install_dir/resources/skills/skills/.curated/hatch-pet"
+    local target_skill="$install_dir/resources/skills/.curated/hatch-pet"
 
     mkdir -p "$workspace" "$install_dir/resources"
     make_fake_browser_upstream_app "$app_dir"
@@ -6895,9 +6895,9 @@ test_upstream_bundled_skills_stage_failure_restores_target() {
     local target_skills="$workspace/install/resources/skills"
     local output_log="$workspace/output.log"
 
-    mkdir -p "$source_skills/skills/.curated/hatch-pet" "$target_skills/skills/.curated/hatch-pet"
-    printf '%s\n' 'new skill' > "$source_skills/skills/.curated/hatch-pet/SKILL.md"
-    printf '%s\n' 'previous skill' > "$target_skills/skills/.curated/hatch-pet/SKILL.md"
+    mkdir -p "$source_skills/.curated/hatch-pet" "$target_skills/.curated/hatch-pet"
+    printf '%s\n' 'new skill' > "$source_skills/.curated/hatch-pet/SKILL.md"
+    printf '%s\n' 'previous skill' > "$target_skills/.curated/hatch-pet/SKILL.md"
 
     (
         warn() { echo "[WARN] $*" >&2; }
@@ -6917,8 +6917,8 @@ test_upstream_bundled_skills_stage_failure_restores_target() {
         fi
     ) >"$output_log" 2>&1
 
-    assert_contains "$target_skills/skills/.curated/hatch-pet/SKILL.md" "previous skill"
-    assert_not_contains "$target_skills/skills/.curated/hatch-pet/SKILL.md" "new skill"
+    assert_contains "$target_skills/.curated/hatch-pet/SKILL.md" "previous skill"
+    assert_not_contains "$target_skills/.curated/hatch-pet/SKILL.md" "new skill"
     assert_contains "$output_log" "previous target was restored"
 }
 
