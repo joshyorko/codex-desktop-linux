@@ -972,6 +972,7 @@ test("default core patch descriptors are grouped and unique", () => {
     "linux-safe-monospace-font-stack",
     "subagent-nickname-metadata-shape",
     "local-environment-action-modal-draft",
+    "linux-computer-use-shared-availability",
     "linux-computer-use-ui-availability",
     "linux-computer-use-install-flow",
     "linux-app-updater-bridge",
@@ -1334,6 +1335,15 @@ function computerUseRendererAvailabilityBundleFixture() {
     "function LS(e){let t=(0,q.c)(10),{hostId:n,featureName:r,defaultEnabled:i}=e,a=i===void 0?!0:i,{data:o,isLoading:s}=N(Wa,n),c;t[0]===o?c=t[1]:(c=o===void 0?[]:o,t[0]=o,t[1]=c);let l=c,u;if(t[2]!==r||t[3]!==l){let e;t[5]===r?e=t[6]:(e=e=>e.name===r,t[5]=r,t[6]=e),u=l.find(e),t[2]=r,t[3]=l,t[4]=u}else u=t[4];let d=u?.enabled??a,f;return t[7]!==s||t[8]!==d?(f={enabled:d,isLoading:s},t[7]=s,t[8]=d,t[9]=f):f=t[9],f}",
     "function RS(e){let t=(0,q.c)(8),{enabled:n,hostId:r,isHostLocal:i}=e,a=n===void 0?!0:n,o=r===void 0?R:r,s=Kn(),{isLoading:c,platform:l}=Hr(),u=Vn(`1506311413`),d;t[0]===o?d=t[1]:(d={featureName:`computer_use`,hostId:o},t[0]=o,t[1]=d);let f=LS(d),p;t[2]===l?p=t[3]:(p=hae(l),t[2]=l,t[3]=p);let m=a&&i&&s===`electron`&&u&&(c||p),h=m&&!c&&f.enabled&&!f.isLoading,g=m&&f.isLoading,_=m&&(c||f.isLoading),v;return t[4]!==h||t[5]!==g||t[6]!==_?(v={available:h,isFetching:g,isLoading:_},t[4]=h,t[5]=g,t[6]=_,t[7]=v):v=t[7],v}",
   ].join("");
+}
+
+function currentSharedComputerUseBundleFixture() {
+  return (
+    "function unrelated(e){return e===`macOS`||e===`windows`}" +
+    "function ext(e){return e===`macOS`||e===`windows`}" +
+    "function $U(e){let t=(0,eW.c)(16),{enabled:n,hostId:r}=e,i=n===void 0?!0:n,{isLoading:a,platform:o}=KU(),s=lx(`1506311413`),c;t[0]===r?c=t[1]:(c={featureName:`computer_use`,hostId:r},t[0]=r,t[1]=c);let l=ZU(c),z=unrelated(o),u=o===`windows`&&!a,d=i&&u,f;t[2]===d?f=t[3]:(f={enabled:d},t[2]=d,t[3]=f);let p=txt(f),m=l.isLoading||u&&p.isLoading,h=l.enabled&&(!u||p.enabled),g;t[4]!==h||t[5]!==i||t[6]!==m||t[7]!==s||t[8]!==a||t[9]!==o?(g=rxt({areRequiredFeaturesEnabled:h,enabled:i,isAnyFeatureLoading:m,isComputerUseGateEnabled:s,isHostCompatiblePlatform:ext(o),isPlatformLoading:a,windowType:`electron`}),t[4]=h,t[5]=i,t[6]=m,t[7]=s,t[8]=a,t[9]=o,t[10]=g):g=t[10];return z&&g}" +
+    "function Zzt(e){let t=(0,Qzt.c)(9),{enabled:n}=e,{platform:r,isLoading:i}=KU(),a=n&&(r===`macOS`||r===`windows`),o;t[0]===Symbol.for(`react.memo_cache_sentinel`)?(o={order:`usage`},t[0]=o):o=t[0];let s;t[1]===a?s=t[2]:(s={params:o,queryConfig:{enabled:a}},t[1]=a,t[2]=s);let c=bp(`native-desktop-apps`,s),l;t[3]!==c||t[4]!==a?(l=a?c.data?.apps??[]:[],t[3]=c,t[4]=a,t[5]=l):l=t[5];return{nativeApps:l,isLoading:i||a&&c.isLoading}}"
+  );
 }
 
 function chromeExtensionStatusBundleFixture() {
@@ -7479,6 +7489,39 @@ test("shows required-features Computer Use plugin UI on Linux", () => {
   assert.match(patched, /featureName:`windows_computer_use`/);
 });
 
+test("patches current shared Computer Use gates without changing unrelated platform helpers", () => {
+  const source = currentSharedComputerUseBundleFixture();
+
+  const patched = applyPatchTwice(applyLinuxComputerUseRendererAvailabilityPatch, source);
+
+  assert.match(patched, /function unrelated\(e\)\{return e===`macOS`\|\|e===`windows`\}/);
+  assert.doesNotMatch(patched, /function unrelated\(e\)[^{]*\{[^}]*`linux`/);
+  assert.match(patched, /function ext\(e\)\{return e===`macOS`\|\|e===`windows`\|\|e===`linux`\}/);
+  assert.match(
+    patched,
+    /areRequiredFeaturesEnabled:o===`linux`\|\|h,enabled:i,isAnyFeatureLoading:o===`linux`\?!1:m,isComputerUseGateEnabled:o===`linux`\|\|s,isHostCompatiblePlatform:o===`linux`\|\|ext\(o\)/,
+  );
+  assert.match(patched, /a=n&&\(r===`macOS`\|\|r===`windows`\|\|r===`linux`\)/);
+});
+
+for (const [gateName, drift] of [
+  ["platform helper", (source) => source.replace("function ext(e){return e===`macOS`||e===`windows`}", "function ext(e){return supportsComputerUse(e)}")],
+  ["availability object", (source) => source.replace("areRequiredFeaturesEnabled:h", "areRequiredFeaturesEnabled:drifted(h)")],
+  ["native app gate", (source) => source.replace("a=n&&(r===`macOS`||r===`windows`)", "a=n&&supportsNativeApps(r)")],
+]) {
+  test(`shared Computer Use patch is atomic when the ${gateName} drifts`, () => {
+    const descriptors = require("./patches/core/all-linux/webview/computer-use-ui/patch.js");
+    const descriptor = descriptors.find(({ id }) => id === "linux-computer-use-shared-availability");
+    const source = drift(currentSharedComputerUseBundleFixture());
+    const { value: patched, warnings } = captureWarns(() => descriptor.apply(source));
+
+    assert.equal(patched, source);
+    assert.deepEqual(warnings, [
+      "WARN: Could not find complete shared Computer Use availability gates — skipping Linux shared Computer Use availability patch",
+    ]);
+  });
+}
+
 test("keeps object-helper Computer Use host compatibility on Linux when platform predicate drifts", () => {
   const source =
     "function m(e){return e===`macOS`||e===`windows`||q(e)}" +
@@ -7500,6 +7543,19 @@ test("Computer Use availability descriptor matches the current settings bundle n
   assert.doesNotMatch("use-model-settings-5PHNqYL4.js", descriptor.pattern);
   assert.doesNotMatch("use-is-plugins-enabled-current.js", descriptor.pattern);
   assert.doesNotMatch("use-native-apps.electron-DhuUEit1.js", descriptor.pattern);
+});
+
+test("Computer Use shared availability descriptor matches the current owner bundle", () => {
+  const descriptors = require("./patches/core/all-linux/webview/computer-use-ui/patch.js");
+  const descriptor = descriptors.find(({ id }) => id === "linux-computer-use-shared-availability");
+
+  assert.ok(descriptor);
+  assert.match(
+    "app-initial~app-main~quick-chat-window-page~work-home-page~chatgpt-conversation-page-BqLP6EDd.js",
+    descriptor.pattern,
+  );
+  assert.doesNotMatch("computer-use-settings-DOuxSVed.js", descriptor.pattern);
+  assert.doesNotMatch("app-initial~app-main~onboarding-page-current.js", descriptor.pattern);
 });
 
 test("keeps current Computer Use settings availability enabled on Linux", () => {

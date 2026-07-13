@@ -168,6 +168,48 @@ function isNativeAppsPlatformGateContext(source, matchEnd, nextPlatformGatePatte
   return rest.slice(0, contextLength).includes("native-desktop-apps");
 }
 
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function patchComputerUsePlatformPredicates(currentSource) {
+  const predicateNames = new Set();
+  const anchoredPredicateCallPattern =
+    /featureName:`computer_use`[\s\S]{0,2400}?isHostCompatiblePlatform:(?:[A-Za-z_$][\w$]*===`linux`\|\|)?([A-Za-z_$][\w$]*)\([A-Za-z_$][\w$]*\)/g;
+  const legacyPredicateCallPattern =
+    /featureName:`computer_use`[\s\S]{0,1200}?\([A-Za-z_$][\w$]*=([A-Za-z_$][\w$]*)\([A-Za-z_$][\w$]*\),/g;
+  const candidateNames = [...currentSource.matchAll(anchoredPredicateCallPattern)].map((match) => match[1]);
+  if (candidateNames.length === 0) {
+    candidateNames.push(...[...currentSource.matchAll(legacyPredicateCallPattern)].map((match) => match[1]));
+  }
+
+  for (const functionName of candidateNames) {
+    const escapedName = escapeRegExp(functionName);
+    const declarationPattern = new RegExp(
+      String.raw`function ${escapedName}\(([A-Za-z_$][\w$]*)\)\{return \1===\x60macOS\x60\|\|\1===\x60windows\x60(?:\|\|\1===\x60linux\x60)?\}`,
+    );
+    if (declarationPattern.test(currentSource)) {
+      predicateNames.add(functionName);
+    }
+  }
+
+  let changed = false;
+  let patchedSource = currentSource;
+  for (const functionName of predicateNames) {
+    const escapedName = escapeRegExp(functionName);
+    const unpatchedPattern = new RegExp(
+      String.raw`function ${escapedName}\(([A-Za-z_$][\w$]*)\)\{return \1===\x60macOS\x60\|\|\1===\x60windows\x60\}`,
+      "g",
+    );
+    patchedSource = patchedSource.replace(unpatchedPattern, (_match, platformVar) => {
+      changed = true;
+      return `function ${functionName}(${platformVar}){return ${platformVar}===\`macOS\`||${platformVar}===\`windows\`||${platformVar}===\`linux\`}`;
+    });
+  }
+
+  return { changed, source: patchedSource };
+}
+
 function isComputerUseNameExpr(nameExpr, computerUseNameVar) {
   return /^(?:`computer-use`|"computer-use"|'computer-use')$/.test(nameExpr) ||
     nameExpr === computerUseNameVar ||
@@ -381,20 +423,9 @@ function applyLinuxComputerUseRendererAvailabilityPatch(currentSource) {
     return lookback.match(loadingFirst)?.[1] ?? lookback.match(platformFirst)?.[1] ?? null;
   };
 
-  const platformPredicateNeedle = "function hae(e){return e===`macOS`||e===`windows`}";
-  const platformPredicatePatch =
-    "function hae(e){return e===`macOS`||e===`windows`||e===`linux`}";
-  const currentPlatformPredicateNeedle =
-    /function ([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*)\)\{return \2===`macOS`\|\|\2===`windows`\}/g;
-  const currentPlatformPredicatePatch = (_, fnName, platformVar) => {
-    platformPredicateChanged = true;
-    return `function ${fnName}(${platformVar}){return ${platformVar}===\`macOS\`||${platformVar}===\`windows\`||${platformVar}===\`linux\`}`;
-  };
-  if (patchedSource.includes(platformPredicateNeedle)) {
-    patchedSource = patchedSource.split(platformPredicateNeedle).join(platformPredicatePatch);
-    platformPredicateChanged = true;
-  }
-  patchedSource = patchedSource.replace(currentPlatformPredicateNeedle, currentPlatformPredicatePatch);
+  const platformPredicatePatch = patchComputerUsePlatformPredicates(patchedSource);
+  patchedSource = platformPredicatePatch.source;
+  platformPredicateChanged = platformPredicatePatch.changed;
 
   const availabilityNeedle =
     "let m=a&&i&&s===`electron`&&u&&(c||p),h=m&&!c&&f.enabled&&!f.isLoading,g=m&&f.isLoading,_=m&&(c||f.isLoading),v;";
@@ -599,6 +630,87 @@ function applyLinuxComputerUseRendererAvailabilityPatch(currentSource) {
   }
 
   return platformPredicateChanged ? patchedSource : currentSource;
+}
+
+function sharedComputerUseAvailabilityState(source) {
+  const unpatchedAvailabilityPattern =
+    /([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)\(\{areRequiredFeaturesEnabled:([A-Za-z_$][\w$]*),enabled:([A-Za-z_$][\w$]*),isAnyFeatureLoading:([A-Za-z_$][\w$]*),isComputerUseGateEnabled:([A-Za-z_$][\w$]*),isHostCompatiblePlatform:([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*)\),isPlatformLoading:([A-Za-z_$][\w$]*),windowType:`electron`\}\)/g;
+  const patchedAvailabilityPattern =
+    /([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)\(\{areRequiredFeaturesEnabled:([A-Za-z_$][\w$]*)===`linux`\|\|([A-Za-z_$][\w$]*),enabled:([A-Za-z_$][\w$]*),isAnyFeatureLoading:\3===`linux`\?!1:([A-Za-z_$][\w$]*),isComputerUseGateEnabled:\3===`linux`\|\|([A-Za-z_$][\w$]*),isHostCompatiblePlatform:\3===`linux`\|\|([A-Za-z_$][\w$]*)\(\3\),isPlatformLoading:([A-Za-z_$][\w$]*),windowType:`electron`\}\)/g;
+  const availabilityMatches = [];
+
+  for (const match of source.matchAll(unpatchedAvailabilityPattern)) {
+    const context = source.slice(Math.max(0, match.index - 1200), match.index + match[0].length);
+    if (context.includes("featureName:`computer_use`")) {
+      availabilityMatches.push({ helperName: match[7], state: "unpatched" });
+    }
+  }
+  for (const match of source.matchAll(patchedAvailabilityPattern)) {
+    const context = source.slice(Math.max(0, match.index - 1200), match.index + match[0].length);
+    if (context.includes("featureName:`computer_use`")) {
+      availabilityMatches.push({ helperName: match[8], state: "patched" });
+    }
+  }
+  if (availabilityMatches.length !== 1) {
+    return "invalid";
+  }
+
+  const availability = availabilityMatches[0];
+  const escapedHelperName = escapeRegExp(availability.helperName);
+  const unpatchedHelperPattern = new RegExp(
+    String.raw`function ${escapedHelperName}\(([A-Za-z_$][\w$]*)\)\{return \1===\x60macOS\x60\|\|\1===\x60windows\x60\}`,
+    "g",
+  );
+  const patchedHelperPattern = new RegExp(
+    String.raw`function ${escapedHelperName}\(([A-Za-z_$][\w$]*)\)\{return \1===\x60macOS\x60\|\|\1===\x60windows\x60\|\|\1===\x60linux\x60\}`,
+    "g",
+  );
+  const helperStates = [
+    ...[...source.matchAll(unpatchedHelperPattern)].map(() => "unpatched"),
+    ...[...source.matchAll(patchedHelperPattern)].map(() => "patched"),
+  ];
+  if (helperStates.length !== 1) {
+    return "invalid";
+  }
+
+  const nativeAppsPlatformPattern =
+    /([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)&&\(([A-Za-z_$][\w$]*)===`macOS`\|\|\3===`windows`(\|\|\3===`linux`)?\)/g;
+  const nativeAppsPlatformBoundaryPattern =
+    /[A-Za-z_$][\w$]*=[A-Za-z_$][\w$]*&&\(([A-Za-z_$][\w$]*)===`macOS`\|\|\1===`windows`(?:\|\|\1===`linux`)?\)/;
+  const nativeAppsStates = [];
+  for (const match of source.matchAll(nativeAppsPlatformPattern)) {
+    if (isNativeAppsPlatformGateContext(source, match.index + match[0].length, nativeAppsPlatformBoundaryPattern)) {
+      nativeAppsStates.push(match[4] == null ? "unpatched" : "patched");
+    }
+  }
+  if (nativeAppsStates.length !== 1) {
+    return "invalid";
+  }
+
+  const states = [availability.state, helperStates[0], nativeAppsStates[0]];
+  return states.every((state) => state === "unpatched")
+    ? "unpatched"
+    : states.every((state) => state === "patched")
+      ? "patched"
+      : "invalid";
+}
+
+function applyLinuxComputerUseSharedAvailabilityPatch(currentSource) {
+  const state = sharedComputerUseAvailabilityState(currentSource);
+  if (state === "patched") {
+    return currentSource;
+  }
+  if (state === "unpatched") {
+    const patchedSource = applyLinuxComputerUseRendererAvailabilityPatch(currentSource);
+    if (sharedComputerUseAvailabilityState(patchedSource) === "patched") {
+      return patchedSource;
+    }
+  }
+
+  console.warn(
+    "WARN: Could not find complete shared Computer Use availability gates — skipping Linux shared Computer Use availability patch",
+  );
+  return currentSource;
 }
 
 function applyLinuxComputerUseInstallFlowPatch(currentSource) {
@@ -834,5 +946,6 @@ module.exports = {
   applyLinuxNativeDesktopAppsHandlerPatch,
   applyLinuxComputerUsePluginGatePatch,
   applyLinuxComputerUseRendererAvailabilityPatch,
+  applyLinuxComputerUseSharedAvailabilityPatch,
   isComputerUseUiEnabled,
 };
