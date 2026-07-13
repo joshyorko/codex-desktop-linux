@@ -788,7 +788,6 @@ fn missing_platform_optional_dependency(error: &anyhow::Error) -> Option<String>
     let dependency = message
         .split_once(ERROR_PREFIX)?
         .1
-        .trim_start()
         .split_whitespace()
         .next()?
         .trim_end_matches('.');
