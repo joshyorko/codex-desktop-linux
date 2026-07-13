@@ -768,6 +768,75 @@ remove_macos_sidecar_files() {
     find "$root" -type f -name '*:com.apple.*' -delete
 }
 
+stage_upstream_bundled_skills() {
+    local source_skills="$1"
+    local target_skills="$2"
+    local target_parent
+    local staging_skills=""
+    local backup_skills=""
+
+    if [ ! -d "$source_skills" ]; then
+        info "Bundled skills not present in upstream resources; skipping"
+        return 0
+    fi
+
+    target_parent="$(dirname "$target_skills")"
+    mkdir -p "$target_parent"
+    if ! staging_skills="$(mktemp -d "$target_parent/.skills.tmp.XXXXXX")"; then
+        warn "Failed to create staging directory for bundled skills"
+        return 1
+    fi
+    if ! cp -R "$source_skills/." "$staging_skills/"; then
+        rm -rf -- "$staging_skills"
+        warn "Failed to stage bundled skills from upstream resources"
+        return 1
+    fi
+    if ! remove_macos_sidecar_files "$staging_skills"; then
+        rm -rf -- "$staging_skills"
+        warn "Failed to clean macOS sidecar files from bundled skills"
+        return 1
+    fi
+    if ! chmod -R u+rwX,go-w "$staging_skills"; then
+        rm -rf -- "$staging_skills"
+        warn "Failed to normalize bundled skills permissions"
+        return 1
+    fi
+
+    backup_skills="$target_parent/.skills.backup.$$"
+    if ! rm -rf -- "$backup_skills"; then
+        rm -rf -- "$staging_skills"
+        warn "Failed to prepare bundled skills backup"
+        return 1
+    fi
+    if [ -e "$target_skills" ] || [ -L "$target_skills" ]; then
+        if ! mv -- "$target_skills" "$backup_skills"; then
+            rm -rf -- "$staging_skills"
+            warn "Failed to preserve existing bundled skills"
+            return 1
+        fi
+    else
+        backup_skills=""
+    fi
+    if ! mv -- "$staging_skills" "$target_skills"; then
+        rm -rf -- "$staging_skills"
+        if [ -n "$backup_skills" ]; then
+            if mv -- "$backup_skills" "$target_skills"; then
+                warn "Failed to install bundled skills; previous target was restored"
+            else
+                warn "Failed to install bundled skills and previous target could not be restored"
+            fi
+        else
+            warn "Failed to install bundled skills"
+        fi
+        return 1
+    fi
+    if [ -n "$backup_skills" ] && ! rm -rf -- "$backup_skills"; then
+        warn "Failed to clean previous bundled skills backup: $backup_skills"
+    fi
+
+    info "Bundled skills staged from upstream DMG"
+}
+
 chrome_extension_host_arch() {
     case "$ARCH" in
         x86_64) echo "x64" ;;
@@ -1588,6 +1657,8 @@ install_bundled_plugin_resources() {
     local include_computer_use=0
     local portable_plugin_names=""
     local portable_plugins=()
+
+    stage_upstream_bundled_skills "$upstream_resources/skills" "$resources_dir/skills"
 
     if [ ! -f "$source_marketplace" ]; then
         warn "Bundled plugin marketplace not found in upstream app; skipping bundled plugins"

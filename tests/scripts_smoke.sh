@@ -6844,6 +6844,84 @@ test_browser_plugin_renamed_upstream_staging() {
     assert_not_contains "$output_log" "Browser bundled plugin resources not present"
 }
 
+test_upstream_bundled_skills_staging() {
+    info "Checking current upstream bundled skills staging"
+    local workspace="$TMP_DIR/upstream-bundled-skills"
+    local app_dir="$workspace/ChatGPT.app"
+    local install_dir="$workspace/install"
+    local output_log="$workspace/output.log"
+    local source_skill="$app_dir/Contents/Resources/skills/skills/.curated/hatch-pet"
+    local target_skill="$install_dir/resources/skills/skills/.curated/hatch-pet"
+
+    mkdir -p "$workspace" "$install_dir/resources"
+    make_fake_browser_upstream_app "$app_dir"
+    mkdir -p "$source_skill/references" "$source_skill/scripts"
+    printf '%s\n' '# Hatch Pet' > "$source_skill/SKILL.md"
+    printf '%s\n' '# Animation rows' > "$source_skill/references/animation-rows.md"
+    printf '%s\n' 'print("render")' > "$source_skill/scripts/render_animation_previews.py"
+    printf '%s\n' 'finder metadata' > "$source_skill/scripts/render_animation_previews.py:com.apple.FinderInfo"
+
+    (
+        SCRIPT_DIR="$REPO_DIR"
+        INSTALL_DIR="$install_dir"
+        WORK_DIR="$workspace/work"
+        ARCH="x86_64"
+        ICON_SOURCE="$workspace/missing-icon.png"
+        CODEX_APP_ID="codex-desktop"
+        mkdir -p "$WORK_DIR"
+        warn() { echo "[WARN] $*" >&2; }
+        info() { echo "[INFO] $*" >&2; }
+        # shellcheck disable=SC1091
+        source "$REPO_DIR/scripts/lib/bundled-plugins.sh"
+        stage_linux_computer_use_plugin() { return 1; }
+        stage_browser_plugin_from_upstream() { return 1; }
+        stage_chrome_plugin_from_upstream() { return 1; }
+        install_browser_use_node_repl_resource() { return 0; }
+        install_bundled_plugin_resources "$app_dir"
+    ) >"$output_log" 2>&1
+
+    assert_file_exists "$target_skill/SKILL.md"
+    assert_file_exists "$target_skill/references/animation-rows.md"
+    assert_file_exists "$target_skill/scripts/render_animation_previews.py"
+    [ ! -e "$target_skill/scripts/render_animation_previews.py:com.apple.FinderInfo" ] \
+        || fail "Expected macOS sidecar metadata to be removed from staged bundled skills"
+    assert_contains "$output_log" "Bundled skills staged from upstream DMG"
+}
+
+test_upstream_bundled_skills_stage_failure_restores_target() {
+    info "Checking bundled skills staging restores the previous target on failure"
+    local workspace="$TMP_DIR/upstream-bundled-skills-failure"
+    local source_skills="$workspace/source-skills"
+    local target_skills="$workspace/install/resources/skills"
+    local output_log="$workspace/output.log"
+
+    mkdir -p "$source_skills/skills/.curated/hatch-pet" "$target_skills/skills/.curated/hatch-pet"
+    printf '%s\n' 'new skill' > "$source_skills/skills/.curated/hatch-pet/SKILL.md"
+    printf '%s\n' 'previous skill' > "$target_skills/skills/.curated/hatch-pet/SKILL.md"
+
+    (
+        warn() { echo "[WARN] $*" >&2; }
+        info() { echo "[INFO] $*" >&2; }
+        # shellcheck disable=SC1091
+        source "$REPO_DIR/scripts/lib/bundled-plugins.sh"
+        mv() {
+            if [ "$#" -eq 3 ] && [ "$1" = "--" ] &&
+                [[ "$2" == "$(dirname "$target_skills")/.skills.tmp."* ]] &&
+                [ "$3" = "$target_skills" ]; then
+                return 1
+            fi
+            command mv "$@"
+        }
+        if stage_upstream_bundled_skills "$source_skills" "$target_skills"; then
+            fail "Expected bundled skills staging to fail when target promotion fails"
+        fi
+    ) >"$output_log" 2>&1
+
+    assert_contains "$target_skills/skills/.curated/hatch-pet/SKILL.md" "previous skill"
+    assert_not_contains "$target_skills/skills/.curated/hatch-pet/SKILL.md" "new skill"
+    assert_contains "$output_log" "previous target was restored"
+}
+
 test_portable_bundled_plugins_staging() {
     info "Checking portable upstream bundled plugin staging"
     local workspace="$TMP_DIR/portable-bundled-plugins"
@@ -9603,6 +9681,8 @@ main() {
     test_browser_use_node_repl_fallback_runtime
     test_browser_use_file_url_policy_patch_behavior
     test_browser_plugin_renamed_upstream_staging
+    test_upstream_bundled_skills_staging
+    test_upstream_bundled_skills_stage_failure_restores_target
     test_portable_bundled_plugins_staging
     test_portable_bundled_plugins_reject_unsafe_content
     test_portable_bundled_plugin_validator_guards
