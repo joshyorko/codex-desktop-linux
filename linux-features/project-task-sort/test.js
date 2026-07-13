@@ -19,8 +19,7 @@ const {
 
 const currentProjectSource = [
   "function ms(e,t){switch(e.kind){case`local`:return e.conversation==null?e.pendingWorktree.createdAt:t===`updated_at`?e.conversation.recencyAt??e.conversation.updatedAt:e.conversation.createdAt;case`remote`:return((t===`updated_at`?e.task.updated_at??e.task.created_at:e.task.created_at??e.task.updated_at)??0)*1e3}}",
-  "const manualSortId=`sidebarElectron.sortMenu.manual`;",
-  "const createdSortId=`sidebarElectron.sortMenu.created`;",
+  "function preferences(e){return{chatSortMode:e?.chatSortMode===`created_at`?`updated_at`:e?.chatSortMode??`priority`,projectSortMode:e?.projectSortMode===`created_at`?`updated_at`:e?.projectSortMode??`priority`}}",
 ].join("");
 
 function captureWarns(fn) {
@@ -140,8 +139,7 @@ test("patch recovers local UUIDv7 creation time", () => {
 test("drift leaves the asset byte-identical", () => {
   const source = [
     "function ms(e,t){return e.conversation?.createdTimestamp}",
-    "const manualSortId=`sidebarElectron.sortMenu.manual`;",
-    "const createdSortId=`sidebarElectron.sortMenu.created`;",
+    "function preferences(e){return{chatSortMode:e?.chatSortMode===`created_at`?`updated_at`:e?.chatSortMode??`priority`,projectSortMode:e?.projectSortMode===`created_at`?`updated_at`:e?.projectSortMode??`priority`}}",
   ].join("");
   const { value, warnings } = captureWarns(() => applyProjectTaskSortPatch(source));
 
@@ -150,16 +148,16 @@ test("drift leaves the asset byte-identical", () => {
   assert.match(warnings[0], /project task creation timestamp insertion point/);
 });
 
-test("missing current menu markers leaves the asset byte-identical", () => {
+test("missing current sort-state markers leaves the asset byte-identical", () => {
   const source = currentProjectSource.replace(
-    "const manualSortId=`sidebarElectron.sortMenu.manual`;const createdSortId=`sidebarElectron.sortMenu.created`;",
-    "",
+    "chatSortMode:e?.chatSortMode===`created_at`?`updated_at`:e?.chatSortMode??`priority`",
+    "chatSortMode:e?.chatSortMode",
   );
   const { value, warnings } = captureWarns(() => applyProjectTaskSortPatch(source));
 
   assert.equal(value, source);
   assert.equal(warnings.length, 1);
-  assert.match(warnings[0], /project task sort menu markers/);
+  assert.match(warnings[0], /project task sort state markers/);
 });
 
 test("mixed patched and clean helpers are rejected byte-identically", () => {
@@ -177,7 +175,7 @@ test("descriptor targets and patches the current project chunk", () => {
     const assetsDir = path.join(tempDir, "webview", "assets");
     const assetPath = path.join(
       assetsDir,
-      "app-initial~app-main~projects-index-page~remote-conversation-page-y7pwA1Hj.js",
+      "app-initial~app-main~onboarding-page~projects-index-page~quick-chat-window-page~codex-micro~iqsnin5k-CcY42RXW.js",
     );
     fs.mkdirSync(assetsDir, { recursive: true });
     fs.writeFileSync(assetPath, currentProjectSource);
@@ -193,7 +191,7 @@ test("descriptor targets and patches the current project chunk", () => {
     assert.notEqual(fs.readFileSync(assetPath, "utf8"), currentProjectSource);
     assert.equal(
       descriptors[0].pattern.test(
-        "app-initial~app-main~projects-index-page~settings-page-y7pwA1Hj.js",
+        "app-initial~app-main~projects-index-page~remote-conversation-page-CEvoxqOS.js",
       ),
       false,
     );

@@ -5,6 +5,10 @@ const currentCreationTime =
 const patchedCreationTime =
   currentCreationTime +
   "??(/^local:[\\da-f]{8}-[\\da-f]{4}-7[\\da-f]{3}-[89ab][\\da-f]{3}-[\\da-f]{12}$/i.test(e.key)?Number.parseInt(e.key.slice(6).replaceAll(`-`,``).slice(0,12),16):e.conversation.recencyAt??e.conversation.updatedAt)";
+const currentSortStateMarkers = [
+  "chatSortMode:e?.chatSortMode===`created_at`?`updated_at`:e?.chatSortMode??`priority`",
+  "projectSortMode:e?.projectSortMode===`created_at`?`updated_at`:e?.projectSortMode??`priority`",
+];
 
 function countOccurrences(source, needle) {
   return source.split(needle).length - 1;
@@ -19,12 +23,9 @@ function applyProjectTaskSortPatch(source) {
     return source;
   }
 
-  if (
-    !source.includes("sidebarElectron.sortMenu.manual") ||
-    !source.includes("sidebarElectron.sortMenu.created")
-  ) {
+  if (!currentSortStateMarkers.every((marker) => source.includes(marker))) {
     console.warn(
-      "WARN: Could not find current project task sort menu markers - skipping project task sort feature patch",
+      "WARN: Could not find current project task sort state markers - skipping project task sort feature patch",
     );
     return source;
   }
@@ -46,7 +47,7 @@ const descriptors = [
     order: 20_900,
     ciPolicy: "optional",
     pattern:
-      /^app-initial~app-main~projects-index-page~remote-conversation-page-[A-Za-z0-9_-]+\.js$/,
+      /^app-initial~app-main~onboarding-page~projects-index-page~quick-chat-window-page~codex-micro~[A-Za-z0-9_-]+\.js$/,
     missingDescription: "project task sort webview bundle",
     skipDescription: "project task creation timestamp feature patch",
     apply: applyProjectTaskSortPatch,
