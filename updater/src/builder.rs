@@ -410,6 +410,7 @@ fn is_native_package_file(path: &Path) -> bool {
 
 fn build_command_path(builder_bundle_root: &Path) -> OsString {
     let mut entries = managed_node_bin_dirs(builder_bundle_root);
+    entries.extend(preferred_user_bin_dirs());
     entries.extend(preferred_node_bin_dirs());
     entries.extend(preferred_rust_bin_dirs());
     entries.extend(std::env::split_paths(
@@ -417,6 +418,19 @@ fn build_command_path(builder_bundle_root: &Path) -> OsString {
     ));
     entries.extend(system_bin_dirs());
     std::env::join_paths(entries).unwrap_or_else(|_| std::env::var_os("PATH").unwrap_or_default())
+}
+
+fn preferred_user_bin_dirs() -> Vec<PathBuf> {
+    let Some(home) = std::env::var_os("HOME") else {
+        return Vec::new();
+    };
+
+    let user_bin = PathBuf::from(home).join(".local/bin");
+    if user_bin.is_dir() {
+        vec![user_bin]
+    } else {
+        Vec::new()
+    }
 }
 
 fn managed_node_bin_dirs(builder_bundle_root: &Path) -> Vec<PathBuf> {
@@ -1121,6 +1135,37 @@ fi
 
         assert!(directories.iter().any(|dir| dir == Path::new("/usr/bin")));
         assert!(directories.iter().any(|dir| dir == Path::new("/bin")));
+    }
+
+    #[test]
+    fn build_command_path_includes_user_local_bin_from_home() -> Result<()> {
+        let _env_guard = crate::test_util::env_lock();
+        let temp = tempdir()?;
+        let user_bin = temp.path().join(".local/bin");
+        fs::create_dir_all(&user_bin)?;
+
+        let original_home = std::env::var_os("HOME");
+        std::env::set_var("HOME", temp.path());
+
+        let path = build_command_path(Path::new("/tmp/missing-codex-builder"));
+
+        if let Some(home) = original_home {
+            std::env::set_var("HOME", home);
+        } else {
+            std::env::remove_var("HOME");
+        }
+
+        let directories = std::env::split_paths(&path).collect::<Vec<_>>();
+        let user_bin_index = directories
+            .iter()
+            .position(|dir| dir == &user_bin)
+            .expect("user-local bin should be included");
+        let system_bin_index = directories
+            .iter()
+            .position(|dir| dir == Path::new("/usr/bin"))
+            .expect("system bin should be included");
+        assert!(user_bin_index < system_bin_index);
+        Ok(())
     }
 
     #[test]
