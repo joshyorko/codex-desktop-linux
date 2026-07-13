@@ -1,6 +1,6 @@
 {
   "id": "omarchy-theme",
-  "title": "Omarchy Theme",
+  "title": "Omarchy Theme — Requires Omarchy",
   "description": "Loads user CSS generated from the active Omarchy theme into Codex Desktop.",
   "defaultEnabled": false,
   "entrypoints": {

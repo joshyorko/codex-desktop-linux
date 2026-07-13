@@ -145,6 +145,13 @@ test("omarchy-theme stays disabled until selected", () => {
   });
 });
 
+test("omarchy-theme metadata labels the Omarchy requirement", () => {
+  const manifest = JSON.parse(
+    fs.readFileSync(path.join(FEATURE_DIR, "feature.json"), "utf8"),
+  );
+  assert.equal(manifest.title, "Omarchy Theme — Requires Omarchy");
+});
+
 test("omarchy-theme exposes optional patches, resources, and hooks when enabled", () => {
   withFeatureConfig(["omarchy-theme"], (featuresRoot) => {
     assert.deepEqual(enabledLinuxFeatureIds({ featuresRoot }), ["omarchy-theme"]);
