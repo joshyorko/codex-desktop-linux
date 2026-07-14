@@ -3,7 +3,7 @@
 const MODEL_PICKER_STATE_ASSET_PATTERN =
   /^app-initial~app-main~new-thread-panel-page~appgen-library-page~hotkey-window-thread-page~ho~iufn7mg3-[^.]+\.js$/;
 const MODEL_PICKER_ALLOWLIST_ASSET_PATTERN =
-  /^app-initial~app-main~hotkey-window-thread-page~keyboard-shortcuts-settings~thread-app-shell~cf704xib-[^.]+\.js$/;
+  /^app-initial~app-main~onboarding-page~projects-index-page~hotkey-window-thread-page~quick-ch~iiv1g666-[^.]+\.js$/;
 const MODEL_PICKER_MENU_ASSET_PATTERN =
   /^app-initial~app-main~onboarding-page~projects-index-page~hotkey-window-thread-page~quick-ch~iiv1g666-[^.]+\.js$/;
 const SIMPLE_MENU_VIEW_PATTERN =
