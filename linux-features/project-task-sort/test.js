@@ -175,7 +175,7 @@ test("descriptor targets and patches the current project chunk", () => {
     const assetsDir = path.join(tempDir, "webview", "assets");
     const assetPath = path.join(
       assetsDir,
-      "app-initial~app-main~onboarding-page~projects-index-page~quick-chat-window-page~codex-micro~iqsnin5k-CcY42RXW.js",
+      "app-initial~app-main~page-Cmd9LUYY.js",
     );
     fs.mkdirSync(assetsDir, { recursive: true });
     fs.writeFileSync(assetPath, currentProjectSource);
@@ -191,7 +191,7 @@ test("descriptor targets and patches the current project chunk", () => {
     assert.notEqual(fs.readFileSync(assetPath, "utf8"), currentProjectSource);
     assert.equal(
       descriptors[0].pattern.test(
-        "app-initial~app-main~projects-index-page~remote-conversation-page-CEvoxqOS.js",
+        "app-initial~app-main~onboarding-page~projects-index-page~quick-chat-window-page~codex-micro~iqsnin5k-CcY42RXW.js",
       ),
       false,
     );

@@ -100,15 +100,27 @@ test("current DMG descriptors target the three owning app bundles", () => {
   );
   assert.equal(
     descriptors[1].pattern.test(
-      "app-initial~app-main~hotkey-window-thread-page~keyboard-shortcuts-settings~thread-app-shell~cf704xib-BpnUyB2R.js",
+      "app-initial~app-main~onboarding-page~projects-index-page~hotkey-window-thread-page~quick-ch~iiv1g666-BjNKtmac.js",
     ),
     true,
   );
   assert.equal(
     descriptors[2].pattern.test(
-      "app-initial~app-main~quick-chat-window-page~work-home-page~chatgpt-conversation-page-BqLP6EDd.js",
+      "app-initial~app-main~hotkey-window-new-thread-page~hotkey-window-home-page~composer-utility-bar-D9zyQF1n.js",
     ),
     true,
+  );
+  assert.equal(
+    descriptors[1].pattern.test(
+      "app-initial~app-main~hotkey-window-thread-page~keyboard-shortcuts-settings~thread-app-shell~cf704xib-BhQogfRL.js",
+    ),
+    false,
+  );
+  assert.equal(
+    descriptors[2].pattern.test(
+      "app-initial~app-main~quick-chat-window-page~work-home-page~chatgpt-conversation-page-C3751cTh.js",
+    ),
+    false,
   );
   assert.equal(
     descriptors.some((descriptor) =>
@@ -159,14 +171,14 @@ test("partial current drift is reported when the other exact target still applie
       fs.writeFileSync(
         path.join(
           assetsDir,
-          "app-initial~app-main~hotkey-window-thread-page~keyboard-shortcuts-settings~thread-app-shell~cf704xib-current.js",
+          "app-initial~app-main~onboarding-page~projects-index-page~hotkey-window-thread-page~quick-ch~iiv1g666-current.js",
         ),
         "function vbe({authMethod:e,availableModels:t,defaultModel:n,enabledReasoningEfforts:r,includeUltraReasoningEffort:i,models:a,useHiddenModels:o}){let s=[],c=null,l=o&&e!==`amazonBedrock`,u=a.some(e=>e.supportedReasoningEfforts.some(({reasoningEffort:e})=>e===`max`)),d=i&&a.some(e=>e.supportedReasoningEfforts.some(({reasoningEffort:e})=>e===`ultra`));return a.forEach(n=>{if(l?t.has(n.model):!n.hidden){let t=i?n.supportedReasoningEfforts:n.supportedReasoningEfforts.filter(({reasoningEffort:e})=>e!==`ultra`),a=(e===`copilot`?[t.find(e=>e.reasoningEffort===`medium`)??{reasoningEffort:`medium`,description:`medium effort`}]:t).filter(({reasoningEffort:e})=>Gx(e)&&r.has(e)),o={...n,supportedReasoningEfforts:a};s.push(o),n.isDefault&&(c=o)}}),c??=s.find(e=>e.model===n)??null,{models:s,defaultModel:c}}",
       );
       fs.writeFileSync(
         path.join(
           assetsDir,
-          "app-initial~app-main~quick-chat-window-page~work-home-page~chatgpt-conversation-page-current.js",
+          "app-initial~app-main~hotkey-window-new-thread-page~hotkey-window-home-page~composer-utility-bar-current.js",
         ),
         [
           "let defaultServiceTier=null;",
@@ -347,7 +359,7 @@ test("fallback descriptor reports skipped when one insertion point drifts", () =
       const assetsDir = path.join(tempApp, "webview", "assets");
       const targetPath = path.join(
         assetsDir,
-        "app-initial~app-main~quick-chat-window-page~work-home-page~chatgpt-conversation-page-drifted.js",
+        "app-initial~app-main~hotkey-window-new-thread-page~hotkey-window-home-page~composer-utility-bar-drifted.js",
       );
       const source = [
         "let defaultServiceTier=null;",
