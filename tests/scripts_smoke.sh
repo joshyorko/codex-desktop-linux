@@ -4724,6 +4724,7 @@ test_bundled_plugin_computer_use_preserves_upstream_shell() {
     assert_contains "$manifest" '"name": "computer-use"'
     assert_contains "$manifest" '"name": "OpenAI"'
     assert_contains "$manifest" '"skills": "./skills/"'
+    assert_contains "$manifest" '"composerIcon": "./assets/app-icon.png"'
     assert_contains "$manifest" 'Control desktop apps on Linux from ChatGPT through Computer Use.'
     assert_not_contains "$manifest" 'macOS'
     assert_contains "$staged_plugins/computer-use/skills/computer-use/SKILL.md" 'Control local Linux apps through Computer Use.'

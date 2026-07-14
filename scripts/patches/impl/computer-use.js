@@ -650,17 +650,20 @@ function applyLinuxComputerUseRendererAvailabilityPatch(currentSource) {
 }
 
 function applyLinuxComputerUsePluginsPageAvailabilityPatch(currentSource) {
-  const alreadyPatchedPattern =
-    /new Set\(([A-Za-z_$][\w$]*)\.filter\(([A-Za-z_$][\w$]*)=>!([A-Za-z_$][\w$]*)\.has\(\2\.plugin\.id\)&&\2\.plugin\.id!==`computer-use`\)\.map\(([A-Za-z_$][\w$]*)=>\4\.plugin\.id\)\)/;
-  if (alreadyPatchedPattern.test(currentSource)) {
+  const installedComputerUseLookup =
+    ".find(e=>e.plugin?.name===`computer-use`&&e.marketplaceName===`openai-bundled`&&e.plugin?.source?.type===`local`)";
+  if (currentSource.includes(installedComputerUseLookup)) {
     return currentSource;
   }
 
+  const availablePluginsPattern =
+    /new Set\(\[\.\.\.([A-Za-z_$][\w$]*),\.\.\.\(?[A-Za-z_$][\w$]*\?\?\[\]\)?,\.\.\.\(?[A-Za-z_$][\w$]*\?\?\[\]\)?\]\.map\(([A-Za-z_$][\w$]*)=>\2\.plugin\.id\)\)/;
+  const availablePluginsVar = currentSource.match(availablePluginsPattern)?.[1] ?? null;
   const unavailableSetPattern =
     /new Set\(([A-Za-z_$][\w$]*)\.filter\(([A-Za-z_$][\w$]*)=>!([A-Za-z_$][\w$]*)\.has\(\2\.plugin\.id\)\)\.map\(([A-Za-z_$][\w$]*)=>\4\.plugin\.id\)\)/;
-  if (!unavailableSetPattern.test(currentSource)) {
+  if (availablePluginsVar == null || !unavailableSetPattern.test(currentSource)) {
     console.warn(
-      "WARN: Could not find current Plugins-page unavailable plugin set — skipping Linux Computer Use global availability patch",
+      "WARN: Could not find current Plugins-page installed plugin reconciliation contract — skipping Linux Computer Use global availability patch",
     );
     return currentSource;
   }
@@ -668,7 +671,7 @@ function applyLinuxComputerUsePluginsPageAvailabilityPatch(currentSource) {
   return currentSource.replace(
     unavailableSetPattern,
     (_match, pluginsVar, pluginVar, installedIdsVar, mappedPluginVar) =>
-      `new Set(${pluginsVar}.filter(${pluginVar}=>!${installedIdsVar}.has(${pluginVar}.plugin.id)&&${pluginVar}.plugin.id!==\`computer-use\`).map(${mappedPluginVar}=>${mappedPluginVar}.plugin.id))`,
+      `(${pluginsVar}=(()=>{let e=${availablePluginsVar}${installedComputerUseLookup};return e==null?${pluginsVar}:[...${pluginsVar}.filter(t=>t.plugin?.name!==\`computer-use\`&&t.plugin?.id?.split(\`@\`)[0]!==\`computer-use\`),e]})(),new Set(${pluginsVar}.filter(${pluginVar}=>!${installedIdsVar}.has(${pluginVar}.plugin.id)).map(${mappedPluginVar}=>${mappedPluginVar}.plugin.id)))`,
   );
 }
 

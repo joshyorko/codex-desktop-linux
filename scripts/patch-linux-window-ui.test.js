@@ -7516,20 +7516,23 @@ test("Computer Use availability descriptors cover current settings and Plugins b
   assert.doesNotMatch("computer-use-settings-B9iEdDjp.js", pluginsDescriptor.pattern);
 });
 
-test("keeps upstream Computer Use available on the current global Plugins page", () => {
+test("reconciles the current global Plugins page to the installed Computer Use plugin", () => {
   const source =
-    "let Pt=[{plugin:{id:`installed`}}],Qt=[],nn=[],Vr=[{plugin:{id:`installed`}},{plugin:{id:`computer-use`}},{plugin:{id:`other-missing`}}]," +
+    "let Pt=[{marketplaceName:`openai-bundled`,marketplacePath:`/marketplace.json`,plugin:{id:`computer-use@openai-bundled`,name:`computer-use`,source:{type:`local`}}},{plugin:{id:`installed`,name:`installed`}}],Qt=[],nn=[]," +
+    "Vr=[{remoteMarketplaceName:`openai-curated`,plugin:{id:`computer-use`,name:`computer-use`,source:{type:`remote`}}},{plugin:{id:`installed`,name:`installed`}},{plugin:{id:`other-missing`,name:`other-missing`}}]," +
     "Ji=new Set([...Pt,...Qt??[],...nn??[]].map(e=>e.plugin.id))," +
     "Xi=new Set(Vr.filter(e=>!Ji.has(e.plugin.id)).map(e=>e.plugin.id));";
 
   const patched = applyPatchTwice(applyLinuxComputerUsePluginsPageAvailabilityPatch, source);
 
-  assert.match(
-    patched,
-    /Vr\.filter\(e=>!Ji\.has\(e\.plugin\.id\)&&e\.plugin\.id!==`computer-use`\)/,
+  const result = vm.runInNewContext(
+    `${patched};({computerUse:Vr.filter(e=>e.plugin.name===\`computer-use\`),unavailable:[...Xi]})`,
   );
-  const unavailable = vm.runInNewContext(`${patched};[...Xi]`);
-  assert.deepEqual(Array.from(unavailable), ["other-missing"]);
+  assert.equal(result.computerUse.length, 1);
+  assert.equal(result.computerUse[0].plugin.id, "computer-use@openai-bundled");
+  assert.equal(result.computerUse[0].plugin.source.type, "local");
+  assert.equal(result.computerUse[0].marketplacePath, "/marketplace.json");
+  assert.deepEqual(Array.from(result.unavailable), ["other-missing"]);
 });
 
 test("patches the current DMG Computer Use settings availability and plugin card atomically", () => {

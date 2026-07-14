@@ -413,6 +413,7 @@ plugin.interface = {
   ...interfaceConfig,
   displayName: "Computer Use",
   shortDescription: "Control Linux apps from ChatGPT",
+  composerIcon: "./assets/app-icon.png",
   longDescription:
     "Linux Computer Use lets ChatGPT use any app on your computer, including your web browsers and files you allow it to access. It may take screenshots or page content while working. You stay in control: you choose which apps to allow ChatGPT to access and can stop actions at any time.",
   defaultPrompt: [
