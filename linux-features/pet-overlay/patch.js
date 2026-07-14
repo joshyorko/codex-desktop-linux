@@ -264,7 +264,7 @@ function patchNiriDragLifecycle(source) {
   if (endMethod.text.includes("codexPetOverlayEndNiriDrag(")) {
     return patched;
   }
-  const completionPattern = /([A-Za-z_$][\w$]*)\?this\.persistWindowBounds\(([A-Za-z_$][\w$]*),([A-Za-z_$][\w$]*\?\?this\.getCurrentDisplay\(\))\):this\.reclampWindowToVisibleDisplay\(\{shouldPersist:!0\}\);let ([A-Za-z_$][\w$]*)=this\.dockTarget;\4!=null&&this\.dockPresentation\(\4\.anchor,\4\.onDock\)/;
+  const completionPattern = /([A-Za-z_$][\w$]*)\?this\.persistWindowBounds\(([A-Za-z_$][\w$]*),([A-Za-z_$][\w$]*\?\?this\.getCurrentDisplay\(\))\):this\.reclampWindowToVisibleDisplay\(\{shouldPersist:!0\}\);let ([A-Za-z_$][\w$]*)=this\.dockTarget,([A-Za-z_$][\w$]*)=[A-Za-z_$][\w$]*\(this\.anchor,this\.presentationOffset\);\4!=null&&[A-Za-z_$][\w$]*\(\{current:\5,next:\5,target:\{x:\4\.anchor\.centerX,y:\4\.anchor\.centerY\}\}\)\.shouldDock&&this\.dockPresentation\(\4\.anchor,\4\.onDock\)/;
   const completionMatch = endMethod.text.match(completionPattern);
   if (completionMatch == null) {
     console.warn("WARN: Could not identify current avatar overlay drag completion shape - skipping Niri transport hook");

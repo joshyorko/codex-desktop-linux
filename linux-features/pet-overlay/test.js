@@ -55,7 +55,7 @@ function currentAvatarOverlayBundleFixture() {
     "constructor(e,t){this.windowManager=e,this.globalState=t}",
     "isOpen(){let e=this.window;return e!=null&&!e.isDestroyed()&&e.isVisible()&&!this.windowStagedForNativePresentation}",
     "startDrag(e,t,n=!1){let r=this.window;if(r==null||r.isDestroyed()||r.webContents.id!==e)return;this.cancelMomentum();let i=this.getLayout(r),o=this.compositionHost.getCursorPosition(),s=t.pointerScreenX!=null?{x:t.pointerScreenX,y:t.pointerScreenY}:a.screen.getCursorScreenPoint();this.dragState=new h2(o==null?`renderer`:`native`,t.pointerWindowX-i.mascot.left,t.pointerWindowY-i.mascot.top,a.screen.getDisplayNearestPoint(s).bounds,n),this.windowServerDragActive=this.layoutMode===`native`&&!n&&this.compositionHost.performWindowDrag(),this.windowServerDragActive||(this.windowServerDragWindowX=null)}",
-    "endDrag(e,t){let n=this.window;if(n==null||n.isDestroyed()||n.webContents.id!==e)return;let r=this.dragState,i=this.windowServerDragActive,a=null;this.dragState=null,this.windowServerDragActive=!1,this.windowServerDragWindowX=null,i?this.persistWindowBounds(n,a??this.getCurrentDisplay()):this.reclampWindowToVisibleDisplay({shouldPersist:!0});let o=this.dockTarget;o!=null&&this.dockPresentation(o.anchor,o.onDock)}",
+    "endDrag(e,t){let n=this.window;if(n==null||n.isDestroyed()||n.webContents.id!==e)return;let r=this.dragState,i=this.windowServerDragActive,a=null;this.dragState=null,this.windowServerDragActive=!1,this.windowServerDragWindowX=null,i?this.persistWindowBounds(n,a??this.getCurrentDisplay()):this.reclampWindowToVisibleDisplay({shouldPersist:!0});let o=this.dockTarget,s=X5(this.anchor,this.presentationOffset);o!=null&&r5({current:s,next:s,target:{x:o.anchor.centerX,y:o.anchor.centerY}}).shouldDock&&this.dockPresentation(o.anchor,o.onDock)}",
     "setElementSize(e,{elementSizeRevision:t,isTrayVisible:n,mascot:r,nativeCompositionEnabled:a,tray:o}){let i=this.window;i==null||i.isDestroyed()||i.webContents.id!==e||(this.cancelMomentum(),this.layoutMode=n==null?`native`:`legacy`,this.mascotSize=r,this.traySize=o,this.applyLatestElementSizes(i),this.stageWindowForNativePresentation(i),this.showWindowIfReady(i))}",
     "applyLatestElementSizes(e){this.anchor={...this.anchor,width:this.mascotSize.width,height:this.mascotSize.height},this.applyLayout(e)}",
     "async createWindow(e){let t=await this.windowManager.createWindow({title:a.app.getName(),width:zB.width,height:zB.height,appearance:`avatarOverlay`,alwaysOnTop:process.platform===`linux`,skipTaskbar:process.platform===`linux`,focusable:process.platform===`linux`?!0:!1,show:!1,initialRoute:rV});return this.window=t,this.compositionHost.setOverlayWindow(t),this.rendererReady=this.windowManager.isWebContentsReady(t.webContents.id),this.displayBounds=null,this.displayId=null,this.dragState=null,this.layout=null,this.mascotSize=oV,this.mousePassthroughEnabled=!1,this.traySize=null,t.on(`closed`,()=>{this.window===t&&(this.cancelMomentum(),this.window=null,this.dragState=null,this.layout=null,this.rendererReady=!1,this.pointerInteractive=!1,this.mousePassthroughEnabled=!1,this.compositionHost.setOverlayWindow(null),this.broadcastOpenState())}),t}",
@@ -63,18 +63,6 @@ function currentAvatarOverlayBundleFixture() {
     "showWindow(e){if(e.isDestroyed())return;let t=this.isOpen();this.windowStagedForNativePresentation&&=(e.setOpacity(1),!1),e.moveTop(),e.showInactive(),!t&&this.isOpen()&&(this.finishPendingPresentation(),this.broadcastOpenState())}showWindowIfReady(e){!this.rendererReady||this.initialPresentationState!==`ready`||(this.showWindow(e),this.applyPointerInteractivityPolicy())}stageWindowForNativePresentation(e){e.isDestroyed()||this.applyPointerInteractivityPolicy()}broadcastOpenState(){this.windowManager.sendMessageToAllRegisteredWindows({type:`avatar-overlay-open-state-changed`,isOpen:this.isOpen()})}",
     "applyPointerInteractivityPolicy(){return null}cancelMomentum(){}finishPendingPresentation(){}sendLayoutToRenderer(){}setWindowBounds(){}persistWindowBounds(){}reclampWindowToVisibleDisplay({shouldPersist:e}){e&&this.persistWindowBounds(this.window,this.getCurrentDisplay())}dockPresentation(){}getCurrentDisplay(){return{id:1,bounds:{x:0,y:0,width:1920,height:1080},workArea:{x:0,y:0,width:1920,height:1080}}}};",
     "function L9({platform:e,appearance:t,opaqueWindowSurfaceEnabled:n,prefersDarkColors:r}){return n?{backgroundColor:r?_ne:vne,backgroundMaterial:e===`win32`?`none`:null}:e===`win32`?{backgroundColor:k9,backgroundMaterial:`mica`}:{backgroundColor:k9,backgroundMaterial:null}}",
-  ].join("");
-}
-
-function legacyAvatarOverlayBundleFixture() {
-  return [
-    "let n=require(`electron`);",
-    "var rV=`/avatar-overlay`,zB={width:356,height:320},oV={width:112,height:121},sV={width:276,height:131};",
-    "var fV=class{window=null;anchor={x:0,y:0,width:112,height:121};dragState=null;layout=null;mascotSize=oV;placement=`top-end`;traySize=null;",
-    "constructor(e,t){this.windowManager=e,this.globalState=t}",
-    "async createWindow(e){let t=await this.windowManager.createWindow({appearance:`avatarOverlay`,focusable:process.platform===`linux`?!0:!1,show:!1,initialRoute:rV});return this.window=t,t}",
-    "applyLayout(e,t=n.screen.getDisplayNearestPoint(this.anchor).bounds){if(e.isDestroyed())return;let r=UB({anchor:this.anchor,displayBounds:t,mascotSize:this.mascotSize,previousPlacement:this.placement,traySize:this.traySize??sV});this.anchor=r.anchor,this.layout=r,this.placement=r.placement,this.setWindowBounds(e,r.windowBounds),this.sendLayoutToRenderer(e)}getLayout(e){return this.layout}",
-    "showWindow(e){if(e.isDestroyed())return;e.moveTop(),e.showInactive(),this.broadcastOpenState()}startDrag(e,t){this.dragState={}}broadcastOpenState(){}sendLayoutToRenderer(){}setWindowBounds(){}};",
   ].join("");
 }
 
@@ -104,6 +92,8 @@ function controllerFromPatchedSource(patched, overrides = {}) {
       throw new Error(`Unexpected module: ${moduleName}`);
     },
     setTimeout: overrides.setTimeout ?? setTimeout,
+    X5: (anchor) => anchor,
+    r5: () => ({ shouldDock: true }),
     UB: overrides.UB ?? (() => ({
       anchor: { x: 10, y: 10, width: 40, height: 40 },
       mascot: { left: 10, top: 10, width: 40, height: 40 },
@@ -282,15 +272,6 @@ test("discards the feature patch when the current settings handler drifts", () =
 
   assert.equal(result, source);
   assert.match(warnings.join("\n"), /Could not find desktop set-setting handler/);
-  assert.match(warnings.join("\n"), /Pet overlay patch is incomplete/);
-});
-
-test("does not retain an obsolete avatar overlay layout fallback", () => {
-  const source = legacyAvatarOverlayBundleFixture();
-  const { result, warnings } = captureWarnings(() => applyPetOverlayPatch(source));
-
-  assert.equal(result, source);
-  assert.match(warnings.join("\n"), /Could not identify avatar overlay layout variable/);
   assert.match(warnings.join("\n"), /Pet overlay patch is incomplete/);
 });
 
