@@ -45,8 +45,7 @@ const descriptors = [
     phase: "webview-asset",
     order: 20_900,
     ciPolicy: "optional",
-    pattern:
-      /^app-initial~app-main~projects-index-page~remote-conversation-page-[A-Za-z0-9_-]+\.js$/,
+    pattern: /^app-initial~app-main~page-[^.]+\.js$/,
     missingDescription: "project task sort webview bundle",
     skipDescription: "project task creation timestamp feature patch",
     apply: applyProjectTaskSortPatch,
