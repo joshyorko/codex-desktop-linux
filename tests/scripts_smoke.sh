@@ -6940,6 +6940,297 @@ test_browser_plugin_renamed_upstream_staging() {
     assert_not_contains "$output_log" "Browser bundled plugin resources not present"
 }
 
+test_upstream_bundled_skills_staging() {
+    info "Checking current upstream bundled skills staging"
+    local workspace="$TMP_DIR/upstream-bundled-skills"
+    local app_dir="$workspace/ChatGPT.app"
+    local install_dir="$workspace/install"
+    local output_log="$workspace/output.log"
+    local source_skill="$app_dir/Contents/Resources/skills/skills/.curated/hatch-pet"
+    local target_skill="$install_dir/resources/skills/skills/.curated/hatch-pet"
+
+    mkdir -p "$workspace" "$install_dir/resources"
+    make_fake_browser_upstream_app "$app_dir"
+    mkdir -p "$source_skill/references" "$source_skill/scripts"
+    printf '%s\n' '# Hatch Pet' > "$source_skill/SKILL.md"
+    printf '%s\n' '# Animation rows' > "$source_skill/references/animation-rows.md"
+    printf '%s\n' 'print("render")' > "$source_skill/scripts/render_animation_previews.py"
+    printf '%s\n' 'finder metadata' > "$source_skill/scripts/render_animation_previews.py:com.apple.FinderInfo"
+    ln -s "../references/animation-rows.md" "$source_skill/scripts/animation-rows.md"
+
+    (
+        SCRIPT_DIR="$REPO_DIR"
+        INSTALL_DIR="$install_dir"
+        WORK_DIR="$workspace/work"
+        ARCH="x86_64"
+        ICON_SOURCE="$workspace/missing-icon.png"
+        CODEX_APP_ID="codex-desktop"
+        mkdir -p "$WORK_DIR"
+        warn() { echo "[WARN] $*" >&2; }
+        info() { echo "[INFO] $*" >&2; }
+        # shellcheck disable=SC1091
+        source "$REPO_DIR/scripts/lib/bundled-plugins.sh"
+        stage_linux_computer_use_plugin() { return 1; }
+        stage_browser_plugin_from_upstream() { return 1; }
+        stage_chrome_plugin_from_upstream() { return 1; }
+        install_browser_use_node_repl_resource() { return 0; }
+        install_bundled_plugin_resources "$app_dir"
+    ) >"$output_log" 2>&1
+
+    assert_file_exists "$target_skill/SKILL.md"
+    assert_file_exists "$target_skill/references/animation-rows.md"
+    assert_file_exists "$target_skill/scripts/render_animation_previews.py"
+    [ -L "$target_skill/scripts/animation-rows.md" ] \
+        || fail "Expected internal bundled-skill symlink to be preserved"
+    [ "$(readlink "$target_skill/scripts/animation-rows.md")" = "../references/animation-rows.md" ] \
+        || fail "Expected internal bundled-skill symlink target to remain relative"
+    [ "$(readlink -f "$target_skill/scripts/animation-rows.md")" = "$target_skill/references/animation-rows.md" ] \
+        || fail "Expected internal bundled-skill symlink to remain inside the staged root"
+    [ ! -e "$target_skill/scripts/render_animation_previews.py:com.apple.FinderInfo" ] \
+        || fail "Expected macOS sidecar metadata to be removed from staged bundled skills"
+    assert_contains "$output_log" "Bundled skills staged from upstream DMG"
+}
+
+test_upstream_bundled_skills_validator_guards() {
+    info "Checking bundled skills filesystem guards"
+    local workspace="$TMP_DIR/upstream-bundled-skills-validator"
+    local case_name=""
+    local case_dir=""
+    local output_log=""
+
+    mkdir -p "$workspace"
+    printf '%s\n' 'outside' > "$workspace/outside.txt"
+
+    # shellcheck disable=SC1091
+    source "$REPO_DIR/scripts/lib/bundled-plugins.sh"
+
+    for case_name in internal-relative absolute escaping chained-escape dangling named-pipe privileged-file root-symlink; do
+        case_dir="$workspace/$case_name"
+        output_log="$workspace/$case_name.log"
+        mkdir -p "$case_dir/skills/.curated/hatch-pet/references"
+        printf '%s\n' '# Hatch Pet' > "$case_dir/skills/.curated/hatch-pet/SKILL.md"
+
+        case "$case_name" in
+            internal-relative)
+                printf '%s\n' '# Shared reference' > "$case_dir/skills/.curated/shared.md"
+                ln -s "../../shared.md" "$case_dir/skills/.curated/hatch-pet/references/shared.md"
+                ;;
+            absolute)
+                ln -s "$workspace/outside.txt" "$case_dir/skills/.curated/hatch-pet/references/outside.md"
+                ;;
+            escaping)
+                ln -s "../../../../../outside.txt" "$case_dir/skills/.curated/hatch-pet/references/outside.md"
+                ;;
+            chained-escape)
+                ln -s "../../../outside.txt" "$case_dir/skills/.curated/escape"
+                ln -s "../../escape" "$case_dir/skills/.curated/hatch-pet/references/outside.md"
+                ;;
+            dangling)
+                ln -s "missing.md" "$case_dir/skills/.curated/hatch-pet/references/missing.md"
+                ;;
+            named-pipe)
+                mkfifo "$case_dir/skills/.curated/hatch-pet/channel"
+                ;;
+            privileged-file)
+                chmod 4755 "$case_dir/skills/.curated/hatch-pet/SKILL.md"
+                ;;
+            root-symlink)
+                mv "$case_dir" "$case_dir.real"
+                ln -s "$case_dir.real" "$case_dir"
+                ;;
+        esac
+
+        if [ "$case_name" = "internal-relative" ]; then
+            validate_upstream_bundled_skills "$case_dir" >"$output_log" 2>&1 \
+                || fail "Expected internal relative bundled-skill symlink to be accepted"
+        elif validate_upstream_bundled_skills "$case_dir" >"$output_log" 2>&1; then
+            fail "Expected bundled skills validator to reject $case_name"
+        fi
+    done
+
+    assert_contains "$workspace/absolute.log" "absolute symlink is not allowed"
+    assert_contains "$workspace/escaping.log" "symlink escapes bundled skills root"
+    assert_contains "$workspace/chained-escape.log" "symlink escapes bundled skills root"
+    assert_contains "$workspace/dangling.log" "cannot resolve symlink"
+    assert_contains "$workspace/named-pipe.log" "unsupported file type"
+    assert_contains "$workspace/privileged-file.log" "privileged mode is not allowed"
+    assert_contains "$workspace/root-symlink.log" "bundled skills root cannot be a symlink"
+}
+
+test_upstream_bundled_skills_rejects_unsafe_source() {
+    info "Checking bundled skills unsafe source rejection is propagated"
+    local workspace="$TMP_DIR/upstream-bundled-skills-unsafe-source"
+    local app_dir="$workspace/ChatGPT.app"
+    local install_dir="$workspace/install"
+    local source_skills="$app_dir/Contents/Resources/skills"
+    local target_skills="$install_dir/resources/skills"
+    local output_log="$workspace/output.log"
+
+    mkdir -p "$source_skills/skills/.curated/hatch-pet" "$target_skills/skills/.curated/hatch-pet"
+    printf '%s\n' 'new skill' > "$source_skills/skills/.curated/hatch-pet/SKILL.md"
+    printf '%s\n' 'previous skill' > "$target_skills/skills/.curated/hatch-pet/SKILL.md"
+    ln -s "$workspace/outside.txt" "$source_skills/skills/.curated/hatch-pet/outside"
+
+    (
+        warn() { echo "[WARN] $*" >&2; }
+        info() { echo "[INFO] $*" >&2; }
+        SCRIPT_DIR="$REPO_DIR"
+        INSTALL_DIR="$install_dir"
+        # shellcheck disable=SC1091
+        source "$REPO_DIR/scripts/lib/bundled-plugins.sh"
+        if install_bundled_plugin_resources "$app_dir"; then
+            fail "Expected bundled plugin installation to propagate unsafe skills rejection"
+        fi
+    ) >"$output_log" 2>&1
+
+    assert_contains "$target_skills/skills/.curated/hatch-pet/SKILL.md" "previous skill"
+    assert_not_contains "$target_skills/skills/.curated/hatch-pet/SKILL.md" "new skill"
+    assert_contains "$output_log" "Bundled skills source contains unsupported content"
+    [ -z "$(find "$(dirname "$target_skills")" -mindepth 1 -maxdepth 1 -type d -name '.skills.tmp.*' -print -quit)" ] \
+        || fail "Expected unsafe bundled skills source rejection to leave no staging directory"
+}
+
+test_upstream_bundled_skills_post_copy_validation() {
+    info "Checking bundled skills post-copy validation preserves the target"
+    local workspace="$TMP_DIR/upstream-bundled-skills-post-copy"
+    local source_skills="$workspace/source-skills"
+    local target_skills="$workspace/install/resources/skills"
+    local output_log="$workspace/output.log"
+
+    mkdir -p "$source_skills/skills/.curated/hatch-pet" "$target_skills/skills/.curated/hatch-pet"
+    printf '%s\n' 'new skill' > "$source_skills/skills/.curated/hatch-pet/SKILL.md"
+    printf '%s\n' 'previous skill' > "$target_skills/skills/.curated/hatch-pet/SKILL.md"
+    printf '%s\n' 'outside' > "$workspace/outside.txt"
+
+    (
+        warn() { echo "[WARN] $*" >&2; }
+        info() { echo "[INFO] $*" >&2; }
+        # shellcheck disable=SC1091
+        source "$REPO_DIR/scripts/lib/bundled-plugins.sh"
+        cp() {
+            command cp "$@" || return
+            if [ "$#" -eq 3 ] && [ "$1" = "-R" ] && [ "$2" = "$source_skills/." ] &&
+                [[ "$3" == "$(dirname "$target_skills")/.skills.tmp."* ]]; then
+                ln -s "$workspace/outside.txt" "$3/post-copy-link"
+            fi
+        }
+        if stage_upstream_bundled_skills "$source_skills" "$target_skills"; then
+            fail "Expected post-copy bundled skills validation to reject injected content"
+        fi
+    ) >"$output_log" 2>&1
+
+    assert_contains "$target_skills/skills/.curated/hatch-pet/SKILL.md" "previous skill"
+    assert_not_contains "$target_skills/skills/.curated/hatch-pet/SKILL.md" "new skill"
+    assert_contains "$output_log" "Bundled skills failed post-copy validation"
+    [ -z "$(find "$(dirname "$target_skills")" -mindepth 1 -maxdepth 1 -type d -name '.skills.tmp.*' -print -quit)" ] \
+        || fail "Expected post-copy validation failure to leave no staging directory"
+}
+
+test_upstream_bundled_skills_replaces_target_symlink_safely() {
+    info "Checking bundled skills target symlink replacement"
+    local workspace="$TMP_DIR/upstream-bundled-skills-target-symlink"
+    local source_skills="$workspace/source-skills"
+    local target_skills="$workspace/install/resources/skills"
+    local external_target="$workspace/external-target"
+
+    mkdir -p "$source_skills/skills/.curated/hatch-pet" "$external_target" "$(dirname "$target_skills")"
+    printf '%s\n' 'new skill' > "$source_skills/skills/.curated/hatch-pet/SKILL.md"
+    printf '%s\n' 'external state' > "$external_target/existing.txt"
+    ln -s "$external_target" "$target_skills"
+
+    (
+        warn() { echo "[WARN] $*" >&2; }
+        info() { echo "[INFO] $*" >&2; }
+        # shellcheck disable=SC1091
+        source "$REPO_DIR/scripts/lib/bundled-plugins.sh"
+        stage_upstream_bundled_skills "$source_skills" "$target_skills"
+    )
+
+    [ ! -L "$target_skills" ] || fail "Expected target symlink to be replaced, not followed"
+    assert_contains "$target_skills/skills/.curated/hatch-pet/SKILL.md" "new skill"
+    assert_contains "$external_target/existing.txt" "external state"
+    [ ! -e "$external_target/skills" ] || fail "Expected external symlink target to remain untouched"
+}
+
+test_upstream_bundled_skills_backup_cleanup_failure_is_recoverable() {
+    info "Checking bundled skills backup cleanup failure is fail-closed and recoverable"
+    local workspace="$TMP_DIR/upstream-bundled-skills-cleanup-failure"
+    local source_skills="$workspace/source-skills"
+    local target_skills="$workspace/install/resources/skills"
+    local backup_skills="$(dirname "$target_skills")/.skills.backup.$$"
+    local output_log="$workspace/output.log"
+
+    mkdir -p "$source_skills/skills/.curated/hatch-pet" "$target_skills/skills/.curated/hatch-pet"
+    printf '%s\n' 'new skill' > "$source_skills/skills/.curated/hatch-pet/SKILL.md"
+    printf '%s\n' 'previous skill' > "$target_skills/skills/.curated/hatch-pet/SKILL.md"
+
+    (
+        warn() { echo "[WARN] $*" >&2; }
+        info() { echo "[INFO] $*" >&2; }
+        # shellcheck disable=SC1091
+        source "$REPO_DIR/scripts/lib/bundled-plugins.sh"
+        rm() {
+            if [ "$#" -eq 3 ] && [ "$1" = "-rf" ] && [ "$2" = "--" ] &&
+                [ "$3" = "$backup_skills" ] && { [ -e "$backup_skills" ] || [ -L "$backup_skills" ]; }; then
+                return 1
+            fi
+            command rm "$@"
+        }
+        if stage_upstream_bundled_skills "$source_skills" "$target_skills"; then
+            fail "Expected bundled skills backup cleanup failure to fail staging"
+        fi
+    ) >"$output_log" 2>&1
+
+    assert_contains "$target_skills/skills/.curated/hatch-pet/SKILL.md" "new skill"
+    assert_contains "$backup_skills/skills/.curated/hatch-pet/SKILL.md" "previous skill"
+    assert_contains "$output_log" "Failed to clean previous bundled skills backup"
+
+    (
+        warn() { echo "[WARN] $*" >&2; }
+        info() { echo "[INFO] $*" >&2; }
+        # shellcheck disable=SC1091
+        source "$REPO_DIR/scripts/lib/bundled-plugins.sh"
+        stage_upstream_bundled_skills "$source_skills" "$target_skills"
+    )
+
+    assert_contains "$target_skills/skills/.curated/hatch-pet/SKILL.md" "new skill"
+    [ ! -e "$backup_skills" ] || fail "Expected second staging run to clean the stale backup"
+}
+
+test_upstream_bundled_skills_stage_failure_restores_target() {
+    info "Checking bundled skills staging restores the previous target on failure"
+    local workspace="$TMP_DIR/upstream-bundled-skills-failure"
+    local source_skills="$workspace/source-skills"
+    local target_skills="$workspace/install/resources/skills"
+    local output_log="$workspace/output.log"
+
+    mkdir -p "$source_skills/skills/.curated/hatch-pet" "$target_skills/skills/.curated/hatch-pet"
+    printf '%s\n' 'new skill' > "$source_skills/skills/.curated/hatch-pet/SKILL.md"
+    printf '%s\n' 'previous skill' > "$target_skills/skills/.curated/hatch-pet/SKILL.md"
+
+    (
+        warn() { echo "[WARN] $*" >&2; }
+        info() { echo "[INFO] $*" >&2; }
+        # shellcheck disable=SC1091
+        source "$REPO_DIR/scripts/lib/bundled-plugins.sh"
+        mv() {
+            if [ "$#" -eq 3 ] && [ "$1" = "--" ] &&
+                [[ "$2" == "$(dirname "$target_skills")/.skills.tmp."* ]] &&
+                [ "$3" = "$target_skills" ]; then
+                return 1
+            fi
+            command mv "$@"
+        }
+        if stage_upstream_bundled_skills "$source_skills" "$target_skills"; then
+            fail "Expected bundled skills staging to fail when target promotion fails"
+        fi
+    ) >"$output_log" 2>&1
+
+    assert_contains "$target_skills/skills/.curated/hatch-pet/SKILL.md" "previous skill"
+    assert_not_contains "$target_skills/skills/.curated/hatch-pet/SKILL.md" "new skill"
+    assert_contains "$output_log" "previous target was restored"
+}
+
 test_portable_bundled_plugins_staging() {
     info "Checking portable upstream bundled plugin staging"
     local workspace="$TMP_DIR/portable-bundled-plugins"
@@ -9702,6 +9993,13 @@ main() {
     test_browser_use_node_repl_fallback_runtime
     test_browser_use_file_url_policy_patch_behavior
     test_browser_plugin_renamed_upstream_staging
+    test_upstream_bundled_skills_staging
+    test_upstream_bundled_skills_validator_guards
+    test_upstream_bundled_skills_rejects_unsafe_source
+    test_upstream_bundled_skills_post_copy_validation
+    test_upstream_bundled_skills_replaces_target_symlink_safely
+    test_upstream_bundled_skills_backup_cleanup_failure_is_recoverable
+    test_upstream_bundled_skills_stage_failure_restores_target
     test_portable_bundled_plugins_staging
     test_portable_bundled_plugins_reject_unsafe_content
     test_portable_bundled_plugin_validator_guards
