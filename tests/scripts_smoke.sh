@@ -41,6 +41,7 @@ TRUE_BIN="$(PATH="$HOST_TOOL_PATH" type -P true)"
 TMP_DIR="$(mktemp -d)"
 
 export CODEX_LINUX_FEATURES_CONFIG="$REPO_DIR/linux-features/features.example.json"
+export CODEX_LINUX_SETTINGS_FILE="$TMP_DIR/codex-linux-settings.json"
 
 cleanup() {
     rm -rf "$TMP_DIR"
@@ -4649,15 +4650,12 @@ test_bundled_plugin_builders_accept_prebuilt_binaries() {
     local backend="$workspace/codex-computer-use-linux"
     local cosmic="$workspace/codex-computer-use-cosmic"
     local host="$workspace/codex-chrome-extension-host"
-    local chatgpt_icon="$workspace/chatgpt.png"
-    local staged_plugins="$workspace/plugins"
     local output_log="$workspace/output.log"
 
     mkdir -p "$workspace"
     printf '#!/usr/bin/env bash\n' > "$backend"
     printf '#!/usr/bin/env bash\n' > "$cosmic"
     printf '#!/usr/bin/env bash\n' > "$host"
-    printf '%s\n' 'chatgpt-icon' > "$chatgpt_icon"
     chmod +x "$backend" "$cosmic" "$host"
 
     (
@@ -4665,8 +4663,6 @@ test_bundled_plugin_builders_accept_prebuilt_binaries() {
         CODEX_LINUX_COMPUTER_USE_BACKEND_SOURCE="$backend"
         CODEX_LINUX_COMPUTER_USE_COSMIC_SOURCE="$cosmic"
         CODEX_CHROME_EXTENSION_HOST_SOURCE="$host"
-        LINUX_ICON_SOURCE="$chatgpt_icon"
-        ICON_SOURCE="$REPO_DIR/assets/codex.png"
         info() { echo "[INFO] $*" >&2; }
         warn() { echo "[WARN] $*" >&2; }
         error() { echo "[ERROR] $*" >&2; exit 1; }
@@ -4674,7 +4670,6 @@ test_bundled_plugin_builders_accept_prebuilt_binaries() {
         source "$REPO_DIR/scripts/lib/bundled-plugins.sh"
         build_linux_computer_use_backend
         build_chrome_extension_host
-        stage_linux_computer_use_plugin "$staged_plugins"
     ) > "$output_log" 2>&1
 
     assert_contains "$output_log" "Using prebuilt Linux Computer Use backend"
@@ -4682,10 +4677,178 @@ test_bundled_plugin_builders_accept_prebuilt_binaries() {
     assert_contains "$output_log" "$backend"
     assert_contains "$output_log" "$cosmic"
     assert_contains "$output_log" "$host"
-    cmp -s "$chatgpt_icon" "$staged_plugins/computer-use/assets/app-icon.png" \
-        || fail "Expected the bundled Computer Use plugin to use the selected ChatGPT icon"
-    [ ! -e "$staged_plugins/computer-use/bin/computer-use-linux-cosmic" ] \
-        || fail "Vendored/prebuilt Computer Use staging must not add the external helper alias"
+}
+
+test_bundled_plugin_computer_use_preserves_upstream_shell() {
+    info "Checking Linux Computer Use preserves the upstream plugin shell"
+    local workspace="$TMP_DIR/bundled-plugin-computer-use-upstream-shell"
+    local upstream_plugin="$workspace/ChatGPT.app/Contents/Resources/plugins/openai-bundled/plugins/computer-use"
+    local backend="$workspace/codex-computer-use-linux"
+    local cosmic="$workspace/codex-computer-use-cosmic"
+    local staged_plugins="$workspace/plugins"
+    local output_log="$workspace/output.log"
+    local manifest="$staged_plugins/computer-use/.codex-plugin/plugin.json"
+
+    mkdir -p \
+        "$upstream_plugin/.codex-plugin" \
+        "$upstream_plugin/assets" \
+        "$upstream_plugin/scripts" \
+        "$upstream_plugin/skills/computer-use" \
+        "$upstream_plugin/Codex Computer Use.app/Contents/MacOS"
+    printf '#!/usr/bin/env bash\n' > "$backend"
+    printf '#!/usr/bin/env bash\n' > "$cosmic"
+    chmod +x "$backend" "$cosmic"
+    printf '%s\n' '{"mcpServers":{"computer-use":{"command":"./Codex Computer Use.app/Contents/MacOS/client","args":["mcp"],"cwd":"."}}}' > "$upstream_plugin/.mcp.json"
+    printf '%s\n' '{"name":"computer-use","version":"1.0.1000387","description":"Control desktop apps on macOS from ChatGPT through Computer Use. Prefer purpose-built connectors, APIs, or CLIs.","author":{"name":"OpenAI","url":"https://openai.com/"},"license":"Proprietary","keywords":["computer-use","desktop-control","macos","automation","accessibility"],"mcpServers":"./.mcp.json","skills":"./skills/","interface":{"displayName":"Computer Use","shortDescription":"Control Mac apps from ChatGPT","longDescription":"Mac Computer Use lets ChatGPT use any app on your computer.","developerName":"OpenAI","logo":"./assets/app-icon.png","defaultPrompt":["Play a playlist to help me lock in","Build & run my open Xcode project and test it for bugs","Play a game in Chess.app"]}}' > "$upstream_plugin/.codex-plugin/plugin.json"
+    printf '%s\n' '---' 'name: computer-use' 'description: Control local Mac apps through Computer Use.' '---' '' '# Computer Use' '' 'Prefer a dedicated plugin or skill when it can complete the task.' '' '# Computer Use Confirmations Policy' '' 'Confirm risky actions.' > "$upstream_plugin/skills/computer-use/SKILL.md"
+    printf '%s\n' 'export const upstreamComputerUseClient = true;' > "$upstream_plugin/scripts/computer-use-client.mjs"
+    printf '%s\n' '# Upstream node repl contract' > "$upstream_plugin/.codex-plugin/computer-use-node-repl.md"
+    printf '%s\n' 'upstream-icon' > "$upstream_plugin/assets/app-icon.png"
+    printf '%s\n' 'mac-binary' > "$upstream_plugin/Codex Computer Use.app/Contents/MacOS/client"
+
+    (
+        SCRIPT_DIR="$REPO_DIR"
+        CODEX_LINUX_COMPUTER_USE_BACKEND_SOURCE="$backend"
+        CODEX_LINUX_COMPUTER_USE_COSMIC_SOURCE="$cosmic"
+        ICON_SOURCE="$REPO_DIR/assets/codex.png"
+        info() { echo "[INFO] $*" >&2; }
+        warn() { echo "[WARN] $*" >&2; }
+        error() { echo "[ERROR] $*" >&2; exit 1; }
+        # shellcheck disable=SC1091
+        source "$REPO_DIR/scripts/lib/bundled-plugins.sh"
+        stage_linux_computer_use_plugin "$staged_plugins" "$upstream_plugin"
+    ) > "$output_log" 2>&1
+
+    assert_contains "$output_log" "Computer Use plugin base staged from upstream DMG"
+    assert_contains "$manifest" '"version": "1.0.1000387"'
+    assert_contains "$manifest" '"name": "computer-use"'
+    assert_contains "$manifest" '"name": "OpenAI"'
+    assert_contains "$manifest" '"skills": "./skills/"'
+    assert_contains "$manifest" 'Control desktop apps on Linux from ChatGPT through Computer Use.'
+    assert_not_contains "$manifest" 'macOS'
+    assert_contains "$staged_plugins/computer-use/skills/computer-use/SKILL.md" 'Control local Linux apps through Computer Use.'
+    assert_contains "$staged_plugins/computer-use/skills/computer-use/SKILL.md" 'Computer Use Confirmations Policy'
+    python3 - "$staged_plugins/computer-use/skills/computer-use/SKILL.md" <<'PY' \
+        || fail "Expected blank-line separation before the preserved confirmation policy"
+import pathlib
+import sys
+
+skill = pathlib.Path(sys.argv[1]).read_text()
+assert "risky UI actions.\n\n# Computer Use Confirmations Policy" in skill
+PY
+    assert_file_exists "$staged_plugins/computer-use/scripts/computer-use-client.mjs"
+    assert_file_exists "$staged_plugins/computer-use/.codex-plugin/computer-use-node-repl.md"
+    assert_contains "$staged_plugins/computer-use/.mcp.json" '"command": "./bin/codex-computer-use-linux"'
+    cmp -s "$upstream_plugin/assets/app-icon.png" "$staged_plugins/computer-use/assets/app-icon.png" \
+        || fail "Expected the exact upstream Computer Use icon bytes to be preserved"
+    [ ! -e "$staged_plugins/computer-use/Codex Computer Use.app" ] \
+        || fail "Expected the macOS Computer Use app payload to be removed"
+}
+
+test_bundled_plugin_computer_use_requires_upstream_shell() {
+    info "Checking Linux Computer Use refuses the repo-authored fallback shell"
+    local workspace="$TMP_DIR/bundled-plugin-computer-use-requires-upstream"
+    local backend="$workspace/codex-computer-use-linux"
+    local cosmic="$workspace/codex-computer-use-cosmic"
+    local staged_plugins="$workspace/plugins"
+    local output_log="$workspace/output.log"
+
+    mkdir -p "$workspace"
+    printf '#!/usr/bin/env bash\n' > "$backend"
+    printf '#!/usr/bin/env bash\n' > "$cosmic"
+    chmod +x "$backend" "$cosmic"
+
+    if (
+        SCRIPT_DIR="$REPO_DIR"
+        CODEX_LINUX_COMPUTER_USE_BACKEND_SOURCE="$backend"
+        CODEX_LINUX_COMPUTER_USE_COSMIC_SOURCE="$cosmic"
+        ICON_SOURCE="$REPO_DIR/assets/codex.png"
+        info() { echo "[INFO] $*" >&2; }
+        warn() { echo "[WARN] $*" >&2; }
+        error() { echo "[ERROR] $*" >&2; exit 1; }
+        # shellcheck disable=SC1091
+        source "$REPO_DIR/scripts/lib/bundled-plugins.sh"
+        stage_linux_computer_use_plugin "$staged_plugins"
+    ) > "$output_log" 2>&1; then
+        fail "Expected Computer Use staging without the upstream DMG plugin to fail"
+    fi
+
+    assert_contains "$output_log" "Upstream Computer Use plugin shell is required"
+    [ ! -e "$staged_plugins/computer-use" ] \
+        || fail "Expected failed Computer Use staging to leave no plugin shell"
+}
+
+test_bundled_plugin_computer_use_rejects_malformed_upstream_manifest() {
+    info "Checking Linux Computer Use rejects malformed upstream plugin metadata"
+    local workspace="$TMP_DIR/bundled-plugin-computer-use-malformed-manifest"
+    local upstream_plugin="$workspace/upstream/plugins/computer-use"
+    local backend="$workspace/codex-computer-use-linux"
+    local cosmic="$workspace/codex-computer-use-cosmic"
+    local staged_plugins="$workspace/plugins"
+    local output_log="$workspace/output.log"
+
+    mkdir -p \
+        "$upstream_plugin/.codex-plugin" \
+        "$upstream_plugin/assets" \
+        "$upstream_plugin/scripts" \
+        "$upstream_plugin/skills/computer-use"
+    printf '#!/usr/bin/env bash\n' > "$backend"
+    printf '#!/usr/bin/env bash\n' > "$cosmic"
+    chmod +x "$backend" "$cosmic"
+    printf '%s\n' '{malformed' > "$upstream_plugin/.codex-plugin/plugin.json"
+    printf '%s\n' '# Upstream node repl contract' > "$upstream_plugin/.codex-plugin/computer-use-node-repl.md"
+    printf '%s\n' '{"mcpServers":{}}' > "$upstream_plugin/.mcp.json"
+    printf '%s\n' 'upstream-icon' > "$upstream_plugin/assets/app-icon.png"
+    printf '%s\n' 'export const upstreamComputerUseClient = true;' > "$upstream_plugin/scripts/computer-use-client.mjs"
+    printf '%s\n' '---' 'name: computer-use' '---' > "$upstream_plugin/skills/computer-use/SKILL.md"
+
+    if (
+        SCRIPT_DIR="$REPO_DIR"
+        CODEX_LINUX_COMPUTER_USE_BACKEND_SOURCE="$backend"
+        CODEX_LINUX_COMPUTER_USE_COSMIC_SOURCE="$cosmic"
+        info() { echo "[INFO] $*" >&2; }
+        warn() { echo "[WARN] $*" >&2; }
+        error() { echo "[ERROR] $*" >&2; exit 1; }
+        # shellcheck disable=SC1091
+        source "$REPO_DIR/scripts/lib/bundled-plugins.sh"
+        stage_linux_computer_use_plugin "$staged_plugins" "$upstream_plugin"
+    ) > "$output_log" 2>&1; then
+        fail "Expected malformed Computer Use plugin metadata to fail staging"
+    fi
+
+    assert_contains "$output_log" "SyntaxError"
+}
+
+test_bundled_plugin_resources_rejects_enabled_computer_use_staging_failure() {
+    info "Checking enabled Computer Use rejects a missing upstream plugin shell"
+    local workspace="$TMP_DIR/bundled-plugin-computer-use-required-build"
+    local app_dir="$workspace/ChatGPT.app"
+    local marketplace="$app_dir/Contents/Resources/plugins/openai-bundled/.agents/plugins/marketplace.json"
+    local output_log="$workspace/output.log"
+
+    mkdir -p "$(dirname "$marketplace")" "$workspace/install/resources"
+    printf '%s\n' '{"plugins":[]}' > "$marketplace"
+
+    if (
+        SCRIPT_DIR="$REPO_DIR"
+        INSTALL_DIR="$workspace/install"
+        export CODEX_LINUX_ENABLE_COMPUTER_USE_UI=1
+        info() { echo "[INFO] $*" >&2; }
+        warn() { echo "[WARN] $*" >&2; }
+        error() { echo "[ERROR] $*" >&2; exit 1; }
+        # shellcheck disable=SC1091
+        source "$REPO_DIR/scripts/lib/bundled-plugins.sh"
+        stage_upstream_bundled_skills() { return 0; }
+        list_portable_bundled_plugins() { return 0; }
+        find_browser_plugin_source() { return 1; }
+        stage_chrome_plugin_from_upstream() { return 1; }
+        stage_linux_computer_use_plugin() { return 1; }
+        install_bundled_plugin_resources "$app_dir"
+    ) > "$output_log" 2>&1; then
+        fail "Expected enabled Computer Use staging failure to reject the build"
+    fi
+
+    assert_contains "$output_log" "Enabled Linux Computer Use plugin staging failed"
 }
 
 test_bundled_plugin_system_computer_use_preserves_cosmic_helper_name() {
@@ -4695,16 +4858,31 @@ test_bundled_plugin_system_computer_use_preserves_cosmic_helper_name() {
     local system_bin="$fake_home/.cargo/bin"
     local backend="$system_bin/computer-use-linux"
     local cosmic="$system_bin/computer-use-linux-cosmic"
+    local upstream_plugin="$workspace/upstream/plugins/computer-use"
     local staged_plugins="$workspace/plugins"
     local output_log="$workspace/output.log"
 
-    mkdir -p "$system_bin"
+    mkdir -p \
+        "$system_bin" \
+        "$upstream_plugin/.codex-plugin" \
+        "$upstream_plugin/assets" \
+        "$upstream_plugin/scripts" \
+        "$upstream_plugin/skills/computer-use"
     printf '%s\n' \
         '#!/usr/bin/env bash' \
         'helper="$(dirname "$0")/computer-use-linux-cosmic"' \
         '[ -x "$helper" ] || { echo "missing COSMIC helper: $helper" >&2; exit 9; }' \
         '"$helper"' > "$backend"
     printf '%s\n' '#!/usr/bin/env bash' 'echo cosmic-ok' > "$cosmic"
+    printf '%s\n' '{"name":"computer-use","version":"test","interface":{"logo":"./assets/app-icon.png"}}' \
+        > "$upstream_plugin/.codex-plugin/plugin.json"
+    printf '%s\n' '# fixture node repl contract' \
+        > "$upstream_plugin/.codex-plugin/computer-use-node-repl.md"
+    printf '%s\n' '{"mcpServers":{}}' > "$upstream_plugin/.mcp.json"
+    printf '%s\n' 'fixture-icon' > "$upstream_plugin/assets/app-icon.png"
+    printf '%s\n' 'export const fixture = true;' > "$upstream_plugin/scripts/computer-use-client.mjs"
+    printf '%s\n' '---' 'name: computer-use' '---' '' '# Computer Use Confirmations Policy' \
+        > "$upstream_plugin/skills/computer-use/SKILL.md"
     chmod +x "$backend" "$cosmic"
 
     (
@@ -4717,7 +4895,7 @@ test_bundled_plugin_system_computer_use_preserves_cosmic_helper_name() {
         error() { echo "[ERROR] $*" >&2; exit 1; }
         # shellcheck disable=SC1091
         source "$REPO_DIR/scripts/lib/bundled-plugins.sh"
-        stage_linux_computer_use_plugin "$staged_plugins"
+        stage_linux_computer_use_plugin "$staged_plugins" "$upstream_plugin"
         "$staged_plugins/computer-use/bin/codex-computer-use-linux"
     ) > "$output_log" 2>&1
 
@@ -9992,6 +10170,10 @@ main() {
     test_native_module_rebuild_uses_local_electron_rebuild_toolchain
     test_native_module_rebuild_accepts_prebuilt_source
     test_bundled_plugin_builders_accept_prebuilt_binaries
+    test_bundled_plugin_computer_use_preserves_upstream_shell
+    test_bundled_plugin_computer_use_requires_upstream_shell
+    test_bundled_plugin_computer_use_rejects_malformed_upstream_manifest
+    test_bundled_plugin_resources_rejects_enabled_computer_use_staging_failure
     test_notification_actions_bridge_accepts_prebuilt_binary
     test_bundled_plugin_system_computer_use_preserves_cosmic_helper_name
     test_browser_use_node_repl_fallback_runtime

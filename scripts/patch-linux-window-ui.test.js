@@ -33,6 +33,7 @@ const {
   applyLinuxComputerUseFeaturePatch,
   applyLinuxNativeDesktopAppsHandlerPatch,
   applyLinuxComputerUsePluginGatePatch,
+  applyLinuxComputerUsePluginsPageAvailabilityPatch,
   applyLinuxComputerUseRendererAvailabilityPatch,
   isComputerUseUiEnabled,
 } = require("./patches/impl/computer-use.js");
@@ -972,6 +973,7 @@ test("default core patch descriptors are grouped and unique", () => {
     "subagent-nickname-metadata-shape",
     "local-environment-action-modal-draft",
     "linux-computer-use-ui-availability",
+    "linux-computer-use-plugins-page-availability",
     "linux-app-updater-bridge",
     "browser-annotation-screenshot",
     "composer-persistent-rate-limit-footer",
@@ -7496,17 +7498,38 @@ test("keeps object-helper Computer Use host compatibility on Linux when platform
   );
 });
 
-test("Computer Use availability descriptor is required and only targets the current settings bundle", () => {
+test("Computer Use availability descriptors cover current settings and Plugins bundles", () => {
   const descriptors = require("./patches/core/all-linux/webview/computer-use-ui/patch.js");
-  assert.equal(descriptors.length, 1);
-  const [descriptor] = descriptors;
+  assert.equal(descriptors.length, 2);
+  const settingsDescriptor = descriptors.find(
+    (descriptor) => descriptor.id === "linux-computer-use-ui-availability",
+  );
+  const pluginsDescriptor = descriptors.find(
+    (descriptor) => descriptor.id === "linux-computer-use-plugins-page-availability",
+  );
 
-  assert.equal(descriptor.id, "linux-computer-use-ui-availability");
-  assert.equal(descriptor.ciPolicy, "required-upstream");
-  assert.match("computer-use-settings-B9iEdDjp.js", descriptor.pattern);
-  assert.doesNotMatch("use-model-settings-5PHNqYL4.js", descriptor.pattern);
-  assert.doesNotMatch("use-is-plugins-enabled-current.js", descriptor.pattern);
-  assert.doesNotMatch("use-native-apps.electron-DhuUEit1.js", descriptor.pattern);
+  assert.equal(settingsDescriptor?.ciPolicy, "required-upstream");
+  assert.match("computer-use-settings-B9iEdDjp.js", settingsDescriptor.pattern);
+  assert.doesNotMatch("plugins-page-bnf47Vi4.js", settingsDescriptor.pattern);
+  assert.equal(pluginsDescriptor?.ciPolicy, "required-upstream");
+  assert.match("plugins-page-bnf47Vi4.js", pluginsDescriptor.pattern);
+  assert.doesNotMatch("computer-use-settings-B9iEdDjp.js", pluginsDescriptor.pattern);
+});
+
+test("keeps upstream Computer Use available on the current global Plugins page", () => {
+  const source =
+    "let Pt=[{plugin:{id:`installed`}}],Qt=[],nn=[],Vr=[{plugin:{id:`installed`}},{plugin:{id:`computer-use`}},{plugin:{id:`other-missing`}}]," +
+    "Ji=new Set([...Pt,...Qt??[],...nn??[]].map(e=>e.plugin.id))," +
+    "Xi=new Set(Vr.filter(e=>!Ji.has(e.plugin.id)).map(e=>e.plugin.id));";
+
+  const patched = applyPatchTwice(applyLinuxComputerUsePluginsPageAvailabilityPatch, source);
+
+  assert.match(
+    patched,
+    /Vr\.filter\(e=>!Ji\.has\(e\.plugin\.id\)&&e\.plugin\.id!==`computer-use`\)/,
+  );
+  const unavailable = vm.runInNewContext(`${patched};[...Xi]`);
+  assert.deepEqual(Array.from(unavailable), ["other-missing"]);
 });
 
 test("patches the current DMG Computer Use settings availability and plugin card atomically", () => {

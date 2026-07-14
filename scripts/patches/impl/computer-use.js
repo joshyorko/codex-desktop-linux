@@ -649,6 +649,29 @@ function applyLinuxComputerUseRendererAvailabilityPatch(currentSource) {
   return platformPredicateChanged ? patchedSource : currentSource;
 }
 
+function applyLinuxComputerUsePluginsPageAvailabilityPatch(currentSource) {
+  const alreadyPatchedPattern =
+    /new Set\(([A-Za-z_$][\w$]*)\.filter\(([A-Za-z_$][\w$]*)=>!([A-Za-z_$][\w$]*)\.has\(\2\.plugin\.id\)&&\2\.plugin\.id!==`computer-use`\)\.map\(([A-Za-z_$][\w$]*)=>\4\.plugin\.id\)\)/;
+  if (alreadyPatchedPattern.test(currentSource)) {
+    return currentSource;
+  }
+
+  const unavailableSetPattern =
+    /new Set\(([A-Za-z_$][\w$]*)\.filter\(([A-Za-z_$][\w$]*)=>!([A-Za-z_$][\w$]*)\.has\(\2\.plugin\.id\)\)\.map\(([A-Za-z_$][\w$]*)=>\4\.plugin\.id\)\)/;
+  if (!unavailableSetPattern.test(currentSource)) {
+    console.warn(
+      "WARN: Could not find current Plugins-page unavailable plugin set — skipping Linux Computer Use global availability patch",
+    );
+    return currentSource;
+  }
+
+  return currentSource.replace(
+    unavailableSetPattern,
+    (_match, pluginsVar, pluginVar, installedIdsVar, mappedPluginVar) =>
+      `new Set(${pluginsVar}.filter(${pluginVar}=>!${installedIdsVar}.has(${pluginVar}.plugin.id)&&${pluginVar}.plugin.id!==\`computer-use\`).map(${mappedPluginVar}=>${mappedPluginVar}.plugin.id))`,
+  );
+}
+
 function findHandlerValue(source, methodName) {
   const key = `${JSON.stringify(methodName)}:`;
   const keyIndex = source.indexOf(key);
@@ -829,6 +852,7 @@ module.exports = {
   applyLinuxComputerUseFeaturePatch,
   applyLinuxNativeDesktopAppsHandlerPatch,
   applyLinuxComputerUsePluginGatePatch,
+  applyLinuxComputerUsePluginsPageAvailabilityPatch,
   applyLinuxComputerUseRendererAvailabilityPatch,
   isComputerUseUiEnabled,
 };

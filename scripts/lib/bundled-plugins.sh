@@ -342,18 +342,119 @@ build_linux_computer_use_backend() {
     printf '%s\n%s\n' "$backend_binary" "$cosmic_helper_binary"
 }
 
+stage_linux_computer_use_plugin_base() {
+    local target_plugin="$1"
+    local upstream_plugin="${2:-}"
+    local required_path=""
+
+    if [ -z "$upstream_plugin" ]; then
+        warn "Upstream Computer Use plugin shell is required"
+        return 1
+    fi
+    for required_path in \
+        ".codex-plugin/plugin.json" \
+        ".codex-plugin/computer-use-node-repl.md" \
+        ".mcp.json" \
+        "assets/app-icon.png" \
+        "scripts/computer-use-client.mjs" \
+        "skills/computer-use/SKILL.md"; do
+        if [ ! -f "$upstream_plugin/$required_path" ]; then
+            warn "Upstream Computer Use plugin is missing $required_path"
+            return 1
+        fi
+    done
+
+    rm -rf "$target_plugin" || return 1
+    mkdir -p "$target_plugin" || return 1
+    cp -R "$upstream_plugin/." "$target_plugin/" || return 1
+    rm -rf "$target_plugin/Codex Computer Use.app" || return 1
+    find "$target_plugin" \( -name '*:com.apple.*' -o -name '.gitkeep' -o -name '.DS_Store' \) -delete || return 1
+    info "Computer Use plugin base staged from upstream DMG"
+}
+
+patch_linux_computer_use_plugin_metadata() {
+    local target_plugin="$1"
+
+    cat > "$target_plugin/.mcp.json" <<'JSON' || return 1
+{
+  "mcpServers": {
+    "computer-use": {
+      "command": "./bin/codex-computer-use-linux",
+      "args": ["mcp"],
+      "cwd": "."
+    }
+  }
+}
+JSON
+
+    node - "$target_plugin/.codex-plugin/plugin.json" "$target_plugin/skills/computer-use/SKILL.md" <<'NODE' || return 1
+const fs = require("node:fs");
+
+const manifestPath = process.argv[2];
+const skillPath = process.argv[3];
+const plugin = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+const interfaceConfig = plugin.interface ?? {};
+
+plugin.name = "computer-use";
+plugin.description =
+  "Control desktop apps on Linux from ChatGPT through Computer Use. Prefer purpose-built connectors, APIs, or CLIs.";
+plugin.keywords = Array.from(
+  new Set(
+    [
+      ...(Array.isArray(plugin.keywords) ? plugin.keywords : []),
+      "linux",
+      "wayland",
+    ].filter((keyword) => keyword !== "macos"),
+  ),
+);
+plugin.mcpServers = "./.mcp.json";
+plugin.skills = "./skills/";
+plugin.interface = {
+  ...interfaceConfig,
+  displayName: "Computer Use",
+  shortDescription: "Control Linux apps from ChatGPT",
+  longDescription:
+    "Linux Computer Use lets ChatGPT use any app on your computer, including your web browsers and files you allow it to access. It may take screenshots or page content while working. You stay in control: you choose which apps to allow ChatGPT to access and can stop actions at any time.",
+  defaultPrompt: [
+    "Play a playlist to help me lock in",
+    "Use my open desktop apps to help complete this task",
+    "Inspect the current app and continue from where I left off",
+  ],
+};
+fs.writeFileSync(manifestPath, `${JSON.stringify(plugin, null, 2)}\n`);
+
+if (fs.existsSync(skillPath)) {
+  let skill = fs.readFileSync(skillPath, "utf8");
+  skill = skill
+    .replace(/local Mac apps/g, "local Linux apps")
+    .replace(/local Mac app/g, "local Linux app")
+    .replace(/Mac apps/g, "Linux apps")
+    .replace(/Mac app/g, "Linux app");
+  const confirmationHeading = "# Computer Use Confirmations Policy";
+  if (!skill.includes("# Linux Computer Use Runtime") && skill.includes(confirmationHeading)) {
+    const linuxRuntime = [
+      "# Linux Computer Use Runtime",
+      "",
+      "Begin every Computer Use turn with `get_app_state`. If diagnostics report that GNOME accessibility is disabled, call `setup_accessibility` before asking the user to retry. Use `list_windows` and `focused_window` before targeted keyboard input, and re-read app state after UI actions so element indexes and focus evidence stay fresh.",
+      "",
+      "Prefer accessibility element actions over coordinates when available. Fall back to screenshots and coordinates only when the accessibility tree is incomplete, and keep the upstream confirmation policy below for risky UI actions.",
+      "",
+      "",
+    ].join("\n");
+    skill = skill.replace(confirmationHeading, `${linuxRuntime}${confirmationHeading}`);
+  }
+  fs.writeFileSync(skillPath, skill);
+}
+NODE
+}
+
 stage_linux_computer_use_plugin() {
     local target_plugins="$1"
-    local plugin_template="$SCRIPT_DIR/plugins/openai-bundled/plugins/computer-use"
+    local upstream_plugin="${2:-}"
     local build_outputs=""
     local backend_binary=""
     local cosmic_helper_binary=""
     local target_plugin="$target_plugins/computer-use"
-
-    if [ ! -d "$plugin_template" ]; then
-        warn "Linux Computer Use plugin template not found at $plugin_template"
-        return 1
-    fi
 
     if ! build_outputs="$(build_linux_computer_use_backend)"; then
         return 1
@@ -361,28 +462,30 @@ stage_linux_computer_use_plugin() {
     backend_binary="$(printf '%s\n' "$build_outputs" | sed -n '1p')"
     cosmic_helper_binary="$(printf '%s\n' "$build_outputs" | sed -n '2p')"
 
-    rm -rf "$target_plugin"
-    mkdir -p "$target_plugin"
-    cp -R "$plugin_template/." "$target_plugin/"
-    mkdir -p "$target_plugin/bin"
-    cp "$backend_binary" "$target_plugin/bin/codex-computer-use-linux"
-    cp "$cosmic_helper_binary" "$target_plugin/bin/codex-computer-use-cosmic"
-    chmod 0755 "$target_plugin/bin/codex-computer-use-linux"
-    chmod 0755 "$target_plugin/bin/codex-computer-use-cosmic"
+    if ! stage_linux_computer_use_plugin_base "$target_plugin" "$upstream_plugin"; then
+        return 1
+    fi
+    patch_linux_computer_use_plugin_metadata "$target_plugin" || return 1
+    mkdir -p "$target_plugin/bin" || return 1
+    cp "$backend_binary" "$target_plugin/bin/codex-computer-use-linux" || return 1
+    cp "$cosmic_helper_binary" "$target_plugin/bin/codex-computer-use-cosmic" || return 1
+    chmod 0755 "$target_plugin/bin/codex-computer-use-linux" || return 1
+    chmod 0755 "$target_plugin/bin/codex-computer-use-cosmic" || return 1
     if [ "${backend_binary##*/}" = "computer-use-linux" ]; then
         # The published backend resolves its COSMIC helper by this sibling name.
-        cp "$cosmic_helper_binary" "$target_plugin/bin/computer-use-linux-cosmic"
-        chmod 0755 "$target_plugin/bin/computer-use-linux-cosmic"
+        cp "$cosmic_helper_binary" "$target_plugin/bin/computer-use-linux-cosmic" || return 1
+        chmod 0755 "$target_plugin/bin/computer-use-linux-cosmic" || return 1
     fi
 
-    local plugin_icon_source="${LINUX_ICON_SOURCE:-$ICON_SOURCE}"
-    if [ -f "$plugin_icon_source" ]; then
-        mkdir -p "$target_plugin/assets"
-        cp "$plugin_icon_source" "$target_plugin/assets/app-icon.png"
-    fi
-
-    find "$target_plugin" \( -name '*:com.apple.*' -o -name '.gitkeep' \) -delete
+    find "$target_plugin" \( -name '*:com.apple.*' -o -name '.gitkeep' -o -name '.DS_Store' \) -delete || return 1
     return 0
+}
+
+is_linux_computer_use_ui_enabled() {
+    node - "$SCRIPT_DIR/scripts/patches/impl/computer-use.js" <<'NODE'
+const { isComputerUseUiEnabled } = require(process.argv[2]);
+process.exit(isComputerUseUiEnabled(process.env) ? 0 : 1);
+NODE
 }
 
 is_host_linux_elf_executable() {
@@ -1789,9 +1892,15 @@ install_bundled_plugin_resources() {
         include_chrome=1
     fi
 
-    if stage_linux_computer_use_plugin "$bundled_plugins_dir/plugins"; then
+    if stage_linux_computer_use_plugin \
+        "$bundled_plugins_dir/plugins" \
+        "$bundled_source_root/plugins/computer-use"; then
         include_computer_use=1
     else
+        if is_linux_computer_use_ui_enabled; then
+            warn "Enabled Linux Computer Use plugin staging failed"
+            return 1
+        fi
         warn "Linux Computer Use plugin will be unavailable"
     fi
 

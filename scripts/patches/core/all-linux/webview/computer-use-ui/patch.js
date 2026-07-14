@@ -5,6 +5,7 @@ const {
 } = require("../../../../descriptor.js");
 const {
   applyLinuxComputerUseRendererAvailabilityPatch,
+  applyLinuxComputerUsePluginsPageAvailabilityPatch,
 } = require("../../../../impl/computer-use.js");
 
 module.exports = [
@@ -18,5 +19,16 @@ module.exports = [
     missingDescription: "Computer Use availability bundle",
     skipDescription: "Linux Computer Use UI availability patch",
     apply: applyLinuxComputerUseRendererAvailabilityPatch,
+  }),
+  webviewAssetPatch({
+    id: "linux-computer-use-plugins-page-availability",
+    phase: "webview-asset",
+    order: 1101,
+    ciPolicy: "required-upstream",
+    enabled: (context) => context.enableComputerUseUi,
+    pattern: /^plugins-page.*\.js$/,
+    missingDescription: "global Plugins page bundle",
+    skipDescription: "Linux Computer Use global Plugins availability patch",
+    apply: applyLinuxComputerUsePluginsPageAvailabilityPatch,
   }),
 ];
