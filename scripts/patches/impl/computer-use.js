@@ -543,10 +543,10 @@ function applyLinuxComputerUseRendererAvailabilityPatch(currentSource) {
   );
 
   const currentSettingsAvailabilityConsumerPattern =
-    /let ([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)\(([^)]*)\),\{platform:([A-Za-z_$][\w$]*)\}=([A-Za-z_$][\w$]*)\(\);/g;
+    /let ([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)\(([^)]*)\),\{platform:([A-Za-z_$][\w$]*)\}=([A-Za-z_$][\w$]*)\(\)([^;]*);/g;
   patchedSource = patchedSource.replace(
     currentSettingsAvailabilityConsumerPattern,
-    (match, availabilityVar, _hookVar, _hookArg, platformVar, _platformHookVar, offset) => {
+    (match, availabilityVar, _hookVar, _hookArg, platformVar, _platformHookVar, _trailingDeclarators, offset) => {
       const nextSource = patchedSource.slice(offset + match.length, offset + match.length + 3000);
       if (
         nextSource.startsWith(`${platformVar}===\`linux\`&&(${availabilityVar}={`) ||
@@ -581,7 +581,7 @@ function applyLinuxComputerUseRendererAvailabilityPatch(currentSource) {
       const contextStart = Math.max(0, offset - 900);
       const lookback = patchedSource.slice(contextStart, offset);
       const nextSource = patchedSource.slice(offset + match.length, offset + match.length + 800);
-      const platformVar = lookback.match(/\{computerUseAvailability:[A-Za-z_$][\w$]*,platform:([A-Za-z_$][\w$]*)\}=/)?.[1] ?? null;
+      const platformVar = lookback.match(/\{computerUseAvailability:[A-Za-z_$][\w$]*,platform:([A-Za-z_$][\w$]*)\}/)?.[1] ?? null;
       const selectorMatch = nextSource.match(
         new RegExp(
           String.raw`${computerUsePluginVar}=[A-Za-z_$][\w$]*\(${pluginsQueryVar}\.availablePlugins,([A-Za-z_$][\w$]*),${marketplacePathVar}\)`,
@@ -618,6 +618,23 @@ function applyLinuxComputerUseRendererAvailabilityPatch(currentSource) {
     );
   }
 
+  const hasCurrentSettingsContract =
+    currentSource.includes("computerUseAvailability:") &&
+    currentSource.includes(".available") &&
+    currentSource.includes(".availablePlugins");
+  if (
+    hasCurrentSettingsContract &&
+    (!/[A-Za-z_$][\w$]*===`linux`&&\([A-Za-z_$][\w$]*=\{\.\.\.[A-Za-z_$][\w$]*,available:!0,isFetching:!1,isLoading:!1\}\);/.test(
+      patchedSource,
+    ) ||
+      !patchedSource.includes("marketplaceName:`openai-bundled`"))
+  ) {
+    console.warn(
+      "WARN: Could not patch the complete current Computer Use settings contract — skipping Linux Computer Use UI availability patch",
+    );
+    return currentSource;
+  }
+
   if (availabilityChanged || nativeAppsGateChanged || availabilityAlreadyPatched()) {
     return patchedSource;
   }
@@ -630,138 +647,6 @@ function applyLinuxComputerUseRendererAvailabilityPatch(currentSource) {
   }
 
   return platformPredicateChanged ? patchedSource : currentSource;
-}
-
-function sharedComputerUseAvailabilityState(source) {
-  const unpatchedAvailabilityPattern =
-    /([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)\(\{areRequiredFeaturesEnabled:([A-Za-z_$][\w$]*),enabled:([A-Za-z_$][\w$]*),isAnyFeatureLoading:([A-Za-z_$][\w$]*),isComputerUseGateEnabled:([A-Za-z_$][\w$]*),isHostCompatiblePlatform:([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*)\),isPlatformLoading:([A-Za-z_$][\w$]*),windowType:`electron`\}\)/g;
-  const patchedAvailabilityPattern =
-    /([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)\(\{areRequiredFeaturesEnabled:([A-Za-z_$][\w$]*)===`linux`\|\|([A-Za-z_$][\w$]*),enabled:([A-Za-z_$][\w$]*),isAnyFeatureLoading:\3===`linux`\?!1:([A-Za-z_$][\w$]*),isComputerUseGateEnabled:\3===`linux`\|\|([A-Za-z_$][\w$]*),isHostCompatiblePlatform:\3===`linux`\|\|([A-Za-z_$][\w$]*)\(\3\),isPlatformLoading:([A-Za-z_$][\w$]*),windowType:`electron`\}\)/g;
-  const availabilityMatches = [];
-
-  for (const match of source.matchAll(unpatchedAvailabilityPattern)) {
-    const context = source.slice(Math.max(0, match.index - 1200), match.index + match[0].length);
-    if (context.includes("featureName:`computer_use`")) {
-      availabilityMatches.push({ helperName: match[7], state: "unpatched" });
-    }
-  }
-  for (const match of source.matchAll(patchedAvailabilityPattern)) {
-    const context = source.slice(Math.max(0, match.index - 1200), match.index + match[0].length);
-    if (context.includes("featureName:`computer_use`")) {
-      availabilityMatches.push({ helperName: match[8], state: "patched" });
-    }
-  }
-  if (availabilityMatches.length !== 1) {
-    return "invalid";
-  }
-
-  const availability = availabilityMatches[0];
-  const escapedHelperName = escapeRegExp(availability.helperName);
-  const unpatchedHelperPattern = new RegExp(
-    String.raw`function ${escapedHelperName}\(([A-Za-z_$][\w$]*)\)\{return \1===\x60macOS\x60\|\|\1===\x60windows\x60\}`,
-    "g",
-  );
-  const patchedHelperPattern = new RegExp(
-    String.raw`function ${escapedHelperName}\(([A-Za-z_$][\w$]*)\)\{return \1===\x60macOS\x60\|\|\1===\x60windows\x60\|\|\1===\x60linux\x60\}`,
-    "g",
-  );
-  const helperStates = [
-    ...[...source.matchAll(unpatchedHelperPattern)].map(() => "unpatched"),
-    ...[...source.matchAll(patchedHelperPattern)].map(() => "patched"),
-  ];
-  if (helperStates.length !== 1) {
-    return "invalid";
-  }
-
-  const nativeAppsPlatformPattern =
-    /([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)&&\(([A-Za-z_$][\w$]*)===`macOS`\|\|\3===`windows`(\|\|\3===`linux`)?\)/g;
-  const nativeAppsPlatformBoundaryPattern =
-    /[A-Za-z_$][\w$]*=[A-Za-z_$][\w$]*&&\(([A-Za-z_$][\w$]*)===`macOS`\|\|\1===`windows`(?:\|\|\1===`linux`)?\)/;
-  const nativeAppsStates = [];
-  for (const match of source.matchAll(nativeAppsPlatformPattern)) {
-    if (isNativeAppsPlatformGateContext(source, match.index + match[0].length, nativeAppsPlatformBoundaryPattern)) {
-      nativeAppsStates.push(match[4] == null ? "unpatched" : "patched");
-    }
-  }
-  if (nativeAppsStates.length !== 1) {
-    return "invalid";
-  }
-
-  const states = [availability.state, helperStates[0], nativeAppsStates[0]];
-  return states.every((state) => state === "unpatched")
-    ? "unpatched"
-    : states.every((state) => state === "patched")
-      ? "patched"
-      : "invalid";
-}
-
-function applyLinuxComputerUseSharedAvailabilityPatch(currentSource) {
-  const state = sharedComputerUseAvailabilityState(currentSource);
-  if (state === "patched") {
-    return currentSource;
-  }
-  if (state === "unpatched") {
-    const patchedSource = applyLinuxComputerUseRendererAvailabilityPatch(currentSource);
-    if (sharedComputerUseAvailabilityState(patchedSource) === "patched") {
-      return patchedSource;
-    }
-  }
-
-  console.warn(
-    "WARN: Could not find complete shared Computer Use availability gates — skipping Linux shared Computer Use availability patch",
-  );
-  return currentSource;
-}
-
-function applyLinuxComputerUseInstallFlowPatch(currentSource) {
-  const currentRequiredFeaturesObjectPattern =
-    /([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)\(\{areRequiredFeaturesEnabled:([A-Za-z_$][\w$]*),enabled:([A-Za-z_$][\w$]*),isAnyFeatureLoading:([A-Za-z_$][\w$]*),isComputerUseGateEnabled:([A-Za-z_$][\w$]*),isHostCompatiblePlatform:([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*)\),isPlatformLoading:([A-Za-z_$][\w$]*),windowType:`electron`\}\)/g;
-
-  let changed = false;
-  let patchedSource = currentSource;
-
-  patchedSource = patchedSource.replace(
-    currentRequiredFeaturesObjectPattern,
-    (
-      match,
-      resultVar,
-      helperVar,
-      requiredFeaturesVar,
-      enabledVar,
-      featureLoadingVar,
-      rolloutVar,
-      platformPredicateVar,
-      platformVar,
-      platformLoadingVar,
-      offset,
-    ) => {
-      const contextStart = Math.max(0, offset - 1200);
-      const context = patchedSource.slice(contextStart, offset + match.length);
-      if (!context.includes("featureName:`computer_use`")) {
-        return match;
-      }
-      changed = true;
-      return `${resultVar}=${helperVar}({areRequiredFeaturesEnabled:${requiredFeaturesVar},enabled:${enabledVar},isAnyFeatureLoading:${featureLoadingVar},isComputerUseGateEnabled:${rolloutVar},isHostCompatiblePlatform:${platformVar}===\`linux\`||${platformPredicateVar}(${platformVar}),isPlatformLoading:${platformLoadingVar},windowType:\`electron\`})`;
-    },
-  );
-
-  if (changed) {
-    return patchedSource;
-  }
-
-  if (
-    /featureName:`computer_use`[\s\S]{0,2200}?areRequiredFeaturesEnabled:[A-Za-z_$][\w$]*,enabled:[A-Za-z_$][\w$]*,isAnyFeatureLoading:[A-Za-z_$][\w$]*,isComputerUseGateEnabled:[A-Za-z_$][\w$]*,isHostCompatiblePlatform:([A-Za-z_$][\w$]*)===`linux`\|\|[A-Za-z_$][\w$]*\(\1\),isPlatformLoading:/.test(currentSource)
-  ) {
-    return currentSource;
-  }
-
-  if (currentSource.includes("featureName:`computer_use`")) {
-    console.warn(
-      "WARN: Could not find Computer Use install flow gate — skipping Linux Computer Use install flow patch",
-    );
-  }
-
-  return currentSource;
 }
 
 function findHandlerValue(source, methodName) {
@@ -942,10 +827,8 @@ module.exports = {
   COMPUTER_USE_UI_ENV_VAR,
   COMPUTER_USE_UI_SETTINGS_KEY,
   applyLinuxComputerUseFeaturePatch,
-  applyLinuxComputerUseInstallFlowPatch,
   applyLinuxNativeDesktopAppsHandlerPatch,
   applyLinuxComputerUsePluginGatePatch,
   applyLinuxComputerUseRendererAvailabilityPatch,
-  applyLinuxComputerUseSharedAvailabilityPatch,
   isComputerUseUiEnabled,
 };

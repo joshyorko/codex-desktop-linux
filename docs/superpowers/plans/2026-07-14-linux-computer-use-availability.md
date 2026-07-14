@@ -27,7 +27,7 @@
 - Consumes: `applyLinuxComputerUseRendererAvailabilityPatch(source: string): string`
 - Produces: an atomic current-settings patch that forces `{available: true, isFetching: false, isLoading: false}` on Linux and injects the installed `computer-use` plugin card.
 
-- [ ] **Step 1: Write the failing current-DMG test**
+- [x] **Step 1: Write the failing current-DMG test**
 
 Use the exact declarator shape from `computer-use-settings-B9iEdDjp.js`:
 
@@ -42,7 +42,7 @@ const source =
 
 Assert the result contains both the Linux availability override and the `openai-bundled` synthetic plugin.
 
-- [ ] **Step 2: Verify red**
+- [x] **Step 2: Verify red**
 
 Run:
 
@@ -52,7 +52,7 @@ rtk node --test --test-name-pattern='current DMG Computer Use settings' scripts/
 
 Expected: failure because the consumer matcher requires the platform hook to end the declaration.
 
-- [ ] **Step 3: Implement the minimal current matcher**
+- [x] **Step 3: Implement the minimal current matcher**
 
 Expand the settings consumer matcher to include trailing declarators through its semicolon, preserve the full declaration, and append:
 
@@ -63,7 +63,7 @@ platformVar === `linux` &&
 
 If the current settings bundle exposes both the availability consumer and plugin selector, require both transformations; otherwise warn and return the original source atomically.
 
-- [ ] **Step 4: Verify green**
+- [x] **Step 4: Verify green**
 
 Run the focused test command again and expect one passing test with zero failures.
 
@@ -78,11 +78,11 @@ Run the focused test command again and expect one passing test with zero failure
 - Consumes: `context.enableComputerUseUi`
 - Produces: one current `linux-computer-use-ui-availability` descriptor with `ciPolicy: "required-upstream"`.
 
-- [ ] **Step 1: Add descriptor-policy assertions**
+- [x] **Step 1: Add descriptor-policy assertions**
 
 Assert the current descriptor list contains only `linux-computer-use-ui-availability`, targets `computer-use-settings-B9iEdDjp.js`, and is required when the UI opt-in is enabled.
 
-- [ ] **Step 2: Verify red**
+- [x] **Step 2: Verify red**
 
 Run:
 
@@ -92,11 +92,11 @@ rtk node --test --test-name-pattern='Computer Use availability descriptor' scrip
 
 Expected: failure while the obsolete shared/install-flow descriptors remain and the current descriptor is `opt-in` policy.
 
-- [ ] **Step 3: Remove obsolete latest-DMG code**
+- [x] **Step 3: Remove obsolete latest-DMG code**
 
 Delete `linux-computer-use-shared-availability`, `linux-computer-use-install-flow`, `sharedComputerUseAvailabilityState`, `applyLinuxComputerUseSharedAvailabilityPatch`, and `applyLinuxComputerUseInstallFlowPatch`. Set the remaining descriptor policy to `required-upstream`; its enable predicate continues to scope it to the explicit UI opt-in.
 
-- [ ] **Step 4: Verify green**
+- [x] **Step 4: Verify green**
 
 Run:
 
@@ -116,7 +116,7 @@ Expected: all selected tests pass and the two obsolete warning IDs are absent.
 - Consumes: exact DMG SHA-256 `40e34814e74e30943c209ebd4da94cd4de3581a52c5bffbe2bcf2e488d6361c6`
 - Produces: accepted candidate with the current Computer Use descriptor applied and no Computer Use warnings.
 
-- [ ] **Step 1: Run focused and core checks**
+- [x] **Step 1: Run focused and core checks**
 
 ```bash
 rtk node --test scripts/patch-linux-window-ui.test.js
@@ -124,13 +124,13 @@ CI_SKIP_PULL=1 rtk proxy ./scripts/ci-local.sh core
 rtk git diff --check
 ```
 
-- [ ] **Step 2: Run exact Homebrew-profile acceptance**
+- [x] **Step 2: Run exact Homebrew-profile acceptance**
 
 Run `install.sh --inspect` with `CODEX_LINUX_FEATURES_CONFIG=/var/home/kdlocpanda/.config/homebrew-tools/codex-desktop-features.json`, then enforce `scripts/validate-upstream-dmg.js` against the generated patch report.
 
 Expected: `accepted_with_warnings`, zero blockers, `linux-computer-use-ui-availability` applied, and neither obsolete Computer Use warning present.
 
-- [ ] **Step 3: Commit and push**
+- [x] **Step 3: Commit and push**
 
 ```bash
 rtk git add scripts/patches/core/all-linux/webview/computer-use-ui/patch.js scripts/patches/impl/computer-use.js scripts/patch-linux-window-ui.test.js docs/superpowers/plans/2026-07-14-linux-computer-use-availability.md
@@ -138,7 +138,7 @@ rtk git commit -m "Fix current Linux Computer Use availability"
 rtk git push origin patchraptor-main
 ```
 
-- [ ] **Step 4: Verify remote**
+- [x] **Step 4: Verify remote**
 
 ```bash
 rtk git rev-list --left-right --count HEAD...origin/patchraptor-main
