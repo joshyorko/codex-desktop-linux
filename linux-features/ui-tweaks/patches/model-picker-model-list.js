@@ -3,9 +3,9 @@
 const MODEL_PICKER_STATE_ASSET_PATTERN =
   /^app-initial~app-main~new-thread-panel-page~appgen-library-page~hotkey-window-thread-page~ho~iufn7mg3-[^.]+\.js$/;
 const MODEL_PICKER_ALLOWLIST_ASSET_PATTERN =
-  MODEL_PICKER_STATE_ASSET_PATTERN;
+  /^app-initial~app-main~onboarding-page~projects-index-page~hotkey-window-thread-page~quick-ch~iiv1g666-[^.]+\.js$/;
 const MODEL_PICKER_MENU_ASSET_PATTERN =
-  MODEL_PICKER_STATE_ASSET_PATTERN;
+  /^app-initial~app-main~onboarding-page~projects-index-page~hotkey-window-thread-page~quick-ch~iiv1g666-[^.]+\.js$/;
 const SIMPLE_MENU_VIEW_PATTERN =
   /([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)\(`composer-model-picker-menu-view-v1`,`simple`\)/;
 const ADVANCED_MENU_VIEW_PATTERN =
@@ -170,9 +170,9 @@ function applyDynamicSupportedReasoningEffortsPatch(source, context = {}) {
     }
 
     const powerSelectionPattern = new RegExp(
-      `function (${JS_IDENT})\\((${JS_IDENT}),(${JS_IDENT})=!1\\)\\{let (${JS_IDENT})=(${JS_IDENT})` +
-        `\\(\\3\\?\\[\\.\\.\\.(${JS_IDENT}),(${JS_IDENT})\\]:\\6,\\2\\);if\\(\\4\\.length>=4\\)return \\4;` +
-        `let (${JS_IDENT})=\\5\\((${JS_IDENT}),\\2\\);return \\8\\.length>=4\\?\\8:\\[\\]\\}`,
+      `function (${JS_IDENT})\\((${JS_IDENT}),(${JS_IDENT})=!1\\)\\{let (${JS_IDENT})=` +
+        `(${JS_IDENT})\\((.+?),\\2\\);if\\(\\4\\.length>=4\\)return \\4;let (${JS_IDENT})=` +
+        `\\5\\((${JS_IDENT}),\\2\\);return \\7\\.length>=4\\?\\7:\\[\\]\\}`,
     );
     const match = source.match(powerSelectionPattern);
     if (match == null) {
@@ -190,22 +190,21 @@ function applyDynamicSupportedReasoningEffortsPatch(source, context = {}) {
       primarySelectionsVar,
       supportedSelectionsFilter,
       primaryCandidates,
-      ultraCandidate,
       fallbackSelectionsVar,
       fallbackCandidates,
     ] = match;
     const patched =
       `function ${resolverFunction}(${modelsVar},${includeUltraVar}=!1){` +
-      `let ${primarySelectionsVar}=${supportedSelectionsFilter}(${primaryCandidates}.filter(` +
+      `let ${primarySelectionsVar}=${supportedSelectionsFilter}((${primaryCandidates}).filter(` +
       `${modelsVar}=>${modelsVar}.model!==\`gpt-5.6-sol\`),${modelsVar}),` +
       `codexLinuxSolModel=${modelsVar}?.find(${modelsVar}=>${modelsVar}.model===\`gpt-5.6-sol\`),` +
       `codexLinuxSolSelections=codexLinuxSolModel==null?[]:` +
-      `${dynamicPowerSelectionsFunction}([{...codexLinuxSolModel,supportedReasoningEfforts:${includeUltraVar}?codexLinuxSolModel.supportedReasoningEfforts:codexLinuxSolModel.supportedReasoningEfforts.filter(({reasoningEffort:${modelsVar}})=>${modelsVar}!==\`ultra\`)}]).map((${modelsVar},codexLinuxIndex)=>` +
+      `${dynamicPowerSelectionsFunction}([codexLinuxSolModel]).map((${modelsVar},codexLinuxIndex)=>` +
       `({...${modelsVar},powerSettingIndex:${primarySelectionsVar}.length+codexLinuxIndex})),` +
       `codexLinuxPowerSelections=[...${primarySelectionsVar},...codexLinuxSolSelections]` +
       `/*${DYNAMIC_POWER_EFFORTS_RUNTIME_MARKER}*/;` +
       `if(codexLinuxPowerSelections.length>=4)return codexLinuxPowerSelections;` +
-      `let codexLinuxCuratedSelections=${supportedSelectionsFilter}(${includeUltraVar}?[...${primaryCandidates},${ultraCandidate}]:${primaryCandidates},${modelsVar});` +
+      `let codexLinuxCuratedSelections=${supportedSelectionsFilter}(${primaryCandidates},${modelsVar});` +
       `if(codexLinuxCuratedSelections.length>=4)return codexLinuxCuratedSelections;` +
       `let ${fallbackSelectionsVar}=${supportedSelectionsFilter}(${fallbackCandidates},${modelsVar});` +
       `return ${fallbackSelectionsVar}.length>=4?${fallbackSelectionsVar}:[]}`;

@@ -13,10 +13,14 @@ use std::{
     collections::BTreeMap,
     ffi::{OsStr, OsString},
     fs,
-    io::Write,
+    io::{Read, Write},
     os::unix::fs::PermissionsExt,
+    os::unix::process::CommandExt,
     path::{Path, PathBuf},
-    process::{Command, Output, Stdio},
+    process::{Command, ExitStatus, Output, Stdio},
+    sync::mpsc::{self, Receiver, RecvTimeoutError},
+    thread,
+    time::{Duration as StdDuration, Instant},
 };
 use tracing::{info, warn};
 
@@ -25,8 +29,21 @@ const STANDALONE_INSTALLER_URL: &str = "https://chatgpt.com/codex/install.sh";
 const CLI_NOT_INSTALLED_MESSAGE: &str =
     "Codex CLI is required but not currently installed. Open the app to retry the automatic install flow, or install it manually with npm optional dependencies enabled.";
 const CLI_VERSION_CHECK_TTL: Duration = Duration::hours(1);
+const NPM_REPAIR_INSTALL_TIMEOUT: StdDuration = StdDuration::from_secs(90);
+const NPM_REPAIR_REGISTRY_TIMEOUT: StdDuration = StdDuration::from_secs(20);
+const CLI_PREFLIGHT_VERSION_TIMEOUT: StdDuration = StdDuration::from_secs(5);
+const BOUNDED_COMMAND_POLL_INTERVAL: StdDuration = StdDuration::from_millis(50);
+const BOUNDED_COMMAND_TERMINATION_GRACE: StdDuration = StdDuration::from_millis(500);
+const BOUNDED_COMMAND_OUTPUT_DRAIN_TIMEOUT: StdDuration = StdDuration::from_secs(1);
+const BOUNDED_COMMAND_OUTPUT_LIMIT: usize = 64 * 1024;
+const SIGTERM: i32 = 15;
+const SIGKILL: i32 = 9;
 #[cfg(test)]
 const CLI_INSTALLED_VERSION_TTL: Duration = Duration::hours(1);
+
+unsafe extern "C" {
+    fn kill(pid: i32, sig: i32) -> i32;
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PreflightOutcome {
@@ -43,6 +60,22 @@ pub fn preflight(
     explicit_cli_path: Option<PathBuf>,
     allow_install_missing: bool,
 ) -> Result<PreflightOutcome> {
+    preflight_with_version_timeout(
+        state,
+        paths,
+        explicit_cli_path,
+        allow_install_missing,
+        CLI_PREFLIGHT_VERSION_TIMEOUT,
+    )
+}
+
+fn preflight_with_version_timeout(
+    state: &mut PersistedState,
+    paths: &RuntimePaths,
+    explicit_cli_path: Option<PathBuf>,
+    allow_install_missing: bool,
+    version_timeout: StdDuration,
+) -> Result<PreflightOutcome> {
     let requested_path = explicit_cli_path.as_deref();
     let (cli_path, installed_missing_cli) = match resolve_cli_path(requested_path) {
         Some(path) => (path, false),
@@ -58,7 +91,7 @@ pub fn preflight(
     let path_env = command_path_env();
     let managed_cli = cli_management::detect_system_package_managed_cli(&cli_path, &path_env);
     let mut repaired_npm_install = None;
-    let installed_version = match read_installed_version(&cli_path) {
+    let installed_version = match read_installed_version_bounded(&cli_path, version_timeout) {
         Ok(version) => version,
         Err(probe_error) => {
             let Some(missing_dependency) = missing_platform_optional_dependency(&probe_error)
@@ -88,7 +121,9 @@ pub fn preflight(
             persist_state(paths, state)?;
 
             let repaired_version = repair_npm_optional_dependency(&npm_install)
-                .and_then(|()| read_installed_version(&cli_path))
+                .and_then(|()| {
+                    read_installed_version_bounded(&cli_path, version_timeout)
+                })
                 .with_context(|| {
                     format!(
                         "Failed to repair npm-managed Codex CLI at {} after its version probe failed: {probe_error}",
@@ -149,11 +184,16 @@ pub fn preflight(
     state.cli_status = CliStatus::Checking;
     persist_state(paths, state)?;
 
-    let latest_version_result = repaired_npm_install
-        .as_ref()
-        .map_or_else(read_latest_version, |install| {
-            read_latest_version_with_npm(&install.npm_program, &install.command_path_env())
-        });
+    let latest_version_result =
+        repaired_npm_install
+            .as_ref()
+            .map_or_else(read_latest_version, |install| {
+                read_latest_version_with_npm_bounded(
+                    &install.npm_program,
+                    &install.command_path_env(),
+                    NPM_REPAIR_REGISTRY_TIMEOUT,
+                )
+            });
     let official_latest_version = match latest_version_result {
         Ok(version) => Some(version),
         Err(error) => {
@@ -782,8 +822,33 @@ fn read_installed_version(cli_path: &Path) -> Result<String> {
     })
 }
 
+fn read_installed_version_bounded(cli_path: &Path, timeout: StdDuration) -> Result<String> {
+    let primary = run_bounded_command(
+        cli_path,
+        &command_path_env(),
+        &[OsString::from("--version")],
+        timeout,
+    )?;
+    if let Some(version) = extract_version(&primary) {
+        return Ok(version);
+    }
+
+    let fallback = run_bounded_command(
+        cli_path,
+        &command_path_env(),
+        &[OsString::from("version")],
+        timeout,
+    )?;
+    extract_version(&fallback).ok_or_else(|| {
+        anyhow!(
+            "Codex CLI returned an unparseable version string: {}",
+            fallback.trim()
+        )
+    })
+}
+
 fn missing_platform_optional_dependency(error: &anyhow::Error) -> Option<String> {
-    const ERROR_PREFIX: &str = "Missing optional dependency ";
+    const ERROR_PREFIX: &str = "Missing optional dependency";
     let message = error.to_string();
     let dependency = message
         .split_once(ERROR_PREFIX)?
@@ -809,6 +874,25 @@ fn read_latest_version_with_npm(npm: &Path, path_env: &OsString) -> Result<Strin
         .output()
         .with_context(|| format!("Failed to spawn {}", npm.display()))?;
 
+    parse_latest_version_output(npm, &output)
+}
+
+fn read_latest_version_with_npm_bounded(
+    npm: &Path,
+    path_env: &OsString,
+    timeout: StdDuration,
+) -> Result<String> {
+    let args = [
+        OsString::from("view"),
+        OsString::from(CLI_PACKAGE_NAME),
+        OsString::from("version"),
+    ];
+    let output = run_bounded_command_output(npm, path_env, None, &args, timeout)?;
+
+    parse_latest_version_output(npm, &output)
+}
+
+fn parse_latest_version_output(npm: &Path, output: &Output) -> Result<String> {
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
         anyhow::bail!(
@@ -937,16 +1021,24 @@ fn path_is_system_managed_location(path: &Path) -> bool {
 }
 
 fn repair_npm_optional_dependency(install: &NpmCliInstall) -> Result<()> {
+    repair_npm_optional_dependency_with_timeout(install, NPM_REPAIR_INSTALL_TIMEOUT)
+}
+
+fn repair_npm_optional_dependency_with_timeout(
+    install: &NpmCliInstall,
+    timeout: StdDuration,
+) -> Result<()> {
     let args = [
         OsString::from("install"),
         OsString::from("--include=optional"),
     ];
-    let output = Command::new(&install.npm_program)
-        .current_dir(&install.package_root)
-        .env("PATH", install.command_path_env())
-        .args(&args)
-        .output()
-        .with_context(|| format!("Failed to spawn {}", install.npm_program.display()))?;
+    let output = run_bounded_command_output(
+        &install.npm_program,
+        &install.command_path_env(),
+        Some(&install.package_root),
+        &args,
+        timeout,
+    )?;
 
     anyhow::ensure!(
         output.status.success(),
@@ -958,6 +1050,164 @@ fn repair_npm_optional_dependency(install: &NpmCliInstall) -> Result<()> {
     );
 
     Ok(())
+}
+
+fn run_bounded_command(
+    program: &Path,
+    path_env: &OsString,
+    args: &[OsString],
+    timeout: StdDuration,
+) -> Result<String> {
+    let output = run_bounded_command_output(program, path_env, None, args, timeout)?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "{} exited with {}{}",
+            program.display(),
+            output.status,
+            format_command_output(&output)
+        );
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+fn run_bounded_command_output(
+    program: &Path,
+    path_env: &OsString,
+    current_dir: Option<&Path>,
+    args: &[OsString],
+    timeout: StdDuration,
+) -> Result<Output> {
+    let mut command = Command::new(program);
+    command
+        .env("PATH", path_env)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    if let Some(current_dir) = current_dir {
+        command.current_dir(current_dir);
+    }
+    command.process_group(0);
+
+    let mut child = command
+        .spawn()
+        .with_context(|| format!("Failed to spawn {}", program.display()))?;
+    let process_group = child.id() as i32;
+    let stdout = child
+        .stdout
+        .take()
+        .context("bounded npm command did not expose stdout")?;
+    let stderr = child
+        .stderr
+        .take()
+        .context("bounded npm command did not expose stderr")?;
+    let stdout_rx = spawn_bounded_output_reader(stdout);
+    let stderr_rx = spawn_bounded_output_reader(stderr);
+    let started = Instant::now();
+
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                return Ok(collect_bounded_output(
+                    status,
+                    process_group,
+                    &stdout_rx,
+                    &stderr_rx,
+                ));
+            }
+            Ok(None) => {}
+            Err(error) => {
+                terminate_process_group(&mut child, process_group);
+                let _ = child.wait();
+                anyhow::bail!(
+                    "Failed while waiting for {} {}: {error}",
+                    program.display(),
+                    format_command_args(args)
+                );
+            }
+        }
+
+        if started.elapsed() >= timeout {
+            terminate_process_group(&mut child, process_group);
+            let _ = child.wait();
+            let _ = receive_bounded_output(&stdout_rx, process_group);
+            let _ = receive_bounded_output(&stderr_rx, process_group);
+            anyhow::bail!(
+                "{} {} timed out after {} seconds",
+                program.display(),
+                format_command_args(args),
+                timeout.as_secs_f64()
+            );
+        }
+
+        thread::sleep(BOUNDED_COMMAND_POLL_INTERVAL.min(timeout.saturating_sub(started.elapsed())));
+    }
+}
+
+fn spawn_bounded_output_reader<R>(mut reader: R) -> Receiver<Vec<u8>>
+where
+    R: Read + Send + 'static,
+{
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let mut retained = Vec::new();
+        let mut chunk = [0_u8; 8192];
+        loop {
+            match reader.read(&mut chunk) {
+                Ok(0) => break,
+                Ok(read) => {
+                    let remaining = BOUNDED_COMMAND_OUTPUT_LIMIT.saturating_sub(retained.len());
+                    retained.extend_from_slice(&chunk[..read.min(remaining)]);
+                }
+                Err(_) => break,
+            }
+        }
+        let _ = tx.send(retained);
+    });
+    rx
+}
+
+fn collect_bounded_output(
+    status: ExitStatus,
+    process_group: i32,
+    stdout_rx: &Receiver<Vec<u8>>,
+    stderr_rx: &Receiver<Vec<u8>>,
+) -> Output {
+    Output {
+        status,
+        stdout: receive_bounded_output(stdout_rx, process_group),
+        stderr: receive_bounded_output(stderr_rx, process_group),
+    }
+}
+
+fn receive_bounded_output(receiver: &Receiver<Vec<u8>>, process_group: i32) -> Vec<u8> {
+    match receiver.recv_timeout(BOUNDED_COMMAND_OUTPUT_DRAIN_TIMEOUT) {
+        Ok(output) => output,
+        Err(RecvTimeoutError::Disconnected) => Vec::new(),
+        Err(RecvTimeoutError::Timeout) => {
+            signal_process_group(process_group, SIGKILL);
+            receiver
+                .recv_timeout(BOUNDED_COMMAND_OUTPUT_DRAIN_TIMEOUT)
+                .unwrap_or_default()
+        }
+    }
+}
+
+fn terminate_process_group(child: &mut std::process::Child, process_group: i32) {
+    signal_process_group(process_group, SIGTERM);
+    thread::sleep(BOUNDED_COMMAND_TERMINATION_GRACE);
+    signal_process_group(process_group, SIGKILL);
+    let _ = child.kill();
+}
+
+fn signal_process_group(process_group: i32, signal: i32) {
+    // SAFETY: the process was spawned into a dedicated group whose id is the
+    // child pid. Timeout cleanup signals it before reaping the child; after a
+    // successful parent exit this is called only if a descendant still holds a
+    // captured output pipe open.
+    unsafe {
+        let _ = kill(-process_group, signal);
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1573,6 +1823,8 @@ mod tests {
             "FAKE_CODEX_ENTRYPOINT",
             "NPM_LOG",
             "NPM_REPAIR_LOG",
+            "NPM_CHILD_MARKER",
+            "NPM_CHILD_PID",
         ]);
         std::env::set_var("HOME", home);
         std::env::set_var("PATH", std::env::join_paths(path_entries)?);
@@ -2674,6 +2926,35 @@ exit 1
     }
 
     #[test]
+    fn initial_cli_version_probe_is_bounded_before_repair() -> Result<()> {
+        let _env_guard = env_lock();
+        let temp = tempdir()?;
+        let paths = test_runtime_paths(temp.path());
+        paths.ensure_dirs()?;
+
+        let bin_dir = temp.path().join("bin");
+        fs::create_dir_all(&bin_dir)?;
+        let codex_path = bin_dir.join("codex");
+        write_executable_script(&codex_path, "#!/bin/sh\nwhile :; do sleep 1; done\n")?;
+        let _restore_env = configure_cli_test_env(temp.path(), [bin_dir])?;
+
+        let mut state = PersistedState::new(true);
+        let started = Instant::now();
+        let error = preflight_with_version_timeout(
+            &mut state,
+            &paths,
+            Some(codex_path),
+            false,
+            StdDuration::from_millis(100),
+        )
+        .expect_err("the initial CLI probe must not block synchronous preflight");
+
+        assert!(error.to_string().contains("timed out"));
+        assert!(started.elapsed() < StdDuration::from_secs(3));
+        Ok(())
+    }
+
+    #[test]
     fn preflight_repairs_verified_npm_cli_without_missing_install_permission() -> Result<()> {
         let _env_guard = env_lock();
         let temp = tempdir()?;
@@ -2683,7 +2964,7 @@ exit 1
         let prefix = temp.path().join("npm-prefix");
         let fixture = write_npm_cli_install(
             &prefix,
-            "#!/bin/sh\necho 'Missing optional dependency @openai/codex-linux-x64. Reinstall Codex: npm install -g @openai/codex' >&2\nexit 1\n",
+            "#!/bin/sh\necho 'Missing optional dependency@openai/codex-linux-x64. Reinstall Codex: npm install -g @openai/codex' >&2\nexit 1\n",
         )?;
         let repair_log = temp.path().join("npm-repair.log");
         write_executable_script(
@@ -2748,9 +3029,17 @@ exit 1
             missing_platform_optional_dependency(&linux_error).as_deref(),
             Some("@openai/codex-linux-x64")
         );
+        let compact_linux_error = anyhow::anyhow!(
+            "Error: Missing optional dependency@openai/codex-linux-arm64. Reinstall Codex"
+        );
+        assert_eq!(
+            missing_platform_optional_dependency(&compact_linux_error).as_deref(),
+            Some("@openai/codex-linux-arm64")
+        );
         for message in [
             "Codex CLI configuration is invalid",
             "Missing optional dependency @openai/codex-darwin-arm64",
+            "Missing optional dependency@openai/codex-linux-x64-evil",
         ] {
             assert_eq!(
                 missing_platform_optional_dependency(&anyhow::anyhow!(message)),
@@ -2827,6 +3116,80 @@ exit 1
         let persisted = PersistedState::load_or_default(&paths.state_file, true)?;
         assert_eq!(persisted.cli_status, CliStatus::Failed);
         assert_eq!(persisted.cli_error_message, state.cli_error_message);
+        Ok(())
+    }
+
+    #[test]
+    fn hanging_npm_repair_times_out_and_terminates_its_process_group() -> Result<()> {
+        let _env_guard = env_lock();
+        let temp = tempdir()?;
+        let npm_program = temp.path().join("npm");
+        let child_marker = temp.path().join("child-terminated");
+        let child_pid = temp.path().join("child.pid");
+        write_executable_script(
+            &npm_program,
+            r#"#!/bin/sh
+if [ "$1" = "install" ]; then
+  sh -c 'trap '\''printf terminated > "$NPM_CHILD_MARKER"; exit 0'\'' TERM; while :; do sleep 1; done' &
+  echo "$!" > "$NPM_CHILD_PID"
+  wait
+fi
+exit 1
+"#,
+        )?;
+        let _restore_env = EnvRestoreGuard::capture(&["NPM_CHILD_MARKER", "NPM_CHILD_PID"]);
+        std::env::set_var("NPM_CHILD_MARKER", &child_marker);
+        std::env::set_var("NPM_CHILD_PID", &child_pid);
+        let install = NpmCliInstall {
+            package_root: temp.path().to_path_buf(),
+            npm_program,
+        };
+
+        let started = Instant::now();
+        let error =
+            repair_npm_optional_dependency_with_timeout(&install, StdDuration::from_millis(100))
+                .expect_err("a hanging npm repair must time out");
+
+        assert!(error.to_string().contains("timed out"));
+        assert!(started.elapsed() < StdDuration::from_secs(3));
+        assert!(child_pid.exists(), "the nested npm child must have started");
+        assert_eq!(fs::read_to_string(child_marker)?, "terminated");
+        Ok(())
+    }
+
+    #[test]
+    fn repaired_cli_registry_lookup_is_bounded() -> Result<()> {
+        let _env_guard = env_lock();
+        let temp = tempdir()?;
+        let npm_program = temp.path().join("npm");
+        write_executable_script(&npm_program, "#!/bin/sh\nwhile :; do sleep 1; done\n")?;
+
+        let started = Instant::now();
+        let error = read_latest_version_with_npm_bounded(
+            &npm_program,
+            &command_path_env(),
+            StdDuration::from_millis(100),
+        )
+        .expect_err("a hanging npm registry lookup must time out");
+
+        assert!(error.to_string().contains("timed out"));
+        assert!(started.elapsed() < StdDuration::from_secs(3));
+        Ok(())
+    }
+
+    #[test]
+    fn repaired_cli_version_probe_is_bounded() -> Result<()> {
+        let _env_guard = env_lock();
+        let temp = tempdir()?;
+        let cli_program = temp.path().join("codex");
+        write_executable_script(&cli_program, "#!/bin/sh\nwhile :; do sleep 1; done\n")?;
+
+        let started = Instant::now();
+        let error = read_installed_version_bounded(&cli_program, StdDuration::from_millis(100))
+            .expect_err("a hanging repaired CLI version probe must time out");
+
+        assert!(error.to_string().contains("timed out"));
+        assert!(started.elapsed() < StdDuration::from_secs(3));
         Ok(())
     }
 

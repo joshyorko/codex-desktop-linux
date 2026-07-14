@@ -53,6 +53,7 @@
           ];
         };
         flakeSourceCommit = self.rev or (self.dirtyRev or "");
+        flakeSourceRemote = "https://github.com/ilysenko/codex-desktop-linux.git";
         flakeSourceDateEpoch = toString (self.lastModified or 1);
         sourceRoot = pkgs.lib.cleanSourceWith {
           src = ./.;
@@ -75,6 +76,17 @@
           cp -R ${./computer-use-linux} "$out/computer-use-linux"
           chmod -R u+w "$out"
         '';
+        notificationActionsBuildSource = pkgs.runCommandLocal "codex-notification-actions-linux-source" { } ''
+          mkdir -p "$out"
+          cp ${./Cargo.lock} "$out/Cargo.lock"
+          cat > "$out/Cargo.toml" <<'EOF'
+          [workspace]
+          members = ["notification-actions-linux"]
+          resolver = "2"
+          EOF
+          cp -R ${./notification-actions-linux} "$out/notification-actions-linux"
+          chmod -R u+w "$out"
+        '';
         nativeModulesBuildSupport = pkgs.runCommandLocal "codex-native-modules-build-support" { } ''
           mkdir -p "$out/scripts/lib"
           cp ${./scripts/lib/native-modules.sh} "$out/scripts/lib/native-modules.sh"
@@ -82,10 +94,10 @@
 
         codexDmg = pkgs.fetchurl {
           url = "https://persistent.oaistatic.com/codex-app-prod/ChatGPT.dmg";
-          hash = "sha256-pmoGRf1N5vTyLnXKh77bFYWutX80V6PfVVCb+NoRCHk=";
+          hash = "sha256-QONIFOdOMJQ8IJ69TalM1N41gaUsW/++K88uSI1jYcY=";
         };
 
-        codexVersion = "26.707.51957";
+        codexVersion = "26.707.72221";
         electronVersion = "42.1.0";
         electronPlatform =
           {
@@ -157,6 +169,33 @@
             install -Dm0755 "$release_dir/codex-computer-use-linux" "$out/bin/codex-computer-use-linux"
             install -Dm0755 "$release_dir/codex-computer-use-cosmic" "$out/bin/codex-computer-use-cosmic"
             install -Dm0755 "$release_dir/codex-chrome-extension-host" "$out/bin/codex-chrome-extension-host"
+            runHook postInstall
+          '';
+        };
+
+        codexNotificationActionsBinary = pkgs.rustPlatform.buildRustPackage {
+          pname = "codex-notification-actions-linux";
+          version = "0.1.0";
+          src = notificationActionsBuildSource;
+
+          cargoLock = {
+            lockFile = ./Cargo.lock;
+          };
+
+          cargoBuildFlags = [
+            "-p"
+            "codex-notification-actions-linux"
+          ];
+
+          doCheck = true;
+
+          installPhase = ''
+            runHook preInstall
+            release_dir="target/''${CARGO_BUILD_TARGET:-${pkgs.stdenv.hostPlatform.rust.rustcTarget}}/release"
+            if [ ! -d "$release_dir" ]; then
+              release_dir="target/release"
+            fi
+            install -Dm0755 "$release_dir/codex-notification-actions-linux" "$out/bin/codex-notification-actions-linux"
             runHook postInstall
           '';
         };
@@ -480,6 +519,7 @@ PY
             export SOURCE_DATE_EPOCH="${flakeSourceDateEpoch}"
             ${pkgs.lib.optionalString (flakeSourceCommit != "") ''
             export CODEX_LINUX_SOURCE_COMMIT="${flakeSourceCommit}"
+            export CODEX_LINUX_SOURCE_REMOTE="${flakeSourceRemote}"
             ''}
             ${pkgs.lib.optionalString enableComputerUseUi ''
             export CODEX_LINUX_ENABLE_COMPUTER_USE_UI=1
@@ -497,6 +537,7 @@ PY
             export CODEX_LINUX_COMPUTER_USE_BACKEND_SOURCE="${codexComputerUseBinaries}/bin/codex-computer-use-linux"
             export CODEX_LINUX_COMPUTER_USE_COSMIC_SOURCE="${codexComputerUseBinaries}/bin/codex-computer-use-cosmic"
             export CODEX_CHROME_EXTENSION_HOST_SOURCE="${codexComputerUseBinaries}/bin/codex-chrome-extension-host"
+            export CODEX_NOTIFICATION_ACTIONS_SOURCE="${codexNotificationActionsBinary}/bin/codex-notification-actions-linux"
             ${pkgs.lib.optionalString (builtins.elem "mcp-helper-reaper" linuxFeatureIds) ''
             export CODEX_MCP_HELPER_REAPER_SOURCE="${codexMcpHelperReaper}/bin/codex-mcp-helper-reaper"
             ''}
@@ -658,6 +699,7 @@ PY
         codexDesktopNixFeatureCheck = codexDesktop.override {
           linuxFeatureIds = [
             "appshots"
+            "frameless-titlebar"
             "global-dictation"
             "mcp-helper-reaper"
             "node-repl-reaper"
@@ -699,6 +741,7 @@ PY
             cd "$source_dir"
             export CODEX_INSTALL_DIR="''${CODEX_INSTALL_DIR:-$root_dir/codex-app}"
             export CODEX_MANAGED_NODE_SOURCE="${pkgs.nodejs}"
+            export CODEX_NOTIFICATION_ACTIONS_SOURCE="${codexNotificationActionsBinary}/bin/codex-notification-actions-linux"
             ${pkgs.bash}/bin/bash "$source_dir/install.sh" "$source_dir/Codex.dmg" "$@"
 
             install_dir="''${CODEX_INSTALL_DIR:-$root_dir/codex-app}"
@@ -718,6 +761,11 @@ PY
         };
 
         checks = {
+          notification-actions-linux = codexNotificationActionsBinary;
+          notification-actions-installer = pkgs.runCommand "codex-notification-actions-installer-check" { } ''
+            grep -F 'CODEX_NOTIFICATION_ACTIONS_SOURCE=' ${installer}/bin/codex-desktop-installer >/dev/null
+            touch "$out"
+          '';
           nix-linux-features-evaluation = import ./nix/linux-features-test.nix {
             inherit pkgs self system;
           };

@@ -63,7 +63,7 @@ module.exports = {
       phase: "webview-asset",
       order: 20500,
       ciPolicy: "optional",
-      pattern: /^app-initial~app-main~new-thread-panel-page~appgen-library-page~hotkey-window-thread-page~ho~iufn7mg3-[^.]+\.js$/,
+      pattern: /^app-initial~app-main~hotkey-window-new-thread-page~hotkey-window-home-page~composer-utility-bar-[^.]+\.js$/,
       missingDescription: "remote connection visibility bundle",
       skipDescription: "remote control UI remote connections visibility patch",
       apply: applyRemoteConnectionsVisibilityPatch,

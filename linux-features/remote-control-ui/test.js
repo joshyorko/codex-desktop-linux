@@ -166,19 +166,31 @@ test("remote-control UI feature patches are idempotent and fail soft", () => {
   );
 });
 
-test("remote-control UI descriptors match only the July 12 current app chunks", () => {
+test("remote-control UI descriptors match the current app chunks", () => {
   const remoteConnectionsPatch = featurePatches.find((patch) => patch.id === "remote-connections-visibility");
   const remoteControlConnectionsPatch = featurePatches.find((patch) => patch.id === "remote-control-connections-visibility");
   const experimentalFeaturesPatch = featurePatches.find((patch) => patch.id === "experimental-features");
 
-  const currentChunk =
-    "app-initial~app-main~new-thread-panel-page~appgen-library-page~hotkey-window-thread-page~ho~iufn7mg3-k1satKyX.js";
-  assert.ok(remoteConnectionsPatch.pattern.test(currentChunk));
-
-  assert.ok(remoteControlConnectionsPatch.pattern.test(currentChunk));
+  assert.ok(
+    remoteConnectionsPatch.pattern.test(
+      "app-initial~app-main~hotkey-window-new-thread-page~hotkey-window-home-page~composer-utility-bar-D9zyQF1n.js",
+    ),
+  );
   assert.equal(
     remoteConnectionsPatch.pattern.test(
-      "app-initial~app-main~pull-request-code-review~onboarding-page~hotkey-window-thread-page~cha~b76hmflu-y0KJWbm3.js",
+      "app-initial~app-main~hotkey-window-thread-page~keyboard-shortcuts-settings~thread-app-shell~cf704xib-BhQogfRL.js",
+    ),
+    false,
+  );
+
+  assert.ok(
+    remoteControlConnectionsPatch.pattern.test(
+      "app-initial~app-main~new-thread-panel-page~appgen-library-page~hotkey-window-thread-page~ho~iufn7mg3-JRP-9S5c.js",
+    ),
+  );
+  assert.equal(
+    remoteControlConnectionsPatch.pattern.test(
+      "app-initial~app-main~new-thread-panel-page~appgen-library-page~hotkey-window-thread-page~ho~lzri21pz-DYeTwZrs.js",
     ),
     false,
   );
@@ -202,14 +214,19 @@ test("remote-control UI feature patches matching webview assets and records patc
         fs.writeFileSync(path.join(buildDir, "main.js"), "console.log('main bundle');");
         fs.writeFileSync(path.join(tempApp, "package.json"), JSON.stringify({ name: "codex" }));
 
-        const currentChunk =
-          "app-initial~app-main~new-thread-panel-page~appgen-library-page~hotkey-window-thread-page~ho~iufn7mg3-k1satKyX.js";
         fs.writeFileSync(
-          path.join(assetsDir, currentChunk),
-          [
-            "function d(){let e=(0,u.c)(3),{data:i}=n(s,r(t)),a=c(`4114442250`);if(i?.config[`features.remote_connections`]===!0)return!0;let o=i?.config.features;if(typeof o!=`object`||!o||Array.isArray(o))return a;let l;return e[0]!==o||e[1]!==a?(l=Object.getOwnPropertyDescriptor(o,`remote_connections`)?.value===!0||a,e[0]=o,e[1]=a,e[2]=l):l=e[2],l}",
-            "function a({remoteControlConnectionsState:e,slingshotEnabled:t}){return t&&(e?.available??!0)&&e?.accessRequired!==!0}",
-          ].join(""),
+          path.join(
+            assetsDir,
+            "app-initial~app-main~hotkey-window-new-thread-page~hotkey-window-home-page~composer-utility-bar-D9zyQF1n.js",
+          ),
+          "function Twt(){let e=(0,kwt.c)(3),{data:t}=Vr(y4,Br(B2)),n=BN(`4114442250`);if(t?.config[`features.remote_connections`]===!0)return!0;let r=t?.config.features;if(typeof r!=`object`||!r||Array.isArray(r))return n;let i;return e[0]!==r||e[1]!==n?(i=Object.getOwnPropertyDescriptor(r,`remote_connections`)?.value===!0||n,e[0]=r,e[1]=n,e[2]=i):i=e[2],i}function D8(e){return e(RN,`4114442250`)?`enabled`:`disabled`}",
+        );
+        fs.writeFileSync(
+          path.join(
+            assetsDir,
+            "app-initial~app-main~new-thread-panel-page~appgen-library-page~hotkey-window-thread-page~ho~iufn7mg3-JRP-9S5c.js",
+          ),
+          "function a({remoteControlConnectionsState:e,slingshotEnabled:t}){return t&&(e?.available??!0)&&e?.accessRequired!==!0}",
         );
         fs.writeFileSync(
           path.join(assetsDir, "settings-route-state-BwIfDYxh.js"),
@@ -224,7 +241,23 @@ test("remote-control UI feature patches matching webview assets and records patc
         );
 
         assert.match(
-          fs.readFileSync(path.join(assetsDir, currentChunk), "utf8"),
+          fs.readFileSync(
+            path.join(
+              assetsDir,
+              "app-initial~app-main~hotkey-window-new-thread-page~hotkey-window-home-page~composer-utility-bar-D9zyQF1n.js",
+            ),
+            "utf8",
+          ),
+          /navigator\.userAgent\.includes\(`Linux`\)/,
+        );
+        assert.match(
+          fs.readFileSync(
+            path.join(
+              assetsDir,
+              "app-initial~app-main~new-thread-panel-page~appgen-library-page~hotkey-window-thread-page~ho~iufn7mg3-JRP-9S5c.js",
+            ),
+            "utf8",
+          ),
           /navigator\.userAgent\.includes\(`Linux`\)/,
         );
         assert.doesNotMatch(

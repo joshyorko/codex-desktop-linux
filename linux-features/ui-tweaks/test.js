@@ -72,11 +72,11 @@ function modelPickerMenuBundleFixture() {
 
 function modelPickerPowerBundleFixture() {
   return [
-    "function ARe(e,t=!1){let n=PRe(t?[...FRe,ORe]:FRe,e);if(n.length>=4)return n;let r=PRe(IRe,e);return r.length>=4?r:[]}",
+    "function ARe(e,t=!1){let n=PRe(t?[...FRe,URe]:FRe,e);if(n.length>=4)return n;let r=PRe(IRe,e);return r.length>=4?r:[]}",
     "function MRe(e){return e?.flatMap(({displayName:e,model:t,supportedReasoningEfforts:n})=>{let r=e==null?`Custom`:e,i=n.flatMap(({reasoningEffort:e})=>[e]);return(i.length>0?i:[`medium`]).map(e=>({id:`${t}:${e}`,model:t,modelLabel:r,reasoningEffort:e}))})??[]}",
     "function PRe(e,t){return e.flatMap((e,n)=>t?.some(t=>t.model===e.model&&t.supportedReasoningEfforts.some(({reasoningEffort:t})=>t===e.reasoningEffort))?[{...e,powerSettingIndex:n}]:[])}",
     "var FRe=[{id:`gpt-5.6-terra:low`,model:`gpt-5.6-terra`,modelLabel:`5.6 Terra`,reasoningEffort:`low`},{id:`gpt-5.6-sol:low`,model:`gpt-5.6-sol`,modelLabel:`5.6 Sol`,reasoningEffort:`low`},{id:`gpt-5.6-sol:medium`,model:`gpt-5.6-sol`,modelLabel:`5.6 Sol`,reasoningEffort:`medium`},{id:`gpt-5.6-sol:high`,model:`gpt-5.6-sol`,modelLabel:`5.6 Sol`,reasoningEffort:`high`},{id:`gpt-5.6-sol:xhigh`,model:`gpt-5.6-sol`,modelLabel:`5.6 Sol`,reasoningEffort:`xhigh`}];",
-    "var ORe={id:`gpt-5.6-sol:ultra`,model:`gpt-5.6-sol`,modelLabel:`5.6 Sol`,reasoningEffort:`ultra`};",
+    "var URe={id:`gpt-5.6-sol:ultra`,model:`gpt-5.6-sol`,modelLabel:`5.6 Sol`,reasoningEffort:`ultra`};",
     "var IRe=[{id:`gpt-5.6-terra:low`,model:`gpt-5.6-terra`,modelLabel:`5.6 Terra`,reasoningEffort:`low`},{id:`gpt-5.6-terra:medium`,model:`gpt-5.6-terra`,modelLabel:`5.6 Terra`,reasoningEffort:`medium`},{id:`gpt-5.6-terra:high`,model:`gpt-5.6-terra`,modelLabel:`5.6 Terra`,reasoningEffort:`high`},{id:`gpt-5.6-terra:xhigh`,model:`gpt-5.6-terra`,modelLabel:`5.6 Terra`,reasoningEffort:`xhigh`}];",
   ].join("");
 }
@@ -179,19 +179,42 @@ test("ui-tweaks is discoverable and disabled until listed in features.json", () 
   }
 });
 
-test("model picker descriptors target only the July 12 current bundle", () => {
-  const currentChunk =
-    "app-initial~app-main~new-thread-panel-page~appgen-library-page~hotkey-window-thread-page~ho~iufn7mg3-k1satKyX.js";
-  assert.match(currentChunk, MODEL_PICKER_STATE_ASSET_PATTERN);
-  assert.match(currentChunk, MODEL_PICKER_ALLOWLIST_ASSET_PATTERN);
-  assert.match(currentChunk, MODEL_PICKER_MENU_ASSET_PATTERN);
-  assert.doesNotMatch("app-initial~app-main~page-hSvsQcNf.js", MODEL_PICKER_STATE_ASSET_PATTERN);
+test("model picker descriptors target the current state and menu bundles", () => {
+  const stateAsset =
+    "app-initial~app-main~new-thread-panel-page~appgen-library-page~hotkey-window-thread-page~ho~iufn7mg3-DRU9Ekz0.js";
+  const allowlistAsset =
+    "app-initial~app-main~onboarding-page~projects-index-page~hotkey-window-thread-page~quick-ch~iiv1g666-BjNKtmac.js";
+  const menuAsset = allowlistAsset;
+
+  assert.match(stateAsset, MODEL_PICKER_STATE_ASSET_PATTERN);
+  assert.match(allowlistAsset, MODEL_PICKER_ALLOWLIST_ASSET_PATTERN);
+  assert.match(menuAsset, MODEL_PICKER_MENU_ASSET_PATTERN);
+
+  assert.doesNotMatch(stateAsset, MODEL_PICKER_ALLOWLIST_ASSET_PATTERN);
+  assert.doesNotMatch(stateAsset, MODEL_PICKER_MENU_ASSET_PATTERN);
+  assert.doesNotMatch(allowlistAsset, MODEL_PICKER_STATE_ASSET_PATTERN);
+  assert.doesNotMatch(menuAsset, MODEL_PICKER_STATE_ASSET_PATTERN);
+
+  // The previous DMG split these patches across different chunks.
+  // Current-DMG-only targeting must not retain those chunks as fallbacks.
   assert.doesNotMatch(
-    "app-initial~app-main~onboarding-page~hotkey-window-thread-page~quick-chat-window-page~chatg~k0ede4gb-C17KDkOa.js",
+    "app-initial~app-main~page-CMpPiY3-.js",
+    MODEL_PICKER_STATE_ASSET_PATTERN,
+  );
+  assert.doesNotMatch(
+    "app-initial~app-main~new-thread-panel-page~onboarding-page~login-route~appgen-library-page~~gpgl9un5-_t04Xpau.js",
     MODEL_PICKER_ALLOWLIST_ASSET_PATTERN,
   );
   assert.doesNotMatch(
-    "app-initial~app-main~onboarding-page~hotkey-window-thread-page~quick-chat-window-page~chatg~k0ede4gb-C17KDkOa.js",
+    "app-initial~app-main~new-thread-panel-page~onboarding-page~projects-index-page~appgen-libra~lpb6mnim-Bawo32lF.js",
+    MODEL_PICKER_MENU_ASSET_PATTERN,
+  );
+  assert.doesNotMatch(
+    "app-initial~app-main~hotkey-window-thread-page~keyboard-shortcuts-settings~thread-app-shell~cf704xib-BpnUyB2R.js",
+    MODEL_PICKER_ALLOWLIST_ASSET_PATTERN,
+  );
+  assert.doesNotMatch(
+    "app-initial~app-main~onboarding-page-qmFVRsFx.js",
     MODEL_PICKER_MENU_ASSET_PATTERN,
   );
 });
@@ -274,6 +297,20 @@ test("GPT-5.6 Power slider follows reasoning efforts enabled in settings", () =>
       "gpt-5.6-sol:medium",
       "gpt-5.6-sol:high",
       "gpt-5.6-sol:xhigh",
+    ],
+  );
+  assert.deepEqual(
+    resolvePowerSelections(
+      filteredGpt56Models(["low", "medium", "high", "xhigh", "ultra"]),
+      true,
+    ).map(({ id }) => id),
+    [
+      "gpt-5.6-terra:low",
+      "gpt-5.6-sol:low",
+      "gpt-5.6-sol:medium",
+      "gpt-5.6-sol:high",
+      "gpt-5.6-sol:xhigh",
+      "gpt-5.6-sol:ultra",
     ],
   );
 });
@@ -359,11 +396,11 @@ test("English reasoning effort labels can be disabled", () => {
 
 test("sidebar project descriptor targets only the current project sidebar asset", () => {
   assert.match(
-    "app-initial~app-main~projects-index-page~remote-conversation-page-CFT2LLOB.js",
+    "app-initial~app-main~page-kMhXWEru.js",
     PROJECTS_SIDEBAR_ASSET_PATTERN,
   );
   assert.doesNotMatch(
-    "app-initial~app-main~page-BF1QkwFT.js",
+    "app-initial~app-main~projects-index-page~remote-conversation-page-CFT2LLOB.js",
     PROJECTS_SIDEBAR_ASSET_PATTERN,
   );
   assert.doesNotMatch(

@@ -131,9 +131,9 @@ User data is preserved for reinstall. To remove only this wrapper's local app
 state, logs, launcher flags, and updater state, delete these paths.
 
 If you enabled Remote Mobile Control, `~/.config/codex-desktop` can contain
-`remote-control-device-keys-v1.json`. Revoke paired devices in Codex
-Settings/Connections or ChatGPT before deleting that file or removing the whole
-directory. For feature-owned data, prefer the cleanup flow in
+the private `remote-control-device-keys/` directory. Revoke paired devices in
+Codex Settings/Connections or ChatGPT before deleting it or removing the whole
+`codex-desktop` directory. For feature-owned data, prefer the cleanup flow in
 [Native setup](docs/native-setup.md#feature-cleanup).
 
 ```bash
@@ -220,6 +220,7 @@ workarounds.
 | Browser Use node_repl reaper | Opt-in | `node-repl-reaper` | [Docs](linux-features/node-repl-reaper/README.md) |
 | Open Target Discovery | Opt-in | `open-target-discovery` | [Docs](linux-features/open-target-discovery/README.md) |
 | Persistent status panel | Opt-in | `persistent-status-panel` | [Docs](linux-features/persistent-status-panel/README.md) |
+| Project task Created sorting | Opt-in | `project-task-sort` | [Docs](linux-features/project-task-sort/README.md) |
 | Read Aloud button | Opt-in | `read-aloud` | [Docs](linux-features/read-aloud/README.md) |
 | Read Aloud MCP | Opt-in | `read-aloud-mcp` | [Docs](linux-features/read-aloud-mcp/README.md) |
 | Remote Control UI gates | Opt-in | `remote-control-ui` | [Docs](linux-features/remote-control-ui/README.md) |

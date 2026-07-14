@@ -35,6 +35,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- Approval notifications now preserve the upstream Approve, Approve for
+  session, and Decline actions on Linux. A small freedesktop notification
+  bridge forwards the action and close signals that Electron's Linux
+  notification backend does not expose, with the existing View-only Electron
+  notification retained as a fail-soft fallback.
+- The opt-in `frameless-titlebar` feature now removes Electron-drawn window
+  controls from Quick Chat as well as the primary window, keeping compositor-
+  managed decoration behavior consistent across both window types.
+- Remote mobile cold starts now select one runtime owner deterministically.
+  Explicit systemd user-service configuration takes precedence over the
+  Desktop app-server and standalone fallback, while a versioned Desktop marker
+  prevents stale or forged marker content from suppressing the fallback.
+- Remote mobile device keys now use a bounded, versioned file store with
+  serialized read-modify-write updates and crash-durable atomic replacement.
+  Unsafe paths, file types, ownership, permissions, malformed records, and
+  oversized stores fail closed instead of being followed or silently erased.
 - Remote mobile control now patches the current upstream webview chunks for
   feature sync, settings visibility, host enablement, and active conversation
   status. Revoking the final controller now also clears the current mobile setup
