@@ -8666,9 +8666,9 @@ test("Computer Use availability descriptors cover current settings and Plugins b
 
 test("reconciles the current global Plugins page to the installed Computer Use plugin", () => {
   const source =
-    "function Si({installedPlugins:e}){return e}" +
-    "let Pt=[{marketplaceName:`openai-bundled`,marketplacePath:`/marketplace.json`,plugin:{id:`computer-use@openai-bundled`,name:`computer-use`,source:{type:`local`}}},{plugin:{id:`installed`,name:`installed`}}],Qt=[],nn=[]," +
-    "Ft=[{remoteMarketplaceName:`openai-curated`,plugin:{id:`computer-use`,name:`computer-use`,source:{type:`remote`}}},{plugin:{id:`installed`,name:`installed`}},{plugin:{id:`other-missing`,name:`other-missing`}}]," +
+    "function Si({installedPlugins:e}){return [{remoteMarketplaceName:`openai-curated`,plugin:{id:`computer-use`,name:`computer-use`,source:{type:`remote`}}},...e]}" +
+    "let Pt=[{plugin:{id:`installed`,name:`installed`}}],Qt=[],nn=[]," +
+    "Ft=[{marketplaceName:`openai-bundled`,marketplacePath:`/marketplace.json`,plugin:{id:`computer-use@openai-bundled`,name:`computer-use`,source:{type:`local`}}},{plugin:{id:`installed`,name:`installed`}},{plugin:{id:`other-missing`,name:`other-missing`}}]," +
     "Vr=Si({installedPlugins:Ft,sharedWithYouPlugins:Qt??[],workspacePlugins:nn??[]})," +
     "Ei=Vr,qi=Vr.find(e=>e.plugin.name===`computer-use`)," +
     "Ji=new Set([...Pt,...Qt??[],...nn??[]].map(e=>e.plugin.id))," +

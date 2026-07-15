@@ -652,17 +652,19 @@ function applyLinuxComputerUseRendererAvailabilityPatch(currentSource) {
 function applyLinuxComputerUsePluginsPageAvailabilityPatch(currentSource) {
   const installedComputerUseLookup =
     ".find(e=>e.plugin?.name===`computer-use`&&e.marketplaceName===`openai-bundled`&&e.plugin?.source?.type===`local`)";
-  if (currentSource.includes(installedComputerUseLookup)) {
+  const unavailableComputerUseGuardPattern =
+    /&&!\(([A-Za-z_$][\w$]*)\.plugin\?\.name===`computer-use`&&\1\.marketplaceName===`openai-bundled`&&\1\.plugin\?\.source\?\.type===`local`\)/;
+  if (
+    currentSource.includes(installedComputerUseLookup) &&
+    unavailableComputerUseGuardPattern.test(currentSource)
+  ) {
     return currentSource;
   }
 
-  const availablePluginsPattern =
-    /new Set\(\[\.\.\.([A-Za-z_$][\w$]*),\.\.\.\(?[A-Za-z_$][\w$]*\?\?\[\]\)?,\.\.\.\(?[A-Za-z_$][\w$]*\?\?\[\]\)?\]\.map\(([A-Za-z_$][\w$]*)=>\2\.plugin\.id\)\)/;
-  const availablePluginsVar = currentSource.match(availablePluginsPattern)?.[1] ?? null;
   const unavailableSetPattern =
     /new Set\(([A-Za-z_$][\w$]*)\.filter\(([A-Za-z_$][\w$]*)=>!([A-Za-z_$][\w$]*)\.has\(\2\.plugin\.id\)\)\.map\(([A-Za-z_$][\w$]*)=>\4\.plugin\.id\)\)/;
   const unavailableSetMatch = currentSource.match(unavailableSetPattern);
-  if (availablePluginsVar == null || unavailableSetMatch == null) {
+  if (unavailableSetMatch == null) {
     console.warn(
       "WARN: Could not find current Plugins-page installed plugin reconciliation contract — skipping Linux Computer Use global availability patch",
     );
@@ -671,7 +673,7 @@ function applyLinuxComputerUsePluginsPageAvailabilityPatch(currentSource) {
 
   const installedPluginsVar = unavailableSetMatch[1];
   const installedPluginsAssignmentPattern = new RegExp(
-    `\\b${escapeRegExp(installedPluginsVar)}=([A-Za-z_$][\\w$]*\\(\\{installedPlugins:[A-Za-z_$][\\w$]*,sharedWithYouPlugins:[A-Za-z_$][\\w$]*\\?\\?\\[\\],workspacePlugins:[A-Za-z_$][\\w$]*\\?\\?\\[\\]\\}\\))`,
+    `\\b${escapeRegExp(installedPluginsVar)}=([A-Za-z_$][\\w$]*\\(\\{installedPlugins:([A-Za-z_$][\\w$]*),sharedWithYouPlugins:[A-Za-z_$][\\w$]*\\?\\?\\[\\],workspacePlugins:[A-Za-z_$][\\w$]*\\?\\?\\[\\]\\}\\))`,
   );
   if (!installedPluginsAssignmentPattern.test(currentSource)) {
     console.warn(
@@ -680,11 +682,17 @@ function applyLinuxComputerUsePluginsPageAvailabilityPatch(currentSource) {
     return currentSource;
   }
 
-  return currentSource.replace(
-    installedPluginsAssignmentPattern,
-    (_match, installedPluginsCall) =>
-      `${installedPluginsVar}=(()=>{let e=${availablePluginsVar}${installedComputerUseLookup},t=${installedPluginsCall};return e==null?t:[...t.filter(t=>t.plugin?.name!==\`computer-use\`&&t.plugin?.id?.split(\`@\`)[0]!==\`computer-use\`),e]})()`,
-  );
+  return currentSource
+    .replace(
+      installedPluginsAssignmentPattern,
+      (_match, installedPluginsCall, installedPluginEntriesVar) =>
+        `${installedPluginsVar}=(()=>{let e=${installedPluginEntriesVar}${installedComputerUseLookup},t=${installedPluginsCall};return e==null?t:[...t.filter(t=>t.plugin?.name!==\`computer-use\`&&t.plugin?.id?.split(\`@\`)[0]!==\`computer-use\`),e]})()`,
+    )
+    .replace(
+      unavailableSetPattern,
+      (_match, pluginsVar, pluginVar, availableIdsVar, mappedPluginVar) =>
+        `new Set(${pluginsVar}.filter(${pluginVar}=>!${availableIdsVar}.has(${pluginVar}.plugin.id)&&!(${pluginVar}.plugin?.name===\`computer-use\`&&${pluginVar}.marketplaceName===\`openai-bundled\`&&${pluginVar}.plugin?.source?.type===\`local\`)).map(${mappedPluginVar}=>${mappedPluginVar}.plugin.id))`,
+    );
 }
 
 function findHandlerValue(source, methodName) {
