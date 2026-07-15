@@ -8686,9 +8686,10 @@ test("Computer Use availability descriptors cover current settings and Plugins b
 test("reconciles the current global Plugins page to the installed Computer Use plugin", () => {
   const source =
     "function Si({installedPlugins:e}){return [{remoteMarketplaceName:`openai-curated`,plugin:{id:`computer-use`,name:`computer-use`,source:{type:`remote`}}},...e]}" +
-    "let Pt=[{plugin:{id:`installed`,name:`installed`}}],Qt=[],nn=[]," +
+    "let Pt=[{plugin:{id:`installed`,name:`installed`}}],Qt=[],nn=[],zr=[{remoteMarketplaceName:`openai-curated`,plugin:{id:`computer-use`,name:`computer-use`,source:{type:`remote`}}}],xi=e=>true," +
     "Ft=[{marketplaceName:`openai-bundled`,marketplacePath:`/marketplace.json`,plugin:{id:`computer-use@openai-bundled`,name:`computer-use`,source:{type:`local`}}},{plugin:{id:`installed`,name:`installed`}},{plugin:{id:`other-missing`,name:`other-missing`}}]," +
     "Vr=Si({installedPlugins:Ft,sharedWithYouPlugins:Qt??[],workspacePlugins:nn??[]})," +
+    "fi=zr.filter(xi),Ai={connectedPlugins:Vr,featuredPluginIds:[],plugins:fi}," +
     "Ei=Vr,qi=Vr.find(e=>e.plugin.name===`computer-use`)," +
     "Ji=new Set([...Pt,...Qt??[],...nn??[]].map(e=>e.plugin.id))," +
     "Xi=new Set(Vr.filter(e=>!Ji.has(e.plugin.id)).map(e=>e.plugin.id));";
@@ -8696,7 +8697,7 @@ test("reconciles the current global Plugins page to the installed Computer Use p
   const patched = applyPatchTwice(applyLinuxComputerUsePluginsPageAvailabilityPatch, source);
 
   const result = vm.runInNewContext(
-    `${patched};({browseComputerUse:Ei.filter(e=>e.plugin.name===\`computer-use\`),detailComputerUse:qi,unavailable:[...Xi]})`,
+    `${patched};({browseComputerUse:Ei.filter(e=>e.plugin.name===\`computer-use\`),detailComputerUse:qi,featuredComputerUse:Ai.plugins.filter(e=>e.plugin.name===\`computer-use\`),unavailable:[...Xi]})`,
   );
   assert.equal(result.browseComputerUse.length, 1);
   assert.equal(result.browseComputerUse[0].plugin.id, "computer-use@openai-bundled");
@@ -8704,7 +8705,29 @@ test("reconciles the current global Plugins page to the installed Computer Use p
   assert.equal(result.browseComputerUse[0].marketplacePath, "/marketplace.json");
   assert.equal(result.detailComputerUse.plugin.id, "computer-use@openai-bundled");
   assert.equal(result.detailComputerUse.plugin.source.type, "local");
+  assert.equal(result.featuredComputerUse.length, 1);
+  assert.equal(result.featuredComputerUse[0].plugin.id, "computer-use@openai-bundled");
+  assert.equal(result.featuredComputerUse[0].plugin.source.type, "local");
   assert.deepEqual(Array.from(result.unavailable), ["other-missing"]);
+});
+
+test("completes Featured Computer Use reconciliation from an already patched installed collection", () => {
+  const source =
+    "function Si({installedPlugins:e}){return [{remoteMarketplaceName:`openai-curated`,plugin:{id:`computer-use`,name:`computer-use`,source:{type:`remote`}}},...e]}" +
+    "let Pt=[{plugin:{id:`installed`,name:`installed`}}],Qt=[],nn=[],zr=[{remoteMarketplaceName:`openai-curated`,plugin:{id:`computer-use`,name:`computer-use`,source:{type:`remote`}}}],xi=e=>true," +
+    "Ft=[{marketplaceName:`openai-bundled`,marketplacePath:`/marketplace.json`,plugin:{id:`computer-use@openai-bundled`,name:`computer-use`,source:{type:`local`}}},{plugin:{id:`installed`,name:`installed`}},{plugin:{id:`other-missing`,name:`other-missing`}}]," +
+    "Vr=(()=>{let e=Ft.find(e=>e.plugin?.name===`computer-use`&&e.marketplaceName===`openai-bundled`&&e.plugin?.source?.type===`local`),t=Si({installedPlugins:Ft,sharedWithYouPlugins:Qt??[],workspacePlugins:nn??[]});return e==null?t:[...t.filter(t=>t.plugin?.name!==`computer-use`&&t.plugin?.id?.split(`@`)[0]!==`computer-use`),e]})()," +
+    "fi=zr.filter(xi),Ai={connectedPlugins:Vr,featuredPluginIds:[],plugins:fi}," +
+    "Ji=new Set([...Pt,...Qt??[],...nn??[]].map(e=>e.plugin.id))," +
+    "Xi=new Set(Vr.filter(e=>!Ji.has(e.plugin.id)&&!(e.plugin?.name===`computer-use`&&e.marketplaceName===`openai-bundled`&&e.plugin?.source?.type===`local`)).map(e=>e.plugin.id));";
+
+  const patched = applyPatchTwice(applyLinuxComputerUsePluginsPageAvailabilityPatch, source);
+  const result = vm.runInNewContext(
+    `${patched};Ai.plugins.find(e=>e.plugin.name===\`computer-use\`)`,
+  );
+
+  assert.equal(result.plugin.id, "computer-use@openai-bundled");
+  assert.equal(result.plugin.source.type, "local");
 });
 
 test("keeps Computer Use in shared plugin queries for composer mentions", () => {
