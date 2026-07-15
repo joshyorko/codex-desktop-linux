@@ -695,6 +695,30 @@ function applyLinuxComputerUsePluginsPageAvailabilityPatch(currentSource) {
     );
 }
 
+function applyLinuxComputerUseSharedPluginAvailabilityPatch(currentSource) {
+  const unpatchedPattern =
+    /function ([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*),\{isComputerUseAvailable:([A-Za-z_$][\w$]*),isExternalBrowserUseAvailable:([A-Za-z_$][\w$]*),isInAppBrowserUseAvailable:([A-Za-z_$][\w$]*)\}\)\{return!\(!\5&&([A-Za-z_$][\w$]*)\(\2\)\|\|!\4&&([A-Za-z_$][\w$]*)\(\2\)\|\|!\3&&[A-Za-z_$][\w$]*\(\2\)\)\}/g;
+  const patchedPattern =
+    /function [A-Za-z_$][\w$]*\(([A-Za-z_$][\w$]*),\{isComputerUseAvailable:[A-Za-z_$][\w$]*,isExternalBrowserUseAvailable:([A-Za-z_$][\w$]*),isInAppBrowserUseAvailable:([A-Za-z_$][\w$]*)\}\)\{return!\(!\3&&[A-Za-z_$][\w$]*\(\1\)\|\|!\2&&[A-Za-z_$][\w$]*\(\1\)\)\}/;
+  let changed = false;
+  const patchedSource = currentSource.replace(
+    unpatchedPattern,
+    (_match, functionName, pluginIdVar, computerUseAvailableVar, externalBrowserAvailableVar, inAppBrowserAvailableVar, inAppBrowserPredicate, externalBrowserPredicate) => {
+      changed = true;
+      return `function ${functionName}(${pluginIdVar},{isComputerUseAvailable:${computerUseAvailableVar},isExternalBrowserUseAvailable:${externalBrowserAvailableVar},isInAppBrowserUseAvailable:${inAppBrowserAvailableVar}}){return!(!${inAppBrowserAvailableVar}&&${inAppBrowserPredicate}(${pluginIdVar})||!${externalBrowserAvailableVar}&&${externalBrowserPredicate}(${pluginIdVar}))}`;
+    },
+  );
+
+  if (changed || patchedPattern.test(currentSource)) {
+    return patchedSource;
+  }
+
+  console.warn(
+    "WARN: Could not find shared Computer Use plugin availability filter — skipping Linux Computer Use composer availability patch",
+  );
+  return currentSource;
+}
+
 function findHandlerValue(source, methodName) {
   const key = `${JSON.stringify(methodName)}:`;
   const keyIndex = source.indexOf(key);
@@ -877,5 +901,6 @@ module.exports = {
   applyLinuxComputerUsePluginGatePatch,
   applyLinuxComputerUsePluginsPageAvailabilityPatch,
   applyLinuxComputerUseRendererAvailabilityPatch,
+  applyLinuxComputerUseSharedPluginAvailabilityPatch,
   isComputerUseUiEnabled,
 };
