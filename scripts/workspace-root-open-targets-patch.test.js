@@ -124,7 +124,7 @@ test("workspace root dropdown follows aliased File Manager callbacks", () => {
   assert.equal(applyWorkspaceRootOpenTargetsPatch(patched, targets), patched);
 });
 
-test("workspace root open targets patch scans current shared app main project chunks", () => {
+test("workspace root open targets patch scans the current app page chunk", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-workspace-root-open-targets-"));
   try {
     const buildDir = path.join(root, ".vite", "build");
@@ -145,7 +145,7 @@ test("workspace root open targets patch scans current shared app main project ch
       path.join(assetsDir, "app-main-current.js"),
       "function decoy(){return{target:`fileManager`}}",
     );
-    const sharedChunkName = "app-initial~app-main~projects-index-page~remote-conversation-page-current.js";
+    const sharedChunkName = "app-initial~app-main~page-current.js";
     fs.writeFileSync(
       path.join(assetsDir, sharedChunkName),
       [

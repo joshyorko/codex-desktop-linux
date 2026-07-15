@@ -6,6 +6,7 @@ const {
 } = require("../../../../descriptor.js");
 const {
   applyLinuxAboutDialogPatch,
+  applyLinuxAppReloadShortcutsPatch,
   applyLinuxApplicationMenuPatch,
   applyLinuxWindowOptionsPatch,
   applyLinuxNativeTitlebarPatch,
@@ -75,6 +76,13 @@ module.exports = [
     order: 65,
     ciPolicy: "optional",
     apply: applyLinuxApplicationMenuPatch,
+  }),
+  mainBundlePatch({
+    id: "linux-app-reload-shortcuts",
+    phase: "main-bundle",
+    order: 67,
+    ciPolicy: "optional",
+    apply: applyLinuxAppReloadShortcutsPatch,
   }),
   mainBundlePatch({
     id: "linux-native-titlebar",

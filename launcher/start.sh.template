@@ -1497,6 +1497,23 @@ run_cli_preflight_background() {
     ) &
 }
 
+run_cli_launch_path_helper() {
+    python3 "$SCRIPT_DIR/.codex-linux/cli-launch-path.py" "$1"
+}
+
+verify_cli_launch_path() {
+    local verified_path=""
+    if ! verified_path="$(run_cli_launch_path_helper "$CODEX_CLI_PATH")"; then
+        return 1
+    fi
+    if [ -z "$verified_path" ]; then
+        return 1
+    fi
+
+    CODEX_CLI_PATH="$verified_path"
+    export CODEX_CLI_PATH
+}
+
 is_interactive_terminal() {
     [ "$LAUNCHER_INTERACTIVE_TERMINAL" -eq 1 ] && [ -r /dev/tty ] && [ -w /dev/tty ]
 }
@@ -1639,6 +1656,7 @@ find_codex_cli() {
     for candidate in \
         "$(cached_codex_cli_path || true)" \
         "$HOME/.bun/bin/codex" \
+        "$HOME/.codex-cli-npm/bin/codex" \
         "$HOME/.npm-global/bin/codex" \
         "${XDG_CONFIG_HOME:-$HOME/.config}/nvm/versions/node/current/bin/codex" \
         "${XDG_CONFIG_HOME:-$HOME/.config}/nvm/versions/node"/*/bin/codex \
@@ -4180,19 +4198,27 @@ if needs_cold_start && [ -z "$CODEX_CLI_PATH" ]; then
     if is_interactive_terminal; then
         if prompt_install_missing_cli; then
             if ! run_cli_preflight 1; then
-                notify_error "Codex CLI installation was attempted but did not succeed. Retry by reopening the app, or install it manually with: npm i -g --include=optional @openai/codex or npm i -g --include=optional --prefix ~/.local @openai/codex"
+                notify_error "Codex CLI installation was attempted but did not succeed. Retry by reopening the app, or install into a fresh safe prefix: (umask 0022; npm i -g --include=optional --prefix ~/.codex-cli-npm @openai/codex)"
                 exit 1
             fi
         fi
     elif ! run_gui_cli_prompt; then
-        notify_error "Codex CLI is required but is not installed. Reopen the app to retry the automatic install flow, or install it manually with: npm i -g --include=optional @openai/codex or npm i -g --include=optional --prefix ~/.local @openai/codex"
+        notify_error "Codex CLI is required but is not installed. Reopen the app to retry the automatic install flow, or install into a fresh safe prefix: (umask 0022; npm i -g --include=optional --prefix ~/.codex-cli-npm @openai/codex)"
         exit 1
     fi
 fi
 
 if needs_cold_start && [ -z "$CODEX_CLI_PATH" ]; then
-    notify_error "Codex CLI is required but is not installed. Reopen the app to retry the automatic install flow, or install it manually with: npm i -g --include=optional @openai/codex or npm i -g --include=optional --prefix ~/.local @openai/codex"
+    notify_error "Codex CLI is required but is not installed. Reopen the app to retry the automatic install flow, or install into a fresh safe prefix: (umask 0022; npm i -g --include=optional --prefix ~/.codex-cli-npm @openai/codex)"
     exit 1
+fi
+
+if [ -n "$CODEX_CLI_PATH" ]; then
+    if ! verify_cli_launch_path; then
+        notify_error "The selected Codex CLI failed its execution-free trust check and will not be executed. If it is a rejected managed standalone install, stop active Codex installers and remove its standalone tree. Updater-enabled native packages can then run: codex-update-manager recover-standalone-cli --print-path. With AppImage, Nix, or updaterless packages, reinstall from a verified package channel into a fresh path owned by you or root with no group/world-writable file or parent directory; do not reuse the rejected tree. To switch away from standalone intentionally, also remove ~/.codex-standalone-provenance."
+        exit 1
+    fi
+    log_phase "cli_launch_path_verified"
 fi
 
 if needs_cold_start; then
