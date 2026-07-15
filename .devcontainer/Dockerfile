@@ -4,6 +4,7 @@ ARG USERNAME=vscode
 ARG USER_UID=1000
 ARG USER_GID=$USER_UID
 ARG NODE_VERSION=22.22.2
+ARG SEVENZIP_VERSION=2600
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PATH="/usr/local/cargo/bin:${PATH}"
@@ -20,7 +21,6 @@ RUN apt-get update -qq \
         jq \
         libssl-dev \
         make \
-        p7zip-full \
         pkg-config \
         python3 \
         ripgrep \
@@ -30,6 +30,23 @@ RUN apt-get update -qq \
         unzip \
         xz-utils \
     && rm -rf /var/lib/apt/lists/*
+
+RUN set -eux; \
+    arch="$(dpkg --print-architecture)"; \
+    case "$arch" in \
+      amd64) sevenzip_arch="x64" ;; \
+      arm64) sevenzip_arch="arm64" ;; \
+      armhf) sevenzip_arch="arm" ;; \
+      *) echo "Unsupported 7-Zip architecture: $arch" >&2; exit 1 ;; \
+    esac; \
+    tmpdir="$(mktemp -d)"; \
+    sevenzip_tarball="7z${SEVENZIP_VERSION}-linux-${sevenzip_arch}.tar.xz"; \
+    curl -fsSL --retry 3 -o "$tmpdir/$sevenzip_tarball" "https://www.7-zip.org/a/$sevenzip_tarball"; \
+    tar -tf "$tmpdir/$sevenzip_tarball" 7zz; \
+    tar -C "$tmpdir" -xJf "$tmpdir/$sevenzip_tarball" 7zz; \
+    install -m 0755 "$tmpdir/7zz" /usr/local/bin/7zz; \
+    rm -rf "$tmpdir"; \
+    7zz 2>&1 | grep -m 1 "7-Zip"
 
 RUN set -eux; \
     arch="$(dpkg --print-architecture)"; \
