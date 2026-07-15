@@ -145,7 +145,13 @@ function loadInjectedTransport({ spawnImpl, WebSocketImpl = null, fsImpl = fs, t
       return require(id);
     },
     setTimeout(callback, delay, ...args) {
-      return setTimeout(callback, timeoutCapMs == null ? delay : Math.min(delay, timeoutCapMs), ...args);
+      const timer = setTimeout(
+        callback,
+        timeoutCapMs == null ? delay : Math.min(delay, timeoutCapMs),
+        ...args,
+      );
+      if (timeoutCapMs != null) timer.unref = () => timer;
+      return timer;
     },
     clearTimeout,
   };
