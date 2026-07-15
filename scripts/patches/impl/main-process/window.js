@@ -319,9 +319,21 @@ function applyLinuxBrowserReloadShortcutCapturePatch(currentSource) {
     /let ([A-Za-z_$][\w$]*)=process\.platform===`darwin`,([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)=>\s*([A-Za-z_$][\w$]*)\.Gt\(\{commandId:\3,isMacOS:\1\}\);/;
   const acceleratorMapPattern =
     /return\{closeTab:([A-Za-z_$][\w$]*)\(`closeTab`\),nextTab:\1\(`nextTab`\),nextRecentThread:\1\(`nextRecentThread`\),nextThread:\1\(`nextThread`\),openBrowserTab:\1\(`openBrowserTab`\),previousTab:\1\(`previousTab`\),previousRecentThread:\1\(`previousRecentThread`\),previousThread:\1\(`previousThread`\)\}/;
+  const handlerSignaturePattern =
+    /owner:([A-Za-z_$][\w$]*),runCommandInOwner:([A-Za-z_$][\w$]*),setInteractionMode:([A-Za-z_$][\w$]*)/;
+  const reloadCallbackPattern =
+    /,setInteractionMode:\(([A-Za-z_$][\w$]*),([A-Za-z_$][\w$]*)\)=>\{([A-Za-z_$][\w$]*)\.setInteractionMode\(([A-Za-z_$][\w$]*)\.owner,([A-Za-z_$][\w$]*)\.conversationId,\1,\5\.browserTabId,\2\)\}\}\),/;
   const resolverMatch = currentSource.match(acceleratorResolverPattern);
   const mapMatch = currentSource.match(acceleratorMapPattern);
-  if (!commandListPattern.test(currentSource) || resolverMatch == null || mapMatch == null) {
+  const signatureMatch = currentSource.match(handlerSignaturePattern);
+  const callbackMatch = currentSource.match(reloadCallbackPattern);
+  if (
+    !commandListPattern.test(currentSource)
+    || resolverMatch == null
+    || mapMatch == null
+    || signatureMatch == null
+    || callbackMatch == null
+  ) {
     console.warn("WARN: Could not find browser WebContents owner shortcut resolver — skipping Linux browser reload shortcut capture patch");
     return currentSource;
   }
@@ -331,11 +343,29 @@ function applyLinuxBrowserReloadShortcutCapturePatch(currentSource) {
     `let ${isMacAlias}=process.platform===\`darwin\`,${patchMarker}=${commandsAlias}.qt(),${resolverAlias}=${commandIdAlias}=>${commandsAlias}.Qt({commandId:${commandIdAlias},keymapState:${patchMarker},isMacOS:${isMacAlias}});`;
   const acceleratorMapReplacement =
     `return{closeTab:${resolverAlias}(\`closeTab\`),hardReloadBrowserPage:${resolverAlias}(\`hardReloadBrowserPage\`),nextTab:${resolverAlias}(\`nextTab\`),nextRecentThread:${resolverAlias}(\`nextRecentThread\`),nextThread:${resolverAlias}(\`nextThread\`),openBrowserTab:${resolverAlias}(\`openBrowserTab\`),previousTab:${resolverAlias}(\`previousTab\`),previousRecentThread:${resolverAlias}(\`previousRecentThread\`),previousThread:${resolverAlias}(\`previousThread\`),reloadBrowserPage:${resolverAlias}(\`reloadBrowserPage\`)}`;
+  const [, ownerAlias] = signatureMatch;
+  const dispatchPattern = new RegExp(
+    `if\\(([A-Za-z_$][\\w$]*)\\.preventDefault\\(\\),${ownerAlias.replaceAll("$", "\\$")}\\.focus\\(\\),([A-Za-z_$][\\w$]*)\\.allowAppShellTabShortcut\\)\\{`,
+  );
+  const dispatchMatch = currentSource.match(dispatchPattern);
+  if (dispatchMatch == null) {
+    console.warn("WARN: Could not find browser WebContents owner shortcut dispatch — skipping Linux browser reload shortcut capture patch");
+    return currentSource;
+  }
+  const [, inputEventAlias, matchedCommandAlias] = dispatchMatch;
+  const dispatchReplacement =
+    `${inputEventAlias}.preventDefault();if(${matchedCommandAlias}.commandId===\`reloadBrowserPage\`){codexLinuxReloadBrowserPage(!1);return}if(${matchedCommandAlias}.commandId===\`hardReloadBrowserPage\`){codexLinuxReloadBrowserPage(!0);return}if(${ownerAlias}.focus(),${matchedCommandAlias}.allowAppShellTabShortcut){`;
+  const [, setModeAlias, entrySourceAlias, managerAlias, windowAlias, pageAlias] = callbackMatch;
+  const reloadCallbackReplacement =
+    `,reloadBrowserPage:codexLinuxIgnoreCache=>{${managerAlias}.reload(${windowAlias}.owner,${pageAlias}.conversationId,{ignoreCache:codexLinuxIgnoreCache},${pageAlias}.browserTabId)},setInteractionMode:(${setModeAlias},${entrySourceAlias})=>{${managerAlias}.setInteractionMode(${windowAlias}.owner,${pageAlias}.conversationId,${setModeAlias},${pageAlias}.browserTabId,${entrySourceAlias})}}),`;
 
   return currentSource
     .replace(commandListPattern, commandListReplacement)
     .replace(acceleratorResolverPattern, acceleratorResolverReplacement)
-    .replace(acceleratorMapPattern, acceleratorMapReplacement);
+    .replace(acceleratorMapPattern, acceleratorMapReplacement)
+    .replace(handlerSignaturePattern, `owner:${ownerAlias},reloadBrowserPage:codexLinuxReloadBrowserPage,runCommandInOwner:$2,setInteractionMode:$3`)
+    .replace(dispatchPattern, dispatchReplacement)
+    .replace(reloadCallbackPattern, reloadCallbackReplacement);
 }
 
 function applyLinuxSetIconPatch(currentSource, iconAsset) {

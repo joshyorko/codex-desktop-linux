@@ -2797,17 +2797,24 @@ test("migrates a Linux-suppressed application menu back to the real menu", () =>
 });
 
 test("captures remapped browser reload shortcuts through the native keymap", () => {
-  const source = "var persisted={reloadBrowserPage:[`Ctrl+Alt+Y`],hardReloadBrowserPage:[`Ctrl+Shift+F5`]},commands={qt:()=>persisted,Qt:({commandId,keymapState})=>keymapState[commandId]??[],Gt:({commandId})=>({reloadBrowserPage:[`Ctrl+R`],hardReloadBrowserPage:[`Ctrl+Shift+R`]})[commandId]??[]};var tabCommands=[`nextTab`,`previousTab`],ownerCommands=[`nextRecentThread`,`nextThread`,`openBrowserTab`,`previousRecentThread`,`previousThread`];function ownerAccelerators(){let isMac=process.platform===`darwin`,get=commandId=>commands.Gt({commandId:commandId,isMacOS:isMac});return{closeTab:get(`closeTab`),nextTab:get(`nextTab`),nextRecentThread:get(`nextRecentThread`),nextThread:get(`nextThread`),openBrowserTab:get(`openBrowserTab`),previousTab:get(`previousTab`),previousRecentThread:get(`previousRecentThread`),previousThread:get(`previousThread`)}}function install({getOwnerCommandAccelerators:a,owner:s,runCommandInOwner:c}){let u=resolve(a);return(d,f)=>{let p=u(f);if(p!=null){d.preventDefault(),s.focus(),c(p.commandId,toKeyboardEvent(f));return}}}function resolve(e){return t=>{if(t.type!==`keyDown`)return null;let n=toKeyboardEvent(t),r=find(t,n,e,tabCommands),i=find(t,n,e,ownerCommands);return r!=null&&i!=null?{allowAppShellTabShortcut:!0,commandId:i}:r==null?i==null?null:{commandId:i}:{commandId:r}}}function find(e,t,r,i){for(let a of i)for(let i of r(a)){if(i.includes(` `)||!matches(t,i))continue;return e.isAutoRepeat?null:a}return null}function toKeyboardEvent(e){return e}function matches(e,t){return e.accelerator===t}this.install=install;this.ownerAccelerators=ownerAccelerators;";
+  const source = "var persisted={reloadBrowserPage:[`Ctrl+Alt+Y`],hardReloadBrowserPage:[`Ctrl+Shift+F5`]},commands={qt:()=>persisted,Qt:({commandId,keymapState})=>keymapState[commandId]??[],Gt:({commandId})=>({reloadBrowserPage:[`Ctrl+R`],hardReloadBrowserPage:[`Ctrl+Shift+R`]})[commandId]??[]};var tabCommands=[`nextTab`,`previousTab`],ownerCommands=[`nextRecentThread`,`nextThread`,`openBrowserTab`,`previousRecentThread`,`previousThread`];function ownerAccelerators(){let isMac=process.platform===`darwin`,get=commandId=>commands.Gt({commandId:commandId,isMacOS:isMac});return{closeTab:get(`closeTab`),nextTab:get(`nextTab`),nextRecentThread:get(`nextRecentThread`),nextThread:get(`nextThread`),openBrowserTab:get(`openBrowserTab`),previousTab:get(`previousTab`),previousRecentThread:get(`previousRecentThread`),previousThread:get(`previousThread`)}}function install({getOwnerCommandAccelerators:a,owner:s,runCommandInOwner:c,setInteractionMode:l}){let u=resolve(a);return(d,f)=>{let p=u(f);if(p!=null){if(d.preventDefault(),s.focus(),p.allowAppShellTabShortcut){c(p.commandId,toKeyboardEvent(f),{allowAppShellTabShortcut:!0});return}c(p.commandId,toKeyboardEvent(f));return}}}function resolve(e){return t=>{if(t.type!==`keyDown`)return null;let n=toKeyboardEvent(t),r=find(t,n,e,tabCommands),i=find(t,n,e,ownerCommands);return r!=null&&i!=null?{allowAppShellTabShortcut:!0,commandId:i}:r==null?i==null?null:{commandId:i}:{commandId:r}}}function find(e,t,r,i){for(let a of i)for(let i of r(a)){if(i.includes(` `)||!matches(t,i))continue;return e.isAutoRepeat?null:a}return null}function toKeyboardEvent(e){return e}function matches(e,t){return e.accelerator===t}function wire(e,t,r){let me=install({getOwnerCommandAccelerators:n=>e.getOwnerCommandAccelerators(n),owner:t.owner,runCommandInOwner:(n,i,a)=>{e.runCommandInOwner(n,i,a)},setInteractionMode:(n,i)=>{e.setInteractionMode(t.owner,r.conversationId,n,r.browserTabId,i)}}),he=0;return me}this.wire=wire;this.ownerAccelerators=ownerAccelerators;";
   const patched = applyPatchTwice(applyLinuxBrowserReloadShortcutCapturePatch, source);
-  const actions = [];
+  const runCommands = [];
+  const reloads = [];
   const context = { process: { platform: "linux" } };
   vm.runInNewContext(patched, context);
   const accelerators = context.ownerAccelerators();
-  const handler = context.install({
+  const manager = {
     getOwnerCommandAccelerators: (commandId) => accelerators[commandId] ?? [],
-    owner: { focus() {} },
-    runCommandInOwner: (commandId) => actions.push(commandId),
-  });
+    reload: (_owner, _conversationId, { ignoreCache }, _browserTabId) => reloads.push(ignoreCache),
+    runCommandInOwner: (commandId) => runCommands.push(commandId),
+    setInteractionMode() {},
+  };
+  const handler = context.wire(
+    manager,
+    { owner: { focus() {} } },
+    { browserTabId: "browser-tab", conversationId: "conversation" },
+  );
   const input = (accelerator) => ({
     accelerator,
     isAutoRepeat: false,
@@ -2826,7 +2833,8 @@ test("captures remapped browser reload shortcuts through the native keymap", () 
   assert.equal(defaultReload.prevented, false);
   assert.equal(reload.prevented, true);
   assert.equal(hardReload.prevented, true);
-  assert.deepEqual(actions, ["reloadBrowserPage", "hardReloadBrowserPage"]);
+  assert.deepEqual(reloads, [false, true]);
+  assert.deepEqual(runCommands, []);
 });
 
 test("patches current opaque window surface background helper shape for Linux", () => {
