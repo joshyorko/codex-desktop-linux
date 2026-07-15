@@ -16,7 +16,7 @@ module.exports = [
     order: 1099,
     ciPolicy: "required-upstream",
     enabled: (context) => context.enableComputerUseUi,
-    pattern: /^app-initial~app-main~new-thread-panel-page~onboarding-page~appgen-library-page~hotkey-windo~.*\.js$/,
+    pattern: /^app-initial~app-main~new-thread-panel-page~onboarding-page~appgen-library-page~hotkey-windo~nrw3o0ql-[^.]+\.js$/,
     missingDescription: "shared plugin availability bundle",
     skipDescription: "Linux Computer Use composer availability patch",
     apply: applyLinuxComputerUseSharedPluginAvailabilityPatch,

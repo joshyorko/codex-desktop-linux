@@ -8672,6 +8672,14 @@ test("Computer Use availability descriptors cover current settings and Plugins b
     "app-initial~app-main~new-thread-panel-page~onboarding-page~appgen-library-page~hotkey-windo~nrw3o0ql-CI1_Z0oj.js",
     sharedDescriptor.pattern,
   );
+  assert.doesNotMatch(
+    "app-initial~app-main~new-thread-panel-page~onboarding-page~appgen-library-page~hotkey-windo~eq487jm7-BvlxyIFK.js",
+    sharedDescriptor.pattern,
+  );
+  assert.doesNotMatch(
+    "app-initial~app-main~new-thread-panel-page~onboarding-page~appgen-library-page~hotkey-windo~pel57pe6-DetEkMu0.js",
+    sharedDescriptor.pattern,
+  );
   assert.doesNotMatch("plugins-page-bnf47Vi4.js", sharedDescriptor.pattern);
 });
 
