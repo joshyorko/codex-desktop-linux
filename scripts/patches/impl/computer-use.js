@@ -661,7 +661,19 @@ function applyLinuxComputerUsePluginsPageAvailabilityPatch(currentSource) {
   const availablePluginsVar = currentSource.match(availablePluginsPattern)?.[1] ?? null;
   const unavailableSetPattern =
     /new Set\(([A-Za-z_$][\w$]*)\.filter\(([A-Za-z_$][\w$]*)=>!([A-Za-z_$][\w$]*)\.has\(\2\.plugin\.id\)\)\.map\(([A-Za-z_$][\w$]*)=>\4\.plugin\.id\)\)/;
-  if (availablePluginsVar == null || !unavailableSetPattern.test(currentSource)) {
+  const unavailableSetMatch = currentSource.match(unavailableSetPattern);
+  if (availablePluginsVar == null || unavailableSetMatch == null) {
+    console.warn(
+      "WARN: Could not find current Plugins-page installed plugin reconciliation contract — skipping Linux Computer Use global availability patch",
+    );
+    return currentSource;
+  }
+
+  const installedPluginsVar = unavailableSetMatch[1];
+  const installedPluginsAssignmentPattern = new RegExp(
+    `\\b${escapeRegExp(installedPluginsVar)}=([A-Za-z_$][\\w$]*\\(\\{installedPlugins:[A-Za-z_$][\\w$]*,sharedWithYouPlugins:[A-Za-z_$][\\w$]*\\?\\?\\[\\],workspacePlugins:[A-Za-z_$][\\w$]*\\?\\?\\[\\]\\}\\))`,
+  );
+  if (!installedPluginsAssignmentPattern.test(currentSource)) {
     console.warn(
       "WARN: Could not find current Plugins-page installed plugin reconciliation contract — skipping Linux Computer Use global availability patch",
     );
@@ -669,9 +681,9 @@ function applyLinuxComputerUsePluginsPageAvailabilityPatch(currentSource) {
   }
 
   return currentSource.replace(
-    unavailableSetPattern,
-    (_match, pluginsVar, pluginVar, installedIdsVar, mappedPluginVar) =>
-      `(${pluginsVar}=(()=>{let e=${availablePluginsVar}${installedComputerUseLookup};return e==null?${pluginsVar}:[...${pluginsVar}.filter(t=>t.plugin?.name!==\`computer-use\`&&t.plugin?.id?.split(\`@\`)[0]!==\`computer-use\`),e]})(),new Set(${pluginsVar}.filter(${pluginVar}=>!${installedIdsVar}.has(${pluginVar}.plugin.id)).map(${mappedPluginVar}=>${mappedPluginVar}.plugin.id)))`,
+    installedPluginsAssignmentPattern,
+    (_match, installedPluginsCall) =>
+      `${installedPluginsVar}=(()=>{let e=${availablePluginsVar}${installedComputerUseLookup},t=${installedPluginsCall};return e==null?t:[...t.filter(t=>t.plugin?.name!==\`computer-use\`&&t.plugin?.id?.split(\`@\`)[0]!==\`computer-use\`),e]})()`,
   );
 }
 

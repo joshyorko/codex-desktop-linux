@@ -8666,20 +8666,25 @@ test("Computer Use availability descriptors cover current settings and Plugins b
 
 test("reconciles the current global Plugins page to the installed Computer Use plugin", () => {
   const source =
+    "function Si({installedPlugins:e}){return e}" +
     "let Pt=[{marketplaceName:`openai-bundled`,marketplacePath:`/marketplace.json`,plugin:{id:`computer-use@openai-bundled`,name:`computer-use`,source:{type:`local`}}},{plugin:{id:`installed`,name:`installed`}}],Qt=[],nn=[]," +
-    "Vr=[{remoteMarketplaceName:`openai-curated`,plugin:{id:`computer-use`,name:`computer-use`,source:{type:`remote`}}},{plugin:{id:`installed`,name:`installed`}},{plugin:{id:`other-missing`,name:`other-missing`}}]," +
+    "Ft=[{remoteMarketplaceName:`openai-curated`,plugin:{id:`computer-use`,name:`computer-use`,source:{type:`remote`}}},{plugin:{id:`installed`,name:`installed`}},{plugin:{id:`other-missing`,name:`other-missing`}}]," +
+    "Vr=Si({installedPlugins:Ft,sharedWithYouPlugins:Qt??[],workspacePlugins:nn??[]})," +
+    "Ei=Vr,qi=Vr.find(e=>e.plugin.name===`computer-use`)," +
     "Ji=new Set([...Pt,...Qt??[],...nn??[]].map(e=>e.plugin.id))," +
     "Xi=new Set(Vr.filter(e=>!Ji.has(e.plugin.id)).map(e=>e.plugin.id));";
 
   const patched = applyPatchTwice(applyLinuxComputerUsePluginsPageAvailabilityPatch, source);
 
   const result = vm.runInNewContext(
-    `${patched};({computerUse:Vr.filter(e=>e.plugin.name===\`computer-use\`),unavailable:[...Xi]})`,
+    `${patched};({browseComputerUse:Ei.filter(e=>e.plugin.name===\`computer-use\`),detailComputerUse:qi,unavailable:[...Xi]})`,
   );
-  assert.equal(result.computerUse.length, 1);
-  assert.equal(result.computerUse[0].plugin.id, "computer-use@openai-bundled");
-  assert.equal(result.computerUse[0].plugin.source.type, "local");
-  assert.equal(result.computerUse[0].marketplacePath, "/marketplace.json");
+  assert.equal(result.browseComputerUse.length, 1);
+  assert.equal(result.browseComputerUse[0].plugin.id, "computer-use@openai-bundled");
+  assert.equal(result.browseComputerUse[0].plugin.source.type, "local");
+  assert.equal(result.browseComputerUse[0].marketplacePath, "/marketplace.json");
+  assert.equal(result.detailComputerUse.plugin.id, "computer-use@openai-bundled");
+  assert.equal(result.detailComputerUse.plugin.source.type, "local");
   assert.deepEqual(Array.from(result.unavailable), ["other-missing"]);
 });
 
