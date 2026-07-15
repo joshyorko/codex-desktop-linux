@@ -35,6 +35,7 @@ const {
   applyLinuxComputerUsePluginGatePatch,
   applyLinuxComputerUsePluginsPageAvailabilityPatch,
   applyLinuxComputerUseRendererAvailabilityPatch,
+  applyLinuxComputerUseSharedPluginAvailabilityPatch,
   isComputerUseUiEnabled,
 } = require("./patches/impl/computer-use.js");
 const {
@@ -981,6 +982,7 @@ test("default core patch descriptors are grouped and unique", () => {
     "local-environment-action-modal-draft",
     "linux-computer-use-ui-availability",
     "linux-computer-use-plugins-page-availability",
+    "linux-computer-use-shared-plugin-availability",
     "linux-app-updater-bridge",
     "browser-annotation-screenshot",
     "composer-persistent-rate-limit-footer",
@@ -8648,12 +8650,15 @@ test("keeps object-helper Computer Use host compatibility on Linux when platform
 
 test("Computer Use availability descriptors cover current settings and Plugins bundles", () => {
   const descriptors = require("./patches/core/all-linux/webview/computer-use-ui/patch.js");
-  assert.equal(descriptors.length, 2);
+  assert.equal(descriptors.length, 3);
   const settingsDescriptor = descriptors.find(
     (descriptor) => descriptor.id === "linux-computer-use-ui-availability",
   );
   const pluginsDescriptor = descriptors.find(
     (descriptor) => descriptor.id === "linux-computer-use-plugins-page-availability",
+  );
+  const sharedDescriptor = descriptors.find(
+    (descriptor) => descriptor.id === "linux-computer-use-shared-plugin-availability",
   );
 
   assert.equal(settingsDescriptor?.ciPolicy, "required-upstream");
@@ -8662,6 +8667,12 @@ test("Computer Use availability descriptors cover current settings and Plugins b
   assert.equal(pluginsDescriptor?.ciPolicy, "required-upstream");
   assert.match("plugins-page-bnf47Vi4.js", pluginsDescriptor.pattern);
   assert.doesNotMatch("computer-use-settings-B9iEdDjp.js", pluginsDescriptor.pattern);
+  assert.equal(sharedDescriptor?.ciPolicy, "required-upstream");
+  assert.match(
+    "app-initial~app-main~new-thread-panel-page~onboarding-page~appgen-library-page~hotkey-windo~nrw3o0ql-CI1_Z0oj.js",
+    sharedDescriptor.pattern,
+  );
+  assert.doesNotMatch("plugins-page-bnf47Vi4.js", sharedDescriptor.pattern);
 });
 
 test("reconciles the current global Plugins page to the installed Computer Use plugin", () => {
@@ -8686,6 +8697,25 @@ test("reconciles the current global Plugins page to the installed Computer Use p
   assert.equal(result.detailComputerUse.plugin.id, "computer-use@openai-bundled");
   assert.equal(result.detailComputerUse.plugin.source.type, "local");
   assert.deepEqual(Array.from(result.unavailable), ["other-missing"]);
+});
+
+test("keeps Computer Use in shared plugin queries for composer mentions", () => {
+  assert.equal(typeof applyLinuxComputerUseSharedPluginAvailabilityPatch, "function");
+  const source =
+    "function Ive(e){return e===`browser`}function Lve(e){return e===`chrome`}function Lb(e){return e===`computer-use`}" +
+    "function Fve(e,{isComputerUseAvailable:t,isExternalBrowserUseAvailable:n,isInAppBrowserUseAvailable:r}){return!(!r&&Ive(e)||!n&&Lve(e)||!t&&Lb(e))}";
+
+  const patched = applyPatchTwice(applyLinuxComputerUseSharedPluginAvailabilityPatch, source);
+  const result = vm.runInNewContext(
+    `${patched};Object.fromEntries([\`browser\`,\`chrome\`,\`computer-use\`,\`codex-computer-use-x11\`].map(e=>[e,Fve(e,{isComputerUseAvailable:!1,isExternalBrowserUseAvailable:!1,isInAppBrowserUseAvailable:!1})]))`,
+  );
+
+  assert.deepEqual({ ...result }, {
+    browser: false,
+    chrome: false,
+    "computer-use": true,
+    "codex-computer-use-x11": true,
+  });
 });
 
 test("patches the current DMG Computer Use settings availability and plugin card atomically", () => {

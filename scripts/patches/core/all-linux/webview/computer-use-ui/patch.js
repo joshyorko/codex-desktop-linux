@@ -6,9 +6,21 @@ const {
 const {
   applyLinuxComputerUseRendererAvailabilityPatch,
   applyLinuxComputerUsePluginsPageAvailabilityPatch,
+  applyLinuxComputerUseSharedPluginAvailabilityPatch,
 } = require("../../../../impl/computer-use.js");
 
 module.exports = [
+  webviewAssetPatch({
+    id: "linux-computer-use-shared-plugin-availability",
+    phase: "webview-asset",
+    order: 1099,
+    ciPolicy: "required-upstream",
+    enabled: (context) => context.enableComputerUseUi,
+    pattern: /^app-initial~app-main~new-thread-panel-page~onboarding-page~appgen-library-page~hotkey-windo~.*\.js$/,
+    missingDescription: "shared plugin availability bundle",
+    skipDescription: "Linux Computer Use composer availability patch",
+    apply: applyLinuxComputerUseSharedPluginAvailabilityPatch,
+  }),
   webviewAssetPatch({
     id: "linux-computer-use-ui-availability",
     phase: "webview-asset",
