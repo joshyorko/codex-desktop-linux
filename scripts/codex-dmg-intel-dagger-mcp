@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage: codex-dmg-intel-dagger-mcp [dagger mcp options]
+
+Expose the optional codex-desktop-linux Dagger module as a stdio MCP server.
+This is a self-hosted convenience bridge; the normal entry point is still the
+devcontainer wrapper:
+
+  scripts/dev/upstream-dmg-intel-devcontainer --candidate /path/to/Codex.dmg
+
+Repo-local Codex config:
+
+  [mcp_servers.codex-dmg-intel-dagger]
+  command = "/path/to/codex-desktop-linux/scripts/codex-dmg-intel-dagger-mcp"
+
+Set CODEX_DMG_INTEL_DAGGER_REPO when Codex may start outside this checkout.
+
+The bridge also exposes the repo Dagger agent functions. By default it routes
+Dagger LLM calls through Josh's Headroom proxy using a local Headroom client
+token shape. Real upstream provider keys belong on the Headroom server:
+
+  DAGGER_HEADROOM_PROXY_URL=http://10.10.10.89
+  DAGGER_HEADROOM_MODEL=openrouter/deepseek/deepseek-v4-flash
+  DAGGER_HEADROOM_API_KEY=headroom-local-client-token
+EOF
+}
+
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+  usage
+  exit 0
+fi
+
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+repo_root="$(cd -- "$script_dir/.." && pwd)"
+
+if ! command -v dagger >/dev/null 2>&1; then
+  echo "dagger CLI is required to expose codex-dmg-intel as MCP." >&2
+  exit 127
+fi
+
+module_repo="${CODEX_DMG_INTEL_DAGGER_REPO:-}"
+if [[ -z "$module_repo" && -f "$repo_root/dagger.json" && -d "$repo_root/.dagger" ]]; then
+  module_repo="$repo_root"
+fi
+
+module_repo="$(python3 - "$module_repo" <<'PY'
+import sys
+from pathlib import Path
+
+print(Path(sys.argv[1]).expanduser().resolve())
+PY
+)"
+
+if [[ ! -f "$module_repo/dagger.json" || ! -d "$module_repo/.dagger" ]]; then
+  echo "Dagger module path must contain dagger.json and .dagger/: $module_repo" >&2
+  exit 2
+fi
+
+headroom_proxy_url="${DAGGER_HEADROOM_PROXY_URL:-http://10.10.10.89}"
+export OPENAI_API_KEY="${OPENAI_API_KEY:-${DAGGER_HEADROOM_API_KEY:-${HEADROOM_API_KEY:-headroom-local-client-token}}}"
+export OPENAI_BASE_URL="${OPENAI_BASE_URL:-${headroom_proxy_url%/}/c/hermes/v1/}"
+export OPENAI_MODEL="${OPENAI_MODEL:-${DAGGER_HEADROOM_MODEL:-openrouter/deepseek/deepseek-v4-flash}}"
+export DAGGER_NO_NAG="${DAGGER_NO_NAG:-1}"
+
+exec python3 "$script_dir/codex-dmg-intel-dagger-mcp-filter.py" --mod "$module_repo" "$@"
