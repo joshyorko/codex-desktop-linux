@@ -97,6 +97,21 @@ mkdir -p \
     "$HOME_DIR" \
     "$RUNTIME_DIR/codex-desktop"
 
+if [ "${CODEX_TEST_DISABLE_PIDFD:-0}" = "1" ]; then
+    mkdir -p "$TMP_DIR/python-site"
+    cat > "$TMP_DIR/python-site/sitecustomize.py" <<'PY'
+import os
+import signal
+
+for module, attribute in (
+    (os, "pidfd_open"),
+    (signal, "pidfd_send_signal"),
+):
+    if hasattr(module, attribute):
+        delattr(module, attribute)
+PY
+fi
+
 if [ "${CODEX_TEST_DISABLE_WARM_START:-0}" = "1" ]; then
     printf '%s\n' '{"codex-linux-warm-start-enabled":false}' \
         > "$HOME_DIR/.config/codex-desktop/settings.json"
@@ -182,6 +197,9 @@ COMMON_ENV=(
     "CODEX_WEBVIEW_PORT=$PORT"
     "CODEX_TEST_HOOK_PID_FILE=$TMP_DIR/hook.pid"
 )
+if [ "${CODEX_TEST_DISABLE_PIDFD:-0}" = "1" ]; then
+    COMMON_ENV+=("PYTHONPATH=$TMP_DIR/python-site")
+fi
 
 "${COMMON_ENV[@]}" "$APP_DIR/start.sh" > "$FIRST_LOG" 2>&1 &
 LAUNCHER_PID=$!
@@ -214,8 +232,22 @@ if [ "${CODEX_TEST_KILL_DURING_PRELAUNCH:-0}" = "1" ]; then
 fi
 
 wait_for "first Electron" pid_file_is_live
+wait_for "first launcher lock release" grep -q "electron_spawned" "$APP_LOG"
 wait_for "first packaged webview" webview_is_ready
 FIRST_ELECTRON_PID="$(read_live_app_pid)"
+
+if [ "${CODEX_TEST_NORMAL_LOCK_ONLY:-0}" = "1" ]; then
+    flock -n "$STATE_DIR/launcher.lock" true \
+        || fail "launcher lock should be released after app.pid publication"
+    if grep -q "launcher lock helper did not exit" "$FIRST_LOG"; then
+        fail "normal launcher lock release should not require pidfd escalation"
+    fi
+    kill "$FIRST_ELECTRON_PID"
+    wait "$LAUNCHER_PID"
+    LAUNCHER_PID=""
+    printf '%s\n' "launcher normal lock test passed (pidfd disabled=${CODEX_TEST_DISABLE_PIDFD:-0})"
+    exit 0
+fi
 
 kill -KILL "$LAUNCHER_PID"
 wait "$LAUNCHER_PID" 2>/dev/null || true

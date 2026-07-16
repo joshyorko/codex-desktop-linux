@@ -1125,6 +1125,20 @@ patch_browser_client_iab_socket_scope() {
     fi
 }
 
+patch_browser_client_linux_socket_dir() {
+    local client="$1"
+    local patcher="$SCRIPT_DIR/scripts/lib/patch-browser-client-iab-socket-scope.js"
+
+    if [ ! -f "$patcher" ]; then
+        warn "Browser socket-directory patch helper not found at $patcher; leaving browser-client.mjs unchanged"
+        return 0
+    fi
+
+    if ! node "$patcher" "$client" --socket-dir-only >&2; then
+        warn "Browser socket-directory patch helper failed; leaving browser-client.mjs unchanged"
+    fi
+}
+
 normalize_plugin_script_executable_modes() {
     local target_plugin="$1"
     local scripts_dir="$target_plugin/scripts"
@@ -1170,6 +1184,7 @@ stage_chrome_plugin_from_upstream() {
     patch_browser_use_node_repl_config_shim "$target_plugin/scripts/browser-client.mjs"
     patch_browser_use_native_pipe_import_meta_bridge "$target_plugin/scripts/browser-client.mjs"
     patch_browser_use_site_status_allowlist_fallback "$target_plugin/scripts/browser-client.mjs"
+    patch_browser_client_linux_socket_dir "$target_plugin/scripts/browser-client.mjs"
     normalize_plugin_script_executable_modes "$target_plugin"
     if ! install_chrome_extension_host_resource "$target_plugin"; then
         rm -rf "$target_plugin"
@@ -1194,33 +1209,17 @@ import sys
 
 path = Path(sys.argv[1])
 source = path.read_text(encoding="utf-8")
-patterns = [
-    re.compile(
-        r'async fetchBlocked\((?P<url>[A-Za-z_$][\w$]*)\)\{'
-        r'let (?P<response>[A-Za-z_$][\w$]*)=await (?P<fetch>[A-Za-z_$][\w$]*)'
-        r'\((?P=url)\.endpoint,\{method:"GET"\}\);'
-        r'if\(!(?P=response)\.ok\)throw new Error\((?P<format>[A-Za-z_$][\w$]*)'
-        r'\(`Browser Use cannot determine if \$\{(?P=url)\.displayUrl\} is allowed\. '
-        r'Please try again later or use another source\.`\)\);'
-        r'let (?P<json>[A-Za-z_$][\w$]*)=await (?P=response)\.json\(\);'
-        r'return (?P<status>[A-Za-z_$][\w$]*)\((?P=json)\)\}'
-    ),
-    re.compile(
-        r'async fetchBlocked\((?P<url>[A-Za-z_$][\w$]*),(?P<label>[A-Za-z_$][\w$]*)\)\{'
-        r'let (?P<response>[A-Za-z_$][\w$]*)=await (?P<fetch>[A-Za-z_$][\w$]*)'
-        r'\((?P=url)\.endpoint,\{method:"GET"\}\);'
-        r'if\(!(?P=response)\.ok\)throw new Error\((?P<format>[A-Za-z_$][\w$]*)'
-        r'\(`\$\{(?P=label)\} cannot determine if \$\{(?P=url)\.displayUrl\} is allowed\. '
-        r'Please try again later or use another source\.`\)\);'
-        r'let (?P<json>[A-Za-z_$][\w$]*)=await (?P=response)\.json\(\);'
-        r'return (?P<status>[A-Za-z_$][\w$]*)\((?P=json)\)\}'
-    ),
-]
-match = None
-for pattern in patterns:
-    match = pattern.search(source)
-    if match is not None:
-        break
+pattern = re.compile(
+    r'async fetchBlocked\((?P<url>[A-Za-z_$][\w$]*),(?P<label>[A-Za-z_$][\w$]*)\)\{'
+    r'let (?P<response>[A-Za-z_$][\w$]*)=await (?P<fetch>[A-Za-z_$][\w$]*)'
+    r'\((?P=url)\.endpoint,\{method:"GET"\}\);'
+    r'if\(!(?P=response)\.ok\)throw new Error\((?P<format>[A-Za-z_$][\w$]*)'
+    r'\(`\$\{(?P=label)\} cannot determine if \$\{(?P=url)\.displayUrl\} is allowed\. '
+    r'Please try again later or use another source\.`\)\);'
+    r'let (?P<json>[A-Za-z_$][\w$]*)=await (?P=response)\.json\(\);'
+    r'return (?P<status>[A-Za-z_$][\w$]*)\((?P=json)\)\}'
+)
+match = pattern.search(source)
 if match is None:
     if "/aura/site_status" not in source and "fetchBlocked(" not in source:
         raise SystemExit(0)
@@ -1236,19 +1235,14 @@ fetch = match.group("fetch")
 formatter = match.group("format")
 json_value = match.group("json")
 status = match.group("status")
-label = match.groupdict().get("label")
+label = match.group("label")
 error = "__codexLinuxErr"
-error_message = (
-    f'Browser Use cannot determine if ${{{url}.displayUrl}} is allowed. Please try again later or use another source.'
-    if label is None
-    else f'${{{label}}} cannot determine if ${{{url}.displayUrl}} is allowed. Please try again later or use another source.'
-)
-args = url if label is None else f"{url},{label}"
+error_message = f'${{{label}}} cannot determine if ${{{url}.displayUrl}} is allowed. Please try again later or use another source.'
 replacement = (
-    f'async fetchBlocked({args}){{let {response};try{{{response}=await {fetch}({url}.endpoint,{{method:"GET"}})}}'
+    f'async fetchBlocked({url},{label}){{let {response};try{{{response}=await {fetch}({url}.endpoint,{{method:"GET"}})}}'
     f'catch({error}){{if(String({url}?.endpoint??"").includes("/aura/site_status")&&'
-    f'String({error}?.message??{error}).toLowerCase().includes("allowlist"))return console.warn'
-    f'("codexLinuxSiteStatusAllowlistFallback",{url}.endpoint),!1;throw {error}}}'
+    f'String({error}?.message??{error}).toLowerCase().includes("allowlist"))'
+    f'return!1/*codexLinuxSiteStatusAllowlistFallback*/;throw {error}}}'
     f'if(!{response}.ok)throw new Error({formatter}(`{error_message}`));'
     f'let {json_value}=await {response}.json();return {status}({json_value})}}'
 )

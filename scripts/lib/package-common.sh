@@ -745,6 +745,7 @@ stage_common_package_files() {
     mkdir -p "$app_root/.codex-linux"
     cp "$ICON_SOURCE" "$app_root/.codex-linux/$PACKAGE_NAME.png"
     cp "$(resolve_tray_icon_source "$app_root")" "$app_root/.codex-linux/$PACKAGE_NAME-tray.png"
+    cp "$REPO_DIR/launcher/cli-launch-path.py" "$app_root/.codex-linux/cli-launch-path.py"
     render_desktop_entry_doctor_helper "$app_root/.codex-linux/codex-desktop-entry-doctor.sh"
     render_desktop_entry "$root/usr/share/applications/$PACKAGE_NAME.desktop"
     cp "$ICON_SOURCE" "$root/usr/share/icons/hicolor/256x256/apps/$PACKAGE_NAME.png"

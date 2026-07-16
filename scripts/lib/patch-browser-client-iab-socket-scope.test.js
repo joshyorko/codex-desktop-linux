@@ -11,6 +11,72 @@ const { pathToFileURL } = require("node:url");
 
 const patcher = path.join(__dirname, "patch-browser-client-iab-socket-scope.js");
 
+test("Linux socket discovery uses the bridge override then a deterministic UID path", async () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "codex-user-socket-dir-"));
+  const clientPath = path.join(workspace, "browser-client.mjs");
+  const fixture =
+    'var kE=t=>t==="win32"?"\\\\\\\\.\\\\pipe\\\\codex-browser-use":"/tmp/codex-browser-use";globalThis.result=kE("linux");';
+
+  try {
+    fs.writeFileSync(clientPath, fixture, "utf8");
+    const firstPatch = spawnSync(process.execPath, [patcher, clientPath, "--socket-dir-only"], {
+      encoding: "utf8",
+    });
+    assert.equal(firstPatch.status, 0, firstPatch.stderr);
+    const patched = fs.readFileSync(clientPath, "utf8");
+    assert.match(patched, /codexLinuxPerUserBrowserSocketDir/);
+    assert.doesNotMatch(patched, /\bprocess\./);
+
+    let importIndex = 0;
+    const resolve = async (env) => {
+      globalThis.nodeRepl = { env };
+      delete globalThis.result;
+      await import(`${pathToFileURL(clientPath).href}?socket-case=${importIndex++}`);
+      return globalThis.result;
+    };
+    assert.equal(
+      await resolve({ CODEX_BROWSER_USE_SOCKET_DIR: "/custom/browser-sockets" }),
+      "/custom/browser-sockets",
+    );
+    const expectedDefault = `/tmp/codex-browser-use-${os.userInfo().uid}`;
+    assert.equal(
+      await resolve({ XDG_RUNTIME_DIR: "/run/user/1000/" }),
+      expectedDefault,
+    );
+    assert.equal(
+      await resolve({ XDG_RUNTIME_DIR: `/run/user/1000/${"x".repeat(200)}` }),
+      expectedDefault,
+    );
+    assert.equal(await resolve({}), expectedDefault);
+
+    const secondPatch = spawnSync(process.execPath, [patcher, clientPath, "--socket-dir-only"], {
+      encoding: "utf8",
+    });
+    assert.equal(secondPatch.status, 0, secondPatch.stderr);
+    assert.equal(fs.readFileSync(clientPath, "utf8"), patched);
+  } finally {
+    delete globalThis.nodeRepl;
+    delete globalThis.result;
+    fs.rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+test("keeps the per-user socket patch when IAB discovery cannot be identified", () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "codex-user-socket-only-"));
+  const clientPath = path.join(workspace, "browser-client.mjs");
+  const fixture =
+    'var kE=t=>t==="win32"?"\\\\\\\\.\\\\pipe\\\\codex-browser-use":"/tmp/codex-browser-use";';
+
+  try {
+    fs.writeFileSync(clientPath, fixture, "utf8");
+    const result = spawnSync(process.execPath, [patcher, clientPath], { encoding: "utf8" });
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(fs.readFileSync(clientPath, "utf8"), /codexLinuxPerUserBrowserSocketDir/);
+  } finally {
+    fs.rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
 test("IAB discovery excludes extension sockets before connecting", async () => {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "codex-iab-socket-scope-"));
   const clientPath = path.join(workspace, "browser-client.mjs");

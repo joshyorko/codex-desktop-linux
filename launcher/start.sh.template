@@ -1459,8 +1459,9 @@ run_cli_preflight() {
         cli-preflight
         --print-path
     )
-    if [ -n "${CODEX_CLI_PATH:-}" ]; then
-        preflight_args+=(--cli-path "$CODEX_CLI_PATH")
+    local preflight_cli_path="${CODEX_CLI_SOURCE_PATH:-${CODEX_CLI_PATH:-}}"
+    if [ -n "$preflight_cli_path" ]; then
+        preflight_args+=(--cli-path "$preflight_cli_path")
     fi
     if [ "$allow_install_missing" = "1" ]; then
         preflight_args+=(--allow-install-missing)
@@ -1488,8 +1489,9 @@ run_cli_preflight_background() {
 
     (
         local -a args=(cli-preflight --print-path)
-        if [ -n "${CODEX_CLI_PATH:-}" ]; then
-            args+=(--cli-path "$CODEX_CLI_PATH")
+        local preflight_cli_path="${CODEX_CLI_SOURCE_PATH:-${CODEX_CLI_PATH:-}}"
+        if [ -n "$preflight_cli_path" ]; then
+            args+=(--cli-path "$preflight_cli_path")
         fi
         if ! run_update_manager "${args[@]}" >/dev/null 2>&1; then
             echo "Codex CLI background preflight failed. Continuing with the current CLI."
@@ -1502,16 +1504,18 @@ run_cli_launch_path_helper() {
 }
 
 verify_cli_launch_path() {
+    local selected_path="${CODEX_CLI_PATH:-}"
     local verified_path=""
-    if ! verified_path="$(run_cli_launch_path_helper "$CODEX_CLI_PATH")"; then
-        return 1
-    fi
-    if [ -z "$verified_path" ]; then
-        return 1
-    fi
 
+    [ -n "$selected_path" ] || return 1
+    if ! verified_path="$(run_cli_launch_path_helper "$selected_path")"; then
+        return 1
+    fi
+    [ -n "$verified_path" ] || return 1
+
+    CODEX_CLI_SOURCE_PATH="$selected_path"
     CODEX_CLI_PATH="$verified_path"
-    export CODEX_CLI_PATH
+    export CODEX_CLI_SOURCE_PATH CODEX_CLI_PATH
 }
 
 is_interactive_terminal() {
@@ -1634,6 +1638,14 @@ find_codex_cli() {
         return 0
     fi
 
+    if [ -n "${HOMEBREW_PREFIX:-}" ]; then
+        local homebrew_candidate="$HOMEBREW_PREFIX/bin/codex"
+        if [ -x "$homebrew_candidate" ]; then
+            echo "$homebrew_candidate"
+            return 0
+        fi
+    fi
+
     local nvm_dir="${NVM_DIR:-}"
     if [ -z "$nvm_dir" ]; then
         if [ -s "${XDG_CONFIG_HOME:-$HOME/.config}/nvm/nvm.sh" ]; then
@@ -1664,6 +1676,8 @@ find_codex_cli() {
         "$HOME/.nvm/versions/node"/*/bin/codex \
         "$(find_fnm_codex_cli || true)" \
         "$HOME/.local/share/pnpm/codex" \
+        "$HOME/.linuxbrew/bin/codex" \
+        "/home/linuxbrew/.linuxbrew/bin/codex" \
         "$HOME/.local/bin/codex" \
         "/usr/local/bin/codex" \
         "/usr/bin/codex"
@@ -3873,9 +3887,6 @@ parent_pid = int(sys.argv[1])
 lock_path, wait_text, status_path = sys.argv[2:]
 wait_seconds = int(wait_text)
 
-if not hasattr(os, "pidfd_open") or not hasattr(signal, "pidfd_send_signal"):
-    sys.exit(1)
-
 libc_name = ctypes.util.find_library("c") or "libc.so.6"
 try:
     libc = ctypes.CDLL(libc_name, use_errno=True)
@@ -3978,49 +3989,16 @@ launcher_lock_helper_is_active() {
 }
 
 stop_launcher_lock_helper() {
-    python3 - \
-        "$LAUNCHER_LOCK_HELPER_PID" \
-        "$LAUNCHER_LOCK_HELPER_START_TIME" \
-        "${BASHPID:-$$}" <<'PY'
-import os
-import select
-import signal
-import sys
+    local actual_start_time
+    local cmdline
 
-pid = int(sys.argv[1])
-expected_start_time = sys.argv[2]
-expected_parent = int(sys.argv[3])
-
-if not hasattr(os, "pidfd_open") or not hasattr(signal, "pidfd_send_signal"):
-    sys.exit(1)
-try:
-    pidfd = os.pidfd_open(pid, 0)
-    with open(f"/proc/{pid}/stat", "r", encoding="utf-8") as handle:
-        fields = handle.read().rsplit(") ", 1)[1].split()
-    if fields[19] != expected_start_time or int(fields[1]) != expected_parent:
-        os.close(pidfd)
-        sys.exit(1)
-    poller = select.poll()
-    poller.register(pidfd, select.POLLIN)
-    exited = False
-    for requested_signal, wait_ms in (
-        (signal.SIGUSR1, 500),
-        (signal.SIGTERM, 500),
-        (signal.SIGKILL, 500),
-    ):
-        try:
-            signal.pidfd_send_signal(pidfd, requested_signal)
-        except ProcessLookupError:
-            exited = True
-            break
-        if poller.poll(wait_ms):
-            exited = True
-            break
-    os.close(pidfd)
-    sys.exit(0 if exited else 1)
-except (OSError, IndexError, ValueError):
-    sys.exit(1)
-PY
+    [[ "$LAUNCHER_LOCK_HELPER_PID" =~ ^[0-9]+$ ]] || return 1
+    actual_start_time="$(pid_start_time "$LAUNCHER_LOCK_HELPER_PID" 2>/dev/null || true)"
+    [ -n "$actual_start_time" ] && [ "$actual_start_time" = "$LAUNCHER_LOCK_HELPER_START_TIME" ] || return 1
+    pid_parent_matches "$LAUNCHER_LOCK_HELPER_PID" "${BASHPID:-$$}" || return 1
+    cmdline="$(pid_cmdline "$LAUNCHER_LOCK_HELPER_PID")"
+    [[ "$cmdline" == *" $APP_STATE_DIR/launcher.lock "*" $LAUNCHER_LOCK_STATUS_PATH"* ]] || return 1
+    kill -TERM "$LAUNCHER_LOCK_HELPER_PID" 2>/dev/null || ! kill -0 "$LAUNCHER_LOCK_HELPER_PID" 2>/dev/null
 }
 
 release_launcher_lock() {
@@ -4030,7 +4008,7 @@ release_launcher_lock() {
         if stop_launcher_lock_helper; then
             wait "$LAUNCHER_LOCK_HELPER_PID" 2>/dev/null || true
         else
-            echo "WARN: launcher lock helper did not exit after bounded pidfd signals" >&2
+            echo "WARN: launcher lock helper did not exit after a verified release signal" >&2
         fi
     fi
     LAUNCHER_LOCK_HELPER_PID=""
@@ -4215,7 +4193,7 @@ fi
 
 if [ -n "$CODEX_CLI_PATH" ]; then
     if ! verify_cli_launch_path; then
-        notify_error "The selected Codex CLI failed its execution-free trust check and will not be executed. If it is a rejected managed standalone install, stop active Codex installers and remove its standalone tree. Updater-enabled native packages can then run: codex-update-manager recover-standalone-cli --print-path. With AppImage, Nix, or updaterless packages, reinstall from a verified package channel into a fresh path owned by you or root with no group/world-writable file or parent directory; do not reuse the rejected tree. To switch away from standalone intentionally, also remove ~/.codex-standalone-provenance."
+        notify_error "The selected Codex CLI path does not resolve to an executable file. Reinstall the CLI or set CODEX_CLI_PATH to a working executable."
         exit 1
     fi
     log_phase "cli_launch_path_verified"

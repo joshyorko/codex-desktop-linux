@@ -5,29 +5,18 @@ const {
 } = require("../../../../descriptor.js");
 const {
   applyLinuxComputerUseRendererAvailabilityPatch,
+  applyLinuxComputerUseInstallFlowPatch,
   applyLinuxComputerUsePluginsPageAvailabilityPatch,
-  applyLinuxComputerUseSharedPluginAvailabilityPatch,
 } = require("../../../../impl/computer-use.js");
 
 module.exports = [
-  webviewAssetPatch({
-    id: "linux-computer-use-shared-plugin-availability",
-    phase: "webview-asset",
-    order: 1099,
-    ciPolicy: "required-upstream",
-    enabled: (context) => context.enableComputerUseUi,
-    pattern: /^app-initial~app-main~new-thread-panel-page~onboarding-page~appgen-library-page~hotkey-windo~nrw3o0ql-[^.]+\.js$/,
-    missingDescription: "shared plugin availability bundle",
-    skipDescription: "Linux Computer Use composer availability patch",
-    apply: applyLinuxComputerUseSharedPluginAvailabilityPatch,
-  }),
   webviewAssetPatch({
     id: "linux-computer-use-ui-availability",
     phase: "webview-asset",
     order: 1100,
     ciPolicy: "required-upstream",
     enabled: (context) => context.enableComputerUseUi,
-    pattern: /^computer-use-settings.*\.js$/,
+    pattern: /^computer-use-settings-[^.]+\.js$/,
     missingDescription: "Computer Use availability bundle",
     skipDescription: "Linux Computer Use UI availability patch",
     apply: applyLinuxComputerUseRendererAvailabilityPatch,
@@ -38,9 +27,20 @@ module.exports = [
     order: 1101,
     ciPolicy: "required-upstream",
     enabled: (context) => context.enableComputerUseUi,
-    pattern: /^plugins-page.*\.js$/,
+    pattern: /^plugins-page-[^.]+\.js$/,
     missingDescription: "global Plugins page bundle",
     skipDescription: "Linux Computer Use global Plugins availability patch",
     apply: applyLinuxComputerUsePluginsPageAvailabilityPatch,
+  }),
+  webviewAssetPatch({
+    id: "linux-computer-use-install-flow",
+    phase: "webview-asset",
+    order: 1110,
+    ciPolicy: "required-upstream",
+    enabled: (context) => context.enableComputerUseUi,
+    pattern: /^app-initial~artifact-tab-content\.electron~app-main~pull-request-route~pull-request-code-rev~jgoqfqy2-[^.]+\.js$/,
+    missingDescription: "current Computer Use install flow bundle",
+    skipDescription: "Linux Computer Use install flow patch",
+    apply: applyLinuxComputerUseInstallFlowPatch,
   }),
 ];

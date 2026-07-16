@@ -25,7 +25,7 @@ feature to the generated app.
 
 ## What It Patches
 
-- The current `...thread-app-shell~cf704xib-*.js` bundle reads and
+- The current `...projects-index-page~remote-conversation-page-*.js` bundle reads and
   writes `copilot-default-reasoning-effort` next to `copilot-default-model` and
   keeps the model's full `supportedReasoningEfforts` list for Copilot auth.
 - The current `...~ho~iufn7mg3-*.js` bundle keeps the

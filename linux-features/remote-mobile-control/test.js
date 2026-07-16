@@ -3,6 +3,7 @@
 
 const assert = require("node:assert/strict");
 const { spawn, spawnSync } = require("node:child_process");
+const { EventEmitter, once } = require("node:events");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
@@ -54,7 +55,11 @@ const LATEST_REMOTE_CONVERSATION_ASSET =
 const OLD_REMOTE_RUNTIME_ASSET =
   "app-initial~app-main~onboarding-page~hotkey-window-thread-page~quick-chat-window-page~chatg~gwqc41kz-test.js";
 const CURRENT_REMOTE_RUNTIME_ASSET =
-  "app-initial~app-main~hotkey-window-new-thread-page~hotkey-window-home-page~composer-utility-bar-test.js";
+  "app-initial~app-main~pull-request-route~new-thread-panel-page~onboarding-page~settings-page~i2dgsl27-test.js";
+const CURRENT_REMOTE_RUNTIME_DECOY_ASSET =
+  "app-initial~app-main~pull-request-route~new-thread-panel-page~onboarding-page~settings-page~on662h0v-test.js";
+const CURRENT_REMOTE_TERMINAL_STATUS_ASSET =
+  "app-initial~artifact-tab-content.electron~app-main~pull-request-route~pull-request-code-rev~jgoqfqy2-test.js";
 const CURRENT_APP_MAIN_PAGE_ASSET =
   "app-initial~app-main~page-test.js";
 const CURRENT_REMOTE_CONNECTIONS_VISIBILITY_ASSET = CURRENT_APP_MAIN_PAGE_ASSET;
@@ -1065,6 +1070,7 @@ test("remote mobile control feature exposes opt-in main-bundle and webview patch
     assert.equal(statusGuardDescriptor.pattern.test(OLD_APP_SERVER_MANAGER_ASSET), false);
     assert.equal(statusGuardDescriptor.pattern.test("app-server-manager-signals-test.js"), false);
     assert.equal(statusGuardDescriptor.pattern.test(CURRENT_REMOTE_RUNTIME_ASSET), true);
+    assert.equal(statusGuardDescriptor.pattern.test(CURRENT_REMOTE_RUNTIME_DECOY_ASSET), false);
 
     const statusWaitDescriptor = descriptors.find((descriptor) =>
       descriptor.id === "feature:remote-mobile-control:linux-remote-control-status-wait"
@@ -1099,7 +1105,8 @@ test("remote mobile control feature exposes opt-in main-bundle and webview patch
     );
     assert.ok(terminalStatusDescriptor);
     assert.equal(terminalStatusDescriptor.pattern.test(OLD_REMOTE_RUNTIME_ASSET), false);
-    assert.equal(terminalStatusDescriptor.pattern.test(CURRENT_REMOTE_RUNTIME_ASSET), true);
+    assert.equal(terminalStatusDescriptor.pattern.test(CURRENT_REMOTE_RUNTIME_ASSET), false);
+    assert.equal(terminalStatusDescriptor.pattern.test(CURRENT_REMOTE_TERMINAL_STATUS_ASSET), true);
     assert.equal(terminalStatusDescriptor.pattern.test(OLD_APP_SERVER_MANAGER_ASSET), false);
     assert.equal(terminalStatusDescriptor.pattern.test("remote-connections-settings-fixture.js"), false);
 
@@ -2544,8 +2551,11 @@ test("remote mobile feature patch report records feature metadata and partial wa
         path.join(assetsDir, CURRENT_REMOTE_RUNTIME_ASSET),
         syntheticAppServerManagerSignalsBundle() +
           syntheticAppServerManagerStatusBundle() +
-          syntheticCompletedItemRecoveryBundle() +
-          syntheticRemoteTerminalStatusBundle(),
+          syntheticCompletedItemRecoveryBundle(),
+      );
+      fs.writeFileSync(
+        path.join(assetsDir, CURRENT_REMOTE_TERMINAL_STATUS_ASSET),
+        syntheticRemoteTerminalStatusBundle(),
       );
       fs.writeFileSync(
         path.join(assetsDir, CURRENT_APP_MAIN_PAGE_ASSET),
@@ -2897,9 +2907,46 @@ test("Linux device-key store serializes concurrent updates", async () => {
   }
 });
 
-test("Linux device-key store contends on its validated lock file", async () => {
+test("Linux device-key operations wait for lock process stdio to close", async () => {
+  const configHome = fs.mkdtempSync(path.join(os.tmpdir(), "codex-remote-mobile-key-close-"));
+  try {
+    const child = new EventEmitter();
+    child.stdin = { end() {} };
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    child.kill = () => true;
+
+    const client = createPatchedDeviceKeyClient(configHome, {
+      "node:child_process": {
+        spawn() {
+          return child;
+        },
+      },
+    });
+    let settled = false;
+    const creation = client.createDeviceKey("allow_os_protected_nonextractable").then((value) => {
+      settled = true;
+      return value;
+    });
+
+    child.stdout.emit("data", Buffer.from("ready\n"));
+    await new Promise((resolve) => setImmediate(resolve));
+    child.emit("exit", 0, null);
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.equal(settled, false, "the lock operation must not resolve before child stdio closes");
+
+    child.emit("close", 0, null);
+    await creation;
+  } finally {
+    fs.rmSync(configHome, { recursive: true, force: true });
+  }
+});
+
+test("Linux device-key store contends on its validated lock file", { timeout: 10_000 }, async () => {
   const configHome = fs.mkdtempSync(path.join(os.tmpdir(), "codex-remote-mobile-key-lock-"));
   let holder;
+  let holderClosed;
   try {
     const client = createPatchedDeviceKeyClient(configHome);
     await client.createDeviceKey("test");
@@ -2907,6 +2954,7 @@ test("Linux device-key store contends on its validated lock file", async () => {
     holder = spawn("flock", ["-x", lock, "sh", "-c", "printf 'ready\\n'; sleep 0.25"], {
       stdio: ["ignore", "pipe", "pipe"],
     });
+    holderClosed = once(holder, "close");
     await new Promise((resolve, reject) => {
       let output = "";
       holder.once("error", reject);
@@ -2918,9 +2966,14 @@ test("Linux device-key store contends on its validated lock file", async () => {
 
     const startedAt = Date.now();
     await client.createDeviceKey("test");
+    const [holderExitCode] = await holderClosed;
     assert.ok(Date.now() - startedAt >= 150, "key update must wait for the existing file lock");
+    assert.equal(holderExitCode, 0);
   } finally {
-    holder?.kill();
+    if (holder && holder.exitCode == null && holder.signalCode == null) {
+      holder.kill("SIGKILL");
+    }
+    await holderClosed?.catch(() => {});
     fs.rmSync(configHome, { recursive: true, force: true });
   }
 });
@@ -3234,8 +3287,11 @@ test("remote mobile control feature participates in ASAR patching and reports", 
             syntheticAppServerManagerSignalsBundle() +
             syntheticAppServerManagerStatusBundle() +
             syntheticCurrentStatusWaitBundle() +
-            syntheticCompletedItemRecoveryBundle() +
-            syntheticRemoteTerminalStatusBundle(),
+            syntheticCompletedItemRecoveryBundle(),
+        );
+        fs.writeFileSync(
+          path.join(assetsDir, CURRENT_REMOTE_TERMINAL_STATUS_ASSET),
+          syntheticRemoteTerminalStatusBundle(),
         );
         fs.writeFileSync(
           path.join(assetsDir, "remote-connections-settings-test.js"),
@@ -3303,6 +3359,10 @@ test("remote mobile control feature participates in ASAR patching and reports", 
           path.join(assetsDir, CURRENT_REMOTE_RUNTIME_ASSET),
           "utf8",
         );
+        const patchedTerminalStatusFile = fs.readFileSync(
+          path.join(assetsDir, CURRENT_REMOTE_TERMINAL_STATUS_ASSET),
+          "utf8",
+        );
         assert.match(patchedFile, /codexLinuxRemoteControlDeviceKeyClient/);
         assert.match(patchedFile, /n\.kind===`local`&&process\.platform!==`linux`/);
         assert.match(patchedAppServerLaunchFile, /codexLinuxRemoteMobileAppServerArgs/);
@@ -3321,6 +3381,7 @@ test("remote mobile control feature participates in ASAR patching and reports", 
         assert.match(patchedSignalsFile, /codexLinuxRemoteMobileHydrateUnknownTurn/);
         assert.match(patchedSignalsFile, /codexLinuxRemoteMobileThreadRuntimeStatus/);
         assert.match(patchedSignalsFile, /codexLinuxCompletedItemExists=/);
+        assert.match(patchedTerminalStatusFile, /codexLinuxRemoteTerminalStatusWaitingOnUserInput/);
         assert.match(patchedStatusFile, /codexLinuxRemoteControlShouldReadStatus/);
         assert.match(patchedStatusFile, /codexLinuxRemoteControlStatusWaitMs/);
         assert.match(patchedAppMainFile, /codexLinuxRemoteControlEnablementBridge/);

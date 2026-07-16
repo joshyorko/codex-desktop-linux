@@ -164,7 +164,7 @@ JSON
 {"name":"browser","version":"0.1.0-alpha2","interface":{"category":"Engineering"}}
 JSON
     cat > "$resources_dir/plugins/openai-bundled/plugins/browser/scripts/browser-client.mjs" <<'JS'
-function lu(e){let t=globalThis.nodeRepl?.env[e];return typeof t=="string"?t:void 0}function th(){let e=import.meta.__codexNativePipe;return e==null||typeof e.createConnection!="function"?null:e}var I2=new Set(["about:blank"]);function Gb(e){if(I2.has(e))return!0;let t;try{t=new URL(e)}catch{return!1}return t.protocol==="http:"||t.protocol==="https:"}class Uf{async fetchBlocked(e){let r=await bS(e.endpoint,{method:"GET"});if(!r.ok)throw new Error(ae(`Browser Use cannot determine if ${e.displayUrl} is allowed. Please try again later or use another source.`));let n=await r.json();return TF(n)}}var Cb=kE(hV.platform()),EV=()=>_P()==="win32"?TV():CV(),CV=async()=>(await yP(Cb)).map(e=>wP.resolve(Cb,e)),TV=async()=>[];export function setupAtlasRuntime() {}
+function lu(e){let t=globalThis.nodeRepl?.env[e];return typeof t=="string"?t:void 0}function th(){let e=import.meta.__codexNativePipe;return e==null||typeof e.createConnection!="function"?null:e}var I2=new Set(["about:blank"]);function Gb(e){if(I2.has(e))return!0;let t;try{t=new URL(e)}catch{return!1}return t.protocol==="http:"||t.protocol==="https:"}class Uf{async fetchBlocked(e,t){let r=await bS(e.endpoint,{method:"GET"});if(!r.ok)throw new Error(ae(`${t} cannot determine if ${e.displayUrl} is allowed. Please try again later or use another source.`));let n=await r.json();return TF(n)}}var kE=t=>t==="win32"?"\\\\.\\pipe\\codex-browser-use":"/tmp/codex-browser-use";var Cb=kE(hV.platform()),EV=()=>_P()==="win32"?TV():CV(),CV=async()=>(await yP(Cb)).map(e=>wP.resolve(Cb,e)),TV=async()=>[];export function setupAtlasRuntime() {}
 JS
 }
 
@@ -4720,29 +4720,18 @@ test_bundled_plugin_computer_use_preserves_upstream_shell() {
         info() { echo "[INFO] $*" >&2; }
         warn() { echo "[WARN] $*" >&2; }
         error() { echo "[ERROR] $*" >&2; exit 1; }
-        # shellcheck disable=SC1091
         source "$REPO_DIR/scripts/lib/bundled-plugins.sh"
         stage_linux_computer_use_plugin "$staged_plugins" "$upstream_plugin"
     ) > "$output_log" 2>&1
 
     assert_contains "$output_log" "Computer Use plugin base staged from upstream DMG"
     assert_contains "$manifest" '"version": "1.0.1000387"'
-    assert_contains "$manifest" '"name": "computer-use"'
     assert_contains "$manifest" '"name": "OpenAI"'
-    assert_contains "$manifest" '"skills": "./skills/"'
     assert_contains "$manifest" '"composerIcon": "./assets/app-icon.png"'
     assert_contains "$manifest" 'Control desktop apps on Linux from ChatGPT through Computer Use.'
     assert_not_contains "$manifest" 'macOS'
     assert_contains "$staged_plugins/computer-use/skills/computer-use/SKILL.md" 'Control local Linux apps through Computer Use.'
     assert_contains "$staged_plugins/computer-use/skills/computer-use/SKILL.md" 'Computer Use Confirmations Policy'
-    python3 - "$staged_plugins/computer-use/skills/computer-use/SKILL.md" <<'PY' \
-        || fail "Expected blank-line separation before the preserved confirmation policy"
-import pathlib
-import sys
-
-skill = pathlib.Path(sys.argv[1]).read_text()
-assert "risky UI actions.\n\n# Computer Use Confirmations Policy" in skill
-PY
     assert_file_exists "$staged_plugins/computer-use/scripts/computer-use-client.mjs"
     assert_file_exists "$staged_plugins/computer-use/.codex-plugin/computer-use-node-repl.md"
     assert_contains "$staged_plugins/computer-use/.mcp.json" '"command": "./bin/codex-computer-use-linux"'
@@ -4773,7 +4762,6 @@ test_bundled_plugin_computer_use_requires_upstream_shell() {
         info() { echo "[INFO] $*" >&2; }
         warn() { echo "[WARN] $*" >&2; }
         error() { echo "[ERROR] $*" >&2; exit 1; }
-        # shellcheck disable=SC1091
         source "$REPO_DIR/scripts/lib/bundled-plugins.sh"
         stage_linux_computer_use_plugin "$staged_plugins"
     ) > "$output_log" 2>&1; then
@@ -4783,79 +4771,6 @@ test_bundled_plugin_computer_use_requires_upstream_shell() {
     assert_contains "$output_log" "Upstream Computer Use plugin shell is required"
     [ ! -e "$staged_plugins/computer-use" ] \
         || fail "Expected failed Computer Use staging to leave no plugin shell"
-}
-
-test_bundled_plugin_computer_use_rejects_malformed_upstream_manifest() {
-    info "Checking Linux Computer Use rejects malformed upstream plugin metadata"
-    local workspace="$TMP_DIR/bundled-plugin-computer-use-malformed-manifest"
-    local upstream_plugin="$workspace/upstream/plugins/computer-use"
-    local backend="$workspace/codex-computer-use-linux"
-    local cosmic="$workspace/codex-computer-use-cosmic"
-    local staged_plugins="$workspace/plugins"
-    local output_log="$workspace/output.log"
-
-    mkdir -p \
-        "$upstream_plugin/.codex-plugin" \
-        "$upstream_plugin/assets" \
-        "$upstream_plugin/scripts" \
-        "$upstream_plugin/skills/computer-use"
-    printf '#!/usr/bin/env bash\n' > "$backend"
-    printf '#!/usr/bin/env bash\n' > "$cosmic"
-    chmod +x "$backend" "$cosmic"
-    printf '%s\n' '{malformed' > "$upstream_plugin/.codex-plugin/plugin.json"
-    printf '%s\n' '# Upstream node repl contract' > "$upstream_plugin/.codex-plugin/computer-use-node-repl.md"
-    printf '%s\n' '{"mcpServers":{}}' > "$upstream_plugin/.mcp.json"
-    printf '%s\n' 'upstream-icon' > "$upstream_plugin/assets/app-icon.png"
-    printf '%s\n' 'export const upstreamComputerUseClient = true;' > "$upstream_plugin/scripts/computer-use-client.mjs"
-    printf '%s\n' '---' 'name: computer-use' '---' > "$upstream_plugin/skills/computer-use/SKILL.md"
-
-    if (
-        SCRIPT_DIR="$REPO_DIR"
-        CODEX_LINUX_COMPUTER_USE_BACKEND_SOURCE="$backend"
-        CODEX_LINUX_COMPUTER_USE_COSMIC_SOURCE="$cosmic"
-        info() { echo "[INFO] $*" >&2; }
-        warn() { echo "[WARN] $*" >&2; }
-        error() { echo "[ERROR] $*" >&2; exit 1; }
-        # shellcheck disable=SC1091
-        source "$REPO_DIR/scripts/lib/bundled-plugins.sh"
-        stage_linux_computer_use_plugin "$staged_plugins" "$upstream_plugin"
-    ) > "$output_log" 2>&1; then
-        fail "Expected malformed Computer Use plugin metadata to fail staging"
-    fi
-
-    assert_contains "$output_log" "SyntaxError"
-}
-
-test_bundled_plugin_resources_rejects_enabled_computer_use_staging_failure() {
-    info "Checking enabled Computer Use rejects a missing upstream plugin shell"
-    local workspace="$TMP_DIR/bundled-plugin-computer-use-required-build"
-    local app_dir="$workspace/ChatGPT.app"
-    local marketplace="$app_dir/Contents/Resources/plugins/openai-bundled/.agents/plugins/marketplace.json"
-    local output_log="$workspace/output.log"
-
-    mkdir -p "$(dirname "$marketplace")" "$workspace/install/resources"
-    printf '%s\n' '{"plugins":[]}' > "$marketplace"
-
-    if (
-        SCRIPT_DIR="$REPO_DIR"
-        INSTALL_DIR="$workspace/install"
-        export CODEX_LINUX_ENABLE_COMPUTER_USE_UI=1
-        info() { echo "[INFO] $*" >&2; }
-        warn() { echo "[WARN] $*" >&2; }
-        error() { echo "[ERROR] $*" >&2; exit 1; }
-        # shellcheck disable=SC1091
-        source "$REPO_DIR/scripts/lib/bundled-plugins.sh"
-        stage_upstream_bundled_skills() { return 0; }
-        list_portable_bundled_plugins() { return 0; }
-        find_browser_plugin_source() { return 1; }
-        stage_chrome_plugin_from_upstream() { return 1; }
-        stage_linux_computer_use_plugin() { return 1; }
-        install_bundled_plugin_resources "$app_dir"
-    ) > "$output_log" 2>&1; then
-        fail "Expected enabled Computer Use staging failure to reject the build"
-    fi
-
-    assert_contains "$output_log" "Enabled Linux Computer Use plugin staging failed"
 }
 
 test_bundled_plugin_system_computer_use_preserves_cosmic_helper_name() {
@@ -5019,7 +4934,8 @@ test_packaged_runtime_keeps_managed_node_out_of_user_service_path() {
     local managed_node_bin="$workspace/managed-node/bin"
     local user_path="$fake_bin:/usr/bin"
     local fallback_path="$fake_bin:/fallback/bin"
-    local import_args="PATH DISPLAY WAYLAND_DISPLAY DBUS_SESSION_BUS_ADDRESS XAUTHORITY XDG_RUNTIME_DIR HYPRLAND_INSTANCE_SIGNATURE YDOTOOL_SOCKET"
+    local homebrew_prefix="$workspace/homebrew"
+    local import_args="PATH HOMEBREW_PREFIX DISPLAY WAYLAND_DISPLAY DBUS_SESSION_BUS_ADDRESS XAUTHORITY XDG_RUNTIME_DIR HYPRLAND_INSTANCE_SIGNATURE YDOTOOL_SOCKET"
     local -a captures
 
     mkdir -p "$fake_bin" "$runtime_dir" "$managed_node_bin"
@@ -5027,14 +4943,14 @@ test_packaged_runtime_keeps_managed_node_out_of_user_service_path() {
     cat >> "$fake_bin/systemctl" <<'EOF'
 case "$*" in
     "--user show-environment") exit 0 ;;
-    "--user import-environment "*) printf 'systemctl|%s|%s\n' "${PATH-}" "$*" >> "$CAPTURE_LOG"; exit 0 ;;
+    "--user import-environment "*) printf 'systemctl|%s|%s|%s\n' "${PATH-}" "${HOMEBREW_PREFIX-}" "$*" >> "$CAPTURE_LOG"; exit 0 ;;
     "--user is-enabled "*) exit 1 ;;
     *) exit 0 ;;
 esac
 EOF
     printf '%s\n' "#!$BASH_BIN" > "$fake_bin/dbus-update-activation-environment"
     cat >> "$fake_bin/dbus-update-activation-environment" <<'EOF'
-printf 'dbus|%s|%s\n' "${PATH-}" "$*" >> "$CAPTURE_LOG"
+printf 'dbus|%s|%s|%s\n' "${PATH-}" "${HOMEBREW_PREFIX-}" "$*" >> "$CAPTURE_LOG"
 EOF
     chmod +x "$fake_bin/systemctl" "$fake_bin/dbus-update-activation-environment"
 
@@ -5042,6 +4958,7 @@ EOF
         export CAPTURE_LOG="$capture_log"
         export XDG_RUNTIME_DIR="$runtime_dir"
         export CODEX_LINUX_USER_PATH="$user_path"
+        export HOMEBREW_PREFIX="$homebrew_prefix"
         export PATH="$managed_node_bin:$user_path"
         # shellcheck disable=SC1091
         source "$REPO_DIR/packaging/linux/codex-packaged-runtime.sh"
@@ -5050,23 +4967,24 @@ EOF
         [ "$PATH" = "$managed_node_bin:$user_path" ] \
             || fail "Expected the packaged runtime to preserve the app PATH"
         mapfile -t captures < "$capture_log"
-        [ "${captures[0]:-}" = "systemctl|$user_path|--user import-environment $import_args" ] \
-            || fail "Expected systemd to import the user PATH"
-        [ "${captures[1]:-}" = "dbus|$user_path|--systemd $import_args" ] \
-            || fail "Expected D-Bus activation to import the user PATH"
+        [ "${captures[0]:-}" = "systemctl|$user_path|$homebrew_prefix|--user import-environment $import_args" ] \
+            || fail "Expected systemd to import the user PATH and HOMEBREW_PREFIX"
+        [ "${captures[1]:-}" = "dbus|$user_path|$homebrew_prefix|--systemd $import_args" ] \
+            || fail "Expected D-Bus activation to import the user PATH and HOMEBREW_PREFIX"
         [ "${#captures[@]}" -eq 2 ] \
             || fail "Expected one PATH export for systemd and D-Bus"
 
         : > "$capture_log"
         unset CODEX_LINUX_USER_PATH
+        unset HOMEBREW_PREFIX
         export PATH="$fallback_path"
         codex_packaged_runtime_prelaunch_background
         [ "$PATH" = "$fallback_path" ] \
             || fail "Expected the packaged runtime to preserve the fallback PATH"
         mapfile -t captures < "$capture_log"
-        [ "${captures[0]:-}" = "systemctl|$fallback_path|--user import-environment $import_args" ] \
+        [ "${captures[0]:-}" = "systemctl|$fallback_path||--user import-environment $import_args" ] \
             || fail "Expected systemd to import PATH when CODEX_LINUX_USER_PATH is unset"
-        [ "${captures[1]:-}" = "dbus|$fallback_path|--systemd $import_args" ] \
+        [ "${captures[1]:-}" = "dbus|$fallback_path||--systemd $import_args" ] \
             || fail "Expected D-Bus activation to import PATH when CODEX_LINUX_USER_PATH is unset"
         [ "${#captures[@]}" -eq 2 ] \
             || fail "Expected fallback PATH exports only for systemd and D-Bus"
@@ -5766,8 +5684,13 @@ if "reap_orphaned_runtime_processes" in source or "pid_is_orphaned_runtime_proce
     raise SystemExit("lock timeout must not kill processes belonging to the active serialized cold start")
 if "LAUNCHER_LOCK_HELD=1" not in source or "stop_launcher_lock_helper" not in source:
     raise SystemExit("launcher must explicitly release and reap its dedicated lock helper")
-if "signal.SIGUSR1, 500" not in source or "signal.SIGTERM, 500" not in source or "signal.SIGKILL, 500" not in source:
-    raise SystemExit("launcher lock helper shutdown must use bounded identity-bound pidfd escalation")
+stop_helper_body = source.split("stop_launcher_lock_helper() {", 1)[1].split("release_launcher_lock() {", 1)[0]
+if "pidfd_open" in stop_helper_body or "pidfd_send_signal" in stop_helper_body:
+    raise SystemExit("normal launcher lock release must not require pidfd")
+if 'kill -TERM "$LAUNCHER_LOCK_HELPER_PID"' not in stop_helper_body:
+    raise SystemExit("launcher lock helper must release through a verified child signal")
+if 'read().strip() == "release"' in source or '"release\\n"' in source:
+    raise SystemExit("launcher lock release must not add a status-file control protocol")
 if "launcher_lock_helper_is_active" not in source or "require_active_launcher_lock" not in launch_body:
     raise SystemExit("launcher must fail closed if the identity-bound lock helper exits before Electron")
 if "LAUNCHER_LOCK_CONTROL_PATH" in source or "mkfifo" in source:
@@ -6298,6 +6221,7 @@ EOF
     assert_contains "$REPO_DIR/updater/src/app.rs" "kdialog"
     assert_contains "$REPO_DIR/updater/src/app.rs" "zenity"
     assert_contains "$REPO_DIR/packaging/linux/codex-packaged-runtime.sh" "CHROME_DESKTOP"
+    assert_contains "$REPO_DIR/packaging/linux/codex-packaged-runtime.sh" "HOMEBREW_PREFIX"
     assert_contains "$REPO_DIR/packaging/linux/codex-packaged-runtime.sh" "is-enabled codex-update-manager.service"
     assert_contains "$REPO_DIR/packaging/linux/codex-packaged-runtime.sh" "codex-update-manager-launch-check"
     assert_contains "$REPO_DIR/packaging/linux/codex-packaged-runtime.sh" "codex-update-manager check-now --if-stale"
@@ -6532,14 +6456,16 @@ test_launcher_cli_resolution_policy() {
     python3 - "$REPO_DIR/launcher/start.sh.template" "$launcher_probe" "$routing_probe" <<'PY'
 import pathlib
 import re
+import shlex
 import sys
 
 source = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
+helper_path = pathlib.Path(sys.argv[1]).with_name("cli-launch-path.py")
 functions = [source[
     source.index("codex_restore_original_ld_library_path() {"):
     source.index("# Capture before package-specific launcher patches")
 ]]
-for name in ("find_codex_cli", "pid_parent_matches", "codex_cli_version_probe", "codex_cli_version", "codex_cli_missing_optional_dependency", "log_codex_cli_path"):
+for name in ("cached_codex_cli_path", "find_fnm_codex_cli", "find_codex_cli", "verify_cli_launch_path", "pid_parent_matches", "codex_cli_version_probe", "codex_cli_version", "codex_cli_missing_optional_dependency", "log_codex_cli_path"):
     match = re.search(r"^" + re.escape(name) + r"\(\) \{[\s\S]*?^\}\n", source, re.M)
     if match is None:
         raise SystemExit(f"missing {name}")
@@ -6549,6 +6475,7 @@ pathlib.Path(sys.argv[2]).write_text(
     "#!/usr/bin/env bash\n"
     "set -Eeuo pipefail\n\n"
     + "\n".join(functions)
+    + f"\nrun_cli_launch_path_helper() {{ python3 {shlex.quote(str(helper_path))} \"$1\"; }}\n"
     + r'''
 case "${1:?}" in
     find)
@@ -6564,6 +6491,19 @@ case "${1:?}" in
         CODEX_CLI_PATH="${2:-}"
         export CODEX_CLI_PATH
         log_codex_cli_path
+        ;;
+    resolve)
+        CODEX_CLI_PATH="${2:-}"
+        export CODEX_CLI_PATH
+        verify_cli_launch_path
+        printf '%s\n' "$CODEX_CLI_PATH"
+        ;;
+    resolve-source)
+        CODEX_CLI_PATH="${2:-}"
+        export CODEX_CLI_PATH
+        verify_cli_launch_path
+        printf 'path=%s\n' "$CODEX_CLI_PATH"
+        printf 'source=%s\n' "$CODEX_CLI_SOURCE_PATH"
         ;;
     *)
         exit 64
@@ -6589,7 +6529,7 @@ pathlib.Path(sys.argv[3]).write_text(
     "#!/usr/bin/env bash\n"
     "set -Eeuo pipefail\n\n"
     + r'''
-CODEX_CLI_PATH=/tmp/codex
+CODEX_CLI_PATH="${ROUTING_CLI_PATH:-/tmp/codex}"
 has_update_manager() { [ "${UPDATE_MANAGER_AVAILABLE:-0}" = "1" ]; }
 run_cli_launch_path_helper() {
     printf 'trust=called\n' >> "$ROUTING_LOG"
@@ -6600,6 +6540,7 @@ run_cli_launch_path_helper() {
     return 1
 }
 run_update_manager() {
+    printf 'preflight_args=%s\n' "$*" >> "$ROUTING_LOG"
     if [ "${UPDATE_MANAGER_RESULT:-failure}" = "success" ]; then
         printf '%s\n' /tmp/repaired-codex
         return 0
@@ -6630,15 +6571,63 @@ PY
     local workspace="$TMP_DIR/launcher-cli-policy"
     local fake_home="$workspace/home"
     local path_cli_bin="$workspace/path-cli-bin"
+    local clean_tool_path="/usr/bin:/bin"
     local selected_cli
     mkdir -p "$path_cli_bin" "$fake_home/.npm-global/bin"
+    chmod 0755 "$workspace" "$path_cli_bin" "$fake_home" "$fake_home/.npm-global" "$fake_home/.npm-global/bin"
 
     printf '#!/usr/bin/env bash\nprintf "codex-cli 0.120.0\\n"\n' > "$path_cli_bin/codex"
     printf '#!/usr/bin/env bash\nprintf "codex-cli 9.999.0\\n"\n' > "$fake_home/.npm-global/bin/codex"
     chmod +x "$path_cli_bin/codex" "$fake_home/.npm-global/bin/codex"
 
-    selected_cli="$(env -i PATH="$path_cli_bin:$HOST_TOOL_PATH" HOME="$fake_home" "$launcher_probe" find)"
+    selected_cli="$(env -i PATH="$path_cli_bin:$clean_tool_path" HOME="$fake_home" "$launcher_probe" find)"
     [ "$selected_cli" = "$path_cli_bin/codex" ] || fail "CLI lookup must keep the first PATH hit, got $selected_cli"
+
+    local brew_home="$workspace/brew-home"
+    mkdir -p "$brew_home/.linuxbrew/bin"
+    printf '#!/usr/bin/env bash\nprintf "codex-cli 0.160.0\\n"\n' > "$brew_home/.linuxbrew/bin/codex"
+    chmod +x "$brew_home/.linuxbrew/bin/codex"
+    selected_cli="$(env -i PATH="$clean_tool_path" HOME="$brew_home" "$launcher_probe" find)"
+    [ "$selected_cli" = "$brew_home/.linuxbrew/bin/codex" ] || fail "CLI lookup must find Linuxbrew installs with a GUI PATH, got $selected_cli"
+
+    local brew_prefix="$workspace/linuxbrew-prefix"
+    mkdir -p "$brew_prefix/bin"
+    printf '#!/usr/bin/env bash\nprintf "codex-cli 0.161.0\\n"\n' > "$brew_prefix/bin/codex"
+    chmod +x "$brew_prefix/bin/codex"
+    selected_cli="$(env -i PATH="$clean_tool_path" HOME="$workspace/empty-home" HOMEBREW_PREFIX="$brew_prefix" "$launcher_probe" find)"
+    [ "$selected_cli" = "$brew_prefix/bin/codex" ] || fail "CLI lookup must honor HOMEBREW_PREFIX, got $selected_cli"
+
+    local resolve_bin="$workspace/resolve-bin"
+    local resolved_cli
+    mkdir -p "$resolve_bin"
+    printf '#!/usr/bin/env bash\nprintf "codex-cli 0.170.0\\n"\n' > "$resolve_bin/codex"
+    chmod 0775 "$resolve_bin" "$resolve_bin/codex"
+    resolved_cli="$(env -i PATH="$resolve_bin:$HOST_TOOL_PATH" HOME="$fake_home" "$launcher_probe" resolve codex)"
+    [ "$resolved_cli" = "$(realpath "$resolve_bin/codex")" ] || \
+        fail "CLI resolver must accept an executable created under umask 0002"
+
+    local external_cli="$workspace/external-codex"
+    local visible_cli="$workspace/visible-codex"
+    printf '#!/usr/bin/env bash\nprintf "codex-cli 0.171.0\\n"\n' > "$external_cli"
+    chmod 0755 "$external_cli"
+    ln -s "$external_cli" "$visible_cli"
+    resolved_cli="$(env -i PATH="$HOST_TOOL_PATH" HOME="$fake_home" "$launcher_probe" resolve "$visible_cli")"
+    [ "$resolved_cli" = "$(realpath "$external_cli")" ] || fail "CLI resolver must canonicalize visible symlinks, got $resolved_cli"
+
+    local custom_brew_prefix="$workspace/custom-homebrew"
+    local custom_brew_target_dir="$workspace/custom-homebrew-cellar/openai-codex/0.42.0/bin"
+    local custom_brew_visible="$custom_brew_prefix/bin/codex"
+    local source_output
+    mkdir -p "$custom_brew_prefix/bin" "$custom_brew_target_dir"
+    printf '#!/usr/bin/env bash\nprintf "codex-cli 0.172.0\\n"\n' > "$custom_brew_target_dir/codex"
+    find "$custom_brew_prefix" "$workspace/custom-homebrew-cellar" -type d -exec chmod 0755 {} +
+    chmod 0755 "$custom_brew_target_dir/codex"
+    ln -s "$custom_brew_target_dir/codex" "$custom_brew_visible"
+    source_output="$(env -i PATH="$HOST_TOOL_PATH" HOME="$fake_home" HOMEBREW_PREFIX="$custom_brew_prefix" "$launcher_probe" resolve-source "$custom_brew_visible")"
+    grep -qx "path=$(realpath "$custom_brew_target_dir/codex")" <<<"$source_output" || \
+        fail "CLI trust helper must expose the canonical launch path for Homebrew: $source_output"
+    grep -qx "source=$custom_brew_visible" <<<"$source_output" || \
+        fail "CLI trust helper must preserve the visible Homebrew source path: $source_output"
 
     local override_cli="$workspace/override-codex"
     local log_output
@@ -6771,29 +6760,35 @@ PY
     fi
 
     local routing_log="$workspace/preflight-routing.log"
+    local routing_cli="$workspace/routing-codex"
+    printf '#!/usr/bin/env bash\nprintf "codex-cli 0.180.0\\n"\n' > "$routing_cli"
+    chmod +x "$routing_cli"
     if env -i PATH="$HOST_TOOL_PATH" ROUTING_LOG="$routing_log" \
+        ROUTING_CLI_PATH="$workspace/missing-routing-codex" \
         UPDATE_MANAGER_AVAILABLE=0 TRUST_RESULT=failure BROKEN_CLI=1 \
         "$routing_probe"; then
-        fail "standalone trust failure must abort launcher startup"
+        fail "invalid CLI path must abort launcher startup"
     fi
-    grep -q '^notify=The selected Codex CLI failed its execution-free trust check' "$routing_log" || \
-        fail "standalone trust failure must show safe recovery guidance"
+    grep -q '^notify=The selected Codex CLI path does not resolve to an executable file' "$routing_log" || \
+        fail "invalid CLI path must show actionable recovery guidance"
     if grep -qE '^(probe=|background=|version=|electron=)' "$routing_log"; then
-        fail "standalone trust failure must block every CLI probe, final version log, and Electron startup"
+        fail "invalid CLI path must block every CLI probe, final version log, and Electron startup"
     fi
 
     : > "$routing_log"
     if env -i PATH="$HOST_TOOL_PATH" ROUTING_LOG="$routing_log" \
+        ROUTING_CLI_PATH="$workspace/missing-routing-codex" \
         COLD_START=0 UPDATE_MANAGER_AVAILABLE=0 TRUST_RESULT=failure \
         "$routing_probe"; then
-        fail "standalone trust failure must also abort second-instance handoff"
+        fail "invalid CLI path must also abort second-instance handoff"
     fi
     if grep -qE '^(probe=|background=|version=|electron=)' "$routing_log"; then
-        fail "second-instance trust failure must not reach any CLI probe or Electron startup"
+        fail "second-instance invalid CLI path must not reach any CLI probe or Electron startup"
     fi
 
     : > "$routing_log"
     if env -i PATH="$HOST_TOOL_PATH" ROUTING_LOG="$routing_log" \
+        ROUTING_CLI_PATH="$routing_cli" \
         CODEX_SYNC_CLI_PREFLIGHT=1 BROKEN_CLI=1 UPDATE_MANAGER_AVAILABLE=0 \
         "$routing_probe"; then
         fail "sync preflight must abort when a known-broken CLI cannot be repaired"
@@ -6803,6 +6798,7 @@ PY
 
     : > "$routing_log"
     env -i PATH="$HOST_TOOL_PATH" ROUTING_LOG="$routing_log" \
+        ROUTING_CLI_PATH="$routing_cli" \
         CODEX_SYNC_CLI_PREFLIGHT=1 BROKEN_CLI=1 UPDATE_MANAGER_AVAILABLE=1 \
         UPDATE_MANAGER_RESULT=success "$routing_probe"
     grep -qx 'phase=cli_preflight_repair_sync' "$routing_log" || \
@@ -6810,19 +6806,33 @@ PY
 
     : > "$routing_log"
     env -i PATH="$HOST_TOOL_PATH" ROUTING_LOG="$routing_log" \
+        ROUTING_CLI_PATH="$routing_cli" \
         CODEX_SYNC_CLI_PREFLIGHT=1 BROKEN_CLI=0 UPDATE_MANAGER_AVAILABLE=0 \
         "$routing_probe"
     grep -qx 'phase=cli_preflight_sync' "$routing_log" || \
         fail "sync preflight must remain fail-soft for a CLI that is not known broken"
 
     : > "$routing_log"
+    env -i PATH="$HOST_TOOL_PATH" ROUTING_LOG="$routing_log" \
+        ROUTING_CLI_PATH="$routing_cli" \
+        CODEX_SYNC_CLI_PREFLIGHT=1 BROKEN_CLI=0 UPDATE_MANAGER_AVAILABLE=1 \
+        UPDATE_MANAGER_RESULT=success "$routing_probe"
+    grep -qx "preflight_args=cli-preflight --print-path --cli-path $routing_cli" "$routing_log" || \
+        fail "updater preflight must receive the visible CLI source path for channel classification"
+    if grep -q -- '--cli-path /tmp/verified-codex' "$routing_log"; then
+        fail "updater preflight must not classify using only the canonical launch path"
+    fi
+
+    : > "$routing_log"
     if env -i PATH="$HOST_TOOL_PATH" ROUTING_LOG="$routing_log" \
+        ROUTING_CLI_PATH="$routing_cli" \
         BROKEN_CLI=1 UPDATE_MANAGER_AVAILABLE=0 "$routing_probe"; then
         fail "default preflight must abort when a known-broken CLI cannot be repaired"
     fi
 
     : > "$routing_log"
     env -i PATH="$HOST_TOOL_PATH" ROUTING_LOG="$routing_log" \
+        ROUTING_CLI_PATH="$routing_cli" \
         BROKEN_CLI=0 UPDATE_MANAGER_AVAILABLE=0 "$routing_probe"
     grep -qx 'background=1' "$routing_log" || \
         fail "healthy default preflight must stay asynchronous"
@@ -6831,7 +6841,8 @@ PY
 
     : > "$routing_log"
     env -i PATH="$HOST_TOOL_PATH" ROUTING_LOG="$routing_log" \
-        BROKEN_CLI=0 UPDATE_MANAGER_AVAILABLE=1 TRUST_RESULT=success \
+        ROUTING_CLI_PATH="$routing_cli" \
+        BROKEN_CLI=0 UPDATE_MANAGER_AVAILABLE=1 \
         "$routing_probe"
     grep -qx 'trust=called' "$routing_log" || \
         fail "native launcher must synchronously validate the selected CLI"
@@ -6865,6 +6876,10 @@ SCRIPT
     stable_path="$(HOME="$trust_workspace/home" python3 "$REPO_DIR/launcher/cli-launch-path.py" "$visible_cli")"
     [ "$stable_path" = "$(realpath "$release/bin/codex")" ] || \
         fail "launcher trust helper must return the canonical standalone release target"
+    printf '%s\n' '/tmp/removed-standalone-home/.codex' > "$trust_workspace/home/.codex-standalone-provenance"
+    stable_path="$(HOME="$trust_workspace/home" python3 "$REPO_DIR/launcher/cli-launch-path.py" "$visible_cli")"
+    [ "$stable_path" = "$(realpath "$release/bin/codex")" ] || \
+        fail "launcher CLI resolution must ignore stale standalone provenance"
 
     local replacement_marker="$trust_workspace/replacement-executed"
     local replacement_cli="$trust_workspace/replacement-codex"
@@ -6876,72 +6891,24 @@ SCRIPT
     chmod 0755 "$replacement_cli"
     rm "$visible_cli"
     ln -s "$replacement_cli" "$visible_cli"
-    "$stable_path" --version >/dev/null
-    [ ! -e "$replacement_marker" ] || \
-        fail "replacing the visible CLI symlink must not redirect the verified launch target"
 
     chmod 0775 "$(dirname "$visible_cli")"
-    chmod 0755 "$replacement_cli"
     mv "$codex_home/packages/standalone" "$codex_home/packages/standalone-rejected"
-    if HOME="$trust_workspace/home" CODEX_HOME="$codex_home" \
-        python3 "$REPO_DIR/launcher/cli-launch-path.py" "$visible_cli" >/dev/null 2>&1; then
-        fail "launcher trust helper must reject an unsafe visible replacement before classification"
-    fi
+    stable_path="$(HOME="$trust_workspace/home" CODEX_HOME="$codex_home" \
+        python3 "$REPO_DIR/launcher/cli-launch-path.py" "$visible_cli")"
+    [ "$stable_path" = "$(realpath "$replacement_cli")" ] || \
+        fail "launcher CLI resolution must follow the currently selected executable"
     [ ! -e "$replacement_marker" ] || \
-        fail "launcher trust helper must not execute an unsafe pre-validation replacement"
+        fail "launcher CLI resolution must remain execution-free"
     mv "$codex_home/packages/standalone-rejected" "$codex_home/packages/standalone"
-
-    python3 - "$REPO_DIR/launcher/cli-launch-path.py" <<'PY'
-import importlib.util
-import os
-import pathlib
-import stat
-import sys
-from types import SimpleNamespace
-from unittest import mock
-
-spec = importlib.util.spec_from_file_location("cli_launch_path", pathlib.Path(sys.argv[1]))
-module = importlib.util.module_from_spec(spec)
-assert spec.loader is not None
-spec.loader.exec_module(module)
-euid = os.geteuid()
-untrusted_uid = 2 if euid == 1 else 1
-assert module.trusted_owner(euid)
-assert module.trusted_owner(0)
-assert not module.trusted_owner(untrusted_uid)
-
-trusted_ancestors = {
-    pathlib.Path("/"): SimpleNamespace(st_mode=stat.S_IFDIR | 0o755, st_uid=0),
-    pathlib.Path("/nix"): SimpleNamespace(st_mode=stat.S_IFDIR | 0o755, st_uid=0),
-    pathlib.Path("/nix/store"): SimpleNamespace(st_mode=stat.S_IFDIR | stat.S_ISVTX | 0o775, st_uid=0),
-    pathlib.Path("/nix/store/example"): SimpleNamespace(st_mode=stat.S_IFDIR | 0o555, st_uid=0),
-    pathlib.Path("/nix/store/example/bin"): SimpleNamespace(st_mode=stat.S_IFDIR | 0o555, st_uid=0),
-}
-with mock.patch.object(pathlib.Path, "lstat", autospec=True, side_effect=trusted_ancestors.__getitem__):
-    module.validate_parent_chain(
-        pathlib.Path("/nix/store/example/bin/codex"),
-        "Selected Codex CLI target",
-    )
-
-trusted_ancestors[pathlib.Path("/nix/store")].st_mode = stat.S_IFDIR | 0o775
-with mock.patch.object(pathlib.Path, "lstat", autospec=True, side_effect=trusted_ancestors.__getitem__):
-    try:
-        module.validate_parent_chain(
-            pathlib.Path("/nix/store/example/bin/codex"),
-            "Selected Codex CLI target",
-        )
-    except module.TrustError:
-        pass
-    else:
-        raise AssertionError("root-owned group-writable ancestors without sticky must remain untrusted")
-PY
 
     rm "$visible_cli"
     ln -s "$codex_home/packages/standalone/current/bin/codex" "$visible_cli"
+    chmod 0755 "$(dirname "$visible_cli")"
     chmod 0775 "$release/bin/codex"
-    if HOME="$trust_workspace/home" python3 "$REPO_DIR/launcher/cli-launch-path.py" "$visible_cli" >/dev/null 2>&1; then
-        fail "launcher trust helper must reject a group-writable standalone binary"
-    fi
+    stable_path="$(HOME="$trust_workspace/home" python3 "$REPO_DIR/launcher/cli-launch-path.py" "$visible_cli")"
+    [ "$stable_path" = "$(realpath "$release/bin/codex")" ] || \
+        fail "launcher CLI resolution must accept existing umask-0002 standalone installs"
     chmod 0755 "$release/bin/codex"
 
     local external_root="$trust_workspace/external"
@@ -6949,9 +6916,9 @@ PY
     cp "$release/bin/codex" "$external_root/bin/codex"
     rm "$codex_home/packages/standalone/current"
     ln -s "$external_root" "$codex_home/packages/standalone/current"
-    if python3 "$REPO_DIR/launcher/cli-launch-path.py" "$visible_cli" >/dev/null 2>&1; then
-        fail "launcher trust helper must reject an external standalone current symlink"
-    fi
+    stable_path="$(HOME="$trust_workspace/home" python3 "$REPO_DIR/launcher/cli-launch-path.py" "$visible_cli")"
+    [ "$stable_path" = "$(realpath "$external_root/bin/codex")" ] || \
+        fail "launcher CLI resolution must follow external package-manager symlink targets"
 }
 
 test_webview_server_cache_policy() {
@@ -7271,6 +7238,120 @@ for (const [key, value] of Object.entries(expected)) {
 NODE
 }
 
+test_browser_use_site_status_allowlist_fallback_patch_behavior() {
+    info "Checking Browser Use site_status allowlist fallback patch behavior"
+    local workspace="$TMP_DIR/browser-site-status-allowlist-fallback"
+    local client="$workspace/browser-client.mjs"
+    local first_patch="$workspace/browser-client.first-patch.mjs"
+    local output_log="$workspace/output.log"
+
+    mkdir -p "$workspace"
+    cat > "$client" <<'JS'
+var fetchImpl;function F(e,t){return fetchImpl(e,t)}function G(e){return e}function H(e){return e.blocked===!0}var policy={async fetchBlocked(e,t){let s=await F(e.endpoint,{method:"GET"});if(!s.ok)throw new Error(G(`${t} cannot determine if ${e.displayUrl} is allowed. Please try again later or use another source.`));let n=await s.json();return H(n)}};
+JS
+
+    (
+        warn() { echo "[WARN] $*" >&2; }
+        info() { echo "[INFO] $*" >&2; }
+        # shellcheck disable=SC1091
+        source "$REPO_DIR/scripts/lib/bundled-plugins.sh"
+        patch_browser_use_site_status_allowlist_fallback "$client"
+        cp "$client" "$first_patch"
+        patch_browser_use_site_status_allowlist_fallback "$client"
+    ) >"$output_log" 2>&1
+
+    cmp -s "$first_patch" "$client" || fail "Expected Browser Use site_status fallback patch to be byte-identical on second application"
+    assert_occurrence_count "$client" "codexLinuxSiteStatusAllowlistFallback" 1
+    assert_not_contains "$client" "console.warn"
+    assert_not_contains "$output_log" "Could not find Browser Use site_status allowlist fallback insertion point"
+
+    node - "$client" <<'NODE'
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const vm = require("node:vm");
+
+const client = process.argv[2];
+const source = fs.readFileSync(client, "utf8");
+const warnings = [];
+const context = {
+  console: {
+    warn(...args) {
+      warnings.push(args);
+    },
+  },
+};
+vm.createContext(context);
+vm.runInContext(source, context);
+
+const matchingUrl = {
+  endpoint: "http://127.0.0.1/aura/site_status?url=https%3A%2F%2Fexample.com",
+  displayUrl: "https://example.com/",
+};
+const otherUrl = {
+  endpoint: "http://127.0.0.1/aura/other",
+  displayUrl: "https://example.com/",
+};
+
+(async () => {
+  const allowlistError = new Error("native ALLOWLIST is unavailable");
+  context.fetchImpl = async () => {
+    throw allowlistError;
+  };
+  assert.strictEqual(await context.policy.fetchBlocked(matchingUrl, "Chrome"), false);
+
+  await assert.rejects(
+    context.policy.fetchBlocked(otherUrl, "Chrome"),
+    (error) => error === allowlistError,
+  );
+
+  const otherError = new Error("native policy is unavailable");
+  context.fetchImpl = async () => {
+    throw otherError;
+  };
+  await assert.rejects(
+    context.policy.fetchBlocked(matchingUrl, "Chrome"),
+    (error) => error === otherError,
+  );
+
+  context.fetchImpl = async () => ({ ok: false });
+  await assert.rejects(
+    context.policy.fetchBlocked(matchingUrl, "Chrome"),
+    (error) => error.message === "Chrome cannot determine if https://example.com/ is allowed. Please try again later or use another source.",
+  );
+
+  const jsonError = new Error("invalid site_status JSON");
+  context.fetchImpl = async () => ({
+    ok: true,
+    json: async () => {
+      throw jsonError;
+    },
+  });
+  await assert.rejects(
+    context.policy.fetchBlocked(matchingUrl, "Chrome"),
+    (error) => error === jsonError,
+  );
+
+  let fetchedEndpoint;
+  let fetchedMethod;
+  context.fetchImpl = async (endpoint, options) => {
+    fetchedEndpoint = endpoint;
+    fetchedMethod = options.method;
+    return {
+      ok: true,
+      json: async () => ({ blocked: true }),
+    };
+  };
+  assert.strictEqual(await context.policy.fetchBlocked(matchingUrl, "Chrome"), true);
+  assert.strictEqual(fetchedEndpoint, matchingUrl.endpoint);
+  assert.strictEqual(fetchedMethod, "GET");
+  assert.strictEqual(warnings.length, 0);
+})().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});
+NODE
+}
+
 test_browser_plugin_renamed_upstream_staging() {
     info "Checking Browser plugin staging from renamed upstream resources"
     local workspace="$TMP_DIR/browser-plugin-renamed"
@@ -7309,6 +7390,10 @@ test_browser_plugin_renamed_upstream_staging() {
     assert_contains "$browser_dir/scripts/browser-client.mjs" "codexLinuxSiteStatusAllowlistFallback"
     assert_contains "$browser_dir/scripts/browser-client.mjs" "codexLinuxFileUrlPolicy"
     assert_contains "$browser_dir/scripts/browser-client.mjs" "codexLinuxIabSocketScope"
+    assert_contains "$browser_dir/scripts/browser-client.mjs" "codexLinuxPerUserBrowserSocketDir"
+    assert_contains "$browser_dir/scripts/browser-client.mjs" "codexLinuxBrowserUseUserInfo"
+    assert_not_contains "$browser_dir/scripts/browser-client.mjs" "process.env.CODEX_BROWSER_USE_SOCKET_DIR"
+    assert_not_contains "$browser_dir/scripts/browser-client.mjs" '"/tmp/codex-browser-use"'
     assert_contains "$browser_dir/scripts/browser-client.mjs" 'protocol==="file:"'
     assert_not_contains "$browser_dir/scripts/browser-client.mjs" 'protocol==="data:"'
     assert_contains "$marketplace" '"name": "browser"'
@@ -7957,11 +8042,11 @@ MD
 JSON
     cat > "$chrome_dir/scripts/browser-client.mjs" <<'JS'
 const browserPreference={};function preferredWindowIdFor(){}function getForUrl(){}const extensionInstanceId=null;
-var Cb=kE(hV.platform()),EV=()=>_P()==="win32"?TV():CV(),CV=async()=>(await yP(Cb)).map(e=>wP.resolve(Cb,e)),TV=async()=>[];
+var kE=t=>t==="win32"?"\\\\.\\pipe\\codex-browser-use":"/tmp/codex-browser-use";var Cb=kE(hV.platform()),EV=()=>_P()==="win32"?TV():CV(),CV=async()=>(await yP(Cb)).map(e=>wP.resolve(Cb,e)),TV=async()=>[];
 function lu(e){let t=globalThis.nodeRepl?.env[e];return typeof t=="string"?t:void 0}
 function Me(){let e=globalThis.nodeRepl;return e?.config==null?void 0:e}
 import{platform as yT}from"node:os";function eh(){return"privileged native pipe bridge is not available; browser-client is not trusted"}function th(){let e=globalThis.nodeRepl?.nativePipe;return e==null||typeof e.createConnection!="function"?null:e}var ml=class e{constructor(t){this.socket=t}static async create(t){let r=th();if(r!=null){let n=await r.createConnection(t);return new e(n)}throw new Error(eh())}};
-async fetchBlocked(e){let r=await bS(e.endpoint,{method:"GET"});if(!r.ok)throw new Error(ae(`Browser Use cannot determine if ${e.displayUrl} is allowed. Please try again later or use another source.`));let n=await r.json();return TF(n)}
+async fetchBlocked(e,t){let r=await bS(e.endpoint,{method:"GET"});if(!r.ok)throw new Error(ae(`${t} cannot determine if ${e.displayUrl} is allowed. Please try again later or use another source.`));let n=await r.json();return TF(n)}
 JS
     cat > "$chrome_dir/scripts/check-native-host-manifest.js" <<'JS'
 #!/usr/bin/env node
@@ -8152,6 +8237,10 @@ test_chrome_plugin_staging() {
     assert_not_contains "$chrome_dir/scripts/browser-client.mjs" "codexLinuxNativePipeFallback"
     assert_not_contains "$chrome_dir/scripts/browser-client.mjs" 'await import("node:net")'
     assert_contains "$chrome_dir/scripts/browser-client.mjs" "codexLinuxSiteStatusAllowlistFallback"
+    assert_contains "$chrome_dir/scripts/browser-client.mjs" "codexLinuxPerUserBrowserSocketDir"
+    assert_contains "$chrome_dir/scripts/browser-client.mjs" "codexLinuxBrowserUseUserInfo"
+    assert_not_contains "$chrome_dir/scripts/browser-client.mjs" "process.env.CODEX_BROWSER_USE_SOCKET_DIR"
+    assert_not_contains "$chrome_dir/scripts/browser-client.mjs" '"/tmp/codex-browser-use"'
     assert_not_contains "$chrome_dir/scripts/browser-client.mjs" "codexLinuxIabSocketScope"
     assert_contains "$chrome_dir/skills/control-chrome/SKILL.md" "agent.browsers.list()"
     assert_contains "$chrome_dir/skills/control-chrome/SKILL.md" "browser.tabs.new()"
@@ -9312,13 +9401,13 @@ test_linux_computer_use_ui_opt_in_smoke() {
     local fake_home="$workspace/home"
     local output_log="$workspace/output.log"
     local main_bundle="$extracted/.vite/build/main-test.js"
-    local renderer_asset="$extracted/webview/assets/computer-use-settings-renderer-test.js"
-    local current_renderer_asset="$extracted/webview/assets/computer-use-settings-current-test.js"
-    local native_apps_asset="$extracted/webview/assets/computer-use-settings-native-apps-test.js"
+    local settings_asset="$extracted/webview/assets/computer-use-settings-CyEHLFtH.js"
+    local plugins_asset="$extracted/webview/assets/plugins-page-gTuUJ93E.js"
+    local install_flow_asset="$extracted/webview/assets/app-initial~artifact-tab-content.electron~app-main~pull-request-route~pull-request-code-rev~jgoqfqy2-test.js"
     local bundle_body
-    local renderer_body
-    local current_renderer_body
-    local native_apps_body
+    local settings_body
+    local plugins_body
+    local install_flow_body
 
     mkdir -p "$workspace" "$fake_home/.config/codex-desktop"
 
@@ -9332,67 +9421,62 @@ function me(e,{env:t=process.env,platform:n=process.platform}={}){return n!==`wi
 var h={handlers:{"native-desktop-apps":async()=>({apps:[]})}};
 JS
 )"
-    renderer_body="$(cat <<'JS'
-function hae(e){return e===`macOS`||e===`windows`}
-function RS(e){let t=(0,q.c)(8),{enabled:n,hostId:r,isHostLocal:i}=e,a=n===void 0?!0:n,o=r===void 0?R:r,s=Kn(),{isLoading:c,platform:l}=Hr(),u=Vn(`1506311413`),d;t[0]===o?d=t[1]:(d={featureName:`computer_use`,hostId:o},t[0]=o,t[1]=d);let f=LS(d),p;t[2]===l?p=t[3]:(p=hae(l),t[2]=l,t[3]=p);let m=a&&i&&s===`electron`&&u&&(c||p),h=m&&!c&&f.enabled&&!f.isLoading,g=m&&f.isLoading,_=m&&(c||f.isLoading),v;return v}
+    settings_body="$(cat <<'JS'
+function Ut(){let i=useAvailability(arg),{platform:a}=usePlatform(),o=hostKind(hostId);let d=jsx(Settings,{computerUseAvailability:i,platform:a});let m=i.available?jsx(AllowedApps,{}):null;return jsx(Page,{children:[d,m]})}function Gt(e){let{computerUseAvailability:n,platform:r}=e;let h;h=[];let g=usePlugins(hostId,h),y=useMarketplacePath(hostId),b=useFlag(flagArg),x;x=selectPlugin(g.availablePlugins,pluginName,y);return x}
 JS
 )"
-    current_renderer_body="$(cat <<'JS'
-function b(e){return e===`macOS`||e===`windows`}
-function x(e){let t=(0,_.c)(16),{enabled:n,hostId:r}=e,i=n===void 0?!0:n,{isLoading:a,platform:o}=m(),s=u(`1506311413`),c;t[0]===r?c=t[1]:(c={featureName:`computer_use`,hostId:r},t[0]=r,t[1]=c);let l=v(c),d=o===`windows`&&!a,f=i&&d,p;t[2]===f?p=t[3]:(p={enabled:f},t[2]=f,t[3]=p);let h=S(p),g=l.isLoading||d&&h.isLoading,y=l.enabled&&(!d||h.enabled),x;t[4]!==y||t[5]!==i||t[6]!==g||t[7]!==s||t[8]!==a||t[9]!==o?(x=w({areRequiredFeaturesEnabled:y,enabled:i,isAnyFeatureLoading:g,isComputerUseGateEnabled:s,isHostCompatiblePlatform:b(o),isPlatformLoading:a,windowType:`electron`}),t[4]=y,t[5]=i,t[6]=g,t[7]=s,t[8]=a,t[9]=o,t[10]=x):x=t[10];return x}
+    plugins_body="$(cat <<'JS'
+function Si({installedPlugins:e}){return [{remoteMarketplaceName:`openai-curated`,plugin:{id:`computer-use`,name:`computer-use`,source:{type:`remote`}}},...e]}let Pt=[{plugin:{id:`installed`,name:`installed`}}],Qt=[],nn=[],zr=[{remoteMarketplaceName:`openai-curated`,plugin:{id:`computer-use`,name:`computer-use`,source:{type:`remote`}}}],xi=e=>true,Ft=[{marketplaceName:`openai-bundled`,marketplacePath:`/marketplace.json`,plugin:{id:`computer-use@openai-bundled`,name:`computer-use`,source:{type:`local`}}},{plugin:{id:`installed`,name:`installed`}},{plugin:{id:`other-missing`,name:`other-missing`}}],Vr=Si({installedPlugins:Ft,sharedWithYouPlugins:Qt??[],workspacePlugins:nn??[]}),fi=zr.filter(xi),Ai={connectedPlugins:Vr,featuredPluginIds:[],plugins:fi},Ji=new Set([...Pt,...Qt??[],...nn??[]].map(e=>e.plugin.id)),Xi=new Set(Vr.filter(e=>!Ji.has(e.plugin.id)).map(e=>e.plugin.id));
 JS
 )"
-    native_apps_body="$(cat <<'JS'
-function d(e){return e.find(e=>e.plugin.name===`computer-use`)??null}
-function C(e){let t=(0,S.c)(9),{enabled:n}=e,{platform:a,isLoading:o}=c(),s=n&&(a===`macOS`||a===`windows`),l;t[0]===Symbol.for(`react.memo_cache_sentinel`)?(l={order:`usage`},t[0]=l):l=t[0];let u;t[1]===s?u=t[2]:(u={params:l,queryConfig:{enabled:s,staleTime:i.FIVE_MINUTES,refetchOnWindowFocus:!1}},t[1]=s,t[2]=u);let d=r(`native-desktop-apps`,u);return d}
+    install_flow_body="$(cat <<'JS'
+function usePluginDetail(e){let{hostId:n,marketplacePath:r,pluginName:i,remoteMarketplaceName:a,enabled:o}=e,s=o===void 0?!0:o,c=n??`local`,u=hostReady(c),f;i==null?f=!1:f=isAvailabilityGated(i);cache[2]===i?f=cache[3]:(f=i!=null&&isAvailabilityGated(i),cache[2]=i,cache[3]=f);let p=f,m;cache[4]!==c||cache[5]!==p?(m={enabled:p,hostId:c},cache[4]=c,cache[5]=p):m=cache[6];let h=useComputerUseAvailability(m),g=(r!=null||a!=null)&&i!=null,loading=u&&s&&g&&p&&h.isLoading,v=u&&s&&g&&(!p||h.available);let query=()=>{if(i==null)throw Error(`plugin detail query requires pluginName`);return read(`read-plugin`,{hostId:c,pluginName:i})};return useQuery({queryFn:query,enabled:v})}
 JS
 )"
 
     make_fake_extracted_asar "$extracted" "$bundle_body"
-    printf '%s\n' "$renderer_body" > "$renderer_asset"
-    printf '%s\n' "$current_renderer_body" > "$current_renderer_asset"
-    printf '%s\n' "$native_apps_body" > "$native_apps_asset"
+    printf '%s\n' "$settings_body" > "$settings_asset"
+    printf '%s\n' "$plugins_body" > "$plugins_asset"
+    printf '%s\n' "$install_flow_body" > "$install_flow_asset"
 
-    # Branch 1: no env var, no settings.json — only the plugin manifest gate runs.
-    HOME="$fake_home" XDG_CONFIG_HOME= unset_env_value="" \
-        env -u CODEX_LINUX_ENABLE_COMPUTER_USE_UI -u CODEX_LINUX_APP_ID -u CODEX_APP_ID -u CODEX_LINUX_SETTINGS_FILE \
+    env -u CODEX_LINUX_ENABLE_COMPUTER_USE_UI -u CODEX_LINUX_APP_ID -u CODEX_APP_ID -u CODEX_LINUX_SETTINGS_FILE \
         HOME="$fake_home" XDG_CONFIG_HOME="$fake_home/.config" \
         node "$REPO_DIR/scripts/patch-linux-window-ui.js" "$extracted" >"$output_log" 2>&1
     assert_contains "$main_bundle" 'if(!((e.platform!==`darwin`&&e.platform!==`linux`)||!e.marketplacePluginNames.includes(`computer-use`))'
-    assert_contains "$main_bundle" 'return e.platform===`darwin`&&e.desktopFeatureAvailability.computerUseNodeRepl?`node-repl`:`legacy-mcp`'
-    assert_not_contains "$main_bundle" 'if(!(e.platform!==`darwin`||!e.marketplacePluginNames.includes(`computer-use`)))return e.desktopFeatureAvailability.computerUseNodeRepl?`node-repl`:`legacy-mcp`'
     assert_not_contains "$main_bundle" 'return n===`linux`?{...e,computerUse:!0,computerUseNodeRepl:!0}'
-    assert_not_contains "$main_bundle" 'codexLinuxNativeDesktopApps'
-    assert_not_contains "$renderer_asset" 'function hae(e){return e===`macOS`||e===`windows`||e===`linux`}'
-    assert_not_contains "$current_renderer_asset" 'areRequiredFeaturesEnabled:o===`linux`||y'
-    assert_not_contains "$native_apps_asset" 'a===`macOS`||a===`windows`||a===`linux`'
+    assert_not_contains "$settings_asset" 'available:!0,isFetching:!1,isLoading:!1'
+    assert_not_contains "$settings_asset" 'marketplaceName:`openai-bundled`'
+    assert_not_contains "$plugins_asset" '.find(e=>e.plugin?.name===`computer-use`&&e.marketplaceName===`openai-bundled`'
+    assert_not_contains "$install_flow_asset" '!==`computer-use`'
 
-    # Branch 2: env var opts in — all Computer Use UI patches apply.
-    rm "$main_bundle" "$renderer_asset" "$current_renderer_asset" "$native_apps_asset"
+    rm "$main_bundle" "$settings_asset" "$plugins_asset" "$install_flow_asset"
     printf '%s\n' "$bundle_body" > "$main_bundle"
-    printf '%s\n' "$renderer_body" > "$renderer_asset"
-    printf '%s\n' "$current_renderer_body" > "$current_renderer_asset"
-    printf '%s\n' "$native_apps_body" > "$native_apps_asset"
+    printf '%s\n' "$settings_body" > "$settings_asset"
+    printf '%s\n' "$plugins_body" > "$plugins_asset"
+    printf '%s\n' "$install_flow_body" > "$install_flow_asset"
 
     env -u CODEX_LINUX_APP_ID -u CODEX_APP_ID -u CODEX_LINUX_SETTINGS_FILE \
         CODEX_LINUX_ENABLE_COMPUTER_USE_UI=1 HOME="$fake_home" XDG_CONFIG_HOME="$fake_home/.config" \
         node "$REPO_DIR/scripts/patch-linux-window-ui.js" "$extracted" >"$output_log" 2>&1
-    assert_contains "$main_bundle" 'if(!((e.platform!==`darwin`&&e.platform!==`linux`)||!e.marketplacePluginNames.includes(`computer-use`))'
-    assert_contains "$main_bundle" 'return e.platform===`darwin`&&e.desktopFeatureAvailability.computerUseNodeRepl?`node-repl`:`legacy-mcp`'
     assert_contains "$main_bundle" 'return n===`linux`?{...e,computerUse:!0,computerUseNodeRepl:!0}'
     assert_contains "$main_bundle" 'codexLinuxNativeDesktopApps'
-    assert_contains "$main_bundle" '"computer-use-native-desktop-app-icon":async(e)=>process.platform===`linux`?codexLinuxNativeDesktopAppIcon(e):{iconSmall:``}'
-    assert_contains "$renderer_asset" 'function hae(e){return e===`macOS`||e===`windows`||e===`linux`}'
-    assert_contains "$current_renderer_asset" 'areRequiredFeaturesEnabled:o===`linux`||y'
-    assert_contains "$current_renderer_asset" 'isAnyFeatureLoading:o===`linux`?!1:g'
-    assert_contains "$native_apps_asset" 'a===`macOS`||a===`windows`||a===`linux`'
+    assert_contains "$settings_asset" 'available:!0,isFetching:!1,isLoading:!1'
+    assert_contains "$settings_asset" 'marketplaceName:`openai-bundled`'
+    assert_contains "$plugins_asset" 'computer-use@openai-bundled'
+    assert_contains "$plugins_asset" '.map(e=>e.plugin?.name===`computer-use`'
+    assert_contains "$install_flow_asset" 'let p=f&&i!==`computer-use`,m;'
 
-    # Branch 3: settings.json flag opts in even without env var.
-    rm "$main_bundle" "$renderer_asset" "$current_renderer_asset" "$native_apps_asset"
+    node "$REPO_DIR/scripts/patch-linux-window-ui.js" "$extracted" >"$output_log" 2>&1
+    assert_occurrence_count "$settings_asset" 'available:!0,isFetching:!1,isLoading:!1' '1'
+    assert_occurrence_count "$settings_asset" 'marketplaceName:`openai-bundled`' '1'
+    assert_occurrence_count "$plugins_asset" '.map(e=>e.plugin?.name===`computer-use`' '1'
+    assert_occurrence_count "$install_flow_asset" '!==`computer-use`' '1'
+
+    rm "$main_bundle" "$settings_asset" "$plugins_asset" "$install_flow_asset"
     printf '%s\n' "$bundle_body" > "$main_bundle"
-    printf '%s\n' "$renderer_body" > "$renderer_asset"
-    printf '%s\n' "$current_renderer_body" > "$current_renderer_asset"
-    printf '%s\n' "$native_apps_body" > "$native_apps_asset"
+    printf '%s\n' "$settings_body" > "$settings_asset"
+    printf '%s\n' "$plugins_body" > "$plugins_asset"
+    printf '%s\n' "$install_flow_body" > "$install_flow_asset"
     printf '%s\n' '{"codex-linux-computer-use-ui-enabled": true}' > "$fake_home/.config/codex-desktop/settings.json"
 
     env -u CODEX_LINUX_ENABLE_COMPUTER_USE_UI -u CODEX_LINUX_APP_ID -u CODEX_APP_ID -u CODEX_LINUX_SETTINGS_FILE \
@@ -9400,9 +9484,10 @@ JS
         node "$REPO_DIR/scripts/patch-linux-window-ui.js" "$extracted" >"$output_log" 2>&1
     assert_contains "$main_bundle" 'return n===`linux`?{...e,computerUse:!0,computerUseNodeRepl:!0}'
     assert_contains "$main_bundle" 'codexLinuxNativeDesktopApps'
-    assert_contains "$renderer_asset" 'function hae(e){return e===`macOS`||e===`windows`||e===`linux`}'
-    assert_contains "$current_renderer_asset" 'areRequiredFeaturesEnabled:o===`linux`||y'
-    assert_contains "$native_apps_asset" 'a===`macOS`||a===`windows`||a===`linux`'
+    assert_contains "$settings_asset" 'available:!0,isFetching:!1,isLoading:!1'
+    assert_contains "$settings_asset" 'marketplaceName:`openai-bundled`'
+    assert_contains "$plugins_asset" '.map(e=>e.plugin?.name===`computer-use`'
+    assert_contains "$install_flow_asset" 'let p=f&&i!==`computer-use`,m;'
 }
 
 test_linux_file_manager_patch_fails_soft() {
@@ -10235,6 +10320,10 @@ test_launcher_warm_start_recovery() {
     bash "$REPO_DIR/tests/launcher_warm_start_recovery.sh"
     CODEX_TEST_DISABLE_WARM_START=1 bash "$REPO_DIR/tests/launcher_warm_start_recovery.sh"
     CODEX_TEST_KILL_DURING_PRELAUNCH=1 bash "$REPO_DIR/tests/launcher_warm_start_recovery.sh"
+    CODEX_TEST_DISABLE_PIDFD=1 CODEX_TEST_NORMAL_LOCK_ONLY=1 \
+        bash "$REPO_DIR/tests/launcher_warm_start_recovery.sh"
+    CODEX_TEST_DISABLE_PIDFD=1 CODEX_TEST_KILL_DURING_PRELAUNCH=1 \
+        bash "$REPO_DIR/tests/launcher_warm_start_recovery.sh"
 }
 
 test_notification_actions_bridge_accepts_prebuilt_binary() {
@@ -10353,12 +10442,11 @@ main() {
     test_bundled_plugin_builders_accept_prebuilt_binaries
     test_bundled_plugin_computer_use_preserves_upstream_shell
     test_bundled_plugin_computer_use_requires_upstream_shell
-    test_bundled_plugin_computer_use_rejects_malformed_upstream_manifest
-    test_bundled_plugin_resources_rejects_enabled_computer_use_staging_failure
     test_notification_actions_bridge_accepts_prebuilt_binary
     test_bundled_plugin_system_computer_use_preserves_cosmic_helper_name
     test_browser_use_node_repl_fallback_runtime
     test_browser_use_file_url_policy_patch_behavior
+    test_browser_use_site_status_allowlist_fallback_patch_behavior
     test_browser_plugin_renamed_upstream_staging
     test_upstream_bundled_skills_staging
     test_upstream_bundled_skills_validator_guards

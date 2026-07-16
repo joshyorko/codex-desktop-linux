@@ -194,7 +194,7 @@ const descriptors = [
     phase: "webview-asset",
     order: 20600,
     ciPolicy: "optional",
-    pattern: /^app-initial~app-main~onboarding-page-[^.]+\.js$/,
+    pattern: /^app-initial~app-main~quick-chat-window-page~chatgpt-conversation-page-[^.]+\.js$/,
     missingDescription: "current API key service tier gate bundle",
     skipDescription: "API key service tier gate patch",
     apply: applyCurrentGatePatch,
@@ -205,7 +205,7 @@ const descriptors = [
     order: 20605,
     ciPolicy: "optional",
     pattern:
-      /^app-initial~app-main~onboarding-page~projects-index-page~hotkey-window-thread-page~quick-ch~iiv1g666-[^.]+\.js$/,
+      /^app-initial~app-main~projects-index-page~remote-conversation-page-[^.]+\.js$/,
     missingDescription: "current API key service tier model bundle",
     skipDescription: "API key model service tier marker patch",
     apply: applyCurrentModelPatch,
@@ -216,7 +216,7 @@ const descriptors = [
     order: 20610,
     ciPolicy: "optional",
     pattern:
-      /^app-initial~app-main~hotkey-window-new-thread-page~hotkey-window-home-page~composer-utility-bar-[^.]+\.js$/,
+      /^app-initial~app-main~pull-request-route~new-thread-panel-page~onboarding-page~settings-page~i2dgsl27-[^.]+\.js$/,
     missingDescription: "current API key service tier fallback bundle",
     skipDescription: "API key fallback fast tier patch",
     apply: applyCurrentFallbackFastTierPatch,

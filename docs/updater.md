@@ -18,7 +18,9 @@ It:
 Codex CLI preflight preserves the detected CLI install type. npm-managed
 installs continue to update through npm, while official standalone installs
 under `~/.codex/packages/standalone` are updated with the official standalone
-installer instead of being replaced through npm.
+installer instead of being replaced through npm. Homebrew/Linuxbrew installs
+are reused and reported, but the updater does not replace them with an
+npm-managed install.
 
 The updater scopes permission hardening to the official standalone installer
 process. New managed releases use the caller's existing umask plus the
@@ -26,66 +28,38 @@ group/world write restrictions from `0022`; stricter policies such as `0027`
 and `0077` remain intact, and the launcher, Electron, app-server, hooks, and
 unrelated child processes keep the caller's original mask.
 
-Before executing a managed standalone CLI, the updater verifies that its tree
-and canonical parent chain are owned by the current user or root and are not
-group/world-writable (apart from root-owned sticky directories such as
-`/tmp`). Every generated launcher performs the same trust-only check through a
-bundled helper before any CLI version probe, including AppImage and native
-packages built without the updater. The helper executes the returned canonical
-release binary rather than a replaceable visible symlink and does not depend on
-an installed updater version. An unsafe tree is rejected without
-executing it, changing its modes, or deleting it; updater state records a
-failed preflight with clean-reinstall guidance.
+Launcher and updater CLI launch validation is intentionally small: the selected
+path is resolved to a canonical regular executable before it is run. They do
+not reject a CLI because its file, parent directory, home path, or standalone
+tree is group-writable, symlinked, or outside a previously recorded standalone
+home. Existing `~/.codex-standalone-provenance` files are ignored.
 
-To recover, stop any active updater or Codex installer, remove the rejected
-`~/.codex/packages/standalone` tree, and run:
+Standalone mutation paths still keep destructive-operation guards. Recovery
+requires absolute paths without `.` or `..`, refuses to overwrite an existing
+standalone tree, runs the official installer child with the safe umask above,
+uses root-controlled system `sh`/`curl`/`wget`, and checks that the installer
+left an executable `codex` command.
+
+To recover a missing or broken standalone tree, stop any active updater or
+Codex installer, remove the old `~/.codex/packages/standalone` tree if one is
+present, and run:
 
 ```bash
 codex-update-manager recover-standalone-cli --print-path
 ```
 
 If the standalone installer link belongs in a non-default directory, add
-`--install-dir /absolute/path/to/bin`. If the recorded standalone home is not
+`--install-dir /absolute/path/to/bin`. If the standalone home is not
 the default `~/.codex`, also add `--codex-home /absolute/path/to/codex-home`.
 Recovery refuses to overwrite any
 existing standalone tree. It downloads the official installer and runs only
 that child with the caller's umask plus the `0022` write restrictions, so the
-flow remains safe even when the desktop session uses `umask 0002`. Before the
-download, recovery removes group/world write access from existing
-current-user-owned directories below `$HOME` along both installer paths (for
-example `.codex`, `packages`, `.local`, and `bin`) and rejects symlinks,
-untrusted ownership, or unsafe ancestors it cannot safely narrow. Automatic
-standalone updates reject an unsafe visible-command directory before
-downloading or spawning the installer. Both update and recovery resolve the
-installer shell, downloader, and child commands only from root-controlled
-system tool directories; they never reuse programs already present in a
-formerly writable user directory. Do not run the official installer directly
-for this recovery: it would inherit the ambient mask. Removing write bits from
-the rejected standalone tree or its command directory is not sufficient because
-their contents may already have been modified.
-
-AppImage, Nix, and native packages built without the updater do not provide the
-recovery command. On those formats, either temporarily install an updater-enabled
-native package and use the command above, or remove the rejected standalone tree
-and reinstall the CLI from a verified package channel into a fresh path whose
-files and canonical ancestors are owned by the current user or root and are not
-group/world-writable. Do not reuse the rejected tree, and do not rerun the
-standalone installer under an ambient `0002` mask.
-
-An npm CLI whose canonical executable or ancestors are already group/world-
-writable is also rejected because its pathname cannot be pinned safely against
-replacement. Do not reinstall into that existing prefix. Remove the rejected
-Codex package tree, then use a fresh dedicated prefix such as
-`(umask 0022; npm i -g --include=optional --prefix ~/.codex-cli-npm
-@openai/codex)`; the launcher and updater both discover that prefix.
-
-After a managed standalone tree is first detected, launcher and updater trust
-checks record its home in `~/.codex-standalone-provenance`, outside the managed
-tree. That durable record keeps standalone provenance active even if the tree or
-visible command has already been replaced. To switch installation channels
-intentionally, remove both the standalone tree and this provenance file;
-otherwise an external replacement is rejected rather than silently reclassified
-as npm- or system-managed.
+flow remains safe even when the desktop session uses `umask 0002`. Both update
+and recovery resolve the installer shell, downloader, and child commands only
+from root-controlled system tool directories; they never reuse programs already
+present in a user install directory. AppImage, Nix, and native packages built
+without the updater do not provide the recovery command; reinstall the CLI
+manually for those formats.
 
 System-package-managed CLI installs are reused but not mutated through npm or
 the standalone installer flow. On Arch-like hosts, when the resolved CLI lives

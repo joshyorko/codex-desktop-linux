@@ -3,7 +3,7 @@
 
 const assert = require("node:assert/strict");
 const { spawn, spawnSync } = require("node:child_process");
-const { EventEmitter } = require("node:events");
+const { EventEmitter, once } = require("node:events");
 const fs = require("node:fs");
 const net = require("node:net");
 const os = require("node:os");
@@ -304,7 +304,21 @@ test("injected transport serializes startup and removes only its owned socket", 
   const children = [];
   let replacement;
   let installReplacementBeforeClose = false;
+  const identityFs = {
+    ...fs,
+    lstatSync(candidate, ...args) {
+      const stat = fs.lstatSync(candidate, ...args);
+      if (candidate !== socketPath || !installReplacementBeforeClose) return stat;
+      return new Proxy(stat, {
+        get(target, property, receiver) {
+          if (property === "ino") return target.ino + 1;
+          return Reflect.get(target, property, receiver);
+        },
+      });
+    },
+  };
   const { Transport } = loadInjectedTransport({
+    fsImpl: identityFs,
     spawnImpl(_command, args) {
       const child = fakeChild();
       children.push(child);
@@ -335,8 +349,9 @@ test("injected transport serializes startup and removes only its owned socket", 
     await assert.rejects(second.ensureAuthority(), /already owned/);
 
     installReplacementBeforeClose = true;
+    const childClosed = once(children[0], "close");
     first.dispose();
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await childClosed;
     assert.equal(fs.lstatSync(socketPath).isSocket(), true, "replacement socket must survive dispose");
     await closeServer(replacement);
   } finally {
