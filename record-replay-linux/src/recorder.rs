@@ -743,11 +743,9 @@ fn ensure_bundle_open(bundle_dir: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Mutex, MutexGuard, OnceLock};
 
-    fn status_env_guard() -> MutexGuard<'static, ()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
+    fn status_env_guard() -> std::sync::MutexGuard<'static, ()> {
+        crate::test_support::env_guard()
     }
 
     fn window(title: &str, app_id: &str, wm_class: &str) -> windowing::WindowInfo {

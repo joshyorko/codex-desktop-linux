@@ -3179,11 +3179,9 @@ fn request_process_stop(pid: u32) {
 mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
-    use std::sync::{Mutex, OnceLock};
 
     fn env_guard() -> std::sync::MutexGuard<'static, ()> {
-        static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
+        crate::test_support::env_guard()
     }
 
     fn exclusion(kind: &str, value: &str) -> SkysightExclusion {

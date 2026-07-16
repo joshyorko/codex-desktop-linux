@@ -1022,6 +1022,10 @@ fn event_stream_end_reason(state: &RecordingRuntimeState) -> Option<&'static str
 mod tests {
     use super::*;
 
+    fn env_guard() -> std::sync::MutexGuard<'static, ()> {
+        crate::test_support::env_guard()
+    }
+
     #[test]
     fn add_event_stream_fields_includes_suppressed_events_path() {
         let temp = tempfile::tempdir().unwrap();
@@ -1046,6 +1050,7 @@ mod tests {
 
     #[test]
     fn status_value_includes_suppressed_events_path() {
+        let _guard = env_guard();
         let temp = tempfile::tempdir().unwrap();
         let session_dir = temp.path().join("session");
         let previous = std::env::var_os("CODEX_RECORD_REPLAY_STATUS_PATH");
@@ -1074,6 +1079,7 @@ mod tests {
 
     #[test]
     fn stop_recording_includes_suppressed_events_path() {
+        let _guard = env_guard();
         let temp = tempfile::tempdir().unwrap();
         let session_dir = temp.path().join("session");
         std::fs::create_dir_all(&session_dir).unwrap();
@@ -1114,6 +1120,7 @@ mod tests {
 
     #[test]
     fn recording_stop_cleans_session_skysight_but_preserves_manual_continuous_capture() {
+        let _guard = env_guard();
         let temp = tempfile::tempdir().unwrap();
         let env_keys = [
             "CODEX_HOME",
