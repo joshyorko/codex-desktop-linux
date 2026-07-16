@@ -2970,7 +2970,7 @@ test("Linux device-key store contends on its validated lock file", { timeout: 10
     assert.ok(Date.now() - startedAt >= 150, "key update must wait for the existing file lock");
     assert.equal(holderExitCode, 0);
   } finally {
-    if (holder?.exitCode == null && holder?.signalCode == null) {
+    if (holder && holder.exitCode == null && holder.signalCode == null) {
       holder.kill("SIGKILL");
     }
     await holderClosed?.catch(() => {});
