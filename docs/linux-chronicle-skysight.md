@@ -12,6 +12,25 @@ transcription system.
 - `speech_context` remains the transcript channel when spoken text is
   available; it is separate from Chronicle-compatible resources.
 
+### Capture Lifecycle
+
+Having the Record & Replay feature installed, enabling Chronicle, or polling
+Chronicle permissions/status does not start continuous desktop capture. The
+event-stream recording path uses bounded session evidence by default and does
+not start the Skysight daemon.
+
+Continuous capture starts only through an explicit Skysight start or Chronicle
+tray action. Each start records a `source` and `owner` in `status.json`; direct
+starts default to `source: cli` and `owner: manual-continuous`. A recording may
+use an owner such as `recording-session:<id>`. Finalizing, canceling, or
+expiring that recording, and clean shutdown of its event-stream MCP server,
+requests stop only when the persisted owner exactly matches that session.
+Manual continuous capture is not stopped by an unrelated recording boundary.
+
+The stop request is a bounded daemon lifecycle signal; the daemon exits on its
+normal loop boundary and records the initiating stop source. Status and
+permission probes remain read-only with respect to daemon startup and capture.
+
 ## Runtime Locations
 
 - Runtime state: `$XDG_RUNTIME_DIR/skysight`
@@ -123,3 +142,8 @@ may also require the system package that provides `libGL.so.1`.
 6. Capture `skysight snapshot` and confirm the segment has `events.jsonl`,
    `metadata.json`, `artifacts/diagnostics.json`, a `*-10min-*.md` resource,
    and either a newly-created or previously-current `*-6h-*.md` rollup.
+
+This lifecycle fix does not add a new empty-exclusion confirmation dialog or a
+hard kill path for an MCP process terminated without a clean transport
+shutdown. Existing exclusion matching, suppression, pruning, and retention
+behavior remains the privacy boundary for captured artifacts.

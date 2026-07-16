@@ -41,6 +41,12 @@ Cargo and copies the release binary into `resources/native/`, the staged plugin
 - Exposes Linux Skysight pause/resume, status, snapshots, exclusions, and a
   rolling evidence daemon through the same `event-stream` MCP server so
   Chronicle-compatible resources can feed skill drafting.
+- Feature availability, Chronicle permissions, and Skysight status polling are
+  passive. Starting Record & Replay uses bounded session evidence by default;
+  it does not start the continuous Skysight daemon.
+- Explicit Skysight starts persist an initiating `source` and `owner` in
+  status. Recording-session owners are stopped at stop, cancel, expiry, and
+  clean MCP shutdown boundaries; `manual-continuous` capture is left alone.
 - Skysight segment directories contain `events.jsonl`, `metadata.json`, and
   bounded artifacts such as diagnostics, screenshots, window metadata, and
   AT-SPI/accessibility evidence when available.

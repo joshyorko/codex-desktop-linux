@@ -49,9 +49,9 @@ pub use skill::{
 };
 pub use skysight::{
     capture_skysight_snapshot, list_skysight_exclusions, pause_skysight, resume_skysight,
-    run_skysight_daemon, skysight_status, start_skysight, stop_skysight, update_skysight_exclusion,
-    SkysightExclusion, SkysightExclusionUpdate, SkysightPaths, SkysightStartOptions,
-    SkysightStatus,
+    run_skysight_daemon, skysight_status, start_skysight, stop_skysight, stop_skysight_if_owned,
+    update_skysight_exclusion, SkysightExclusion, SkysightExclusionUpdate, SkysightPaths,
+    SkysightStartOptions, SkysightStatus,
 };
 pub use timeline::{
     append_timeline_record, parse_timeline_line, read_timeline, TimelineEvent, TimelineParseError,
@@ -179,6 +179,12 @@ pub struct SkysightStartArgs {
     pub interval_seconds: u64,
     #[arg(long, value_enum)]
     pub summary_agent: Option<SkysightSummaryAgentArg>,
+    /// Initiating surface for this explicit continuous capture start.
+    #[arg(long)]
+    pub source: Option<String>,
+    /// Capture owner, such as manual-continuous or recording-session:<id>.
+    #[arg(long)]
+    pub owner: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -376,6 +382,8 @@ pub async fn command_json(command: Commands) -> Result<Value> {
                     SkysightStartOptions {
                         interval_seconds: args.interval_seconds,
                         summary_agent: args.summary_agent.map(SkysightSummaryAgentArg::as_bool),
+                        source: args.source,
+                        owner: args.owner,
                     },
                 )?)?),
                 SkysightCommand::Status => Ok(serde_json::to_value(skysight_status(&paths)?)?),
