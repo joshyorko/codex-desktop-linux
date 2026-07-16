@@ -507,6 +507,57 @@ test("record-and-replay explicit paused Chronicle resume preserves source and ow
   ]);
 });
 
+
+test("record-and-replay tray resume reassigns a paused daemon before resuming", async () => {
+  const helperSource = recordReplayHelperSource({
+    childProcessVar: "childProcess",
+    fsVar: "fs",
+    pathVar: "path",
+  });
+  const calls = [];
+  const responses = [
+    { state: "paused", is_running: true, paused: true, owner: "recording-session:abc" },
+    { state: "paused", is_running: true, paused: true, owner: "manual-continuous" },
+    { state: "running", is_running: true, paused: false, owner: "manual-continuous" },
+  ];
+  const context = {
+    childProcess: {
+      execFile(_bin, args, _options, callback) {
+        calls.push(args);
+        callback(null, JSON.stringify(responses.shift()), "");
+      },
+    },
+    fs,
+    path,
+    process: {
+      env: { CODEX_RECORD_REPLAY_LINUX_BIN: "/tmp/codex-record-replay-linux" },
+      cwd: () => "/tmp",
+      pid: 4242,
+    },
+    JSON,
+    Promise,
+    String,
+  };
+
+  await vm.runInNewContext(`${helperSource};codexLinuxChronicleToggleSidecar()`, context);
+
+  assert.deepEqual(JSON.parse(JSON.stringify(calls)), [
+    ["skysight", "status"],
+    ["skysight", "status"],
+    [
+      "skysight",
+      "start",
+      "--summary-agent",
+      "enabled",
+      "--source",
+      "chronicle-tray",
+      "--owner",
+      "manual-continuous",
+    ],
+    ["skysight", "resume"],
+  ]);
+});
+
 test("record-and-replay generic Skysight start can pass summary agent true or false", async () => {
   const source = [
     "const cp=require(\"node:child_process\"),fs=require(\"node:fs\"),path=require(\"node:path\");",
@@ -578,6 +629,16 @@ test("record-and-replay patch wires Linux Chronicle tray controls to Skysight", 
   assert.match(patched, /getChronicleSidecarControlState:\(\)=>process\.platform===`linux`\?codexLinuxChronicleSidecarControlState\(\)/);
   assert.match(patched, /toggleChronicleSidecar:async\(\)=>\{if\(process\.platform===`linux`\)return codexLinuxChronicleToggleSidecar\(\)/);
   assert.match(patched, /e\.pauseChronicleSidecar\(\):e\.resumeChronicleSidecar\(\)/);
+});
+
+
+test("record-and-replay upgrade keeps Chronicle handlers untouched when helpers cannot be installed", () => {
+  const oldPatched =
+    'var bridge={"linux-record-replay-doctor":async()=>null,"chronicle-permissions":async()=>codexLinuxChronicleEnsureSidecarRunning(),"getChronicleSidecarControlState":async()=>codexLinuxChronicleEnsureSidecarRunning(),"get-global-state":async({key:e})=>null};';
+  const patched = applyRecordReplayMainBridgePatch(oldPatched);
+
+  assert.equal(patched, oldPatched);
+  assert.doesNotMatch(patched, /codexLinuxChronicleSidecarControlStateAsync/);
 });
 
 test("record-and-replay bridge patch upgrades old patched bundles with active speech endpoint", () => {

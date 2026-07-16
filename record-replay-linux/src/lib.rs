@@ -410,6 +410,8 @@ pub async fn command_json(command: Commands) -> Result<Value> {
                         &paths,
                         args.interval_seconds,
                         args.summary_agent.map(SkysightSummaryAgentArg::as_bool),
+                        args.source,
+                        args.owner,
                     )?;
                     Ok(serde_json::to_value(skysight_status(&paths)?)?)
                 }

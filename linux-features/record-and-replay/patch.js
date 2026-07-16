@@ -225,14 +225,13 @@ function codexLinuxChronicleControlStateFromSkysight(e){let t=e?.json&&typeof e.
 function codexLinuxChronicleSidecarControlState(){return codexLinuxChronicleControlStateFromSkysight(codexLinuxRecordReplayRunSync(["skysight","status"],3000))}
 async function codexLinuxChronicleSidecarControlStateAsync(){return codexLinuxChronicleControlStateFromSkysight(await codexLinuxRecordReplayRun(["skysight","status"],5000))}
 function codexLinuxChronicleSummaryAgentArgs(e){return e===!0?["--summary-agent","enabled"]:e===!1?["--summary-agent","disabled"]:[]}
-async function codexLinuxChronicleEnsureSidecarRunning(e,u,l){let t=await codexLinuxRecordReplayRun(["skysight","status"],5000),n=t?.json&&typeof t.json==="object"?t.json:null,r=String(n?.state||""),a=n?.is_running===!0||n?.isRunning===!0,o=n?.paused===!0||n?.is_paused===!0||n?.isPaused===!0||r==="paused",s=codexLinuxChronicleSummaryAgentArgs(e),i=e===!0&&(n?.summary_agent_enabled!==!0&&n?.summaryAgentEnabled!==!0);u&&s.push("--source",String(u));l&&s.push("--owner",String(l));if(r==="running"&&a&&!o)return i?codexLinuxChronicleControlStateFromSkysight(await codexLinuxRecordReplayRun(["skysight","start",...s],15000)):codexLinuxChronicleControlStateFromSkysight(t);if(a&&o){i&&await codexLinuxRecordReplayRun(["skysight","start",...s],15000);return codexLinuxChronicleControlStateFromSkysight(await codexLinuxRecordReplayRun(["skysight","resume"],10000))}return codexLinuxChronicleControlStateFromSkysight(await codexLinuxRecordReplayRun(["skysight","start",...s],15000))}
+async function codexLinuxChronicleEnsureSidecarRunning(e,u,l){let t=await codexLinuxRecordReplayRun(["skysight","status"],5000),n=t?.json&&typeof t.json==="object"?t.json:null,r=String(n?.state||""),a=n?.is_running===!0||n?.isRunning===!0,o=n?.paused===!0||n?.is_paused===!0||n?.isPaused===!0||r==="paused",s=codexLinuxChronicleSummaryAgentArgs(e),i=e===!0&&(n?.summary_agent_enabled!==!0&&n?.summaryAgentEnabled!==!0),c=u||l||i;u&&s.push("--source",String(u));l&&s.push("--owner",String(l));if(r==="running"&&a&&!o)return c?codexLinuxChronicleControlStateFromSkysight(await codexLinuxRecordReplayRun(["skysight","start",...s],15000)):codexLinuxChronicleControlStateFromSkysight(t);if(a&&o){c&&await codexLinuxRecordReplayRun(["skysight","start",...s],15000);return codexLinuxChronicleControlStateFromSkysight(await codexLinuxRecordReplayRun(["skysight","resume"],10000))}return codexLinuxChronicleControlStateFromSkysight(await codexLinuxRecordReplayRun(["skysight","start",...s],15000))}
 async function codexLinuxChronicleToggleSidecar(){let e=await codexLinuxRecordReplayRun(["skysight","status"],5000),t=e?.json&&typeof e.json==="object"?e.json:null,n=String(t?.state||""),r=t?.is_running===!0||t?.isRunning===!0,a=t?.paused===!0||t?.is_paused===!0||t?.isPaused===!0||n==="paused";if(n==="running"&&r&&!a)return codexLinuxChronicleControlStateFromSkysight(await codexLinuxRecordReplayRun(["skysight","pause"],10000));if(r&&a)return codexLinuxChronicleEnsureSidecarRunning(!0,"chronicle-tray","manual-continuous");return codexLinuxChronicleControlStateFromSkysight(await codexLinuxRecordReplayRun(["skysight","start","--source","chronicle-tray","--owner","manual-continuous","--summary-agent","enabled"],15000))}`;
 }
 
 function upgradeRecordReplayBridgeSource(currentSource) {
   const patchName = "Record & Replay main bridge patch";
   let patchedSource = currentSource;
-  patchedSource = replaceRecordReplayChronicleBridgeHandlers(patchedSource);
   const childProcessVar = requireName(currentSource, "node:child_process");
   if (!patchedSource.includes("function codexLinuxChronicleControlStateFromSkysight")) {
     if (childProcessVar == null) {
@@ -240,6 +239,13 @@ function upgradeRecordReplayBridgeSource(currentSource) {
     } else {
       patchedSource = `${recordReplayChronicleHelperSource({ childProcessVar })}\n${patchedSource}`;
     }
+  }
+
+  const canReplaceChronicleHandlers = patchedSource.includes("function codexLinuxChronicleControlStateFromSkysight");
+  if (canReplaceChronicleHandlers) {
+    patchedSource = replaceRecordReplayChronicleBridgeHandlers(patchedSource);
+  } else {
+    warn("Could not replace Chronicle bridge handlers without helper functions", patchName);
   }
 
   if (!patchedSource.includes('"linux-record-replay-speech-context-active":async')) {

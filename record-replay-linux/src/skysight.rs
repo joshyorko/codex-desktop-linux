@@ -392,6 +392,10 @@ pub fn start_skysight(
                 .pid
                 .is_some_and(|pid| process_is_alive(pid, status.process_start_time_ticks))
         {
+            let mut status = status;
+            status.source = Some(source);
+            status.owner = Some(owner);
+            write_status(paths, &status)?;
             return skysight_status(paths);
         }
     }
@@ -445,11 +449,15 @@ pub fn run_skysight_daemon(
     paths: &SkysightPaths,
     interval_seconds: u64,
     summary_agent: Option<bool>,
+    source: Option<String>,
+    owner: Option<String>,
 ) -> Result<()> {
     ensure_layout(paths)?;
     if let Some(summary_agent) = summary_agent {
         write_summary_agent_runtime_setting(paths, summary_agent)?;
     }
+    let requested_source = source.filter(|value| !value.trim().is_empty());
+    let requested_owner = owner.filter(|value| !value.trim().is_empty());
     let interval = Duration::from_secs(interval_seconds.max(1));
     let ocr_policy = crate::ocr::OcrPolicy::from_env();
     let mut ocr_readiness = None;
@@ -457,20 +465,24 @@ pub fn run_skysight_daemon(
     loop {
         let cached_ocr_readiness = cached_ocr_readiness(&ocr_policy, &mut ocr_readiness);
         if paths.stop_request_path.exists() {
-            let status = status_value(StatusValueInput {
-                paths,
-                state: "stopped",
-                is_running: false,
-                paused: false,
-                pause_reason: None,
-                interval_seconds: Some(interval_seconds.max(1)),
-                pid: None,
-                started_at: None,
-                end_reason: Some("stop-requested".to_string()),
-                message: Some("Skysight daemon stopped".to_string()),
-                ocr_policy: Some(ocr_policy.clone()),
-                ocr_readiness: Some(cached_ocr_readiness),
-            })?;
+            let status = apply_requested_daemon_ownership(
+                status_value(StatusValueInput {
+                    paths,
+                    state: "stopped",
+                    is_running: false,
+                    paused: false,
+                    pause_reason: None,
+                    interval_seconds: Some(interval_seconds.max(1)),
+                    pid: None,
+                    started_at: None,
+                    end_reason: Some("stop-requested".to_string()),
+                    message: Some("Skysight daemon stopped".to_string()),
+                    ocr_policy: Some(ocr_policy.clone()),
+                    ocr_readiness: Some(cached_ocr_readiness),
+                })?,
+                requested_source.as_deref(),
+                requested_owner.as_deref(),
+            );
             write_status(paths, &status)?;
             let _ = fs::remove_file(&paths.stop_request_path);
             let _ = fs::remove_file(&paths.pause_request_path);
@@ -478,20 +490,24 @@ pub fn run_skysight_daemon(
             return Ok(());
         }
         if let Some(reason) = read_pause_reason(paths)? {
-            let status = status_value(StatusValueInput {
-                paths,
-                state: "paused",
-                is_running: true,
-                paused: true,
-                pause_reason: Some(reason),
-                interval_seconds: Some(interval_seconds.max(1)),
-                pid: Some(std::process::id()),
-                started_at: None,
-                end_reason: None,
-                message: Some("Skysight daemon paused".to_string()),
-                ocr_policy: Some(ocr_policy.clone()),
-                ocr_readiness: Some(cached_ocr_readiness),
-            })?;
+            let status = apply_requested_daemon_ownership(
+                status_value(StatusValueInput {
+                    paths,
+                    state: "paused",
+                    is_running: true,
+                    paused: true,
+                    pause_reason: Some(reason),
+                    interval_seconds: Some(interval_seconds.max(1)),
+                    pid: Some(std::process::id()),
+                    started_at: None,
+                    end_reason: None,
+                    message: Some("Skysight daemon paused".to_string()),
+                    ocr_policy: Some(ocr_policy.clone()),
+                    ocr_readiness: Some(cached_ocr_readiness),
+                })?,
+                requested_source.as_deref(),
+                requested_owner.as_deref(),
+            );
             write_status(paths, &status)?;
             thread::sleep(interval);
             continue;
@@ -503,24 +519,42 @@ pub fn run_skysight_daemon(
             cached_ocr_readiness.clone(),
             Some(std::process::id()),
         ) {
-            let status = status_value(StatusValueInput {
-                paths,
-                state: "running",
-                is_running: true,
-                paused: false,
-                pause_reason: None,
-                interval_seconds: Some(interval_seconds.max(1)),
-                pid: Some(std::process::id()),
-                started_at: None,
-                end_reason: None,
-                message: Some(format!("Skysight snapshot failed: {error:#}")),
-                ocr_policy: Some(ocr_policy.clone()),
-                ocr_readiness: Some(cached_ocr_readiness),
-            })?;
+            let status = apply_requested_daemon_ownership(
+                status_value(StatusValueInput {
+                    paths,
+                    state: "running",
+                    is_running: true,
+                    paused: false,
+                    pause_reason: None,
+                    interval_seconds: Some(interval_seconds.max(1)),
+                    pid: Some(std::process::id()),
+                    started_at: None,
+                    end_reason: None,
+                    message: Some(format!("Skysight snapshot failed: {error:#}")),
+                    ocr_policy: Some(ocr_policy.clone()),
+                    ocr_readiness: Some(cached_ocr_readiness),
+                })?,
+                requested_source.as_deref(),
+                requested_owner.as_deref(),
+            );
             write_status(paths, &status)?;
         }
         thread::sleep(interval);
     }
+}
+
+fn apply_requested_daemon_ownership(
+    mut status: SkysightStatus,
+    source: Option<&str>,
+    owner: Option<&str>,
+) -> SkysightStatus {
+    if let Some(source) = source {
+        status.source = Some(source.to_string());
+    }
+    if let Some(owner) = owner {
+        status.owner = Some(owner.to_string());
+    }
+    status
 }
 
 fn cached_ocr_readiness(
