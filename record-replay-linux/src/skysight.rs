@@ -462,27 +462,32 @@ pub fn run_skysight_daemon(
     let ocr_policy = crate::ocr::OcrPolicy::from_env();
     let mut ocr_readiness = None;
     write_chronicle_started_pid(std::process::id())?;
+    let initial_ocr_readiness = cached_ocr_readiness(&ocr_policy, &mut ocr_readiness);
+    initialize_daemon_status(
+        paths,
+        interval_seconds,
+        ocr_policy.clone(),
+        initial_ocr_readiness,
+        requested_source.as_deref(),
+        requested_owner.as_deref(),
+    )?;
     loop {
         let cached_ocr_readiness = cached_ocr_readiness(&ocr_policy, &mut ocr_readiness);
         if paths.stop_request_path.exists() {
-            let status = apply_requested_daemon_ownership(
-                status_value(StatusValueInput {
-                    paths,
-                    state: "stopped",
-                    is_running: false,
-                    paused: false,
-                    pause_reason: None,
-                    interval_seconds: Some(interval_seconds.max(1)),
-                    pid: None,
-                    started_at: None,
-                    end_reason: Some("stop-requested".to_string()),
-                    message: Some("Skysight daemon stopped".to_string()),
-                    ocr_policy: Some(ocr_policy.clone()),
-                    ocr_readiness: Some(cached_ocr_readiness),
-                })?,
-                requested_source.as_deref(),
-                requested_owner.as_deref(),
-            );
+            let status = status_value(StatusValueInput {
+                paths,
+                state: "stopped",
+                is_running: false,
+                paused: false,
+                pause_reason: None,
+                interval_seconds: Some(interval_seconds.max(1)),
+                pid: None,
+                started_at: None,
+                end_reason: Some("stop-requested".to_string()),
+                message: Some("Skysight daemon stopped".to_string()),
+                ocr_policy: Some(ocr_policy.clone()),
+                ocr_readiness: Some(cached_ocr_readiness),
+            })?;
             write_status(paths, &status)?;
             let _ = fs::remove_file(&paths.stop_request_path);
             let _ = fs::remove_file(&paths.pause_request_path);
@@ -490,75 +495,73 @@ pub fn run_skysight_daemon(
             return Ok(());
         }
         if let Some(reason) = read_pause_reason(paths)? {
-            let status = apply_requested_daemon_ownership(
-                status_value(StatusValueInput {
-                    paths,
-                    state: "paused",
-                    is_running: true,
-                    paused: true,
-                    pause_reason: Some(reason),
-                    interval_seconds: Some(interval_seconds.max(1)),
-                    pid: Some(std::process::id()),
-                    started_at: None,
-                    end_reason: None,
-                    message: Some("Skysight daemon paused".to_string()),
-                    ocr_policy: Some(ocr_policy.clone()),
-                    ocr_readiness: Some(cached_ocr_readiness),
-                })?,
-                requested_source.as_deref(),
-                requested_owner.as_deref(),
-            );
+            let status = status_value(StatusValueInput {
+                paths,
+                state: "paused",
+                is_running: true,
+                paused: true,
+                pause_reason: Some(reason),
+                interval_seconds: Some(interval_seconds.max(1)),
+                pid: Some(std::process::id()),
+                started_at: None,
+                end_reason: None,
+                message: Some("Skysight daemon paused".to_string()),
+                ocr_policy: Some(ocr_policy.clone()),
+                ocr_readiness: Some(cached_ocr_readiness),
+            })?;
             write_status(paths, &status)?;
             thread::sleep(interval);
             continue;
         }
-        if let Err(error) = capture_daemon_snapshot_with_ocr(
+        if let Err(error) = capture_skysight_snapshot_with_ocr(
             paths,
+            Some("daemon"),
             ocr_policy.clone(),
             cached_ocr_readiness.clone(),
-            std::process::id(),
-            requested_source.as_deref(),
-            requested_owner.as_deref(),
+            Some(std::process::id()),
         ) {
-            let status = apply_requested_daemon_ownership(
-                status_value(StatusValueInput {
-                    paths,
-                    state: "running",
-                    is_running: true,
-                    paused: false,
-                    pause_reason: None,
-                    interval_seconds: Some(interval_seconds.max(1)),
-                    pid: Some(std::process::id()),
-                    started_at: None,
-                    end_reason: None,
-                    message: Some(format!("Skysight snapshot failed: {error:#}")),
-                    ocr_policy: Some(ocr_policy.clone()),
-                    ocr_readiness: Some(cached_ocr_readiness),
-                })?,
-                requested_source.as_deref(),
-                requested_owner.as_deref(),
-            );
+            let status = status_value(StatusValueInput {
+                paths,
+                state: "running",
+                is_running: true,
+                paused: false,
+                pause_reason: None,
+                interval_seconds: Some(interval_seconds.max(1)),
+                pid: Some(std::process::id()),
+                started_at: None,
+                end_reason: None,
+                message: Some(format!("Skysight snapshot failed: {error:#}")),
+                ocr_policy: Some(ocr_policy.clone()),
+                ocr_readiness: Some(cached_ocr_readiness),
+            })?;
             write_status(paths, &status)?;
         }
         thread::sleep(interval);
     }
 }
 
-fn capture_daemon_snapshot_with_ocr(
+fn initialize_daemon_status(
     paths: &SkysightPaths,
+    interval_seconds: u64,
     ocr_policy: crate::ocr::OcrPolicy,
     ocr_readiness: crate::ocr::OcrReadiness,
-    daemon_pid: u32,
     source: Option<&str>,
     owner: Option<&str>,
 ) -> Result<SkysightStatus> {
-    let status = capture_skysight_snapshot_with_ocr(
+    let status = status_value(StatusValueInput {
         paths,
-        Some("daemon"),
-        ocr_policy,
-        ocr_readiness,
-        Some(daemon_pid),
-    )?;
+        state: "running",
+        is_running: true,
+        paused: false,
+        pause_reason: None,
+        interval_seconds: Some(interval_seconds.max(1)),
+        pid: Some(std::process::id()),
+        started_at: Some(now_timestamp()),
+        end_reason: None,
+        message: Some("Skysight daemon started".to_string()),
+        ocr_policy: Some(ocr_policy),
+        ocr_readiness: Some(ocr_readiness),
+    })?;
     let status = apply_requested_daemon_ownership(status, source, owner);
     write_status(paths, &status)?;
     Ok(status)
@@ -3594,13 +3597,14 @@ mod tests {
     }
 
     #[test]
-    fn daemon_snapshot_status_applies_requested_source_and_owner() {
+    fn daemon_initial_status_applies_requested_source_and_owner() {
         let _guard = env_guard();
         let temp = tempfile::tempdir().unwrap();
         let paths = SkysightPaths::new(temp.path().join("runtime"), temp.path().join("resources"));
 
-        let status = capture_daemon_snapshot_with_ocr(
+        let status = initialize_daemon_status(
             &paths,
+            60,
             crate::ocr::OcrPolicy::from_env(),
             crate::ocr::OcrReadiness {
                 enabled: false,
@@ -3612,7 +3616,6 @@ mod tests {
                 dependency_hint: None,
                 error: None,
             },
-            std::process::id(),
             Some("direct-daemon"),
             Some("recording-session:test"),
         )
@@ -3623,6 +3626,54 @@ mod tests {
         let persisted = read_status(&paths).unwrap();
         assert_eq!(persisted.source, status.source);
         assert_eq!(persisted.owner, status.owner);
+    }
+
+    #[test]
+    fn daemon_snapshot_status_preserves_live_ownership_reassignment() {
+        let _guard = env_guard();
+        let temp = tempfile::tempdir().unwrap();
+        let paths = SkysightPaths::new(temp.path().join("runtime"), temp.path().join("resources"));
+        ensure_layout(&paths).unwrap();
+
+        let mut reassigned = status_value(StatusValueInput {
+            paths: &paths,
+            state: "running",
+            is_running: true,
+            paused: false,
+            pause_reason: None,
+            interval_seconds: Some(60),
+            pid: Some(std::process::id()),
+            started_at: Some(now_timestamp()),
+            end_reason: None,
+            message: Some("ownership reassigned while daemon is live".to_string()),
+            ocr_policy: None,
+            ocr_readiness: None,
+        })
+        .unwrap();
+        reassigned.source = Some("chronicle-tray".to_string());
+        reassigned.owner = Some("manual-continuous".to_string());
+        write_status(&paths, &reassigned).unwrap();
+
+        let status = capture_skysight_snapshot_with_ocr(
+            &paths,
+            Some("daemon"),
+            crate::ocr::OcrPolicy::from_env(),
+            crate::ocr::OcrReadiness {
+                enabled: false,
+                available: false,
+                backend: "auto".to_string(),
+                status: "disabled".to_string(),
+                language: "eng".to_string(),
+                version: None,
+                dependency_hint: None,
+                error: None,
+            },
+            Some(std::process::id()),
+        )
+        .unwrap();
+
+        assert_eq!(status.source.as_deref(), Some("chronicle-tray"));
+        assert_eq!(status.owner.as_deref(), Some("manual-continuous"));
     }
 
     #[test]
