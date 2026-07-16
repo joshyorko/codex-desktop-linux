@@ -52,6 +52,61 @@ function findMatchingBracket(source, openIndex) {
   return -1;
 }
 
+function findPropertyValueEnd(source, valueStart) {
+  let quote = null;
+  let escaped = false;
+  let parentheses = 0;
+  let brackets = 0;
+  let braces = 0;
+  for (let index = valueStart; index < source.length; index += 1) {
+    const char = source[index];
+    if (quote != null) {
+      if (escaped) escaped = false;
+      else if (char === "\\") escaped = true;
+      else if (char === quote) quote = null;
+      continue;
+    }
+    if (char === "'" || char === '"' || char === "`") {
+      quote = char;
+      continue;
+    }
+    if (char === "(") parentheses += 1;
+    else if (char === ")") parentheses -= 1;
+    else if (char === "[") brackets += 1;
+    else if (char === "]") brackets -= 1;
+    else if (char === "{") braces += 1;
+    else if (char === "}") {
+      if (braces > 0) braces -= 1;
+      else if (parentheses === 0 && brackets === 0) return index;
+    } else if (char === "," && parentheses === 0 && brackets === 0 && braces === 0) {
+      return index;
+    }
+  }
+  return -1;
+}
+
+function replaceObjectPropertyValues(source, propertyKey, replacement) {
+  let searchFrom = 0;
+  let copiedThrough = 0;
+  let replaced = false;
+  const chunks = [];
+  while (true) {
+    const propertyIndex = source.indexOf(propertyKey, searchFrom);
+    if (propertyIndex === -1) break;
+    const valueStart = propertyIndex + propertyKey.length;
+    const valueEnd = findPropertyValueEnd(source, valueStart);
+    if (valueEnd === -1) {
+      searchFrom = valueStart;
+      continue;
+    }
+    chunks.push(source.slice(copiedThrough, propertyIndex), replacement);
+    copiedThrough = valueEnd;
+    searchFrom = valueEnd;
+    replaced = true;
+  }
+  return replaced ? chunks.concat(source.slice(copiedThrough)).join("") : source;
+}
+
 function findBundledPluginGateArray(source) {
   let markerIndex = source.indexOf(".computerUse");
   while (markerIndex !== -1) {
@@ -94,15 +149,40 @@ function applyRecordReplayPluginGatePatch(currentSource) {
   return `${currentSource.slice(0, insertionIndex)}${buildRecordReplayDescriptor(availabilityProp)},${currentSource.slice(insertionIndex)}`;
 }
 
-function recordReplayBridgeSource({ childProcessVar, fsVar, pathVar }) {
+function recordReplayChronicleBridgeEntries() {
   return [
     `"chronicle-permissions":async()=>{let e=await codexLinuxChronicleSidecarControlStateAsync(),t=e.enabled===!0?"granted":"unknown";return{accessibility:t,screenRecording:t,chronicleSidecarPresent:e.enabled===!0,chronicleSidecarProcessState:e.state??"disabled",chronicleOcrAvailable:e.chronicleOcrAvailable===!0,chronicleOcrStatus:e.chronicleOcrStatus??"unknown",chronicleOcrBackend:e.chronicleOcrBackend??null,chronicleOcrLanguage:e.chronicleOcrLanguage??null}}`,
     `"getChronicleSidecarControlState":async()=>codexLinuxChronicleSidecarControlStateAsync()`,
     `"toggleChronicleSidecar":async()=>codexLinuxChronicleToggleSidecar()`,
+  ];
+}
+
+function chronicleBridgePropertyKey(entry) {
+  return entry.slice(0, entry.indexOf(":") + 1);
+}
+
+function replaceRecordReplayChronicleBridgeHandlers(source) {
+  return recordReplayChronicleBridgeEntries().reduce(
+    (patchedSource, entry) =>
+      replaceObjectPropertyValues(patchedSource, chronicleBridgePropertyKey(entry), entry),
+    source,
+  );
+}
+
+function missingRecordReplayChronicleBridgeEntries(source) {
+  return recordReplayChronicleBridgeEntries().filter(
+    (entry) => !source.includes(chronicleBridgePropertyKey(entry)),
+  );
+}
+
+function recordReplayBridgeSource({ childProcessVar, fsVar, pathVar, chronicleEntries }) {
+  const entries = chronicleEntries ?? recordReplayChronicleBridgeEntries();
+  return [
+    ...entries,
     `"linux-record-replay-doctor":async()=>codexLinuxRecordReplayRun([${JSON.stringify("doctor")}],15000)`,
     `"linux-record-replay-status":async()=>codexLinuxRecordReplayRun([${JSON.stringify("status")}],5000)`,
     `"linux-record-replay-start":async({sessionDir:e,appId:t,windowId:n,goal:r,includeScreenshot:a,includeAccessibility:o,includeAudio:s}={})=>{let i=codexLinuxRecordReplayString(e);if(!i)return{ok:!1,action:"record.start",message:"sessionDir is required"};let c=["record","start","--session-dir",i];t&&c.push("--app-id",String(t));n&&c.push("--window-id",String(n));r&&c.push("--goal",String(r));a===!1&&c.push("--no-screenshot");o===!1&&c.push("--no-accessibility");s===!0&&c.push("--audio");s===!1&&c.push("--no-audio");return codexLinuxRecordReplayRun(c,60000)}`,
-    `"linux-record-replay-skysight-start":async({intervalSeconds:e,summaryAgent:t}={})=>{let n=["skysight","start"];e&&n.push("--interval-seconds",String(e));t===!0&&n.push("--summary-agent","enabled");t===!1&&n.push("--summary-agent","disabled");return codexLinuxRecordReplayRun(n,15000)}`,
+    `"linux-record-replay-skysight-start":async({intervalSeconds:e,summaryAgent:t,source:r,owner:a}={})=>{let n=["skysight","start"];e&&n.push("--interval-seconds",String(e));r&&n.push("--source",String(r));a&&n.push("--owner",String(a));t===!0&&n.push("--summary-agent","enabled");t===!1&&n.push("--summary-agent","disabled");return codexLinuxRecordReplayRun(n,15000)}`,
     `"linux-record-replay-skysight-status":async()=>codexLinuxRecordReplayRun(["skysight","status"],5000)`,
     `"linux-record-replay-skysight-pause":async()=>codexLinuxRecordReplayRun(["skysight","pause"],10000)`,
     `"linux-record-replay-skysight-resume":async()=>codexLinuxRecordReplayRun(["skysight","resume"],10000)`,
@@ -145,8 +225,8 @@ function codexLinuxChronicleControlStateFromSkysight(e){let t=e?.json&&typeof e.
 function codexLinuxChronicleSidecarControlState(){return codexLinuxChronicleControlStateFromSkysight(codexLinuxRecordReplayRunSync(["skysight","status"],3000))}
 async function codexLinuxChronicleSidecarControlStateAsync(){return codexLinuxChronicleControlStateFromSkysight(await codexLinuxRecordReplayRun(["skysight","status"],5000))}
 function codexLinuxChronicleSummaryAgentArgs(e){return e===!0?["--summary-agent","enabled"]:e===!1?["--summary-agent","disabled"]:[]}
-async function codexLinuxChronicleEnsureSidecarRunning(e){let t=await codexLinuxRecordReplayRun(["skysight","status"],5000),n=t?.json&&typeof t.json==="object"?t.json:null,r=String(n?.state||""),a=n?.is_running===!0||n?.isRunning===!0,o=n?.paused===!0||n?.is_paused===!0||n?.isPaused===!0||r==="paused",s=codexLinuxChronicleSummaryAgentArgs(e),i=e===!0&&(n?.summary_agent_enabled!==!0&&n?.summaryAgentEnabled!==!0);if(r==="running"&&a&&!o)return i?codexLinuxChronicleControlStateFromSkysight(await codexLinuxRecordReplayRun(["skysight","start",...s],15000)):codexLinuxChronicleControlStateFromSkysight(t);if(a&&o){i&&await codexLinuxRecordReplayRun(["skysight","start",...s],15000);return codexLinuxChronicleControlStateFromSkysight(await codexLinuxRecordReplayRun(["skysight","resume"],10000))}return codexLinuxChronicleControlStateFromSkysight(await codexLinuxRecordReplayRun(["skysight","start",...s],15000))}
-async function codexLinuxChronicleToggleSidecar(){let e=await codexLinuxRecordReplayRun(["skysight","status"],5000),t=e?.json&&typeof e.json==="object"?e.json:null,n=String(t?.state||""),r=t?.is_running===!0||t?.isRunning===!0,a=t?.paused===!0||t?.is_paused===!0||t?.isPaused===!0||n==="paused";if(n==="running"&&r&&!a)return codexLinuxChronicleControlStateFromSkysight(await codexLinuxRecordReplayRun(["skysight","pause"],10000));if(r&&a)return codexLinuxChronicleEnsureSidecarRunning(!0);return codexLinuxChronicleControlStateFromSkysight(await codexLinuxRecordReplayRun(["skysight","start","--summary-agent","enabled"],15000))}`;
+async function codexLinuxChronicleEnsureSidecarRunning(e,u,l){let t=await codexLinuxRecordReplayRun(["skysight","status"],5000),n=t?.json&&typeof t.json==="object"?t.json:null,r=String(n?.state||""),a=n?.is_running===!0||n?.isRunning===!0,o=n?.paused===!0||n?.is_paused===!0||n?.isPaused===!0||r==="paused",s=codexLinuxChronicleSummaryAgentArgs(e),i=e===!0&&(n?.summary_agent_enabled!==!0&&n?.summaryAgentEnabled!==!0),c=u||l||i;u&&s.push("--source",String(u));l&&s.push("--owner",String(l));if(r==="running"&&a&&!o)return c?codexLinuxChronicleControlStateFromSkysight(await codexLinuxRecordReplayRun(["skysight","start",...s],15000)):codexLinuxChronicleControlStateFromSkysight(t);if(a&&o){c&&await codexLinuxRecordReplayRun(["skysight","start",...s],15000);return codexLinuxChronicleControlStateFromSkysight(await codexLinuxRecordReplayRun(["skysight","resume"],10000))}return codexLinuxChronicleControlStateFromSkysight(await codexLinuxRecordReplayRun(["skysight","start",...s],15000))}
+async function codexLinuxChronicleToggleSidecar(){let e=await codexLinuxRecordReplayRun(["skysight","status"],5000),t=e?.json&&typeof e.json==="object"?e.json:null,n=String(t?.state||""),r=t?.is_running===!0||t?.isRunning===!0,a=t?.paused===!0||t?.is_paused===!0||t?.isPaused===!0||n==="paused";if(n==="running"&&r&&!a)return codexLinuxChronicleControlStateFromSkysight(await codexLinuxRecordReplayRun(["skysight","pause"],10000));if(r&&a)return codexLinuxChronicleEnsureSidecarRunning(!0,"chronicle-tray","manual-continuous");return codexLinuxChronicleControlStateFromSkysight(await codexLinuxRecordReplayRun(["skysight","start","--source","chronicle-tray","--owner","manual-continuous","--summary-agent","enabled"],15000))}`;
 }
 
 function upgradeRecordReplayBridgeSource(currentSource) {
@@ -159,6 +239,13 @@ function upgradeRecordReplayBridgeSource(currentSource) {
     } else {
       patchedSource = `${recordReplayChronicleHelperSource({ childProcessVar })}\n${patchedSource}`;
     }
+  }
+
+  const canReplaceChronicleHandlers = patchedSource.includes("function codexLinuxChronicleControlStateFromSkysight");
+  if (canReplaceChronicleHandlers) {
+    patchedSource = replaceRecordReplayChronicleBridgeHandlers(patchedSource);
+  } else {
+    warn("Could not replace Chronicle bridge handlers without helper functions", patchName);
   }
 
   if (!patchedSource.includes('"linux-record-replay-speech-context-active":async')) {
@@ -174,7 +261,8 @@ function upgradeRecordReplayBridgeSource(currentSource) {
   }
 
   const hasChronicleHelpers = patchedSource.includes("function codexLinuxChronicleControlStateFromSkysight");
-  if (!patchedSource.includes('"chronicle-permissions":async')) {
+  const missingChronicleEntries = missingRecordReplayChronicleBridgeEntries(patchedSource);
+  if (missingChronicleEntries.length > 0) {
     const doctorNeedle = `"linux-record-replay-doctor":async`;
     if (!patchedSource.includes(doctorNeedle)) {
       warn("Could not find Chronicle bridge upgrade point", patchName);
@@ -183,7 +271,12 @@ function upgradeRecordReplayBridgeSource(currentSource) {
     } else {
       patchedSource = patchedSource.replace(
         doctorNeedle,
-        `${recordReplayBridgeSource({ childProcessVar, fsVar: "fs", pathVar: "path" }).split(`,"linux-record-replay-doctor":async`)[0]},${doctorNeedle}`,
+        `${recordReplayBridgeSource({
+          childProcessVar,
+          fsVar: "fs",
+          pathVar: "path",
+          chronicleEntries: missingChronicleEntries,
+        }).split(`,"linux-record-replay-doctor":async`)[0]},${doctorNeedle}`,
       );
     }
   }
@@ -238,9 +331,16 @@ function applyRecordReplayMainBridgePatch(currentSource) {
     return currentSource;
   }
 
+  patchedSource = replaceRecordReplayChronicleBridgeHandlers(patchedSource);
+  const missingChronicleEntries = missingRecordReplayChronicleBridgeEntries(patchedSource);
   patchedSource = `${recordReplayHelperSource({ childProcessVar, fsVar, pathVar })}\n${patchedSource.replace(
     handlerNeedle,
-    `${recordReplayBridgeSource({ childProcessVar, fsVar, pathVar })},${handlerNeedle}`,
+    `${recordReplayBridgeSource({
+      childProcessVar,
+      fsVar,
+      pathVar,
+      chronicleEntries: missingChronicleEntries,
+    })},${handlerNeedle}`,
   )}`;
   return applyRecordReplayChronicleTrayPatch(patchedSource);
 }

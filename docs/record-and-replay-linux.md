@@ -63,6 +63,13 @@ pause and resume alongside the existing start, status, stop, snapshot, and
 exclusion methods so the app can keep the active capture session alive while
 the backend moves between recording states.
 
+Feature availability and Chronicle permission/status polling are passive: they
+do not start the continuous Skysight daemon. Record & Replay uses bounded
+session evidence by default. Explicit Skysight starts persist a source and
+owner, and stop/cancel/expiry plus clean event-stream MCP shutdown stop only a
+daemon whose owner matches `recording-session:<id>`; manual-continuous capture
+remains independently controllable.
+
 Chronicle-compatible resources are written under
 `${CODEX_HOME:-$HOME/.codex}/memories/extensions/chronicle/resources`, while the
 runtime state directory remains `$XDG_RUNTIME_DIR/skysight`.

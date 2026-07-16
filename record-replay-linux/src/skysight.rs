@@ -38,6 +38,10 @@ const TEN_MINUTE_WINDOW_SECONDS: i64 = 10 * 60;
 const SIX_HOUR_ROLLUP_SECONDS: i64 = 6 * 60 * 60;
 const SIX_HOUR_ROLLUP_REFRESH_SECONDS: i64 = 60 * 60;
 const SUMMARY_AGENT_ENABLE_ENV: &str = "CODEX_SKYSIGHT_SUMMARY_AGENT";
+const SOURCE_ENV: &str = "CODEX_SKYSIGHT_SOURCE";
+const OWNER_ENV: &str = "CODEX_SKYSIGHT_OWNER";
+const DEFAULT_START_SOURCE: &str = "cli";
+const DEFAULT_START_OWNER: &str = "manual-continuous";
 const ARTIFACTS_DIR_NAME: &str = "artifacts";
 const ACCESSIBILITY_NODE_LIMIT: usize = 160;
 const ACCESSIBILITY_DEPTH_LIMIT: u32 = 10;
@@ -64,6 +68,10 @@ pub struct SkysightStatus {
     pub schema_version: u32,
     pub state: String,
     pub is_running: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
     #[serde(default)]
     pub paused: bool,
     #[serde(default)]
@@ -204,6 +212,10 @@ pub struct SkysightStartOptions {
     pub interval_seconds: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub summary_agent: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -283,6 +295,8 @@ impl Default for SkysightStartOptions {
         Self {
             interval_seconds: DEFAULT_INTERVAL_SECONDS,
             summary_agent: None,
+            source: None,
+            owner: None,
         }
     }
 }
@@ -361,6 +375,14 @@ pub fn start_skysight(
     options: SkysightStartOptions,
 ) -> Result<SkysightStatus> {
     ensure_layout(paths)?;
+    let source = options
+        .source
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| DEFAULT_START_SOURCE.to_string());
+    let owner = options
+        .owner
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| DEFAULT_START_OWNER.to_string());
     if let Some(summary_agent) = options.summary_agent {
         write_summary_agent_runtime_setting(paths, summary_agent)?;
     }
@@ -370,6 +392,10 @@ pub fn start_skysight(
                 .pid
                 .is_some_and(|pid| process_is_alive(pid, status.process_start_time_ticks))
         {
+            let mut status = status;
+            status.source = Some(source);
+            status.owner = Some(owner);
+            write_status(paths, &status)?;
             return skysight_status(paths);
         }
     }
@@ -386,6 +412,8 @@ pub fn start_skysight(
         .env("CODEX_SKYSIGHT_RUNTIME_DIR", &paths.runtime_dir)
         .env("CODEX_SKYSIGHT_SEGMENTS_DIR", &paths.segments_dir)
         .env("CODEX_SKYSIGHT_RESOURCES_DIR", &paths.resources_dir)
+        .env(SOURCE_ENV, &source)
+        .env(OWNER_ENV, &owner)
         .env(
             "CODEX_SKYSIGHT_MEMORY_EXTENSION_DIR",
             &paths.memory_extension_dir,
@@ -397,7 +425,7 @@ pub fn start_skysight(
     let pid = crate::process_reaper::spawn_reaped(&mut command, "failed to spawn Skysight daemon")?;
     write_chronicle_started_pid(pid)?;
 
-    let status = status_value(StatusValueInput {
+    let mut status = status_value(StatusValueInput {
         paths,
         state: "running",
         is_running: true,
@@ -411,6 +439,8 @@ pub fn start_skysight(
         ocr_policy: None,
         ocr_readiness: None,
     })?;
+    status.source = Some(source);
+    status.owner = Some(owner);
     write_status(paths, &status)?;
     Ok(status)
 }
@@ -419,11 +449,15 @@ pub fn run_skysight_daemon(
     paths: &SkysightPaths,
     interval_seconds: u64,
     summary_agent: Option<bool>,
+    source: Option<String>,
+    owner: Option<String>,
 ) -> Result<()> {
     ensure_layout(paths)?;
     if let Some(summary_agent) = summary_agent {
         write_summary_agent_runtime_setting(paths, summary_agent)?;
     }
+    let requested_source = source.filter(|value| !value.trim().is_empty());
+    let requested_owner = owner.filter(|value| !value.trim().is_empty());
     let interval = Duration::from_secs(interval_seconds.max(1));
     let ocr_policy = crate::ocr::OcrPolicy::from_env();
     let mut ocr_readiness = None;
@@ -431,20 +465,24 @@ pub fn run_skysight_daemon(
     loop {
         let cached_ocr_readiness = cached_ocr_readiness(&ocr_policy, &mut ocr_readiness);
         if paths.stop_request_path.exists() {
-            let status = status_value(StatusValueInput {
-                paths,
-                state: "stopped",
-                is_running: false,
-                paused: false,
-                pause_reason: None,
-                interval_seconds: Some(interval_seconds.max(1)),
-                pid: None,
-                started_at: None,
-                end_reason: Some("stop-requested".to_string()),
-                message: Some("Skysight daemon stopped".to_string()),
-                ocr_policy: Some(ocr_policy.clone()),
-                ocr_readiness: Some(cached_ocr_readiness),
-            })?;
+            let status = apply_requested_daemon_ownership(
+                status_value(StatusValueInput {
+                    paths,
+                    state: "stopped",
+                    is_running: false,
+                    paused: false,
+                    pause_reason: None,
+                    interval_seconds: Some(interval_seconds.max(1)),
+                    pid: None,
+                    started_at: None,
+                    end_reason: Some("stop-requested".to_string()),
+                    message: Some("Skysight daemon stopped".to_string()),
+                    ocr_policy: Some(ocr_policy.clone()),
+                    ocr_readiness: Some(cached_ocr_readiness),
+                })?,
+                requested_source.as_deref(),
+                requested_owner.as_deref(),
+            );
             write_status(paths, &status)?;
             let _ = fs::remove_file(&paths.stop_request_path);
             let _ = fs::remove_file(&paths.pause_request_path);
@@ -452,20 +490,24 @@ pub fn run_skysight_daemon(
             return Ok(());
         }
         if let Some(reason) = read_pause_reason(paths)? {
-            let status = status_value(StatusValueInput {
-                paths,
-                state: "paused",
-                is_running: true,
-                paused: true,
-                pause_reason: Some(reason),
-                interval_seconds: Some(interval_seconds.max(1)),
-                pid: Some(std::process::id()),
-                started_at: None,
-                end_reason: None,
-                message: Some("Skysight daemon paused".to_string()),
-                ocr_policy: Some(ocr_policy.clone()),
-                ocr_readiness: Some(cached_ocr_readiness),
-            })?;
+            let status = apply_requested_daemon_ownership(
+                status_value(StatusValueInput {
+                    paths,
+                    state: "paused",
+                    is_running: true,
+                    paused: true,
+                    pause_reason: Some(reason),
+                    interval_seconds: Some(interval_seconds.max(1)),
+                    pid: Some(std::process::id()),
+                    started_at: None,
+                    end_reason: None,
+                    message: Some("Skysight daemon paused".to_string()),
+                    ocr_policy: Some(ocr_policy.clone()),
+                    ocr_readiness: Some(cached_ocr_readiness),
+                })?,
+                requested_source.as_deref(),
+                requested_owner.as_deref(),
+            );
             write_status(paths, &status)?;
             thread::sleep(interval);
             continue;
@@ -477,24 +519,42 @@ pub fn run_skysight_daemon(
             cached_ocr_readiness.clone(),
             Some(std::process::id()),
         ) {
-            let status = status_value(StatusValueInput {
-                paths,
-                state: "running",
-                is_running: true,
-                paused: false,
-                pause_reason: None,
-                interval_seconds: Some(interval_seconds.max(1)),
-                pid: Some(std::process::id()),
-                started_at: None,
-                end_reason: None,
-                message: Some(format!("Skysight snapshot failed: {error:#}")),
-                ocr_policy: Some(ocr_policy.clone()),
-                ocr_readiness: Some(cached_ocr_readiness),
-            })?;
+            let status = apply_requested_daemon_ownership(
+                status_value(StatusValueInput {
+                    paths,
+                    state: "running",
+                    is_running: true,
+                    paused: false,
+                    pause_reason: None,
+                    interval_seconds: Some(interval_seconds.max(1)),
+                    pid: Some(std::process::id()),
+                    started_at: None,
+                    end_reason: None,
+                    message: Some(format!("Skysight snapshot failed: {error:#}")),
+                    ocr_policy: Some(ocr_policy.clone()),
+                    ocr_readiness: Some(cached_ocr_readiness),
+                })?,
+                requested_source.as_deref(),
+                requested_owner.as_deref(),
+            );
             write_status(paths, &status)?;
         }
         thread::sleep(interval);
     }
+}
+
+fn apply_requested_daemon_ownership(
+    mut status: SkysightStatus,
+    source: Option<&str>,
+    owner: Option<&str>,
+) -> SkysightStatus {
+    if let Some(source) = source {
+        status.source = Some(source.to_string());
+    }
+    if let Some(owner) = owner {
+        status.owner = Some(owner.to_string());
+    }
+    status
 }
 
 fn cached_ocr_readiness(
@@ -787,6 +847,24 @@ pub fn skysight_status(paths: &SkysightPaths) -> Result<SkysightStatus> {
 }
 
 pub fn stop_skysight(paths: &SkysightPaths) -> Result<SkysightStatus> {
+    stop_skysight_with_source(paths, "skysight_stop")
+}
+
+pub fn stop_skysight_if_owned(
+    paths: &SkysightPaths,
+    owner: &str,
+    source: &str,
+) -> Result<Option<SkysightStatus>> {
+    let Ok(status) = read_status(paths) else {
+        return Ok(None);
+    };
+    if !status.is_running || status.owner.as_deref() != Some(owner) {
+        return Ok(None);
+    }
+    stop_skysight_with_source(paths, source).map(Some)
+}
+
+fn stop_skysight_with_source(paths: &SkysightPaths, source: &str) -> Result<SkysightStatus> {
     ensure_layout(paths)?;
     if let Ok(status) = read_status(paths) {
         if let Some(pid) = status.pid {
@@ -798,7 +876,7 @@ pub fn stop_skysight(paths: &SkysightPaths) -> Result<SkysightStatus> {
     crate::secure_fs::write_private_file(&paths.stop_request_path, "stop\n")?;
     let _ = fs::remove_file(&paths.pause_request_path);
     let _ = remove_chronicle_started_pid();
-    let status = status_value(StatusValueInput {
+    let mut status = status_value(StatusValueInput {
         paths,
         state: "stopped",
         is_running: false,
@@ -812,6 +890,7 @@ pub fn stop_skysight(paths: &SkysightPaths) -> Result<SkysightStatus> {
         ocr_policy: None,
         ocr_readiness: None,
     })?;
+    status.source = Some(source.to_string());
     write_status(paths, &status)?;
     Ok(status)
 }
@@ -2136,6 +2215,22 @@ struct StatusValueInput<'a> {
 
 fn status_value(input: StatusValueInput<'_>) -> Result<SkysightStatus> {
     let existing = read_status(input.paths).ok();
+    let source = existing
+        .as_ref()
+        .and_then(|status| status.source.clone())
+        .or_else(|| {
+            env::var(SOURCE_ENV)
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+        });
+    let owner = existing
+        .as_ref()
+        .and_then(|status| status.owner.clone())
+        .or_else(|| {
+            env::var(OWNER_ENV)
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+        });
     let latest = latest_segment(input.paths)?;
     let exclusions_count = list_skysight_exclusions(input.paths)?.len();
     let capture_capabilities = capture_capability_notes();
@@ -2182,6 +2277,8 @@ fn status_value(input: StatusValueInput<'_>) -> Result<SkysightStatus> {
         schema_version: 3,
         state: input.state.to_string(),
         is_running: input.is_running,
+        source,
+        owner,
         paused: input.paused,
         is_paused: input.paused,
         pause_reason: input.pause_reason,
@@ -3116,11 +3213,9 @@ fn request_process_stop(pid: u32) {
 mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
-    use std::sync::{Mutex, OnceLock};
 
     fn env_guard() -> std::sync::MutexGuard<'static, ()> {
-        static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
+        crate::test_support::env_guard()
     }
 
     fn exclusion(kind: &str, value: &str) -> SkysightExclusion {
@@ -3650,6 +3745,8 @@ echo '__CODEX_RAPIDOCR_JSON__{{"rapidocr":"3.9.1","onnxruntime":"1.22.0","lang_t
             SkysightStartOptions {
                 interval_seconds: 60,
                 summary_agent: Some(true),
+                source: None,
+                owner: None,
             },
         )
         .unwrap();
