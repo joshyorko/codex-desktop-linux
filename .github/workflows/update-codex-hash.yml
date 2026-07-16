@@ -38,7 +38,7 @@ jobs:
         .#checks.x86_64-linux.watchdog-linux-features
         .#installer
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           fetch-depth: 0
           ref: ${{ inputs.expected_main_sha }}
@@ -75,17 +75,17 @@ jobs:
             echo "skip_refresh=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         if: steps.dedupe.outputs.skip_refresh != 'true'
         with:
           node-version: 24
 
-      - uses: cachix/install-nix-action@v31
+      - uses: cachix/install-nix-action@630ae543ea3a38a9a4166f03376c02c50f408342 # v31
         if: steps.dedupe.outputs.skip_refresh != 'true'
 
       - name: Configure Cachix for hash refresh builds
         if: steps.dedupe.outputs.skip_refresh != 'true' && env.CACHIX_AUTH_TOKEN != ''
-        uses: cachix/cachix-action@v17
+        uses: cachix/cachix-action@5f2d7c5294214f71b873db4b969586b980625e71 # v17
         with:
           name: ${{ env.CACHIX_CACHE_NAME }}
           authToken: ${{ env.CACHIX_AUTH_TOKEN }}
