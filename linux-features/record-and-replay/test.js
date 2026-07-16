@@ -641,6 +641,81 @@ test("record-and-replay upgrade keeps Chronicle handlers untouched when helpers 
   assert.doesNotMatch(patched, /codexLinuxChronicleSidecarControlStateAsync/);
 });
 
+test("record-and-replay upgrade refreshes stale Chronicle helpers", () => {
+  const staleHelpers = `function codexLinuxRecordReplayRunSync(e,t){return null}
+function codexLinuxChronicleControlStateFromSkysight(e){return e}
+function codexLinuxChronicleSidecarControlState(){return null}
+async function codexLinuxChronicleSidecarControlStateAsync(){return null}
+function codexLinuxChronicleSummaryAgentArgs(e){return[]}
+async function codexLinuxChronicleEnsureSidecarRunning(e){return null}
+async function codexLinuxChronicleToggleSidecar(){return codexLinuxChronicleEnsureSidecarRunning(!0)}`;
+  const oldPatched = [
+    'const cp=require("node:child_process");',
+    staleHelpers,
+    'var bridge={"linux-record-replay-doctor":async()=>null,"chronicle-permissions":async()=>codexLinuxChronicleEnsureSidecarRunning(),"getChronicleSidecarControlState":async()=>codexLinuxChronicleEnsureSidecarRunning(),"get-global-state":async({key:e})=>null};',
+  ].join("\n");
+
+  const patched = applyRecordReplayMainBridgePatch(oldPatched);
+
+  assert.notEqual(patched, oldPatched);
+  assert.equal(applyRecordReplayMainBridgePatch(patched), patched);
+  assert.match(patched, /codexLinuxChronicleEnsureSidecarRunning\(!0,"chronicle-tray","manual-continuous"\)/);
+  assert.doesNotMatch(patched, /async function codexLinuxChronicleEnsureSidecarRunning\(e\)\{return null\}/);
+});
+
+test("record-and-replay upgrade refreshes a stale Skysight start handler", () => {
+  const oldPatched = [
+    'const cp=require("node:child_process"),fs=require("node:fs"),path=require("node:path");',
+    recordReplayHelperSource({ childProcessVar: "cp", fsVar: "fs", pathVar: "path" }),
+    'var bridge={"linux-record-replay-doctor":async()=>null,"linux-record-replay-skysight-start":async({intervalSeconds:e,summaryAgent:t}={})=>null,"get-global-state":async({key:e})=>null};',
+  ].join("\n");
+
+  const patched = applyRecordReplayMainBridgePatch(oldPatched);
+
+  assert.notEqual(patched, oldPatched);
+  assert.equal(applyRecordReplayMainBridgePatch(patched), patched);
+  assert.match(
+    patched,
+    /"linux-record-replay-skysight-start":async\(\{intervalSeconds:e,summaryAgent:t,source:r,owner:a\}=\{\}\)/,
+  );
+  assert.match(patched, /r&&n\.push\("--source",String\(r\)\)/);
+  assert.match(patched, /a&&n\.push\("--owner",String\(a\)\)/);
+
+  const calls = [];
+  const context = {
+    cp: {
+      execFile(_bin, args, _options, callback) {
+        calls.push(args);
+        callback(null, JSON.stringify({ state: "running", is_running: true }), "");
+      },
+    },
+    fs,
+    path,
+    process: {
+      env: { CODEX_RECORD_REPLAY_LINUX_BIN: "/tmp/codex-record-replay-linux" },
+      cwd: () => "/tmp",
+      pid: 4242,
+    },
+    JSON,
+    Promise,
+    String,
+  };
+  context.require = (name) => ({
+    "node:child_process": context.cp,
+    "node:fs": context.fs,
+    "node:path": context.path,
+  })[name];
+
+  return vm.runInNewContext(
+    `${patched};bridge["linux-record-replay-skysight-start"]({source:"chronicle-tray",owner:"recording-session:test"})`,
+    context,
+  ).then(() => {
+    assert.deepEqual(JSON.parse(JSON.stringify(calls)), [
+      ["skysight", "start", "--source", "chronicle-tray", "--owner", "recording-session:test"],
+    ]);
+  });
+});
+
 test("record-and-replay bridge patch upgrades old patched bundles with active speech endpoint", () => {
   const oldPatched =
     'var bridge={"linux-record-replay-doctor":async()=>null,"linux-record-replay-speech-context":async()=>null,"linux-record-replay-browser-trace":async()=>null,"get-global-state":async({key:e})=>null};';

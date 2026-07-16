@@ -85,6 +85,28 @@ function findPropertyValueEnd(source, valueStart) {
   return -1;
 }
 
+function findMatchingBrace(source, openIndex) {
+  let depth = 0;
+  let quote = null;
+  let escaped = false;
+  for (let index = openIndex; index < source.length; index += 1) {
+    const char = source[index];
+    if (quote != null) {
+      if (escaped) escaped = false;
+      else if (char === "\\") escaped = true;
+      else if (char === quote) quote = null;
+      continue;
+    }
+    if (char === "'" || char === '"' || char === "`") quote = char;
+    else if (char === "{") depth += 1;
+    else if (char === "}") {
+      depth -= 1;
+      if (depth === 0) return index;
+    }
+  }
+  return -1;
+}
+
 function replaceObjectPropertyValues(source, propertyKey, replacement) {
   let searchFrom = 0;
   let copiedThrough = 0;
@@ -182,7 +204,7 @@ function recordReplayBridgeSource({ childProcessVar, fsVar, pathVar, chronicleEn
     `"linux-record-replay-doctor":async()=>codexLinuxRecordReplayRun([${JSON.stringify("doctor")}],15000)`,
     `"linux-record-replay-status":async()=>codexLinuxRecordReplayRun([${JSON.stringify("status")}],5000)`,
     `"linux-record-replay-start":async({sessionDir:e,appId:t,windowId:n,goal:r,includeScreenshot:a,includeAccessibility:o,includeAudio:s}={})=>{let i=codexLinuxRecordReplayString(e);if(!i)return{ok:!1,action:"record.start",message:"sessionDir is required"};let c=["record","start","--session-dir",i];t&&c.push("--app-id",String(t));n&&c.push("--window-id",String(n));r&&c.push("--goal",String(r));a===!1&&c.push("--no-screenshot");o===!1&&c.push("--no-accessibility");s===!0&&c.push("--audio");s===!1&&c.push("--no-audio");return codexLinuxRecordReplayRun(c,60000)}`,
-    `"linux-record-replay-skysight-start":async({intervalSeconds:e,summaryAgent:t,source:r,owner:a}={})=>{let n=["skysight","start"];e&&n.push("--interval-seconds",String(e));r&&n.push("--source",String(r));a&&n.push("--owner",String(a));t===!0&&n.push("--summary-agent","enabled");t===!1&&n.push("--summary-agent","disabled");return codexLinuxRecordReplayRun(n,15000)}`,
+    recordReplaySkysightStartBridgeEntry(),
     `"linux-record-replay-skysight-status":async()=>codexLinuxRecordReplayRun(["skysight","status"],5000)`,
     `"linux-record-replay-skysight-pause":async()=>codexLinuxRecordReplayRun(["skysight","pause"],10000)`,
     `"linux-record-replay-skysight-resume":async()=>codexLinuxRecordReplayRun(["skysight","resume"],10000)`,
@@ -204,6 +226,10 @@ function recordReplayBridgeSource({ childProcessVar, fsVar, pathVar, chronicleEn
     `"linux-record-replay-import-skill":async({source:e,dryRun:t,allowUnsupported:n}={})=>{let r=codexLinuxRecordReplayString(e);if(!r)return{ok:!1,action:"skill.import",message:"source is required"};let a=["skill","import","--source",r];t&&a.push("--dry-run");n&&a.push("--allow-unsupported");return codexLinuxRecordReplayRun(a,30000)}`,
     `"linux-record-replay-inspect-skill":async({source:e}={})=>{let t=codexLinuxRecordReplayString(e);if(!t)return{ok:!1,action:"skill.inspect",message:"source is required"};return codexLinuxRecordReplayRun(["skill","inspect","--source",t],15000)}`,
   ].join(",");
+}
+
+function recordReplaySkysightStartBridgeEntry() {
+  return `"linux-record-replay-skysight-start":async({intervalSeconds:e,summaryAgent:t,source:r,owner:a}={})=>{let n=["skysight","start"];e&&n.push("--interval-seconds",String(e));r&&n.push("--source",String(r));a&&n.push("--owner",String(a));t===!0&&n.push("--summary-agent","enabled");t===!1&&n.push("--summary-agent","disabled");return codexLinuxRecordReplayRun(n,15000)}`;
 }
 
 function recordReplayActiveSpeechContextBridgeHandler() {
@@ -229,16 +255,41 @@ async function codexLinuxChronicleEnsureSidecarRunning(e,u,l){let t=await codexL
 async function codexLinuxChronicleToggleSidecar(){let e=await codexLinuxRecordReplayRun(["skysight","status"],5000),t=e?.json&&typeof e.json==="object"?e.json:null,n=String(t?.state||""),r=t?.is_running===!0||t?.isRunning===!0,a=t?.paused===!0||t?.is_paused===!0||t?.isPaused===!0||n==="paused";if(n==="running"&&r&&!a)return codexLinuxChronicleControlStateFromSkysight(await codexLinuxRecordReplayRun(["skysight","pause"],10000));if(r&&a)return codexLinuxChronicleEnsureSidecarRunning(!0,"chronicle-tray","manual-continuous");return codexLinuxChronicleControlStateFromSkysight(await codexLinuxRecordReplayRun(["skysight","start","--source","chronicle-tray","--owner","manual-continuous","--summary-agent","enabled"],15000))}`;
 }
 
+function replaceRecordReplayChronicleHelpers(source, childProcessVar) {
+  const start = source.indexOf("function codexLinuxRecordReplayRunSync");
+  const toggle = source.indexOf("async function codexLinuxChronicleToggleSidecar", start);
+  if (start === -1 || toggle === -1) return source;
+  const openBrace = source.indexOf("{", toggle);
+  const end = findMatchingBrace(source, openBrace);
+  if (openBrace === -1 || end === -1) return source;
+  return `${source.slice(0, start)}${recordReplayChronicleHelperSource({ childProcessVar })}${source.slice(end + 1)}`;
+}
+
 function upgradeRecordReplayBridgeSource(currentSource) {
   const patchName = "Record & Replay main bridge patch";
   let patchedSource = currentSource;
   const childProcessVar = requireName(currentSource, "node:child_process");
-  if (!patchedSource.includes("function codexLinuxChronicleControlStateFromSkysight")) {
+  const hasChronicleHelpers = patchedSource.includes("function codexLinuxChronicleControlStateFromSkysight");
+  if (hasChronicleHelpers && childProcessVar != null) {
+    const currentHelpers = recordReplayChronicleHelperSource({ childProcessVar });
+    if (!patchedSource.includes(currentHelpers)) {
+      patchedSource = replaceRecordReplayChronicleHelpers(patchedSource, childProcessVar);
+    }
+  } else if (!hasChronicleHelpers) {
     if (childProcessVar == null) {
       warn("Could not find Node child_process alias for Chronicle bridge upgrade", patchName);
     } else {
       patchedSource = `${recordReplayChronicleHelperSource({ childProcessVar })}\n${patchedSource}`;
     }
+  }
+
+  const skysightStartKey = '"linux-record-replay-skysight-start":';
+  if (patchedSource.includes(skysightStartKey)) {
+    patchedSource = replaceObjectPropertyValues(
+      patchedSource,
+      skysightStartKey,
+      recordReplaySkysightStartBridgeEntry(),
+    );
   }
 
   const canReplaceChronicleHandlers = patchedSource.includes("function codexLinuxChronicleControlStateFromSkysight");
@@ -260,13 +311,13 @@ function upgradeRecordReplayBridgeSource(currentSource) {
     }
   }
 
-  const hasChronicleHelpers = patchedSource.includes("function codexLinuxChronicleControlStateFromSkysight");
+  const hasUsableChronicleHelpers = patchedSource.includes("function codexLinuxChronicleControlStateFromSkysight");
   const missingChronicleEntries = missingRecordReplayChronicleBridgeEntries(patchedSource);
   if (missingChronicleEntries.length > 0) {
     const doctorNeedle = `"linux-record-replay-doctor":async`;
     if (!patchedSource.includes(doctorNeedle)) {
       warn("Could not find Chronicle bridge upgrade point", patchName);
-    } else if (!hasChronicleHelpers) {
+    } else if (!hasUsableChronicleHelpers) {
       warn("Could not install Chronicle bridge handlers without helper functions", patchName);
     } else {
       patchedSource = patchedSource.replace(

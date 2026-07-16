@@ -375,14 +375,8 @@ pub fn start_skysight(
     options: SkysightStartOptions,
 ) -> Result<SkysightStatus> {
     ensure_layout(paths)?;
-    let source = options
-        .source
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| DEFAULT_START_SOURCE.to_string());
-    let owner = options
-        .owner
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| DEFAULT_START_OWNER.to_string());
+    let requested_source = options.source.filter(|value| !value.trim().is_empty());
+    let requested_owner = options.owner.filter(|value| !value.trim().is_empty());
     if let Some(summary_agent) = options.summary_agent {
         write_summary_agent_runtime_setting(paths, summary_agent)?;
     }
@@ -393,12 +387,18 @@ pub fn start_skysight(
                 .is_some_and(|pid| process_is_alive(pid, status.process_start_time_ticks))
         {
             let mut status = status;
-            status.source = Some(source);
-            status.owner = Some(owner);
+            if let Some(source) = requested_source.as_deref() {
+                status.source = Some(source.to_string());
+            }
+            if let Some(owner) = requested_owner.as_deref() {
+                status.owner = Some(owner.to_string());
+            }
             write_status(paths, &status)?;
             return skysight_status(paths);
         }
     }
+    let source = requested_source.unwrap_or_else(|| DEFAULT_START_SOURCE.to_string());
+    let owner = requested_owner.unwrap_or_else(|| DEFAULT_START_OWNER.to_string());
     let _ = fs::remove_file(&paths.stop_request_path);
     let _ = fs::remove_file(&paths.pause_request_path);
     let exe =
@@ -512,12 +512,13 @@ pub fn run_skysight_daemon(
             thread::sleep(interval);
             continue;
         }
-        if let Err(error) = capture_skysight_snapshot_with_ocr(
+        if let Err(error) = capture_daemon_snapshot_with_ocr(
             paths,
-            Some("daemon"),
             ocr_policy.clone(),
             cached_ocr_readiness.clone(),
-            Some(std::process::id()),
+            std::process::id(),
+            requested_source.as_deref(),
+            requested_owner.as_deref(),
         ) {
             let status = apply_requested_daemon_ownership(
                 status_value(StatusValueInput {
@@ -541,6 +542,26 @@ pub fn run_skysight_daemon(
         }
         thread::sleep(interval);
     }
+}
+
+fn capture_daemon_snapshot_with_ocr(
+    paths: &SkysightPaths,
+    ocr_policy: crate::ocr::OcrPolicy,
+    ocr_readiness: crate::ocr::OcrReadiness,
+    daemon_pid: u32,
+    source: Option<&str>,
+    owner: Option<&str>,
+) -> Result<SkysightStatus> {
+    let status = capture_skysight_snapshot_with_ocr(
+        paths,
+        Some("daemon"),
+        ocr_policy,
+        ocr_readiness,
+        Some(daemon_pid),
+    )?;
+    let status = apply_requested_daemon_ownership(status, source, owner);
+    write_status(paths, &status)?;
+    Ok(status)
 }
 
 fn apply_requested_daemon_ownership(
@@ -3573,6 +3594,38 @@ mod tests {
     }
 
     #[test]
+    fn daemon_snapshot_status_applies_requested_source_and_owner() {
+        let _guard = env_guard();
+        let temp = tempfile::tempdir().unwrap();
+        let paths = SkysightPaths::new(temp.path().join("runtime"), temp.path().join("resources"));
+
+        let status = capture_daemon_snapshot_with_ocr(
+            &paths,
+            crate::ocr::OcrPolicy::from_env(),
+            crate::ocr::OcrReadiness {
+                enabled: false,
+                available: false,
+                backend: "auto".to_string(),
+                status: "disabled".to_string(),
+                language: "eng".to_string(),
+                version: None,
+                dependency_hint: None,
+                error: None,
+            },
+            std::process::id(),
+            Some("direct-daemon"),
+            Some("recording-session:test"),
+        )
+        .unwrap();
+
+        assert_eq!(status.source.as_deref(), Some("direct-daemon"));
+        assert_eq!(status.owner.as_deref(), Some("recording-session:test"));
+        let persisted = read_status(&paths).unwrap();
+        assert_eq!(persisted.source, status.source);
+        assert_eq!(persisted.owner, status.owner);
+    }
+
+    #[test]
     fn cached_ocr_readiness_reuses_daemon_session_probe() {
         let _guard = env_guard();
         let env_keys = [
@@ -3723,7 +3776,7 @@ echo '__CODEX_RAPIDOCR_JSON__{{"rapidocr":"3.9.1","onnxruntime":"1.22.0","lang_t
         env::set_var("CODEX_HOME", temp.path().join("codex-home"));
 
         ensure_layout(&paths).unwrap();
-        let status = status_value(StatusValueInput {
+        let mut status = status_value(StatusValueInput {
             paths: &paths,
             state: "running",
             is_running: true,
@@ -3738,6 +3791,8 @@ echo '__CODEX_RAPIDOCR_JSON__{{"rapidocr":"3.9.1","onnxruntime":"1.22.0","lang_t
             ocr_readiness: None,
         })
         .unwrap();
+        status.source = Some("recording-session".to_string());
+        status.owner = Some("recording-session:fixture".to_string());
         write_status(&paths, &status).unwrap();
 
         let updated = start_skysight(
@@ -3761,6 +3816,8 @@ echo '__CODEX_RAPIDOCR_JSON__{{"rapidocr":"3.9.1","onnxruntime":"1.22.0","lang_t
             fs::read_to_string(&paths.summary_agent_setting_path).unwrap(),
             "enabled\n"
         );
+        assert_eq!(updated.source.as_deref(), Some("recording-session"));
+        assert_eq!(updated.owner.as_deref(), Some("recording-session:fixture"));
 
         match old_value {
             Some(value) => env::set_var(SUMMARY_AGENT_ENABLE_ENV, value),
