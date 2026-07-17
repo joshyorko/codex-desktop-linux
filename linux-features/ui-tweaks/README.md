@@ -55,8 +55,10 @@ Exposes the upstream Dock icon selector on Linux and stages the original PNG
 resources from the current macOS bundle. The selected icon is applied to open
 and restored Electron windows and to the system tray. On KDE Plasma, the tweak
 also creates and updates a managed user-local desktop entry so a pinned taskbar
-launcher follows the selected icon. Existing user-managed desktop entries remain
-untouched.
+launcher follows the selected icon without reloading Plasma Shell. The Codex
+resources are cropped to the same visual occupancy as the ChatGPT icon because
+Linux taskbars do not apply macOS Dock normalization. Existing user-managed
+desktop entries remain untouched.
 
 This tweak is independently disabled by default. Enable it while keeping the
 rest of `ui-tweaks` configurable:
@@ -80,7 +82,7 @@ rest of `ui-tweaks` configurable:
 
 Config keys:
 
-- `enabled`: `true` applies the three Dock icon descriptors and stages their
+- `enabled`: `true` applies the two Dock icon descriptors and stages their
   resources. `false` skips Dock-specific asset checks and removes any staged
   Dock icon payload without disabling other UI tweaks.
 

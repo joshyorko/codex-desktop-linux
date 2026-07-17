@@ -177,7 +177,6 @@ test("ui-tweaks is discoverable and disabled until listed in features.json", () 
         ["feature:ui-tweaks:reasoning-effort-labels-english", "webview-asset", "optional"],
         ["feature:ui-tweaks:appearance-dock-icon-main-process", "main-bundle", "optional"],
         ["feature:ui-tweaks:appearance-dock-icon-settings-row", "webview-asset", "optional"],
-        ["feature:ui-tweaks:appearance-dock-icon-settings-search", "webview-asset", "optional"],
       ],
     );
   } finally {
