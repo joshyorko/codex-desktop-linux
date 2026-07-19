@@ -57,10 +57,14 @@ What it changes:
 - Persists the private key material at
   `~/.config/codex-desktop/remote-control-device-keys/remote-control-device-keys-v1.json`
   with `0600` file permissions inside a dedicated `0700` directory. Updates are
-  serialized with a safely resolved `flock`/`sh` helper, written through a
-  crash-durable atomic replacement, and rejected when the store has unsafe
-  ownership, permissions, file types, schema, or size. An existing key file at
-  the previous location is moved into the private directory on first use.
+  serialized with a safely resolved `flock`/`sh` helper, including migrations
+  triggered by reading or signing a key. A replacement fsyncs its temporary
+  file before an atomic rename; the rename is the commit point and is followed
+  by a best-effort directory fsync. If that final fsync fails, the committed
+  replacement remains in use and a warning reports that crash durability was
+  not confirmed. Unsafe ownership, permissions, file types, schema, or size
+  are rejected. An existing key file at the previous location is moved into the
+  private directory on first use.
 - Encrypts private key material with Electron `safeStorage` when the Linux
   desktop exposes GNOME Secret Service/libsecret or KWallet. The hardened JSON
   store keeps only public metadata and a base64 ciphertext in that mode.
@@ -73,8 +77,9 @@ What it changes:
   a compatibility fallback, not equivalent protection to a desktop keychain or
   macOS Secure Enclave.
 - Existing file-backed PEM records migrate to `safeStorage` on first read when
-  a usable backend is available. Failed migrations leave the original file
-  intact.
+  a usable backend is available. Encryption and pre-rename write failures leave
+  the original file intact; a post-rename directory-fsync warning does not roll
+  back the already committed replacement.
 - Preserves `remote_control = true` / `features.remote_control = true` in the
   local Codex config instead of letting upstream strip it before app-server
   startup.
