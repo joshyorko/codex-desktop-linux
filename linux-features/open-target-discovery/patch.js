@@ -751,6 +751,12 @@ function applyOpenInTargetsDirectoryModePatch(currentSource) {
     return currentSource;
   }
 
+  const cwdVar = currentSource.match(/"open-in-targets":async\(\{cwd:([A-Za-z_$][\w$]*)[,}]/u)?.[1];
+  if (cwdVar == null) {
+    warn("Could not find open-in-targets cwd variable");
+    return currentSource;
+  }
+
   const [needle, modeVar, remoteVar, pathVar, pathModule, pathMethod] = modeExpression;
   const directoryVar = "_codexLinuxDirectory";
   if (block.text.includes(directoryVar)) {
@@ -758,7 +764,7 @@ function applyOpenInTargetsDirectoryModePatch(currentSource) {
     return currentSource;
   }
   const replacement =
-    `${directoryVar}=${pathVar}!=null&&codexLinuxOpenTargetIsDirectory(${pathVar}),` +
+    `${directoryVar}=${cwdVar}==null&&${pathVar}!=null&&codexLinuxOpenTargetIsDirectory(${pathVar}),` +
     `${modeVar}=${remoteVar}||${directoryVar}||${pathVar}!=null&&${pathModule}.${pathMethod}(${pathVar}),`;
 
   const helperSource =

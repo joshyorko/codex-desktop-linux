@@ -1278,7 +1278,7 @@ test("open-target discovery patches current app directory mode expression", () =
   const patched = applyPatchTwice(applyOpenInTargetsDirectoryModePatch, currentAppOpenInTargetsBundle);
 
   assert.match(patched, /codexLinuxOpenTargetIsDirectory/);
-  assert.match(patched, /f!=null&&codexLinuxOpenTargetIsDirectory\(f\)/);
+  assert.match(patched, /_codexLinuxDirectory=e==null&&f!=null&&codexLinuxOpenTargetIsDirectory\(f\)/);
   assert.match(patched, /g=d\|\|[^,]+\|\|f!=null&&n\.ys\(f\)/);
 });
 
