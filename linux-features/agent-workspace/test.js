@@ -230,6 +230,15 @@ function rewriteSettingsAssetsWithConsolidatedCurrentLayout(assetsDir) {
     ].join(""),
   );
   fs.writeFileSync(
+    path.join(assetsDir, "use-visible-settings-sections-test.js"),
+    [
+      'var Z={"general-settings":N,"local-environments":U,worktrees:Ve,environments:U,"mcp-settings":pe};',
+      'var B=[`general-settings`,`local-environments`,`worktrees`,`data-controls`];',
+      'function visible(e){switch(e.slug){case`pets`:case`git-settings`:case`worktrees`:case`local-environments`:case`environments`:return!0;}}',
+      'function load(e){switch(e.slug){case`local-environments`:case`worktrees`:case`environments`:return!1}}',
+    ].join(""),
+  );
+  fs.writeFileSync(
     path.join(assetsDir, "app-initial~app-main~messages-test.js"),
     syntheticSettingsShared(),
   );
@@ -1631,7 +1640,7 @@ test("agent-workspace feature participates in ASAR patching and reports", () => 
         assert.match(fs.readFileSync(path.join(buildDir, "main.js"), "utf8"), /"linux-agent-workspace":async/);
         assert.ok(fs.existsSync(path.join(assetsDir, SETTINGS_ASSET)));
         assert.match(fs.readFileSync(path.join(assetsDir, SETTINGS_ASSET), "utf8"), /AgentWorkspacesSettings/);
-        assert.match(fs.readFileSync(path.join(assetsDir, "settings-page-test.js"), "utf8"), /agent-workspaces/);
+        assert.match(fs.readFileSync(path.join(assetsDir, "use-visible-settings-sections-test.js"), "utf8"), /agent-workspaces/);
         assert.match(fs.readFileSync(path.join(assetsDir, "app-initial~app-main~messages-test.js"), "utf8"), /Agent Workspaces/);
         assert.match(fs.readFileSync(path.join(assetsDir, "app-initial~app-main~automations-page-test.js"), "utf8"), new RegExp(SETTINGS_ASSET));
         assert.equal(

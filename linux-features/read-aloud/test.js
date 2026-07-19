@@ -1013,7 +1013,7 @@ test("assistant runtime descriptor targets current shared assistant bundles", ()
   assert.ok(descriptor);
   assert.equal(
     descriptor.pattern.test(
-      "app-initial~app-main~onboarding-page-zcfEkMl-.js",
+      "app-initial~app-main~onboarding-page~hotkey-window-thread-page~quick-chat-window-page~chatg~c33rimzq-BCpF88Ln.js",
     ),
     true,
   );
@@ -1034,7 +1034,7 @@ test("assistant runtime descriptor fails soft and atomically when the current re
     fs.mkdirSync(assetsDir, { recursive: true });
     const assetPath = path.join(
       assetsDir,
-      "app-initial~app-main~onboarding-page-zcfEkMl-.js",
+      "app-initial~app-main~onboarding-page~hotkey-window-thread-page~quick-chat-window-page~chatg~c33rimzq-BCpF88Ln.js",
     );
     const source = "console.log(`assistant render contract moved`);";
     fs.writeFileSync(assetPath, source);
@@ -1062,7 +1062,7 @@ test("assistant runtime descriptor reports applied then already-applied for the 
     fs.mkdirSync(assetsDir, { recursive: true });
     const assetPath = path.join(
       assetsDir,
-      "app-initial~app-main~onboarding-page-zcfEkMl-.js",
+      "app-initial~app-main~onboarding-page~hotkey-window-thread-page~quick-chat-window-page~chatg~c33rimzq-BCpF88Ln.js",
     );
     fs.writeFileSync(
       assetPath,

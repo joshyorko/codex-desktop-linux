@@ -96,19 +96,19 @@ test("current DMG descriptors target the three owning app bundles", () => {
   );
   assert.equal(
     descriptors[0].pattern.test(
-      "app-initial~app-main~quick-chat-window-page~chatgpt-conversation-page-Bv7yLYDT.js",
+      "app-initial~app-main~new-thread-panel-page~onboarding-page~appgen-library-page~hotkey-windo~l46phxln-DMkrLNCT.js",
     ),
     true,
   );
   assert.equal(
     descriptors[1].pattern.test(
-      "app-initial~app-main~projects-index-page~remote-conversation-page-ClV_ycdc.js",
+      "app-initial~avatarOverlayCompositionSurface~artifact-tab-content.electron~app-main~plugin-d~kw7nl1sl-IKjhUium.js",
     ),
     true,
   );
   assert.equal(
     descriptors[2].pattern.test(
-      "app-initial~app-main~pull-request-route~new-thread-panel-page~onboarding-page~settings-page~i2dgsl27-Cg6hAhRO.js",
+      "app-initial~artifact-tab-content.electron~notebook-preview-panel~app-main~business-checkout~oxnpxkxc-D1ceIDrn.js",
     ),
     true,
   );
@@ -169,21 +169,21 @@ test("partial current drift is reported when the other exact target still applie
       fs.writeFileSync(
         path.join(
           assetsDir,
-          "app-initial~app-main~quick-chat-window-page~chatgpt-conversation-page-drifted.js",
+          "app-initial~app-main~new-thread-panel-page~onboarding-page~appgen-library-page~hotkey-windo~l46phxln-drifted.js",
         ),
         "function driftedGate(){return `priority_mode`}",
       );
       fs.writeFileSync(
         path.join(
           assetsDir,
-      "app-initial~app-main~projects-index-page~remote-conversation-page-current.js",
+      "app-initial~avatarOverlayCompositionSurface~artifact-tab-content.electron~app-main~plugin-d~kw7nl1sl-current.js",
         ),
         "function vbe({authMethod:e,availableModels:t,defaultModel:n,enabledReasoningEfforts:r,includeUltraReasoningEffort:i,models:a,useHiddenModels:o}){let s=[],c=null,l=o&&e!==`amazonBedrock`,u=a.some(e=>e.supportedReasoningEfforts.some(({reasoningEffort:e})=>e===`max`)),d=i&&a.some(e=>e.supportedReasoningEfforts.some(({reasoningEffort:e})=>e===`ultra`));return a.forEach(n=>{if(l?t.has(n.model):!n.hidden){let t=i?n.supportedReasoningEfforts:n.supportedReasoningEfforts.filter(({reasoningEffort:e})=>e!==`ultra`),a=(e===`copilot`?[t.find(e=>e.reasoningEffort===`medium`)??{reasoningEffort:`medium`,description:`medium effort`}]:t).filter(({reasoningEffort:e})=>Gx(e)&&r.has(e)),o={...n,supportedReasoningEfforts:a};s.push(o),n.isDefault&&(c=o)}}),c??=s.find(e=>e.model===n)??null,{models:s,defaultModel:c}}",
       );
       fs.writeFileSync(
         path.join(
           assetsDir,
-      "app-initial~app-main~pull-request-route~new-thread-panel-page~onboarding-page~settings-page~i2dgsl27-current.js",
+      "app-initial~artifact-tab-content.electron~notebook-preview-panel~app-main~business-checkout~oxnpxkxc-current.js",
         ),
         [
           "let defaultServiceTier=null;",
@@ -254,6 +254,21 @@ test("service tier auth gate allows API-key hosts while preserving ChatGPT requi
 
   assert.match(patched, /d=!u&&\(a\?c!=null&&c\?\.requirements\?\.featureRequirements\?\.fast_mode!==!1:o===`apikey`\)/);
   assert.doesNotMatch(patched, /d=a&&!u&&c!=null/);
+});
+
+test("service tier auth gate follows the latest minified result binding", () => {
+  const source =
+    "function U(e){let t=cache(6),i=host(),a=e?.hostId??i,o=resolve(a),s=o?.authMethod===`chatgpt`,c=o?.authMethod??null,l;" +
+    "t[0]!==a||t[1]!==c?(l={authMethod:c,hostId:a},t[0]=a,t[1]=c,t[2]=l):l=t[2];" +
+    "let{data:u,isPending:d}=load(l),f=!!o?.isLoading||s&&d,p=s&&!f&&u!=null&&u?.requirements?.featureRequirements?.fast_mode!==!1,m;" +
+    "return t[3]!==f||t[4]!==p?(m={isServiceTierAllowed:p,isLoading:f},t[3]=f,t[4]=p,t[5]=m):m=t[5],m}";
+
+  const patched = applyPatchTwice(applyApiKeyServiceTierGatePatch, source);
+
+  assert.match(
+    patched,
+    /p=!f&&\(s\?u!=null&&u\?\.requirements\?\.featureRequirements\?\.fast_mode!==!1:c===`apikey`\)/,
+  );
 });
 
 test("service tier auth gate warning ignores unrelated fast-mode config guards", () => {
@@ -364,7 +379,7 @@ test("fallback descriptor reports skipped when one insertion point drifts", () =
       const assetsDir = path.join(tempApp, "webview", "assets");
       const targetPath = path.join(
         assetsDir,
-        "app-initial~app-main~pull-request-route~new-thread-panel-page~onboarding-page~settings-page~i2dgsl27-drifted.js",
+        "app-initial~artifact-tab-content.electron~notebook-preview-panel~app-main~business-checkout~oxnpxkxc-drifted.js",
       );
       const source = [
         "let defaultServiceTier=null;",

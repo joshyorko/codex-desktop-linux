@@ -9331,7 +9331,7 @@ test_linux_computer_use_ui_opt_in_smoke() {
     local main_bundle="$extracted/.vite/build/main-test.js"
     local settings_asset="$extracted/webview/assets/computer-use-settings-DsM_pz8i.js"
     local plugins_asset="$extracted/webview/assets/plugins-page-gTuUJ93E.js"
-    local host_platform_asset="$extracted/webview/assets/app-initial~artifact-tab-content.electron~notebook-preview-panel~app-main~settings-command-~ekwfx4j1-test.js"
+    local host_platform_asset="$extracted/webview/assets/app-initial~artifact-tab-content.electron~notebook-preview-panel~app-main~settings-command-~kt7wj8fo-test.js"
     local install_flow_asset="$extracted/webview/assets/app-initial~avatarOverlayCompositionSurface~artifact-tab-content.electron~notebook-preview-~iaq4jiqv-test.js"
     local bundle_body
     local settings_body

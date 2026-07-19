@@ -477,7 +477,7 @@ function applyLinuxComputerUsePluginsPageAvailabilityPatch(currentSource) {
 
     installedPluginsVar = unavailableSetMatch[1];
     const installedPluginsAssignmentPattern = new RegExp(
-      `\\b${escapeRegExp(installedPluginsVar)}=([A-Za-z_$][\\w$]*\\(\\{installedPlugins:([A-Za-z_$][\\w$]*),sharedWithYouPlugins:[A-Za-z_$][\\w$]*\\?\\?\\[\\],workspacePlugins:[A-Za-z_$][\\w$]*\\?\\?\\[\\]\\}\\))`,
+      `\\b${escapeRegExp(installedPluginsVar)}=([A-Za-z_$][\\w$]*\\(\\{[^{}]*installedPlugins:([A-Za-z_$][\\w$]*),sharedWithYouPlugins:[A-Za-z_$][\\w$]*\\?\\?\\[\\],workspacePlugins:[A-Za-z_$][\\w$]*\\?\\?\\[\\]\\}\\))`,
     );
     if (!installedPluginsAssignmentPattern.test(currentSource)) {
       console.warn(

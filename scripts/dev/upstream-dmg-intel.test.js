@@ -471,6 +471,25 @@ test("marks Chronicle settings toggle surface partial when the Memory master tog
     );
   }));
 
+test("Chronicle memory-disable evidence does not depend on a minified function name", () => {
+  const checkedInRegistry = JSON.parse(
+    fs.readFileSync(
+      path.join(process.cwd(), "scripts/dev/upstream-dmg-protected-surfaces.json"),
+      "utf8",
+    ),
+  );
+  const surface = checkedInRegistry.surfaces.find(
+    ({ id }) => id === "chronicle_settings_toggles",
+  );
+  const anchor = surface.requiredEvidence.find(
+    ({ id }) => id === "memory-master-toggle-chronicle-disable",
+  );
+
+  assert.doesNotMatch(anchor.contentNeedles.join("\n"), /^function [A-Za-z_$][\w$]*$/m);
+  assert.ok(anchor.contentNeedles.includes("chronicleDisable"));
+  assert.ok(anchor.contentNeedles.includes("Promise.allSettled"));
+});
+
 test("tracks Work Louder control-surface hooks when the service, kits, and HID runtime are bundled", () =>
   withTempDir((workspace) => {
     const appDir = createFixtureApp(workspace, "candidate");

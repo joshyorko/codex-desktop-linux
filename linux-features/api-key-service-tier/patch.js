@@ -29,16 +29,16 @@ function applyApiKeyServiceTierGatePatch(source) {
   const gateNeedle = new RegExp(
     `(${JS_IDENT})=(${JS_IDENT})\\?\\.authMethod===\\\`chatgpt\\\`,` +
       `(${JS_IDENT})=\\2\\?\\.authMethod\\?\\?null([\\s\\S]{0,500}?),` +
-      `d=\\1&&!(${JS_IDENT})&&(${JS_IDENT})!=null&&\\6\\?\\.requirements\\?\\.featureRequirements\\?\\.fast_mode!==!1`,
+      `(${JS_IDENT})=\\1&&!(${JS_IDENT})&&(${JS_IDENT})!=null&&\\7\\?\\.requirements\\?\\.featureRequirements\\?\\.fast_mode!==!1`,
     "g",
   );
 
   const patched = source.replace(
     gateNeedle,
-    (_match, isChatGptVar, hostVar, authMethodVar, middle, loadingVar, requirementsVar) =>
+    (_match, isChatGptVar, hostVar, authMethodVar, middle, allowedVar, loadingVar, requirementsVar) =>
       `${isChatGptVar}=${hostVar}?.authMethod===\`chatgpt\`,` +
       `${authMethodVar}=${hostVar}?.authMethod??null${middle},` +
-      `d=!${loadingVar}&&(${isChatGptVar}?${requirementsVar}!=null&&${requirementsVar}?.requirements?.featureRequirements?.fast_mode!==!1:${authMethodVar}===\`apikey\`)`,
+      `${allowedVar}=!${loadingVar}&&(${isChatGptVar}?${requirementsVar}!=null&&${requirementsVar}?.requirements?.featureRequirements?.fast_mode!==!1:${authMethodVar}===\`apikey\`)`,
   );
 
   if (patched !== source || PATCHED_SERVICE_TIER_GATE.test(source)) {
@@ -194,7 +194,7 @@ const descriptors = [
     phase: "webview-asset",
     order: 20600,
     ciPolicy: "optional",
-    pattern: /^app-initial~app-main~quick-chat-window-page~chatgpt-conversation-page-[^.]+\.js$/,
+    pattern: /^app-initial~app-main~new-thread-panel-page~onboarding-page~appgen-library-page~hotkey-windo~l46phxln-[^.]+\.js$/,
     missingDescription: "current API key service tier gate bundle",
     skipDescription: "API key service tier gate patch",
     apply: applyCurrentGatePatch,
@@ -204,8 +204,7 @@ const descriptors = [
     phase: "webview-asset",
     order: 20605,
     ciPolicy: "optional",
-    pattern:
-      /^app-initial~app-main~projects-index-page~remote-conversation-page-[^.]+\.js$/,
+    pattern: /^app-initial~avatarOverlayCompositionSurface~artifact-tab-content\.electron~app-main~plugin-d~kw7nl1sl-[^.]+\.js$/,
     missingDescription: "current API key service tier model bundle",
     skipDescription: "API key model service tier marker patch",
     apply: applyCurrentModelPatch,
@@ -215,8 +214,7 @@ const descriptors = [
     phase: "webview-asset",
     order: 20610,
     ciPolicy: "optional",
-    pattern:
-      /^app-initial~app-main~pull-request-route~new-thread-panel-page~onboarding-page~settings-page~i2dgsl27-[^.]+\.js$/,
+    pattern: /^app-initial~artifact-tab-content\.electron~notebook-preview-panel~app-main~business-checkout~oxnpxkxc-[^.]+\.js$/,
     missingDescription: "current API key service tier fallback bundle",
     skipDescription: "API key fallback fast tier patch",
     apply: applyCurrentFallbackFastTierPatch,

@@ -1911,10 +1911,13 @@ function isAgentWorkspaceSettingsRouteBundleSource(currentSource) {
 
 function isAgentWorkspaceSettingsNavigationBundleSource(currentSource) {
   return (
-    /[A-Za-z_$][\w$]*=\{[^;]*"local-environments":[A-Za-z_$][\w$]*,[^;]*worktrees:/.test(currentSource) &&
-    currentSource.includes("slugs:[`") &&
-    currentSource.includes("`local-environments`") &&
-    currentSource.includes("`worktrees`")
+    /"local-environments":[A-Za-z_$][\w$]*,(?:"agent-workspaces":[A-Za-z_$][\w$]*,)?worktrees:[A-Za-z_$][\w$]*/.test(currentSource) &&
+    (currentSource.includes("`local-environments`,`worktrees`") ||
+      currentSource.includes("`local-environments`,`agent-workspaces`,`worktrees`") ||
+      currentSource.includes("`local-environments`,`environments`,`worktrees`") ||
+      currentSource.includes("`local-environments`,`agent-workspaces`,`environments`,`worktrees`")) &&
+    (currentSource.includes("case`worktrees`:case`local-environments`:case`environments`:return") ||
+      currentSource.includes("case`worktrees`:case`local-environments`:case`agent-workspaces`:case`environments`:return"))
   );
 }
 
@@ -2091,7 +2094,8 @@ function collectAgentWorkspaceRouteAndNavigationPatches(extractedDir) {
     .readdirSync(assetsDir)
     .filter((name) =>
       /^app-initial~app-main~.*\.js$/.test(name) ||
-      /(?:^|~)settings-page(?:[-~].*)?\.js$/.test(name)
+      /(?:^|~)settings-page(?:[-~].*)?\.js$/.test(name) ||
+      /^use-visible-settings-sections-[^.]+\.js$/.test(name)
     )
     .sort();
   let metadataMatched = false;

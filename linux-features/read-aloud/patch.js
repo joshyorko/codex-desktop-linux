@@ -793,7 +793,7 @@ module.exports = {
       phase: "webview-asset",
       order: 20620,
       ciPolicy: "optional",
-      pattern: /^app-initial~app-main~onboarding-page-[A-Za-z0-9_-]+\.js$/,
+      pattern: /^app-initial~app-main~onboarding-page~hotkey-window-thread-page~quick-chat-window-page~chatg~c33rimzq-[^.]+\.js$/,
       missingDescription: "current primary thread assistant bundle",
       skipDescription: "read aloud assistant runtime patch",
       apply: applyWebviewPatch,

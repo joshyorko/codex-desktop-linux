@@ -102,9 +102,8 @@
           "pathPatterns": [
             "personalization-settings.*\\.js$"
           ],
-          "contentNeedles": [
-            "function un",
-            "chronicleDisable",
+      "contentNeedles": [
+        "chronicleDisable",
             "Promise.allSettled",
             "memoryFeatureEnabled",
             "generateMemoriesEnabled",

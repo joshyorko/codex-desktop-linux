@@ -56,12 +56,19 @@ function applyAuthenticatedProxyPatch(currentSource) {
     return patchedSource;
   }
 
-  const fetchNeedle =
-    `let f=i==null?await ${electronVar}.net.fetch(a,{method:r,headers:n,body:m(),signal:o,credentials:s?\`include\`:\`same-origin\`}):await this.performProgressRequest({body:m(),headers:n,method:r,onUploadProgress:i,resolvedUrl:a,signal:o,useSessionCookies:s});`;
-  const fetchReplacement =
-    `let f=i==null&&!codexLinuxProxyAuthEntry()?await ${electronVar}.net.fetch(a,{method:r,headers:n,body:m(),signal:o,credentials:s?\`include\`:\`same-origin\`}):await this.performProgressRequest({body:m(),headers:n,method:r,onUploadProgress:i,resolvedUrl:a,signal:o,useSessionCookies:s});`;
-  if (patchedSource.includes(fetchNeedle)) {
-    patchedSource = patchedSource.replace(fetchNeedle, fetchReplacement);
+  const fetchPattern = new RegExp(
+    `let (${JS_IDENT})=(${JS_IDENT})==null\\?await ${electronVar}\\.net\\.fetch\\((${JS_IDENT}),\\{method:(${JS_IDENT}),headers:(${JS_IDENT}),body:(${JS_IDENT})\\(\\),signal:(${JS_IDENT}),credentials:(${JS_IDENT})\\?\\x60include\\x60:\\x60same-origin\\x60\\}\\):await this\\.performProgressRequest\\(\\{body:\\6\\(\\),headers:\\5,method:\\4,onUploadProgress:\\2,resolvedUrl:\\3,signal:\\7,useSessionCookies:\\8\\}\\);`,
+  );
+  const fetchMatch = patchedSource.match(fetchPattern);
+  if (fetchMatch != null) {
+    const [needle, resultVar, progressVar] = fetchMatch;
+    patchedSource = patchedSource.replace(
+      needle,
+      needle.replace(
+        `let ${resultVar}=${progressVar}==null?await`,
+        `let ${resultVar}=${progressVar}==null&&!codexLinuxProxyAuthEntry()?await`,
+      ),
+    );
   } else if (
     patchedSource.includes("performDesktopFetch") &&
     !patchedSource.includes("!codexLinuxProxyAuthEntry()?await")
