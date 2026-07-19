@@ -19,7 +19,7 @@ const {
 
 const currentProjectSource = [
   "function ms(e,t){switch(e.kind){case`local`:return e.conversation==null?e.pendingWorktree.createdAt:t===`updated_at`?e.conversation.recencyAt??e.conversation.updatedAt:e.conversation.createdAt;case`remote`:return((t===`updated_at`?e.task.updated_at??e.task.created_at:e.task.created_at??e.task.updated_at)??0)*1e3}}",
-  "function preferences(e){return{chatSortMode:e?.chatSortMode===`created_at`?`updated_at`:e?.chatSortMode??`priority`,projectSortMode:e?.projectSortMode===`created_at`?`updated_at`:e?.projectSortMode??`priority`}}",
+  "function chat(e,t){let n=e.get(C);e.set(k,{...n,chatSortMode:t})}function project(e,t){let n=e.get(C);e.set(k,{...n,projectSortMode:t})}",
 ].join("");
 
 function captureWarns(fn) {
@@ -139,7 +139,7 @@ test("patch recovers local UUIDv7 creation time", () => {
 test("drift leaves the asset byte-identical", () => {
   const source = [
     "function ms(e,t){return e.conversation?.createdTimestamp}",
-    "function preferences(e){return{chatSortMode:e?.chatSortMode===`created_at`?`updated_at`:e?.chatSortMode??`priority`,projectSortMode:e?.projectSortMode===`created_at`?`updated_at`:e?.projectSortMode??`priority`}}",
+    "function chat(e,t){let n=e.get(C);e.set(k,{...n,chatSortMode:t})}function project(e,t){let n=e.get(C);e.set(k,{...n,projectSortMode:t})}",
   ].join("");
   const { value, warnings } = captureWarns(() => applyProjectTaskSortPatch(source));
 
@@ -150,8 +150,8 @@ test("drift leaves the asset byte-identical", () => {
 
 test("missing current sort-state markers leaves the asset byte-identical", () => {
   const source = currentProjectSource.replace(
-    "chatSortMode:e?.chatSortMode===`created_at`?`updated_at`:e?.chatSortMode??`priority`",
-    "chatSortMode:e?.chatSortMode",
+    "chatSortMode:t})}",
+    "chatSortMode:e})}",
   );
   const { value, warnings } = captureWarns(() => applyProjectTaskSortPatch(source));
 
@@ -175,7 +175,7 @@ test("descriptor targets and patches the current project chunk", () => {
     const assetsDir = path.join(tempDir, "webview", "assets");
     const assetPath = path.join(
       assetsDir,
-      "app-initial~app-main~page-Cmd9LUYY.js",
+      "app-initial~app-main~onboarding-page~projects-index-page~quick-chat-window-page~codex-micro~iqsnin5k-DbygVuDa.js",
     );
     fs.mkdirSync(assetsDir, { recursive: true });
     fs.writeFileSync(assetPath, currentProjectSource);
@@ -191,7 +191,7 @@ test("descriptor targets and patches the current project chunk", () => {
     assert.notEqual(fs.readFileSync(assetPath, "utf8"), currentProjectSource);
     assert.equal(
       descriptors[0].pattern.test(
-        "app-initial~app-main~onboarding-page~projects-index-page~quick-chat-window-page~codex-micro~iqsnin5k-CcY42RXW.js",
+        "app-initial~app-main~page-Cmd9LUYY.js",
       ),
       false,
     );

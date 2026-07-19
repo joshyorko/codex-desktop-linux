@@ -6,8 +6,8 @@ const patchedCreationTime =
   currentCreationTime +
   "??(/^local:[\\da-f]{8}-[\\da-f]{4}-7[\\da-f]{3}-[89ab][\\da-f]{3}-[\\da-f]{12}$/i.test(e.key)?Number.parseInt(e.key.slice(6).replaceAll(`-`,``).slice(0,12),16):e.conversation.recencyAt??e.conversation.updatedAt)";
 const currentSortStateMarkers = [
-  "chatSortMode:e?.chatSortMode===`created_at`?`updated_at`:e?.chatSortMode??`priority`",
-  "projectSortMode:e?.projectSortMode===`created_at`?`updated_at`:e?.projectSortMode??`priority`",
+  "chatSortMode:t})}",
+  "projectSortMode:t})}",
 ];
 
 function countOccurrences(source, needle) {
@@ -46,7 +46,7 @@ const descriptors = [
     phase: "webview-asset",
     order: 20_900,
     ciPolicy: "optional",
-    pattern: /^app-initial~app-main~page-[^.]+\.js$/,
+    pattern: /^app-initial~app-main~onboarding-page~projects-index-page~quick-chat-window-page~codex-micro~[^.]+\.js$/,
     missingDescription: "project task sort webview bundle",
     skipDescription: "project task creation timestamp feature patch",
     apply: applyProjectTaskSortPatch,

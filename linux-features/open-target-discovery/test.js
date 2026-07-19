@@ -52,6 +52,8 @@ const currentAppOpenTargetPrelude =
   `var PN=[],FN=async e=>\`shortcut:\${e}\`,BN=new WeakMap;function RN(e){return e.map(({id:e,label:t,icon:n,kind:r,hidden:i,supportsSsh:a})=>({id:e,label:t,icon:n,kind:r,hidden:i,supportsSsh:a}))}function HN(e){return RN(QN(e))}function UN(e,t){let n=QN(e).find(e=>e.id===t);return n?.configuredCommand==null||n.configuredIcon==null?{target:t}:{target:t,customTarget:{command:n.configuredCommand,icon:n.configuredIcon}}}${currentAppRegistryFunction}async function LN(e,t,{detectedCommand:r,targets:c=PN}={}){let l=c.find(t=>t.id===e);if(!l)throw Error(\`Unknown open target "\${e}"\`);let u=r??await l.detect(FN);if(!u)throw Error(\`Open target "\${e}" is not available\`);return u}var WRONG={};async function unrelated(e){return await e.detect(WRONG)}function zN(){return{error(){},warning(){}}}`;
 const currentAppOpenInCommandBundle =
   `${currentAppOpenTargetPrelude}class App{constructor(e,t){this.settingsStore=e;this.requestOpenInWorker=t}getSettingsStore(){return this.settingsStore}getOpenInWorker(){return this.requestOpenInWorker}async getOpenInTargetCommand(e){let{command:t}=await this.getOpenInWorker()({method:\`get-target-command\`,params:UN(this.getSettingsStore(),e)});if(t==null)throw Error(\`Open target "\${e}" is not available\`);return t}}`;
+const currentDmgPrivateOpenInCommandBundle =
+  `${currentAppOpenTargetPrelude}class App{constructor(e,t){this.settingsStore=e;this.requestOpenInWorker=t}async resolve(e){return this.#t(e)}async#t(e){let{command:t}=await this.#n()({method:\`get-target-command\`,params:UN(this.settingsStore,e)});if(t==null)throw Error(\`Open target "\${e}" is not available\`);return t}#n(){return this.requestOpenInWorker}}`;
 const currentAppOpenInAvailabilityBundle =
   `${currentAppOpenTargetPrelude}async function WN(e,t){let n=await Promise.all(HN(e).map(async n=>{let r=UN(e,n.id),[i,a]=await Promise.all([t({method:\`get-target-command\`,params:r}).then(e=>e.command).catch(e=>(zN().error(\`Failed to detect open target\`,{safe:{},sensitive:{id:n.id,error:e}}),null)),process.platform===\`win32\`?t({method:\`load-target-icon\`,params:r}).then(e=>e.icon).catch(e=>(zN().warning(\`Failed to resolve open target icon\`,{safe:{},sensitive:{id:n.id,error:e}}),n.icon)):n.icon]);return{command:i,metadata:{...n,icon:a}}}));return{allAvailableTargets:n.flatMap(({command:e,metadata:t})=>e==null?[]:[t.id]),targetMetadata:n.map(({metadata:e})=>e)}}`;
 const currentAppOpenInBridgeBundle =
@@ -1125,6 +1127,29 @@ test("open-target discovery patches current app command lookup through its regis
   );
   assert.equal(await darwinApp.getOpenInTargetCommand("linux-desktop-agent"), "worker-command");
   assert.equal(workerCalls, 1);
+});
+
+test("open-target discovery patches current DMG private command lookup through its registry", async () => {
+  let workerCalls = 0;
+  const settingsStore = currentAppSettingsStore([
+    { id: "vscode", detect: async () => "/usr/bin/code" },
+    { id: "vscodeInsiders", detect: async () => "/usr/bin/code-insiders" },
+  ]);
+  const patched = applyPatchTwice(applyOpenInTargetCommandPatch, currentDmgPrivateOpenInCommandBundle);
+  const app = new Function("process", `${patched};return new App(arguments[1],arguments[2]);`)(
+    { platform: "linux" },
+    settingsStore,
+    async () => {
+      workerCalls += 1;
+      throw new Error('Unknown open target');
+    },
+  );
+
+  assert.equal(await app.resolve("vscode"), "/usr/bin/code");
+  assert.equal(await app.resolve("vscodeInsiders"), "/usr/bin/code-insiders");
+  assert.equal(workerCalls, 0);
+  const repatched = captureWarns(() => applyOpenInTargetCommandPatch(patched));
+  assert.deepEqual(repatched.warnings, []);
 });
 
 test("open-target discovery patches current app availability through its registry", async () => {

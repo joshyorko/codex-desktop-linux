@@ -620,7 +620,10 @@ function applyOpenInTargetRegistryCommandPatch(currentSource, { warnOnMissing = 
 
 function applyOpenInTargetCommandPatch(currentSource) {
   currentSource = applyOpenInTargetRegistryCommandPatch(currentSource, { warnOnMissing: false });
-  if (currentSource.includes("codexLinuxOpenTargetRegistryCommand(this.getSettingsStore(),e)")) {
+  if (
+    currentSource.includes("codexLinuxOpenTargetRegistryCommand(this.getSettingsStore(),e)") ||
+    currentSource.includes("codexLinuxOpenTargetRegistryCommand(this.settingsStore,e)")
+  ) {
     return currentSource;
   }
   if (!currentSource.includes("async function codexLinuxOpenTargetRegistryCommand(")) {
@@ -638,7 +641,18 @@ function applyOpenInTargetCommandPatch(currentSource) {
     );
   }
 
-  if (currentSource.includes("getOpenInTargetCommand")) {
+  const privateShapeMatch = currentSource.match(
+    /async#([A-Za-z_$][\w$]*)\(e\)\{let\{command:t\}=await this\.#([A-Za-z_$][\w$]*)\(\)\(\{method:`get-target-command`,params:([A-Za-z_$][\w$]*)\(this\.settingsStore,e\)\}\);if\(t==null\)throw Error\(`Open target "\$\{e\}" is not available`\);return t\}/u,
+  );
+  if (privateShapeMatch != null) {
+    const [needle, commandMethod, workerMethod, paramsFn] = privateShapeMatch;
+    return currentSource.replace(
+      needle,
+      `async#${commandMethod}(e){if(process.platform===\`linux\`){let t=await codexLinuxOpenTargetRegistryCommand(this.settingsStore,e);if(t==null)throw Error(\`Open target "\${e}" is not available\`);return t}let{command:n}=await this.#${workerMethod}()({method:\`get-target-command\`,params:${paramsFn}(this.settingsStore,e)});if(n==null)throw Error(\`Open target "\${e}" is not available\`);return n}`,
+    );
+  }
+
+  if (currentSource.includes("getOpenInTargetCommand") || currentSource.includes("get-target-command")) {
     warn("Could not find getOpenInTargetCommand worker fallback");
   }
   return currentSource;
