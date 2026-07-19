@@ -205,6 +205,7 @@ The Home Manager and NixOS modules accept these feature IDs through
 | Feature ID | Purpose |
 | --- | --- |
 | `appshots` | Linux AppShots capture integration |
+| `directory-only-working-tree-watch` | Bounded directory-only working-tree watches |
 | `frameless-titlebar` | Hide app-provided titlebar controls for compositor-managed decorations |
 | `mcp-helper-reaper` | Cleanup for stale configured MCP helper processes |
 | `node-repl-reaper` | Cleanup for leaked Browser Use `node_repl` helpers |
@@ -280,4 +281,5 @@ When a merge to `main` changes the pinned `Codex.dmg` hash, the `Populate
 Cachix` workflow builds the default package, feature-specific package variants,
 the watchdog feature check, and `.#installer`. It uploads and garbage-collects
 each output before starting the next one so the hosted runner does not retain
-every large app variant at once.
+every large app variant at once. Maintainers can dispatch the workflow manually
+to backfill the current `main` pin after a skipped or interrupted run.

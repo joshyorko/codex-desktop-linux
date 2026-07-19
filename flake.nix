@@ -94,20 +94,20 @@
 
         codexDmg = pkgs.fetchurl {
           url = "https://persistent.oaistatic.com/codex-app-prod/ChatGPT.dmg";
-          hash = "sha256-Wiq5aJ9Lo4/LE1VlJG1covEk1Tkzagoyr823IEDSFGY=";
+          hash = "sha256-xgK3kJYGqI3M5ZbZGlRCjcO1MFo/Ee+MMGDZ/tw6E5Y=";
         };
 
-        codexVersion = "26.707.91948";
-        electronVersion = "42.1.0";
+        codexVersion = "26.715.31925";
+        electronVersion = "42.3.0";
         electronPlatform =
           {
             x86_64-linux = {
               arch = "x64";
-              hash = "sha256-iCBHNDqeIDxs/F05sWbqngJd0laUPg03EfhnJa0OO9k=";
+              hash = "sha256-SHpmfKanNLlYwWz/HfdNnUTSwYpszNtN1R9jAaNWxCA=";
             };
             aarch64-linux = {
               arch = "arm64";
-              hash = "sha256-HnAPfz2u95TMRSNeUcEXJmSu1JpOdze4iW3cOYv/TX0=";
+              hash = "sha256-Kjdf+XP7e93FOKT2eyFBlH6dclE6G6or6r7Cp/Zc0PA=";
             };
           }.${system} or (throw "codex-desktop-linux Nix package is not supported on ${system}");
 
@@ -118,7 +118,7 @@
 
         electronHeaders = pkgs.fetchurl {
           url = "https://artifacts.electronjs.org/headers/dist/v${electronVersion}/node-v${electronVersion}-headers.tar.gz";
-          hash = "sha256-DPwdIPJS1sKb3RSx88qjDtxkd9uT5aZiBnRCSzjc3f0=";
+          hash = "sha256-ghAJ+cGDAFDYlK755hkGywpTeyAAstm77ZmF//HV4NA=";
         };
 
         browserUseNodeReplRuntime = pkgs.fetchurl {
@@ -345,6 +345,15 @@
           stdenv.cc.cc.lib
           zlib
         ]);
+        gsettingsSchemaPackages = with pkgs; [
+          gsettings-desktop-schemas
+          gtk3
+        ];
+        gsettingsSchemaRoot = pkg:
+          pkgs.lib.removeSuffix "/glib-2.0/schemas" (pkgs.glib.getSchemaPath pkg);
+        gsettingsSchemaDataDirs =
+          pkgs.lib.concatMapStringsSep ":" gsettingsSchemaRoot gsettingsSchemaPackages;
+        xdgDefaultDataDirs = "/usr/local/share:/usr/share";
         launcherPath = pkgs.lib.makeBinPath (with pkgs; [
           bash
           coreutils
@@ -688,6 +697,8 @@ PY
 
             makeWrapper "$out/opt/codex-desktop/start.sh" "$out/bin/codex-desktop" \
               --prefix PATH : "${payloadLauncherPath}" \
+              --run 'export XDG_DATA_DIRS="''${XDG_DATA_DIRS:-${xdgDefaultDataDirs}}"' \
+              --prefix XDG_DATA_DIRS : "${gsettingsSchemaDataDirs}" \
               --prefix PATH : "/run/current-system/sw/bin" \
               --prefix PATH : "/etc/profiles/per-user/$(whoami)/bin"
 
@@ -785,6 +796,43 @@ PY
           notification-actions-linux = codexNotificationActionsBinary;
           notification-actions-installer = pkgs.runCommand "codex-notification-actions-installer-check" { } ''
             grep -F 'CODEX_NOTIFICATION_ACTIONS_SOURCE=' ${installer}/bin/codex-desktop-installer >/dev/null
+            touch "$out"
+          '';
+          nix-gsettings-schema-wrapper = pkgs.runCommand "codex-desktop-nix-gsettings-schema-wrapper-check" { } ''
+            schema_data_dirs=${pkgs.lib.escapeShellArg gsettingsSchemaDataDirs}
+            default_data_dirs=${pkgs.lib.escapeShellArg xdgDefaultDataDirs}
+            explicit_data_dirs=/custom/share:/other/share
+
+            run_wrapper() {
+              case "$1" in
+                unset) unset XDG_DATA_DIRS ;;
+                empty) export XDG_DATA_DIRS= ;;
+                populated) export XDG_DATA_DIRS="$explicit_data_dirs" ;;
+                *) echo "unknown test case: $1" >&2; return 1 ;;
+              esac
+
+              exec() {
+                printf '%s\n' "$XDG_DATA_DIRS"
+              }
+
+              source ${codexDesktop}/bin/codex-desktop
+            }
+
+            assert_data_dirs() {
+              test_case="$1"
+              expected="$2"
+              actual="$(run_wrapper "$test_case")"
+              if [ "$actual" != "$expected" ]; then
+                printf '%s: expected <%s>, got <%s>\n' \
+                  "$test_case" "$expected" "$actual" >&2
+                return 1
+              fi
+            }
+
+            expected_defaults="$schema_data_dirs:$default_data_dirs"
+            assert_data_dirs unset "$expected_defaults"
+            assert_data_dirs empty "$expected_defaults"
+            assert_data_dirs populated "$schema_data_dirs:$explicit_data_dirs"
             touch "$out"
           '';
           nix-linux-features-evaluation = import ./nix/linux-features-test.nix {

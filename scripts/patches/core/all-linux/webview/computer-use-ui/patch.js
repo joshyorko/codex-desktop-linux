@@ -4,6 +4,7 @@ const {
   webviewAssetPatch,
 } = require("../../../../descriptor.js");
 const {
+  applyLinuxComputerUseHostPlatformPatch,
   applyLinuxComputerUseRendererAvailabilityPatch,
   applyLinuxComputerUseInstallFlowPatch,
   applyLinuxComputerUsePluginsPageAvailabilityPatch,
@@ -33,12 +34,23 @@ module.exports = [
     apply: applyLinuxComputerUsePluginsPageAvailabilityPatch,
   }),
   webviewAssetPatch({
+    id: "linux-computer-use-host-platform",
+    phase: "webview-asset",
+    order: 1105,
+    ciPolicy: "opt-in",
+    enabled: (context) => context.enableComputerUseUi,
+    pattern: /^app-initial~artifact-tab-content\.electron~notebook-preview-panel~app-main~settings-command-~ekwfx4j1-[^.]+\.js$/,
+    missingDescription: "current Computer Use host-platform bundle",
+    skipDescription: "Linux Computer Use host-platform patch",
+    apply: applyLinuxComputerUseHostPlatformPatch,
+  }),
+  webviewAssetPatch({
     id: "linux-computer-use-install-flow",
     phase: "webview-asset",
     order: 1110,
     ciPolicy: "required-upstream",
     enabled: (context) => context.enableComputerUseUi,
-    pattern: /^app-initial~artifact-tab-content\.electron~app-main~pull-request-route~pull-request-code-rev~jgoqfqy2-[^.]+\.js$/,
+    pattern: /^app-initial~avatarOverlayCompositionSurface~artifact-tab-content\.electron~notebook-preview-~iaq4jiqv-[^.]+\.js$/,
     missingDescription: "current Computer Use install flow bundle",
     skipDescription: "Linux Computer Use install flow patch",
     apply: applyLinuxComputerUseInstallFlowPatch,

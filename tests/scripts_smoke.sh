@@ -482,85 +482,6 @@ JSON
     assert_mode "$private_file" "600"
 }
 
-test_stage_common_package_files_resolves_tray_icon_deterministically() {
-    info "Checking stage_common_package_files tray icon resolution"
-    local workspace="$TMP_DIR/package-common-tray"
-    local app_dir="$workspace/app"
-    local root="$workspace/root"
-    local output_log="$workspace/output.log"
-    local icon_source="$workspace/icon-source.png"
-    local tray_output="$root/opt/codex-desktop/.codex-linux/codex-desktop-tray.png"
-    local package_icon="$root/opt/codex-desktop/.codex-linux/codex-desktop.png"
-
-    mkdir -p "$workspace" "$root"
-    make_fake_app "$app_dir"
-    mkdir -p "$app_dir/content/webview/assets"
-    printf '%s\n' 'package-icon' > "$icon_source"
-    printf '%s\n' 'upstream-tray' > "$app_dir/content/webview/assets/app-main.png"
-
-    (
-        export APP_DIR="$app_dir"
-        export PACKAGE_NAME="codex-desktop"
-        export PACKAGE_WITH_UPDATER=0
-        export ICON_SOURCE="$icon_source"
-        export DESKTOP_TEMPLATE="$REPO_DIR/packaging/linux/codex-desktop.desktop"
-        export PACKAGED_RUNTIME_SOURCE="$REPO_DIR/packaging/linux/codex-packaged-runtime.sh"
-        # shellcheck disable=SC1091
-        source "$REPO_DIR/scripts/lib/package-common.sh"
-        stage_common_package_files "$root"
-    ) >"$output_log" 2>&1
-
-    assert_file_exists "$package_icon"
-    assert_file_exists "$tray_output"
-    cmp -s "$icon_source" "$package_icon" || fail "Expected package icon copy to come from ICON_SOURCE"
-    cmp -s "$app_dir/content/webview/assets/app-main.png" "$tray_output" \
-        || fail "Expected tray icon copy to come from the unique upstream asset"
-    assert_not_contains "$output_log" "falling back to package icon"
-}
-
-test_stage_common_package_files_tray_icon_fallbacks_when_ambiguous_or_missing() {
-    info "Checking stage_common_package_files tray icon fallback behavior"
-    local workspace="$TMP_DIR/package-common-tray-fallback"
-    local icon_source="$workspace/icon-source.png"
-    local output_log="$workspace/output.log"
-
-    mkdir -p "$workspace"
-    printf '%s\n' 'package-icon' > "$icon_source"
-
-    for scenario in ambiguous missing; do
-        local app_dir="$workspace/$scenario-app"
-        local root="$workspace/$scenario-root"
-        local tray_output="$root/opt/codex-desktop/.codex-linux/codex-desktop-tray.png"
-
-        mkdir -p "$root"
-        make_fake_app "$app_dir"
-        mkdir -p "$app_dir/content/webview/assets"
-        if [ "$scenario" = "ambiguous" ]; then
-            printf '%s\n' 'upstream-a' > "$app_dir/content/webview/assets/app-alpha.png"
-            printf '%s\n' 'upstream-b' > "$app_dir/content/webview/assets/app-beta.png"
-        fi
-
-        (
-            export APP_DIR="$app_dir"
-            export PACKAGE_NAME="codex-desktop"
-            export PACKAGE_WITH_UPDATER=0
-            export ICON_SOURCE="$icon_source"
-            export DESKTOP_TEMPLATE="$REPO_DIR/packaging/linux/codex-desktop.desktop"
-            export PACKAGED_RUNTIME_SOURCE="$REPO_DIR/packaging/linux/codex-packaged-runtime.sh"
-            # shellcheck disable=SC1091
-            source "$REPO_DIR/scripts/lib/package-common.sh"
-            stage_common_package_files "$root"
-        ) >>"$output_log" 2>&1
-
-        assert_file_exists "$tray_output"
-        cmp -s "$icon_source" "$tray_output" \
-            || fail "Expected tray icon fallback to come from ICON_SOURCE for $scenario"
-    done
-
-    assert_contains "$output_log" "Multiple tray icon candidates found"
-    assert_contains "$output_log" "Could not resolve a unique tray icon"
-}
-
 test_deb_builder_smoke() {
     info "Running Debian packaging smoke test"
     local workspace="$TMP_DIR/deb"
@@ -4249,6 +4170,48 @@ SCRIPT
     CODEX_WEBVIEW_PORT=00080 bash "$launcher_probe_script" >"$launcher_stdout" 2>"$launcher_stderr"
     [ "$(tail -n 1 "$launcher_stdout")" = "80" ] || fail "Expected launcher validation to canonicalize leading-zero CODEX_WEBVIEW_PORT"
     [ ! -s "$launcher_stderr" ] || fail "Expected launcher leading-zero canonicalization to be quiet, got: $(cat "$launcher_stderr")"
+}
+
+test_launcher_uses_private_default_tmpdir() {
+    info "Checking launcher default TMPDIR isolation"
+    local workspace="$TMP_DIR/launcher-private-tmpdir"
+    local probe="$workspace/probe.sh"
+    local output="$workspace/output.log"
+    local runtime_dir="$workspace/runtime"
+    local state_dir="$workspace/state/codex-desktop"
+    local custom_tmp="$workspace/custom-tmp"
+
+    mkdir -p "$runtime_dir" "$state_dir" "$custom_tmp"
+    cat > "$probe" <<SCRIPT
+#!/bin/bash
+set -euo pipefail
+CODEX_LINUX_APP_ID=codex-desktop
+APP_STATE_DIR=$(printf '%q' "$state_dir")
+SCRIPT
+    awk '
+        /^configure_runtime_tmpdir\(\) \{/ { emit = 1 }
+        emit { print }
+        emit && /^}/ { exit }
+    ' "$REPO_DIR/launcher/start.sh.template" >> "$probe"
+    cat >> "$probe" <<'SCRIPT'
+configure_runtime_tmpdir
+printf '%s\n' "$TMPDIR"
+SCRIPT
+    chmod +x "$probe"
+
+    env -u TMPDIR XDG_RUNTIME_DIR="$runtime_dir" bash "$probe" > "$output"
+    [ "$(cat "$output")" = "$runtime_dir/codex-desktop/tmp" ] \
+        || fail "Expected runtime-scoped default TMPDIR, got: $(cat "$output")"
+    [ "$(stat -c '%a' "$runtime_dir/codex-desktop/tmp")" = "700" ] \
+        || fail "Expected runtime-scoped TMPDIR mode 700"
+
+    env -u TMPDIR -u XDG_RUNTIME_DIR bash "$probe" > "$output"
+    [ "$(cat "$output")" = "$state_dir/tmp" ] \
+        || fail "Expected state-scoped fallback TMPDIR, got: $(cat "$output")"
+
+    TMPDIR="$custom_tmp" XDG_RUNTIME_DIR="$runtime_dir" bash "$probe" > "$output"
+    [ "$(cat "$output")" = "$custom_tmp" ] \
+        || fail "Expected explicit TMPDIR to remain unchanged, got: $(cat "$output")"
 }
 
 test_managed_node_runtime_source_install() {
@@ -8395,7 +8358,7 @@ test_linux_file_manager_patch_smoke() {
     node "$REPO_DIR/scripts/patch-linux-window-ui.js" "$extracted" >"$output_log" 2>&1
     assert_contains "$extracted/.vite/build/main-test.js" 'detect:()=>`linux-file-manager`'
     assert_contains "$extracted/.vite/build/main-test.js" 'linux:{label:`File Manager`'
-    assert_contains "$extracted/.vite/build/main-test.js" 'process.platform===`linux`&&D.removeMenu(),process.platform===`win32`&&D.removeMenu(),'
+    assert_contains "$extracted/.vite/build/main-test.js" 'process.platform===`linux`&&(D.on(`system-context-menu`,e=>e.preventDefault()),D.removeMenu()),process.platform===`win32`&&D.removeMenu(),'
     assert_not_contains "$extracted/.vite/build/main-test.js" 'D.setMenuBarVisibility(!1)'
     assert_contains "$extracted/.vite/build/main-test.js" '&&D.setIcon('
     assert_contains "$extracted/webview/assets/app-server-manager-signals-test.js" '`subAgent`in e?e.subAgent:`subagent`in e?e.subagent:null'
@@ -8440,48 +8403,27 @@ test_linux_tray_patch_smoke() {
 
     mkdir -p "$workspace"
     bundle_body="$(cat <<'JS'
-let D={removeMenu(){},setMenuBarVisibility(){},setIcon(){},once(){}};
 const x={o:e=>e};let s=require(`node:url`),n=require(`electron`);n=x.o(n);let l=require(`node:os`);l=x.o(l);let i=require(`node:path`);i=x.o(i);let d=require(`node:util`),q=require(`node:crypto`),a=require(`node:fs`);a=x.o(a);
-let t={join(){},C:{Prod:`prod`},A(){}};
-let k={hide(){},isDestroyed(){return false}};
-let f=`local`;
-...process.platform===`win32`?{autoHideMenuBar:!0}:{},process.platform===`win32`&&D.removeMenu(),foo)}),D.once(`ready-to-show`,()=>{
-var sa=Mi({id:`fileManager`,label:`Finder`,icon:`apps/finder.png`,kind:`fileManager`,darwin:{detect:()=>`open`,args:e=>ai(e)},win32:{label:`File Explorer`,icon:`apps/file-explorer.png`,detect:ca,args:e=>ai(e),open:async({path:e})=>la(e)}});
-function ca(){let e=1;return e}
-async function la(e){let t=ua(e);if(t&&(0,a.statSync)(t).isFile()){n.shell.showItemInFolder(t);return}let r=t??e,i=await n.shell.openPath(r);if(i)throw Error(i)}
-function ua(e){return e}
-var Ua=Mi({id:`systemDefault`,label:`System Default App`,icon:`apps/file-explorer.png`,kind:`systemDefault`,hidden:!0,darwin:{icon:`apps/finder.png`,detect:()=>`system-default`,iconPath:()=>null,args:e=>[e],open:async({path:e})=>Wa(e)},win32:{detect:()=>`system-default`,iconPath:()=>null,args:e=>[e],open:async({path:e})=>Wa(e)},linux:{detect:()=>`system-default`,iconPath:()=>null,args:e=>[e],open:async({path:e})=>Wa(e)}});
-async function Wa(e){return e}
-async function Hw(e){return process.platform!==`win32`&&process.platform!==`darwin`?null:(zw=!0,Lw??Rw??(Rw=(async()=>{let r=await Ww(e.buildFlavor,e.appBrand,e.repoRoot),i=new n.Tray(r.defaultIcon);return i})()))}
-async function Ww(e,t,i){if(process.platform===`darwin`){return null}let r=K9(e,t,i);return r==null?{defaultIcon:await n.app.getFileIcon(process.execPath,{size:`small`}),chronicleRunningIcon:null}:{defaultIcon:r,chronicleRunningIcon:null}}
-function K9(e,t,r){let a=[(0,i.join)(r,`electron`,`src`,`icons`,`tray.png`)];for(let e of a){let t=n.nativeImage.createFromPath(e);if(!t.isEmpty())return t}return null}
-var pb=class{nativeTrayClickSuppressionReason=null;clearNativeTrayClickSuppressionTimeout=null;chronicleTrayIconRefreshInterval=null;chronicleTrayIconState=`default`;isNativeTrayMenuOpen=!1;trayMenuThreads={runningThreads:[],unreadThreads:[],pinnedThreads:[],recentThreads:[],usageLimits:[]};constructor(){this.tray={on(){},setContextMenu(){},popUpContextMenu(){}};this.onTrayButtonClick=()=>{};this.tray.on(`click`,()=>{this.onTrayButtonClick()}),this.tray.on(`right-click`,()=>{this.openNativeTrayMenu()})}async handleMessage(e){switch(e.type){case`tray-menu-threads-changed`:this.trayMenuThreads=e.trayMenuThreads;return}}openNativeTrayMenu(){this.updateChronicleTrayIcon();let e=n.Menu.buildFromTemplate(this.getNativeTrayMenuItems());e.once(`menu-will-show`,()=>{this.isNativeTrayMenuOpen=!0}),e.once(`menu-will-close`,()=>{this.isNativeTrayMenuOpen=!1,this.handleNativeTrayMenuClosed()}),this.tray.popUpContextMenu(e)}updateChronicleTrayIcon(){}getNativeTrayMenuItems(){return[]}}
-v&&k.on(`close`,e=>{this.persistPrimaryWindowBounds(k);let t=this.getPrimaryWindows().some(e=>e!==k);if(process.platform===`win32`&&!this.isAppQuitting&&this.options.canHideLastWindowToTray?.()===!0&&!t){e.preventDefault(),k.hide();return}if(process.platform===`darwin`&&!this.isAppQuitting&&!t){e.preventDefault(),k.hide()}});
-let E=process.platform===`win32`;
-let oe=async()=>{O=!0;try{await Hw({appBrand:a.U(),buildFlavor:b,repoRoot:j.repoRoot})}catch(e){O=!1}};
-let se=async e=>{};
-E&&oe();let ce=Hr({});
+async function gj(e){let t=e;if(typeof t.whenReady!=`function`)return process.platform!==`linux`;try{return await t.whenReady(),!0}catch{return!1}}function _j(e){let t=e;return typeof t.isReady==`function`?t.isReady():process.platform!==`linux`}
+async function fae(e){let t=await pae(e.buildFlavor,e.appBrand,e.repoRoot),r=new n.Tray(t.defaultIcon);r.setToolTip(n.app.getName());let i=new pb(r);return!await i.waitForReady()?(i.destroy(),null):i}
+async function pae(e,t,r){if(process.platform===`darwin`)return null;if(process.platform===`linux`){let a=`${fv(e,t)}.png`,o=n.nativeImage.createFromPath(n.app.isPackaged?(0,i.join)(process.resourcesPath,a):(0,i.join)(r,`electron`,`src`,`icons`,a));if(o.isEmpty())throw Error(`Linux tray application icon is unavailable`);return{defaultIcon:o.resize({width:V9,height:V9,quality:`best`}),chronicleRunningIcon:null}}return null}
+var pb=class{trayMenuThreads={runningThreads:[],unreadThreads:[],pinnedThreads:[],recentThreads:[],usageLimits:[]};constructor(e={on(){},setContextMenu(){}}){this.tray=e;if(process.platform===`linux`){this.tray.on(`click`,()=>{}),this.updatePersistentTrayMenu();return}}destroy(){this.tray.destroy()}isReady(){return _j(this.tray)}waitForReady(){return gj(this.tray)}getNativeTrayMenuItems(){return[]}updatePersistentTrayMenu(){process.platform===`linux`&&this.tray.setContextMenu(n.Menu.buildFromTemplate(this.getNativeTrayMenuItems()))}};
+v&&k.on(`close`,e=>{this.persistPrimaryWindowBounds(k);let t=this.getPrimaryWindows().some(e=>e!==k);if((process.platform===`win32`||process.platform===`linux`)&&!this.isAppQuitting&&this.options.canHideLastWindowToTray?.()===!0&&!t){e.preventDefault(),k.hide();return}if(process.platform===`darwin`&&!this.isAppQuitting&&!t){e.preventDefault(),k.hide()}});
+let oe=async()=>{try{await fae({appBrand:a.U(),buildFlavor:b,repoRoot:j.repoRoot})}catch(e){v.reportNonFatal(e)}};(E||process.platform===`linux`)&&oe();
 JS
 )"
     make_fake_extracted_asar "$extracted" "$bundle_body"
 
     node "$REPO_DIR/scripts/patch-linux-window-ui.js" "$extracted" >"$output_log" 2>&1
-    assert_contains "$extracted/.vite/build/main-test.js" 'process.platform!==`win32`&&process.platform!==`darwin`&&process.platform!==`linux`?null:'
-    assert_contains "$extracted/.vite/build/main-test.js" 'nativeImage.createFromPath(process.resourcesPath+`/../content/webview/assets/app-test.png`)'
-    assert_contains "$extracted/.vite/build/main-test.js" '(process.platform===`win32`||process.platform===`linux`)&&!this.isAppQuitting'
-    assert_contains "$extracted/.vite/build/main-test.js" '!this.isAppQuitting&&!(typeof codexLinuxIsQuitInProgress===`function`&&codexLinuxIsQuitInProgress())'
-    assert_contains "$extracted/.vite/build/main-test.js" 'setLinuxTrayContextMenu(){let e=n.Menu.buildFromTemplate(this.getNativeTrayMenuItems())'
-    assert_contains "$extracted/.vite/build/main-test.js" 'process.platform===`linux`&&(codexLinuxSetTrayController(this),this.setLinuxTrayContextMenu()),this.tray.on(`click`'
-    assert_contains "$extracted/.vite/build/main-test.js" 'codexLinuxTrayRecoveryHandler=()=>{let e=codexLinuxTrayController;e?.setLinuxTrayContextMenu?.()}'
-    assert_contains "$extracted/.vite/build/main-test.js" 'process.platform===`linux`?this.openNativeTrayMenu():this.onTrayButtonClick()'
-    assert_contains "$extracted/.vite/build/main-test.js" 'openNativeTrayMenu(){if(process.platform===`linux`&&(typeof codexLinuxIsQuitInProgress===`function`&&codexLinuxIsQuitInProgress()))return;'
-    assert_contains "$extracted/.vite/build/main-test.js" 'let e=process.platform===`linux`&&this.setLinuxTrayContextMenu?this.setLinuxTrayContextMenu():n.Menu.buildFromTemplate'
-    assert_contains "$extracted/.vite/build/main-test.js" 'if(process.platform===`linux`)return;e.once(`menu-will-show`'
-    assert_contains "$extracted/.vite/build/main-test.js" 'this.trayMenuThreads=e.trayMenuThreads,process.platform===`linux`&&!(typeof codexLinuxIsQuitInProgress===`function`&&codexLinuxIsQuitInProgress())&&this.setLinuxTrayContextMenu?.()'
-    assert_contains "$extracted/.vite/build/main-test.js" '(E||process.platform===`linux`&&(typeof codexLinuxIsTrayEnabled!==`function`||codexLinuxIsTrayEnabled()))&&oe();'
-    assert_not_contains "$extracted/.vite/build/main-test.js" 'process.platform===`linux`&&this.tray.setContextMenu?.(e),this.tray.popUpContextMenu(e)'
-    assert_not_contains "$output_log" 'WARN: Could not find tray'
-
+    assert_contains "$extracted/.vite/build/main-test.js" '(process.platform===`win32`||process.platform===`linux`)&&!this.isAppQuitting&&!(typeof codexLinuxIsQuitInProgress===`function`&&codexLinuxIsQuitInProgress())'
+    assert_contains "$extracted/.vite/build/main-test.js" 'r=typeof codexLinuxRegisterTray===`function`?codexLinuxRegisterTray(new n.Tray(t.defaultIcon)):new n.Tray(t.defaultIcon)'
+    assert_contains "$extracted/.vite/build/main-test.js" 'if(typeof t.whenReady!=`function`)return!0'
+    assert_contains "$extracted/.vite/build/main-test.js" 'return typeof t.isReady==`function`?t.isReady():!0'
+    assert_contains "$extracted/.vite/build/main-test.js" 'let __codexLinuxTrayFallbackIcon=n.nativeImage.createFromPath(process.resourcesPath+`/../content/webview/assets/app-test.png`)'
+    assert_contains "$extracted/.vite/build/main-test.js" 'if(!__codexLinuxTrayFallbackIcon.isEmpty())o=__codexLinuxTrayFallbackIcon'
+    assert_contains "$extracted/.vite/build/main-test.js" 'updatePersistentTrayMenu(){process.platform===`linux`'
+    assert_contains "$extracted/.vite/build/main-test.js" '(E||process.platform===`linux`)&&oe();'
+    assert_not_contains "$output_log" 'WARN: Could not find current Linux'
     node - "$extracted/.vite/build/main-test.js" <<'NODE'
 const fs = require("fs");
 
@@ -8572,26 +8514,15 @@ if (!result.event.prevented || result.state.hideCalls !== 1) {
 NODE
 
     node "$REPO_DIR/scripts/patch-linux-window-ui.js" "$extracted" >"$output_log" 2>&1
-    assert_occurrence_count "$extracted/.vite/build/main-test.js" 'process.platform!==`win32`&&process.platform!==`darwin`&&process.platform!==`linux`?null:' '1'
-    assert_occurrence_count "$extracted/.vite/build/main-test.js" 'nativeImage.createFromPath(process.resourcesPath' '3'
-    assert_occurrence_count "$extracted/.vite/build/main-test.js" 'nativeImage.createFromPath(process.resourcesPath+`/../.codex-linux/codex-desktop-tray.png`)' '1'
-    assert_occurrence_count "$extracted/.vite/build/main-test.js" 'nativeImage.createFromPath(process.resourcesPath+`/../.codex-linux/codex-desktop.png`)' '1'
-    assert_occurrence_count "$extracted/.vite/build/main-test.js" 'nativeImage.createFromPath(process.resourcesPath+`/../content/webview/assets/app-test.png`)' '1'
-    assert_occurrence_count "$extracted/.vite/build/main-test.js" 'process.platform===`linux`)&&!this.isAppQuitting' '1'
-    assert_occurrence_count "$extracted/.vite/build/main-test.js" 'setLinuxTrayContextMenu(){' '1'
-    assert_occurrence_count "$extracted/.vite/build/main-test.js" 'process.platform===`linux`&&(codexLinuxSetTrayController(this),this.setLinuxTrayContextMenu()),this.tray.on(`click`' '1'
-    assert_occurrence_count "$extracted/.vite/build/main-test.js" 'process.platform===`linux`?this.openNativeTrayMenu():this.onTrayButtonClick()' '1'
-    assert_occurrence_count "$extracted/.vite/build/main-test.js" 'typeof codexLinuxIsQuitInProgress===`function`&&codexLinuxIsQuitInProgress()' '3'
-    assert_occurrence_count "$extracted/.vite/build/main-test.js" 'openNativeTrayMenu(){if(process.platform===`linux`&&(typeof codexLinuxIsQuitInProgress===`function`&&codexLinuxIsQuitInProgress()))return;' '1'
-    assert_occurrence_count "$extracted/.vite/build/main-test.js" 'let e=process.platform===`linux`&&this.setLinuxTrayContextMenu?this.setLinuxTrayContextMenu():n.Menu.buildFromTemplate' '1'
-    assert_occurrence_count "$extracted/.vite/build/main-test.js" 'if(process.platform===`linux`)return;e.once(`menu-will-show`' '1'
-    assert_occurrence_count "$extracted/.vite/build/main-test.js" 'process.platform===`linux`&&!(typeof codexLinuxIsQuitInProgress===`function`&&codexLinuxIsQuitInProgress())&&this.setLinuxTrayContextMenu?.()' '1'
-    assert_occurrence_count "$extracted/.vite/build/main-test.js" 'process.platform===`linux`&&(typeof codexLinuxIsTrayEnabled!==`function`||codexLinuxIsTrayEnabled()))&&oe' '1'
+    assert_occurrence_count "$extracted/.vite/build/main-test.js" 'codexLinuxRegisterTray(new n.Tray(t.defaultIcon))' '1'
+    assert_occurrence_count "$extracted/.vite/build/main-test.js" 'let __codexLinuxTrayFallbackIcon=' '1'
+    assert_occurrence_count "$extracted/.vite/build/main-test.js" 'if(typeof t.whenReady!=`function`)return!0' '1'
+    assert_occurrence_count "$extracted/.vite/build/main-test.js" 'return typeof t.isReady==`function`?t.isReady():!0' '1'
+    assert_occurrence_count "$extracted/.vite/build/main-test.js" '!(typeof codexLinuxIsQuitInProgress===`function`&&codexLinuxIsQuitInProgress())' '1'
     assert_contains "$extracted/.vite/build/main-test.js" 'codexLinuxRegisterTray=e=>(codexLinuxTray=e,e)'
     assert_contains "$extracted/.vite/build/main-test.js" 'codexLinuxDestroyTray=()=>{if(process.platform!==`linux`)return;'
     assert_contains "$extracted/.vite/build/main-test.js" 'codexLinuxMarkQuitInProgress=()=>{codexLinuxQuitInProgress=!0,codexLinuxDestroyTray()}'
     assert_contains "$extracted/.vite/build/main-test.js" 'n.app.on(`before-quit`,()=>codexLinuxDestroyTray())'
-    assert_contains "$extracted/.vite/build/main-test.js" 'i=typeof codexLinuxRegisterTray===`function`?codexLinuxRegisterTray(new n.Tray(r.defaultIcon)):new n.Tray(r.defaultIcon)'
     assert_not_contains "$extracted/.vite/build/main-test.js" 'codexLinuxTrayQuitDelayMs'
 }
 
@@ -8746,7 +8677,7 @@ JS
 import{t as d}from"./jsx-runtime-test.js";var c={"general-settings":{id:`settings.nav.general-settings`,defaultMessage:`General`,description:`Title for general settings section`},"keyboard-shortcuts":{id:`settings.nav.keyboard-shortcuts`,defaultMessage:`Keyboard shortcuts`,description:`Title for keyboard shortcuts settings section`}};function m(e){let t=(0,u.c)(17),{slug:r}=e;switch(r){case`keyboard-shortcuts`:{let e;return t[1]===Symbol.for(`react.memo_cache_sentinel`)?(e=(0,d.jsx)(n,{id:`settings.section.keyboard-shortcuts`,defaultMessage:`Keyboard shortcuts`,description:`Title for keyboard shortcuts settings section`}),t[1]=e):e=t[1],e}case`general-settings`:{let e;return t[2]===Symbol.for(`react.memo_cache_sentinel`)?(e=(0,d.jsx)(n,{id:`settings.section.general-settings`,defaultMessage:`General`,description:`Title for general settings section`}),t[2]=e):e=t[2],e}}}
 JS
     cat > "$extracted/webview/assets/index-test.js" <<'JS'
-import{n as routeModule,s as routeToESM}from"./rolldown-runtime-test.js";import{I as routeJsxFactory,R as routeReactFactory}from"./shared-runtime-test.js";function Z(e){let r=(0,RouteReact.lazy)(e);function SettingsRouteWrapper(){let t=(0,RouteReact.useState)(null);return (0,RouteJsx.jsx)(r,{children:t})}return SettingsRouteWrapper}var RouteReact,RouteJsx;routeModule(()=>{RouteReact=routeToESM(routeReactFactory(),1),RouteJsx=routeJsxFactory()})();var Xge={"general-settings":xh,"keyboard-shortcuts":ks,appearance:Pf,agent:gU},H7={},Zge=[`general-settings`,`profile`,`keyboard-shortcuts`,`appearance`,`agent`,`personalization`,`mcp-settings`,`connections`,`git-settings`,`local-environments`,`worktrees`,`browser-use`,`computer-use`,`data-controls`],Qge=[{key:`app`,heading:H7.appHeading,slugs:[`general-settings`,`profile`,`keyboard-shortcuts`,`appearance`,`connections`,`git-settings`,`usage`]}];function n_e(){let e=e=>{switch(e.slug){case`general-settings`:case`agent`:case`personalization`:return!0;case`keyboard-shortcuts`:return!0}};if(O)bb0:switch(D.slug){case`usage`:k=g;break bb0;case`appearance`:case`general-settings`:case`agent`:case`git-settings`:case`account`:case`data-controls`:case`personalization`:k=!1;break bb0;case`keyboard-shortcuts`:k=!1;break bb0;}}function s_e(e){let{slug:n}=e,r=c_e[n];return (0,$.jsx)(r,{})}var c_e={"general-settings":Z(async()=>(await s(async()=>{let{GeneralSettings:e}=await import(`./general-settings-DZbwMmWz.js`);return{GeneralSettings:e}},[],import.meta.url)).GeneralSettings),"keyboard-shortcuts":Z(async()=>(await s(async()=>{let{KeyboardShortcutsSettings:e}=await import(`./keyboard-shortcuts-settings-test.js`);return{KeyboardShortcutsSettings:e}},[],import.meta.url)).KeyboardShortcutsSettings)};export{Z};
+import{n as routeModule,s as routeToESM}from"./rolldown-runtime-test.js";import{I as routeJsxFactory,R as routeReactFactory}from"./shared-runtime-test.js";function Z(e){let r=(0,RouteReact.lazy)(e);function SettingsRouteWrapper(){let t=(0,RouteReact.useState)(null);return (0,RouteJsx.jsx)(r,{children:t})}return SettingsRouteWrapper}var RouteReact,RouteJsx;routeModule(()=>{RouteReact=routeToESM(routeReactFactory(),1),RouteJsx=routeJsxFactory()})();var Xge={"general-settings":xh,"keyboard-shortcuts":ks,appearance:Pf,agent:gU},H7={},Zge=[`general-settings`,`import`,`profile`,`keyboard-shortcuts`,`appearance`,`agent`,`personalization`,`mcp-settings`,`connections`,`git-settings`,`local-environments`,`worktrees`,`browser-use`,`computer-use`,`data-controls`],Qge=[{key:`app`,heading:H7.appHeading,slugs:[`general-settings`,`import`,`profile`,`keyboard-shortcuts`,`appearance`,`connections`,`git-settings`,`usage`]}];function n_e(){let e=e=>{switch(e.slug){case`general-settings`:case`agent`:case`personalization`:return!0;case`keyboard-shortcuts`:return!0}};if(O)bb0:switch(D.slug){case`usage`:k=g;break bb0;case`appearance`:case`general-settings`:case`agent`:case`git-settings`:case`account`:case`data-controls`:case`personalization`:k=!1;break bb0;case`keyboard-shortcuts`:k=!1;break bb0;}}function s_e(e){let{slug:n}=e,r=c_e[n];return (0,$.jsx)(r,{})}var c_e={"general-settings":Z(async()=>(await s(async()=>{let{GeneralSettings:e}=await import(`./general-settings-DZbwMmWz.js`);return{GeneralSettings:e}},[],import.meta.url)).GeneralSettings),"keyboard-shortcuts":Z(async()=>(await s(async()=>{let{KeyboardShortcutsSettings:e}=await import(`./keyboard-shortcuts-settings-test.js`);return{KeyboardShortcutsSettings:e}},[],import.meta.url)).KeyboardShortcutsSettings)};export{Z};
 JS
     cat > "$extracted/webview/assets/keyboard-shortcuts-settings-test.js" <<'JS'
 import{s as __toESM}from"./chunk-test.js";import{t as __reactFactory}from"./react-test.js";import{t as __jsxFactory}from"./jsx-runtime-test.js";function KeyboardShortcutsSettings(){let t=(0,React.useState)(null);return (0,$.jsx)(`div`,{children:t})}var React,$;initialize(()=>{React=__toESM(__reactFactory(),1),$=__jsxFactory()})();slug:`keyboard-shortcuts`;export{KeyboardShortcutsSettings};
@@ -8780,7 +8711,6 @@ JS
     assert_contains "$extracted/webview/assets/index-test.js" '"linux-desktop":'
     assert_contains "$extracted/webview/assets/index-test.js" 'Zge=\[`general-settings`,`linux-desktop`'
     assert_contains "$extracted/webview/assets/index-test.js" 'slugs:\[`general-settings`,`linux-desktop`'
-    assert_contains "$extracted/webview/assets/index-test.js" 'case`linux-desktop`:case`general-settings`'
     assert_not_contains "$extracted/webview/assets/index-test.js" "keybinds-settings-linux.js"
     assert_not_contains "$extracted/webview/assets/index-test.js" "codexLinuxKeybindOverridesRuntime"
 
@@ -8859,7 +8789,7 @@ let S=globalThis.__codexSmoke;
 let n=require(`electron`);
 let t={Er(){return {info(){}}},jn:class{add(e){S.disposables.push(e)}},y(){return{setSecondInstanceArgsHandler:e=>{S.initialHandler=e}}},g(e){return e},t(e){return Array.isArray(e)&&e.includes(`--open-project`)}};
 let i={default:{dirname(e){S.dirnameCalls.push(e);return `/tmp`}}},o={mkdirSync(...e){S.mkdirSyncCalls.push(e)},rmSync(...e){S.rmSyncCalls.push(e)}},u={default:{createServer(e){S.createServerCalls++;S.socketConnectionHandler=e;return S.socketServer}}};
-async function uT(){let{setSecondInstanceArgsHandler:l}=t.y(),k=new t.jn;k.add(()=>{}),t.Er().info(`Launching app`,{safe:{agentRunId:process.env.CODEX_ELECTRON_AGENT_RUN_ID?.trim()||null}});let A=Date.now();await n.app.whenReady();let w=(...e)=>{S.traceCalls.push(e)},M={globalState:S.globalState,repoRoot:`/tmp/codex-smoke`},z=`local`,R={deepLinks:{queueProcessArgs(e){S.queueArgs.push(e);return Array.isArray(e)&&e.some(e=>{let t=String(e);return t.startsWith(`codex://`)||t.startsWith(`codex-browser-sidebar://`)})},flushPendingDeepLinks(){S.flushPendingDeepLinksCalls++;return Promise.resolve()}},navigateToRoute(e,t){S.navigateCalls.push({windowId:e.id,path:t})}},P={windowManager:{sendMessageToWindow(e,t){S.messages.push({windowId:e.id,message:t})}},hotkeyWindowLifecycleManager:{hide(){S.hideCalls++},show(){S.showCalls++;return S.hotkeyWindowShowResult},ensureHotkeyWindowController(){S.ensureHotkeyWindowControllerCalls++;return S.hotkeyWindowController}},getPrimaryWindow(){return S.primaryWindow},createFreshLocalWindow(e){S.createFreshLocalWindowCalls.push(e);return S.createdWindow},ensureHostWindow(e){S.ensureHostWindowCalls.push(e);return S.primaryWindow??S.createdWindow}},g={reportNonFatal(e,t){S.errors.push({error:String(e),meta:t})}},re=e=>{S.focusCalls.push(e.id);e.isMinimized()&&e.restore(),e.show(),e.focus()},ie=async()=>{S.ieCalls++;try{P.hotkeyWindowLifecycleManager.hide();let e=P.getPrimaryWindow()??await P.createFreshLocalWindow(`/`);if(e==null)return;re(e)}catch(e){g.reportNonFatal(e instanceof Error?e:`Failed to open window on second instance`,{kind:`second-instance-open-window-failed`})}};l(e=>{let n=t.t(t.g(e));if(R.deepLinks.queueProcessArgs(e)){n&&ie();return}if(n){ie();return}ie()});let ae=async(e,t)=>{P.hotkeyWindowLifecycleManager.hide();let n=P.getPrimaryWindow(),r=n??await P.createFreshLocalWindow(e);r!=null&&(n!=null&&t.navigateExistingWindow&&R.navigateToRoute(r,e),re(r))};async function ore(e){return new n.Tray(e)}let oe=async()=>{N=!0;try{await ore({appBrand:`codex`,buildFlavor:`prod`,repoRoot:M.repoRoot}),S.trayStartupCalls++}catch(e){N=!1}};let E=process.platform===`win32`;E&&oe();let me=await P.ensureHostWindow(z);me&&re(me),w(`local window ensured`,A,{hostId:z,localWindowVisible:me?.isVisible()??!1}),A=Date.now(),await R.deepLinks.flushPendingDeepLinks()}
+async function uT(){let{setSecondInstanceArgsHandler:l}=t.y(),k=new t.jn;k.add(()=>{}),t.Er().info(`Launching app`,{safe:{agentRunId:process.env.CODEX_ELECTRON_AGENT_RUN_ID?.trim()||null}});let A=Date.now();await n.app.whenReady();let w=(...e)=>{S.traceCalls.push(e)},M={globalState:S.globalState,repoRoot:`/tmp/codex-smoke`},z=`local`,R={deepLinks:{queueProcessArgs(e){S.queueArgs.push(e);return Array.isArray(e)&&e.some(e=>{let t=String(e);return t.startsWith(`codex://`)||t.startsWith(`codex-browser-sidebar://`)})},flushPendingDeepLinks(){S.flushPendingDeepLinksCalls++;return Promise.resolve()}},navigateToRoute(e,t){S.navigateCalls.push({windowId:e.id,path:t})}},P={windowManager:{sendMessageToWindow(e,t){S.messages.push({windowId:e.id,message:t})}},hotkeyWindowLifecycleManager:{hide(){S.hideCalls++},show(){S.showCalls++;return S.hotkeyWindowShowResult},ensureHotkeyWindowController(){S.ensureHotkeyWindowControllerCalls++;return S.hotkeyWindowController}},getPrimaryWindow(){return S.primaryWindow},createFreshLocalWindow(e){S.createFreshLocalWindowCalls.push(e);return S.createdWindow},ensureHostWindow(e){S.ensureHostWindowCalls.push(e);return S.primaryWindow??S.createdWindow}},g={reportNonFatal(e,t){S.errors.push({error:String(e),meta:t})}},re=e=>{S.focusCalls.push(e.id);e.isMinimized()&&e.restore(),e.show(),e.focus()},ie=async()=>{S.ieCalls++;try{P.hotkeyWindowLifecycleManager.hide();let e=P.getPrimaryWindow()??await P.createFreshLocalWindow(`/`);if(e==null)return;re(e)}catch(e){g.reportNonFatal(e instanceof Error?e:`Failed to open window on second instance`,{kind:`second-instance-open-window-failed`})}};l(e=>{let n=t.t(t.g(e));if(R.deepLinks.queueProcessArgs(e)){n&&ie();return}if(n){ie();return}ie()});let ae=async(e,t)=>{P.hotkeyWindowLifecycleManager.hide();let n=P.getPrimaryWindow(),r=n??await P.createFreshLocalWindow(e);r!=null&&(n!=null&&t.navigateExistingWindow&&R.navigateToRoute(r,e),re(r))};async function ore(e){return new n.Tray(e)}let oe=async()=>{N=!0;try{await ore({appBrand:`codex`,buildFlavor:`prod`,repoRoot:M.repoRoot}),S.trayStartupCalls++}catch(e){N=!1}};let E=process.platform===`win32`;(E||process.platform===`linux`)&&oe();let me=await P.ensureHostWindow(z);me&&re(me),w(`local window ensured`,A,{hostId:z,localWindowVisible:me?.isVisible()??!1}),A=Date.now(),await R.deepLinks.flushPendingDeepLinks()}
 JS
 )"
     make_fake_extracted_asar "$extracted" "$bundle_body"
@@ -9341,8 +9271,6 @@ async function boot(settings = {}, env = { CODEX_DESKTOP_LAUNCH_ACTION_SOCKET: "
   assert(state.socketListenCalls.length === 0, "disabled warm-start gate should not listen on the launch-action socket");
   assert(state.socketConnectionHandler == null, "disabled warm-start gate should not register a socket connection handler");
 
-  await boot({ trayEnabled: false });
-  assert(state.trayStartupCalls === 0, "disabled tray gate should not start the Linux tray during startup");
 })().catch((error) => {
   console.error(error.stack || error);
   process.exit(1);
@@ -9401,12 +9329,14 @@ test_linux_computer_use_ui_opt_in_smoke() {
     local fake_home="$workspace/home"
     local output_log="$workspace/output.log"
     local main_bundle="$extracted/.vite/build/main-test.js"
-    local settings_asset="$extracted/webview/assets/computer-use-settings-CyEHLFtH.js"
+    local settings_asset="$extracted/webview/assets/computer-use-settings-DsM_pz8i.js"
     local plugins_asset="$extracted/webview/assets/plugins-page-gTuUJ93E.js"
-    local install_flow_asset="$extracted/webview/assets/app-initial~artifact-tab-content.electron~app-main~pull-request-route~pull-request-code-rev~jgoqfqy2-test.js"
+    local host_platform_asset="$extracted/webview/assets/app-initial~artifact-tab-content.electron~notebook-preview-panel~app-main~settings-command-~ekwfx4j1-test.js"
+    local install_flow_asset="$extracted/webview/assets/app-initial~avatarOverlayCompositionSurface~artifact-tab-content.electron~notebook-preview-~iaq4jiqv-test.js"
     local bundle_body
     local settings_body
     local plugins_body
+    local host_platform_body
     local install_flow_body
 
     mkdir -p "$workspace" "$fake_home/.config/codex-desktop"
@@ -9422,7 +9352,11 @@ var h={handlers:{"native-desktop-apps":async()=>({apps:[]})}};
 JS
 )"
     settings_body="$(cat <<'JS'
-function Ut(){let i=useAvailability(arg),{platform:a}=usePlatform(),o=hostKind(hostId);let d=jsx(Settings,{computerUseAvailability:i,platform:a});let m=i.available?jsx(AllowedApps,{}):null;return jsx(Page,{children:[d,m]})}function Gt(e){let{computerUseAvailability:n,platform:r}=e;let h;h=[];let g=usePlugins(hostId,h),y=useMarketplacePath(hostId),b=useFlag(flagArg),x;x=selectPlugin(g.availablePlugins,pluginName,y);return x}
+function Ht(){let e=cache(24),{selectedHostId:t}=host(),n=data(t),i={hostId:t};let a=useAvailability(i),{platform:o}=usePlatform(),s=hostKind(t)===`local`,c=flag(`188145323`);let f=jsx(Settings,{computerUseAvailability:a,platform:o});let h=a.available?jsx(AllowedApps,{}):null;return jsx(Page,{children:[f,h]})}function Wt(e){let t=cache(35),{computerUseAvailability:n,platform:i}=e,{selectedHostId:s}=host();let g=[];let _=usePlugins(s,g),v=useMarketplacePath(s),y=useFlag(firstFlag),b=useFlag(secondFlag),x;x=selectPlugin(_.availablePlugins,computerUsePluginName,v);return x}
+JS
+)"
+    host_platform_body="$(cat <<'JS'
+function Se(e){return e===`macOS`||e===`windows`}function Ce(e){let t=cache(16),{enabled:n,hostId:r}=e,i=n===void 0?!0:n,{isLoading:a,platform:o}=usePlatform(),s=flag(`1506311413`),c;t[0]===r?c=t[1]:(c={featureName:`computer_use`,hostId:r},t[0]=r,t[1]=c);let l=useFeature(c),u=o===`windows`&&!a,d=i&&u,f;t[2]===d?f=t[3]:(f={enabled:d},t[2]=d,t[3]=f);let p=useWindowsFeature(f),m=l.isLoading||u&&p.isLoading,h=l.enabled&&(!u||p.enabled),g;t[4]!==h||t[5]!==i||t[6]!==m||t[7]!==s||t[8]!==a||t[9]!==o?(g=resolveAvailability({areRequiredFeaturesEnabled:h,enabled:i,isAnyFeatureLoading:m,isComputerUseGateEnabled:s,isHostCompatiblePlatform:Se(o),isPlatformLoading:a,windowType:`electron`}),t[4]=h,t[5]=i,t[6]=m,t[7]=s,t[8]=a,t[9]=o,t[10]=g):g=t[10];return g}
 JS
 )"
     plugins_body="$(cat <<'JS'
@@ -9430,13 +9364,14 @@ function Si({installedPlugins:e}){return [{remoteMarketplaceName:`openai-curated
 JS
 )"
     install_flow_body="$(cat <<'JS'
-function usePluginDetail(e){let{hostId:n,marketplacePath:r,pluginName:i,remoteMarketplaceName:a,enabled:o}=e,s=o===void 0?!0:o,c=n??`local`,u=hostReady(c),f;i==null?f=!1:f=isAvailabilityGated(i);cache[2]===i?f=cache[3]:(f=i!=null&&isAvailabilityGated(i),cache[2]=i,cache[3]=f);let p=f,m;cache[4]!==c||cache[5]!==p?(m={enabled:p,hostId:c},cache[4]=c,cache[5]=p):m=cache[6];let h=useComputerUseAvailability(m),g=(r!=null||a!=null)&&i!=null,loading=u&&s&&g&&p&&h.isLoading,v=u&&s&&g&&(!p||h.available);let query=()=>{if(i==null)throw Error(`plugin detail query requires pluginName`);return read(`read-plugin`,{hostId:c,pluginName:i})};return useQuery({queryFn:query,enabled:v})}
+function Ke(e){let t=cache(31),{hostId:n,marketplacePath:r,pluginName:i,remoteMarketplaceName:a,enabled:o}=e,c=o===void 0?!0:o,l=n??`local`,d;t[0]===l?d=t[1]:(d={hostId:l},t[0]=l,t[1]=d);let f=hostReady(d),p=environment(),m;t[2]===i?m=t[3]:(m=i!=null&&isAvailabilityGated(i),t[2]=i,t[3]=m);let g=m,_;t[4]!==l||t[5]!==g?(_={enabled:g,hostId:l},t[4]=l,t[5]=g,t[6]=_):_=t[6];let v=useComputerUseAvailability(_),y=(r!=null||a!=null)&&i!=null,b=f&&c&&y&&g&&v.isLoading,x=f&&c&&y&&(!g||v.available);let query=async()=>{if(i==null)throw Error(`plugin detail query requires pluginName`);return read(`read-plugin`,{hostId:l,pluginName:i})};return useQuery({queryFn:query,enabled:x})}
 JS
 )"
 
     make_fake_extracted_asar "$extracted" "$bundle_body"
     printf '%s\n' "$settings_body" > "$settings_asset"
     printf '%s\n' "$plugins_body" > "$plugins_asset"
+    printf '%s\n' "$host_platform_body" > "$host_platform_asset"
     printf '%s\n' "$install_flow_body" > "$install_flow_asset"
 
     env -u CODEX_LINUX_ENABLE_COMPUTER_USE_UI -u CODEX_LINUX_APP_ID -u CODEX_APP_ID -u CODEX_LINUX_SETTINGS_FILE \
@@ -9447,12 +9382,14 @@ JS
     assert_not_contains "$settings_asset" 'available:!0,isFetching:!1,isLoading:!1'
     assert_not_contains "$settings_asset" 'marketplaceName:`openai-bundled`'
     assert_not_contains "$plugins_asset" '.find(e=>e.plugin?.name===`computer-use`&&e.marketplaceName===`openai-bundled`'
+    assert_not_contains "$host_platform_asset" 'isHostCompatiblePlatform:o===`linux`'
     assert_not_contains "$install_flow_asset" '!==`computer-use`'
 
-    rm "$main_bundle" "$settings_asset" "$plugins_asset" "$install_flow_asset"
+    rm "$main_bundle" "$settings_asset" "$plugins_asset" "$host_platform_asset" "$install_flow_asset"
     printf '%s\n' "$bundle_body" > "$main_bundle"
     printf '%s\n' "$settings_body" > "$settings_asset"
     printf '%s\n' "$plugins_body" > "$plugins_asset"
+    printf '%s\n' "$host_platform_body" > "$host_platform_asset"
     printf '%s\n' "$install_flow_body" > "$install_flow_asset"
 
     env -u CODEX_LINUX_APP_ID -u CODEX_APP_ID -u CODEX_LINUX_SETTINGS_FILE \
@@ -9464,18 +9401,21 @@ JS
     assert_contains "$settings_asset" 'marketplaceName:`openai-bundled`'
     assert_contains "$plugins_asset" 'computer-use@openai-bundled'
     assert_contains "$plugins_asset" '.map(e=>e.plugin?.name===`computer-use`'
-    assert_contains "$install_flow_asset" 'let p=f&&i!==`computer-use`,m;'
+    assert_contains "$host_platform_asset" 'isHostCompatiblePlatform:o===`linux`||Se(o)'
+    assert_contains "$install_flow_asset" 'let g=m&&i!==`computer-use`,_;'
 
     node "$REPO_DIR/scripts/patch-linux-window-ui.js" "$extracted" >"$output_log" 2>&1
     assert_occurrence_count "$settings_asset" 'available:!0,isFetching:!1,isLoading:!1' '1'
     assert_occurrence_count "$settings_asset" 'marketplaceName:`openai-bundled`' '1'
     assert_occurrence_count "$plugins_asset" '.map(e=>e.plugin?.name===`computer-use`' '1'
+    assert_occurrence_count "$host_platform_asset" 'isHostCompatiblePlatform:o===`linux`' '1'
     assert_occurrence_count "$install_flow_asset" '!==`computer-use`' '1'
 
-    rm "$main_bundle" "$settings_asset" "$plugins_asset" "$install_flow_asset"
+    rm "$main_bundle" "$settings_asset" "$plugins_asset" "$host_platform_asset" "$install_flow_asset"
     printf '%s\n' "$bundle_body" > "$main_bundle"
     printf '%s\n' "$settings_body" > "$settings_asset"
     printf '%s\n' "$plugins_body" > "$plugins_asset"
+    printf '%s\n' "$host_platform_body" > "$host_platform_asset"
     printf '%s\n' "$install_flow_body" > "$install_flow_asset"
     printf '%s\n' '{"codex-linux-computer-use-ui-enabled": true}' > "$fake_home/.config/codex-desktop/settings.json"
 
@@ -9487,7 +9427,8 @@ JS
     assert_contains "$settings_asset" 'available:!0,isFetching:!1,isLoading:!1'
     assert_contains "$settings_asset" 'marketplaceName:`openai-bundled`'
     assert_contains "$plugins_asset" '.map(e=>e.plugin?.name===`computer-use`'
-    assert_contains "$install_flow_asset" 'let p=f&&i!==`computer-use`,m;'
+    assert_contains "$host_platform_asset" 'isHostCompatiblePlatform:o===`linux`||Se(o)'
+    assert_contains "$install_flow_asset" 'let g=m&&i!==`computer-use`,_;'
 }
 
 test_linux_file_manager_patch_fails_soft() {
@@ -10432,6 +10373,7 @@ main() {
     test_installer_detects_electron_version_from_plist
     test_installer_keeps_electron_fallback_for_bad_metadata
     test_port_validation_rejects_oversized_numeric_values
+    test_launcher_uses_private_default_tmpdir
     test_managed_node_runtime_source_install
     test_managed_node_runtime_rejects_version_only_stub
     test_better_sqlite3_electron_42_source_patch

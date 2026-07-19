@@ -175,13 +175,14 @@ async function closeServer(server) {
 
 function syntheticBundle() {
   return [
-    "var Ky=class{kind=`websocket`;proxyStreams=new Set;supportsReconnect(){return!0}",
+    "var Ky=class{options;kind=`websocket`;logger=r.i(`AppServerTransportSshWebsocket`);proxyStreams=new Set;supportsReconnect(){return!0}",
     "async connect(){let t={current:null},r=new n.zn(Fy,{perMessageDeflate:!1,createConnection:()=>",
     "(t.current=this.createSshProxyStream(),t.current)});return n.Ln(r,{onPongTimeout:()=>r.terminate()}),new n.Rn(r)}};",
     "function n6(e){let t=Jy(e.hostConfig);if(t)return Z.info(`selected app-server transport`),new Ky(t);",
     "if(e.transportKind===`remote-control`)return new Remote(e);",
-    "if(n.io(e.hostConfig))return new Wsl(e);",
-    "let r=r6(e.hostConfig);return r?new n.Fn({websocketUrl:r}):new n.Nn(e)}function afterFactory(){}",
+    "if(n.io(e.hostConfig))return new Wsl({hostConfig:e.hostConfig,repoRoot:e.repoRoot,resourcesPath:e.resourcesPath,defaultOriginator:e.defaultOriginator});",
+    "let r=r6(e.hostConfig);if(r){e.desktopAuthAppServerClient;let t=p8(e.hostConfig,r);return new n.Fn({hostConfig:e.hostConfig,websocketUrl:r,getWebsocketProtocols:void 0,...t==null?{}:{socksProxyUrl:t}})}",
+    "return new n.Nn({hostConfig:e.hostConfig,repoRoot:e.repoRoot,resourcesPath:e.resourcesPath,defaultOriginator:e.defaultOriginator})}function afterFactory(){}",
   ].join("");
 }
 
@@ -241,6 +242,22 @@ test("patch leaves unsupported bundle shapes unchanged with a warning", () => {
     console.warn = originalWarn;
   }
   assert.match(warnings.join("\n"), /shared app-server socket/i);
+});
+
+test("patch rejects the previous SSH transport class shape", () => {
+  const source = syntheticBundle().replace(
+    "class{options;kind=`websocket`;logger=r.i(`AppServerTransportSshWebsocket`);",
+    "class{kind=`websocket`;",
+  );
+  const warnings = [];
+  const originalWarn = console.warn;
+  console.warn = (...args) => warnings.push(args.join(" "));
+  try {
+    assert.equal(applySharedAppServerSocketPatch(source), source);
+  } finally {
+    console.warn = originalWarn;
+  }
+  assert.match(warnings.join("\n"), /SSH WebSocket transport/);
 });
 
 test("descriptor is optional and targets the main bundle", () => {
@@ -303,12 +320,13 @@ test("injected transport serializes startup and removes only its owned socket", 
   const servers = new Map();
   const children = [];
   let replacement;
-  let installReplacementBeforeClose = false;
+  let replacementError;
+  let installReplacementBeforeChildClose = false;
   const identityFs = {
     ...fs,
     lstatSync(candidate, ...args) {
       const stat = fs.lstatSync(candidate, ...args);
-      if (candidate !== socketPath || !installReplacementBeforeClose) return stat;
+      if (candidate !== socketPath || !installReplacementBeforeChildClose) return stat;
       return new Proxy(stat, {
         get(target, property, receiver) {
           if (property === "ino") return target.ino + 1;
@@ -329,9 +347,19 @@ test("injected transport serializes startup and removes only its owned socket", 
         child.kill = () => {
           child.killed = true;
           child.signalCode = "SIGTERM";
-          server.close(async () => {
-            if (installReplacementBeforeClose) replacement = await listenUnix(target);
-            child.emit("close", null, "SIGTERM");
+          server.close(() => {
+            setImmediate(() => {
+              Promise.resolve()
+                .then(async () => {
+                  if (installReplacementBeforeChildClose) replacement = await listenUnix(target);
+                })
+                .catch((error) => {
+                  replacementError = error;
+                })
+                .finally(() => {
+                  child.emit("close", null, "SIGTERM");
+                });
+            });
           });
           return true;
         };
@@ -348,10 +376,11 @@ test("injected transport serializes startup and removes only its owned socket", 
     assert.equal(fs.existsSync(`${socketPath}.lock`), true);
     await assert.rejects(second.ensureAuthority(), /already owned/);
 
-    installReplacementBeforeClose = true;
+    installReplacementBeforeChildClose = true;
     const childClosed = once(children[0], "close");
     first.dispose();
     await childClosed;
+    assert.ifError(replacementError);
     assert.equal(fs.lstatSync(socketPath).isSocket(), true, "replacement socket must survive dispose");
     await closeServer(replacement);
   } finally {
