@@ -1302,6 +1302,17 @@ test("open-target discovery native selector includes available directory-capable
     }).map((target) => target.target),
     ["fileManager", "systemDefault", "terminal", "vscode", "linux-desktop-kate"],
   );
+
+  assert.deepEqual(
+    selectTargets({
+      targets: targets.map(({ available, ...target }) => target),
+      availableTargets: targets
+        .filter((target) => target.available !== false)
+        .map((target) => target.target),
+      mode: "native",
+    }).map((target) => target.target),
+    ["fileManager", "systemDefault", "terminal", "vscode", "linux-desktop-kate"],
+  );
 });
 
 test("open-target discovery respects hidden desktop entry overrides", () => {

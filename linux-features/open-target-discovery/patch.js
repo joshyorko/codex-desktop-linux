@@ -789,7 +789,7 @@ function applyNativeOpenTargetSelectionPatch(currentSource) {
   }
   const [original, fnName] = match;
   const patched =
-    `function codexLinuxDirectoryOpenTarget(e){return e?.available===!0&&(e.kind===\`editor\`||e.kind===\`terminal\`)}function ${fnName}({targets:e,availableTargets:t,includeHiddenTargets:n=!1,mode:r=\`editor\`}){if(r===\`native\`)return e.filter(e=>e.target===\`systemDefault\`||e.target===\`fileManager\`||codexLinuxDirectoryOpenTarget(e));let i=e.filter(e=>e.appPath!=null);if(i.length>0)return i;let a=new Set(t);return e.filter(e=>a.has(e.target)&&(n||!e.hidden))}`;
+    `function codexLinuxDirectoryOpenTarget(e,t){return e?.available!==!1&&(e?.available===!0||t.has(e?.target))&&(e.kind===\`editor\`||e.kind===\`terminal\`)}function ${fnName}({targets:e,availableTargets:t,includeHiddenTargets:n=!1,mode:r=\`editor\`}){let a=new Set(t);if(r===\`native\`)return e.filter(e=>e.target===\`systemDefault\`||e.target===\`fileManager\`||codexLinuxDirectoryOpenTarget(e,a));let i=e.filter(e=>e.appPath!=null);if(i.length>0)return i;return e.filter(e=>a.has(e.target)&&(n||!e.hidden))}`;
   return currentSource.replace(original, patched);
 }
 
