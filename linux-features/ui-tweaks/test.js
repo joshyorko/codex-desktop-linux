@@ -391,6 +391,34 @@ test("reasoning effort labels stay in English in the Simplified Chinese locale",
   assert.doesNotMatch("zh-TW-rBlCyjlT.js", ZH_CN_LOCALE_ASSET_PATTERN);
 });
 
+test("reasoning effort label drift warns and leaves the asset unchanged", () => {
+  const source = simplifiedChineseLocaleFixture().replace(
+    '"composer.mode.local.reasoning.ultra.label":`极高`',
+    '"composer.mode.local.reasoning.ultra.missing":`极高`',
+  );
+  const { value, warnings } = withCapturedWarns(() =>
+    applyEnglishReasoningLabels(source, { warnOnMissingMarkers: true }),
+  );
+
+  assert.equal(value, source);
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /composer\.mode\.local\.reasoning\.ultra\.label/);
+});
+
+test("mixed reasoning effort label markers warn and remain byte-identical", () => {
+  const source = simplifiedChineseLocaleFixture().replace(
+    '"composer.mode.local.reasoning.medium.label":`中`',
+    '"composer.mode.local.reasoning.medium.label":`Medium`',
+  );
+  const { value, warnings } = withCapturedWarns(() =>
+    applyEnglishReasoningLabels(source, { warnOnMissingMarkers: true }),
+  );
+
+  assert.equal(value, source);
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /mixed applied and untranslated reasoning label markers/i);
+});
+
 test("English reasoning effort labels can be disabled", () => {
   const source = simplifiedChineseLocaleFixture();
   const context = {
