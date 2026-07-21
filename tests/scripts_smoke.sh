@@ -5018,6 +5018,21 @@ SCRIPT
     assert_file_exists "$electron_marker"
     [ "$(cat "$electron_marker")" = "http://127.0.0.1:9999/" ] \
         || fail "Fingerprint failure should not replace an explicit renderer URL override"
+
+    local feature_renderer_env="$app_dir/.codex-linux/env.d/renderer-url.env"
+    printf '%s\n' \
+        'CODEX_LINUX_ALLOW_RENDERER_URL_OVERRIDE=1' \
+        'ELECTRON_RENDERER_URL=http://127.0.0.1:9998/' \
+        > "$feature_renderer_env"
+    rm -f "$electron_marker"
+    set +e
+    run_packaged_launcher "$fake_bin:$HOST_TOOL_PATH" > "$fingerprint_error" 2>&1
+    rc=$?
+    set -e
+    [ "$rc" -eq 0 ] || fail "Feature renderer URL override should bypass packaged fingerprint failure"
+    assert_file_exists "$electron_marker"
+    [ "$(cat "$electron_marker")" = "http://127.0.0.1:9998/" ] \
+        || fail "Feature environment should replace the inherited renderer URL override"
 }
 
 test_launcher_extra_bundled_plugin_cache_rollback() {

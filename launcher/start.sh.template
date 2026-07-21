@@ -269,7 +269,7 @@ resolve_webview_renderer_url() {
     fi
     if ! index_sha256="$(sha256sum "$webview_index" 2>/dev/null | awk '{print $1}')" ||
        [[ ! "$index_sha256" =~ ^[0-9a-f]{64}$ ]]; then
-        printf '%s\n' "$CODEX_LINUX_APP_DISPLAY_NAME could not fingerprint $webview_index; install coreutils and rebuild the app." >&2
+        launcher_notice "$CODEX_LINUX_APP_DISPLAY_NAME could not fingerprint $webview_index; install coreutils and rebuild the app."
         return 1
     fi
 
@@ -290,7 +290,6 @@ select_webview_renderer_url() {
 
 WEBVIEW_RENDERER_URL=""
 WEBVIEW_RENDERER_URL_OVERRIDE_ACTIVE=0
-select_webview_renderer_url || exit 1
 
 mkdir -p "$LOG_DIR" "$APP_CONFIG_DIR" "$APP_STATE_DIR" "$LAUNCH_ACTION_RUNTIME_DIR"
 chmod 700 "$LAUNCH_ACTION_RUNTIME_DIR" 2>/dev/null || true
@@ -385,11 +384,6 @@ else
 fi
 
 echo "[$(date -Is)] Starting $CODEX_LINUX_APP_DISPLAY_NAME launcher"
-if [ "$WEBVIEW_RENDERER_URL_OVERRIDE_ACTIVE" -eq 1 ]; then
-    echo "External renderer URL override active"
-else
-    echo "Packaged webview renderer URL: $WEBVIEW_RENDERER_URL"
-fi
 if [ "$MULTI_LAUNCH_ACTIVE" -eq 1 ]; then
     echo "Multi-launch instance: id=$CODEX_LINUX_INSTANCE_ID webview_port=$CODEX_LINUX_WEBVIEW_PORT state_dir=$APP_STATE_DIR user_data_dir=$CODEX_ELECTRON_USER_DATA_DIR"
 fi
@@ -4200,6 +4194,12 @@ source_feature_env_files
 if [ "$LAUNCHER_DIAGNOSE_SCALING" -eq 1 ]; then
     print_scaling_diagnostics
     exit 0
+fi
+select_webview_renderer_url || exit 1
+if renderer_url_override_is_active; then
+    echo "External renderer URL override active"
+else
+    echo "Packaged webview renderer URL: $WEBVIEW_RENDERER_URL"
 fi
 register_url_scheme_handlers
 log_phase "initial_launch_state_refresh_start"
