@@ -940,6 +940,8 @@ function createNativeBinaryMap(inventory, registry = null) {
 }
 
 const LINUX_SETTINGS_PATCH_SYMBOL_PATTERN = /\bcodexLinux[A-Za-z0-9_$]*SettingsIcon\b/g;
+const UNPATCHED_LINUX_OPEN_TARGET_BRIDGE_PATTERN =
+  /async detectTarget\(\{target:[A-Za-z_$][\w$]*\}\)\{let\{command:[A-Za-z_$][\w$]*\}=await this\.#[A-Za-z_$][\w$]*\(\)\(\{method:`get-target-command`/u;
 
 function segmentDeclaresSymbol(segment, symbol) {
   const escaped = escapeRegExp(symbol);
@@ -1021,6 +1023,17 @@ function findPostPatchIntegrityFindings(inventory) {
         reason: "Linux settings patch symbol is referenced without a local declaration",
         snippet: textSnippet(file.text, symbol),
         symbol,
+      });
+    }
+    if (
+      file.text.includes("async function codexLinuxOpenTargetRegistryCommand(") &&
+      UNPATCHED_LINUX_OPEN_TARGET_BRIDGE_PATTERN.test(file.text)
+    ) {
+      findings.push({
+        path: file.relativePath,
+        reason: "Linux deferred open-target detection still uses the worker bridge",
+        snippet: textSnippet(file.text, "async detectTarget({target:"),
+        symbol: "codexLinuxOpenTargetRegistryCommand",
       });
     }
   }

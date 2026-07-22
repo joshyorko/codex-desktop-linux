@@ -698,7 +698,11 @@ function applyOpenInTargetsAvailabilityPatch(currentSource) {
 
 function applyOpenInTargetsBridgeDetectionPatch(currentSource) {
   currentSource = applyOpenInTargetRegistryCommandPatch(currentSource, { warnOnMissing: false });
-  if (currentSource.includes("codexLinuxOpenTargetRegistryCommand(this.settingsStore,e)")) {
+  if (
+    /async detectTarget\(\{target:[A-Za-z_$][\w$]*\}\)\{if\(process\.platform===`linux`\)\{let [A-Za-z_$][\w$]*=await codexLinuxOpenTargetRegistryCommand\(this\.settingsStore,[A-Za-z_$][\w$]*\)/u.test(
+      currentSource,
+    )
+  ) {
     return currentSource;
   }
   if (!currentSource.includes("async function codexLinuxOpenTargetRegistryCommand(")) {

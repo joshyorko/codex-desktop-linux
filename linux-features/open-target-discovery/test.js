@@ -58,6 +58,8 @@ const currentAppOpenInAvailabilityBundle =
   `${currentAppOpenTargetPrelude}async function WN(e,t){let n=await Promise.all(HN(e).map(async n=>{let r=UN(e,n.id),[i,a]=await Promise.all([t({method:\`get-target-command\`,params:r}).then(e=>e.command).catch(e=>(zN().error(\`Failed to detect open target\`,{safe:{},sensitive:{id:n.id,error:e}}),null)),process.platform===\`win32\`?t({method:\`load-target-icon\`,params:r}).then(e=>e.icon).catch(e=>(zN().warning(\`Failed to resolve open target icon\`,{safe:{},sensitive:{id:n.id,error:e}}),n.icon)):n.icon]);return{command:i,metadata:{...n,icon:a}}}));return{allAvailableTargets:n.flatMap(({command:e,metadata:t})=>e==null?[]:[t.id]),targetMetadata:n.map(({metadata:e})=>e)}}`;
 const currentAppOpenInBridgeBundle =
   `${currentAppOpenTargetPrelude}class App{constructor(e,t){this.settingsStore=e;this.requestOpenInWorker=t}#n(){return this.requestOpenInWorker}async detectTarget({target:e}){let{command:t}=await this.#n()({method:\`get-target-command\`,params:UN(this.settingsStore,e)});return{available:t!=null}}}`;
+const currentDmgCombinedOpenInBundle =
+  `${currentAppOpenTargetPrelude}${currentAppOpenInAvailabilityBundle.slice(currentAppOpenTargetPrelude.length)}class App{constructor(e,t){this.settingsStore=e;this.requestOpenInWorker=t}async resolve(e){return this.#t(e)}async#t(e){let{command:t}=await this.#n()({method:\`get-target-command\`,params:UN(this.settingsStore,e)});if(t==null)throw Error(\`Open target "\${e}" is not available\`);return t}#n(){return this.requestOpenInWorker}async detectTarget({target:e}){let{command:t}=await this.#n()({method:\`get-target-command\`,params:UN(this.settingsStore,e)});return{available:t!=null}}}`;
 const currentAppOpenInTargetsBundle =
   '"open-in-targets":async({cwd:e,deferEnrichment:t=!1,hostId:r,nativeBrowserDiscovery:i=`scan`,path:a})=>{let o=this.getRequestAppServerClient(r??void 0),s=this.getSettingsStore();if(t&&a==null){let t=XN(s,e);return{preferredTarget:t,availableTargets:[],mode:`editor`,targets:uj(HN(s),o.hostConfig)}}let{allAvailableTargets:c,targetMetadata:l}=await WN(s,this.getOpenInWorker()),u=a?.replace(/^([ab])[\\\\/]/,``)??null,d=u!=null&&xF(u)&&!n.eo(o.hostConfig),f=u==null||d||n.eo(o.hostConfig)?null:this.resolveOpenFilePath(u,e),p=lj(o.hostConfig,c,l),m=new Set(p),h=YN(s,e,m),g=d||f!=null&&n.ys(f),_=f!=null&&KA(f),v=f!=null&&JA(f),y=g?await yF(i):_?await vF({filePath:f}):[];return{preferredTarget:h,availableTargets:Array.from(m),mode:g||v?`native`:`editor`,targets:l}}';
 const currentDmgOpenInTargetsBundle =
@@ -1224,6 +1226,27 @@ test("open-target discovery patches current app bridge detection through its reg
   assert.deepEqual(await app.detectTarget({ target: "broken" }), { available: false });
   assert.equal(workerCalls, 0);
   assert.match(patched, /if\(process\.platform===`linux`\)\{let t=await codexLinuxOpenTargetRegistryCommand/);
+});
+
+test("open-target discovery patches deferred bridge detection after bulk availability", async () => {
+  let workerCalls = 0;
+  const settingsStore = currentAppSettingsStore([
+    { id: "vscode", detect: async () => "/usr/bin/code" },
+  ]);
+  const withCommandLookup = applyOpenInTargetCommandPatch(currentDmgCombinedOpenInBundle);
+  const withAvailability = applyOpenInTargetsAvailabilityPatch(withCommandLookup);
+  const patched = applyOpenInTargetsBridgeDetectionPatch(withAvailability);
+  const app = new Function("process", `${patched};return new App(arguments[1],arguments[2]);`)(
+    { platform: "linux" },
+    settingsStore,
+    async () => {
+      workerCalls += 1;
+      throw new Error("Unknown open target");
+    },
+  );
+
+  assert.deepEqual(await app.detectTarget({ target: "vscode" }), { available: true });
+  assert.equal(workerCalls, 0);
 });
 
 test("open-target discovery inserts shared Linux registry command helper", async () => {

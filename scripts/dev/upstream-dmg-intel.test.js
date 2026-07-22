@@ -661,6 +661,40 @@ test("classifies unresolved Linux settings patch symbols as acceptance blockers"
     assert.equal(findingPaths.has("settings-page-good-comma-declaration.js"), false);
   }));
 
+test("classifies an unpatched Linux deferred open-target bridge as an acceptance blocker", () =>
+  withTempDir((workspace) => {
+    const candidateApp = createFixtureApp(workspace, "candidate");
+    const buildDir = path.join(candidateApp, "Contents/Resources/.vite/build");
+    writeFile(
+      path.join(buildDir, "main-open-target-bridge.js"),
+      "async function codexLinuxOpenTargetRegistryCommand(e,t){return '/usr/bin/code'}" +
+        "class App{async#t(e){if(process.platform===`linux`){return codexLinuxOpenTargetRegistryCommand(this.settingsStore,e)}}" +
+        "async detectTarget({target:e}){let{command:t}=await this.#n()({method:`get-target-command`,params:F0(this.settingsStore,e)});return{available:t!=null}}}",
+    );
+    writeFile(
+      path.join(buildDir, "main-open-target-bridge-patched.js"),
+      "async function codexLinuxOpenTargetRegistryCommand(e,t){return '/usr/bin/code'}" +
+        "class App{async detectTarget({target:e}){if(process.platform===`linux`){let t=await codexLinuxOpenTargetRegistryCommand(this.settingsStore,e);return{available:t!=null}}" +
+        "let{command:t}=await this.#n()({method:`get-target-command`,params:F0(this.settingsStore,e)});return{available:t!=null}}}",
+    );
+
+    const candidate = extractProtectedSurfaces({
+      inventory: createInventory({ registry, sourcePath: candidateApp }),
+      registry,
+      repoRoot: process.cwd(),
+    });
+    const driftReport = compareProtectedSurfaces({ candidate });
+
+    const finding = findClassification(driftReport, "linux_patch_integrity", "PATCH_INTEGRITY_BROKEN");
+    assert.ok(finding);
+    assert.deepEqual(
+      finding.findings
+        .filter((entry) => entry.reason.includes("deferred open-target detection still uses the worker bridge"))
+        .map((entry) => path.basename(entry.path)),
+      ["main-open-target-bridge.js"],
+    );
+  }));
+
 test("folds patch-report post-patch integrity findings into candidate-only reports", () =>
   withTempDir((workspace) => {
     const candidateApp = createFixtureApp(workspace, "candidate");
