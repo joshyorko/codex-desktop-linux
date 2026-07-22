@@ -39,7 +39,7 @@ module.exports = [
     order: 1105,
     ciPolicy: "opt-in",
     enabled: (context) => context.enableComputerUseUi,
-    pattern: /^app-initial~artifact-tab-content\.electron~notebook-preview-panel~app-main~settings-command-~kt7wj8fo-[^.]+\.js$/,
+    pattern: /^app-initial~artifact-tab-content\.electron~notebook-preview-panel~app-main~settings-command-~cajo70vh-[^.]+\.js$/,
     missingDescription: "current Computer Use host-platform bundle",
     skipDescription: "Linux Computer Use host-platform patch",
     apply: applyLinuxComputerUseHostPlatformPatch,

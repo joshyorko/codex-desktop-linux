@@ -1121,7 +1121,7 @@ test("default core patch descriptors are grouped and unique", () => {
   );
   assert.equal(
     computerUseHostPlatform.pattern.test(
-      "app-initial~artifact-tab-content.electron~notebook-preview-panel~app-main~settings-command-~kt7wj8fo-BV3sZU7P.js",
+      "app-initial~artifact-tab-content.electron~notebook-preview-panel~app-main~settings-command-~cajo70vh-C4Uu6T2D.js",
     ),
     true,
   );
@@ -10155,7 +10155,7 @@ test("patchExtractedApp scans current Computer Use settings bundles when UI is e
       fs.writeFileSync(
         path.join(
           assetsDir,
-          "app-initial~artifact-tab-content.electron~notebook-preview-panel~app-main~settings-command-~kt7wj8fo-current.js",
+          "app-initial~artifact-tab-content.electron~notebook-preview-panel~app-main~settings-command-~cajo70vh-C4Uu6T2D.js",
         ),
         "function Se(e){return e===`macOS`||e===`windows`}" +
           "function Ce(e){let t=cache(16),{enabled:n,hostId:r}=e,i=n===void 0?!0:n,{isLoading:a,platform:o}=usePlatform(),s=flag(`1506311413`),c;t[0]===r?c=t[1]:(c={featureName:`computer_use`,hostId:r},t[0]=r,t[1]=c);let l=useFeature(c),u=o===`windows`&&!a,d=i&&u,f;t[2]===d?f=t[3]:(f={enabled:d},t[2]=d,t[3]=f);let p=useWindowsFeature(f),m=l.isLoading||u&&p.isLoading,h=l.enabled&&(!u||p.enabled),g;t[4]!==h||t[5]!==i||t[6]!==m||t[7]!==s||t[8]!==a||t[9]!==o?(g=resolveAvailability({areRequiredFeaturesEnabled:h,enabled:i,isAnyFeatureLoading:m,isComputerUseGateEnabled:s,isHostCompatiblePlatform:Se(o),isPlatformLoading:a,windowType:`electron`}),t[4]=h,t[5]=i,t[6]=m,t[7]=s,t[8]=a,t[9]=o,t[10]=g):g=t[10];return g}",
@@ -10172,7 +10172,7 @@ test("patchExtractedApp scans current Computer Use settings bundles when UI is e
       );
       const hostPlatformPath = path.join(
         assetsDir,
-        "app-initial~artifact-tab-content.electron~notebook-preview-panel~app-main~settings-command-~kt7wj8fo-current.js",
+        "app-initial~artifact-tab-content.electron~notebook-preview-panel~app-main~settings-command-~cajo70vh-C4Uu6T2D.js",
       );
       const patchedSettings = fs.readFileSync(settingsPath, "utf8");
       const patchedDetail = fs.readFileSync(detailPath, "utf8");
