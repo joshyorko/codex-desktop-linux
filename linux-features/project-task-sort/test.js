@@ -17,10 +17,8 @@ const {
   descriptors,
 } = require("./patch.js");
 
-const currentProjectSource = [
-  "function ms(e,t){switch(e.kind){case`local`:return e.conversation==null?e.pendingWorktree.createdAt:t===`updated_at`?e.conversation.recencyAt??e.conversation.updatedAt:e.conversation.createdAt;case`remote`:return((t===`updated_at`?e.task.updated_at??e.task.created_at:e.task.created_at??e.task.updated_at)??0)*1e3}}",
-  "function chat(e,t){let n=e.get(C);e.set(k,{...n,chatSortMode:t})}function project(e,t){let n=e.get(C);e.set(k,{...n,projectSortMode:t})}",
-].join("");
+const currentProjectSource =
+  "function xe(e,t){switch(e.kind){case`local`:return e.conversation==null?e.pendingWorktree.createdAt:t===`updated_at`?e.conversation.recencyAt??e.conversation.updatedAt:e.conversation.createdAt;case`remote`:return((t===`updated_at`?e.task.updated_at??e.task.created_at:e.task.created_at??e.task.updated_at)??0)*1e3}}";
 
 function captureWarns(fn) {
   const originalWarn = console.warn;
@@ -88,7 +86,7 @@ test("patch recovers local UUIDv7 creation time", () => {
   );
 
   const context = {};
-  vm.runInNewContext(`${patched};globalThis.timestamp=ms`, context);
+  vm.runInNewContext(`${patched};globalThis.timestamp=xe`, context);
   const older = {
     key: "local:019e0000-0000-7000-8000-000000000001",
     kind: "local",
@@ -137,27 +135,15 @@ test("patch recovers local UUIDv7 creation time", () => {
 });
 
 test("drift leaves the asset byte-identical", () => {
-  const source = [
-    "function ms(e,t){return e.conversation?.createdTimestamp}",
-    "function chat(e,t){let n=e.get(C);e.set(k,{...n,chatSortMode:t})}function project(e,t){let n=e.get(C);e.set(k,{...n,projectSortMode:t})}",
-  ].join("");
-  const { value, warnings } = captureWarns(() => applyProjectTaskSortPatch(source));
-
-  assert.equal(value, source);
-  assert.equal(warnings.length, 1);
-  assert.match(warnings[0], /project task creation timestamp insertion point/);
-});
-
-test("missing current sort-state markers leaves the asset byte-identical", () => {
   const source = currentProjectSource.replace(
-    "chatSortMode:t})}",
-    "chatSortMode:e})}",
+    "e.pendingWorktree.createdAt",
+    "e.pendingWorktree.createdTimestamp",
   );
   const { value, warnings } = captureWarns(() => applyProjectTaskSortPatch(source));
 
   assert.equal(value, source);
   assert.equal(warnings.length, 1);
-  assert.match(warnings[0], /project task sort state markers/);
+  assert.match(warnings[0], /project task creation timestamp insertion point/);
 });
 
 test("mixed patched and clean helpers are rejected byte-identically", () => {
@@ -175,7 +161,7 @@ test("descriptor targets and patches the current project chunk", () => {
     const assetsDir = path.join(tempDir, "webview", "assets");
     const assetPath = path.join(
       assetsDir,
-      "app-initial~app-main~onboarding-page~projects-index-page~quick-chat-window-page~codex-micro~iqsnin5k-DbygVuDa.js",
+      "app-initial~app-main~onboarding-page~projects-index-page~quick-chat-window-page~codex-micro~iqsnin5k-Bxmd3ja1.js",
     );
     fs.mkdirSync(assetsDir, { recursive: true });
     fs.writeFileSync(assetPath, currentProjectSource);
@@ -191,7 +177,7 @@ test("descriptor targets and patches the current project chunk", () => {
     assert.notEqual(fs.readFileSync(assetPath, "utf8"), currentProjectSource);
     assert.equal(
       descriptors[0].pattern.test(
-        "app-initial~app-main~page-Cmd9LUYY.js",
+        "app-initial~app-main~projects-index-page~remote-conversation-page-y7pwA1Hj.js",
       ),
       false,
     );

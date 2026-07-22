@@ -9,8 +9,16 @@ const {
 } = require("../../lib/minified-js.js");
 
 function applyLinuxBundledPluginCopyPermissionsPatch(currentSource) {
-  const helperName = "codexLinuxMakeBundledPluginTreeWritable";
-  if (currentSource.includes(`async function ${helperName}(`)) {
+  const ancestorHelperName = "codexLinuxValidateBundledPluginAncestors";
+  const sourceHelperName = "codexLinuxValidateBundledPluginSource";
+  const stageHelperName = "codexLinuxPrepareBundledPluginStage";
+  const writableHelperName = "codexLinuxMakeBundledPluginTreeWritable";
+  if (
+    currentSource.includes(`async function ${ancestorHelperName}(`) &&
+    currentSource.includes(`async function ${sourceHelperName}(`) &&
+    currentSource.includes(`async function ${stageHelperName}(`) &&
+    currentSource.includes(`async function ${writableHelperName}(`)
+  ) {
     return currentSource;
   }
 
@@ -31,7 +39,7 @@ function applyLinuxBundledPluginCopyPermissionsPatch(currentSource) {
     copyBranchRegex,
     (_match, platformVar, fsPromisesVar, sourceVar, targetVar) => {
       patchedCopyBranch = true;
-      return `if(${platformVar}.default.platform!==\`win32\`){await ${fsPromisesVar}.default.cp(${sourceVar},${targetVar},{recursive:!0,verbatimSymlinks:!0});if(process.platform===\`linux\`)await ${helperName}(${targetVar},${fsPromisesVar}.default);return}`;
+      return `if(${platformVar}.default.platform!==\`win32\`){if(process.platform===\`linux\`){await ${fsPromisesVar}.default.cp(await ${sourceHelperName}(${sourceVar},${fsPromisesVar}.default),${targetVar},{recursive:!0,verbatimSymlinks:!0});await ${writableHelperName}(${targetVar},${fsPromisesVar}.default);return}await ${fsPromisesVar}.default.cp(${sourceVar},${targetVar},{recursive:!0,verbatimSymlinks:!0});return}`;
     },
   );
   if (!patchedCopyBranch) {
@@ -43,16 +51,63 @@ function applyLinuxBundledPluginCopyPermissionsPatch(currentSource) {
     return currentSource;
   }
 
-  const helper =
-    `async function ${helperName}(e,t){let n=await t.lstat(e);if(n.isSymbolicLink())return;await t.chmod(e,n.mode|128);if(n.isDirectory())for(let n of await t.readdir(e))await ${helperName}((0,${pathVar}.join)(e,n),t)}`;
+  const stagingMkdirRegex = new RegExp(
+    `await ([A-Za-z_$][\\w$]*)\\.default\\.mkdir\\(\\(0,${escapeRegExp(pathVar)}\\.join\\)\\(([A-Za-z_$][\\w$]*),\\.\\.\\.([A-Za-z_$][\\w$]*)\\.slice\\(0,-1\\)\\),\\{recursive:!0\\}\\)`,
+  );
+  let patchedStagingMkdir = false;
+  const stagingPatchedSource = patchedSource.replace(
+    stagingMkdirRegex,
+    (_match, fsPromisesVar, stageRootVar, manifestPartsVar) => {
+      patchedStagingMkdir = true;
+      return `await ${stageHelperName}(${stageRootVar},${fsPromisesVar}.default),await ${fsPromisesVar}.default.mkdir((0,${pathVar}.join)(${stageRootVar},...${manifestPartsVar}.slice(0,-1)),{recursive:!0,mode:448})`;
+    },
+  );
+  if (!patchedStagingMkdir) {
+    if (currentSource.includes("staging_marketplace")) {
+      console.warn(
+        "WARN: Could not find bundled marketplace staging creation — skipping Linux plugin permissions patch",
+      );
+    }
+    return currentSource;
+  }
+
+  const pluginParentMkdirRegex = new RegExp(
+    `await ([A-Za-z_$][\\w$]*)\\.default\\.mkdir\\(\\(0,${escapeRegExp(pathVar)}\\.dirname\\)\\(([A-Za-z_$][\\w$]*)\\),\\{recursive:!0\\}\\),await ([A-Za-z_$][\\w$]*)\\(([A-Za-z_$][\\w$]*),([A-Za-z_$][\\w$]*)\\)`,
+  );
+  let patchedPluginParentMkdir = false;
+  const fullyPatchedSource = stagingPatchedSource.replace(
+    pluginParentMkdirRegex,
+    (_match, fsPromisesVar, targetVar, copyFunctionVar, sourceVar, copyTargetVar) => {
+      if (copyTargetVar !== targetVar) {
+        return _match;
+      }
+      patchedPluginParentMkdir = true;
+      return `await ${fsPromisesVar}.default.mkdir((0,${pathVar}.dirname)(${targetVar}),{recursive:!0,mode:448}),await ${copyFunctionVar}(${sourceVar},${targetVar})`;
+    },
+  );
+  if (!patchedPluginParentMkdir) {
+    if (currentSource.includes("copy_plugins")) {
+      console.warn(
+        "WARN: Could not find bundled plugin target parent creation — skipping Linux plugin permissions patch",
+      );
+    }
+    return currentSource;
+  }
+
+  const helpers = [
+    `async function ${ancestorHelperName}(e,t){let n=await t.realpath(e),r=process.geteuid?.();if(!Number.isInteger(r))throw Error(\`Linux bundled plugin path is not trusted\`);for(let e=n;;){let n=await t.lstat(e),i=n.mode;if(n.isSymbolicLink()||!n.isDirectory()||n.uid!==r&&n.uid!==0||i&18&&!(n.uid===0&&i&512))throw Error(\`Linux bundled plugin path is not trusted\`);let a=(0,${pathVar}.dirname)(e);if(a===e)break;e=a}return n}`,
+    `async function ${sourceHelperName}(e,t){let n=await ${ancestorHelperName}(e,t),r=process.geteuid(),i=async e=>{let n=await t.lstat(e);if(n.isSymbolicLink()||!n.isDirectory()&&!n.isFile()||n.uid!==r&&n.uid!==0||n.mode&18)throw Error(\`Linux bundled plugin source is not trusted\`);if(n.isDirectory())for(let n of await t.readdir(e))await i((0,${pathVar}.join)(e,n))};return await i(n),n}`,
+    `async function ${stageHelperName}(e,t){let n=(0,${pathVar}.dirname)(e),r=n;for(;;)try{await t.lstat(r);break}catch(e){if(e?.code!==\`ENOENT\`)throw e;let t=(0,${pathVar}.dirname)(r);if(t===r)throw e;r=t}await ${ancestorHelperName}(r,t),await t.mkdir(n,{recursive:!0,mode:448}),await ${ancestorHelperName}(n,t),await t.mkdir(e,{mode:448});let i=process.geteuid(),a=await t.lstat(e);if(a.isSymbolicLink()||!a.isDirectory()||a.uid!==i)throw Error(\`Linux bundled plugin staging root is not private\`);await t.chmod(e,448),a=await t.lstat(e);if((a.mode&511)!==448)throw Error(\`Linux bundled plugin staging root is not private\`)}`,
+    `async function ${writableHelperName}(e,t){let n=await t.lstat(e);if(n.isSymbolicLink())throw Error(\`Linux bundled plugin copy contains a symbolic link\`);await t.chmod(e,(n.mode|128)&~18);if(n.isDirectory())for(let n of await t.readdir(e))await ${writableHelperName}((0,${pathVar}.join)(e,n),t)}`,
+  ].join("");
   const strictDirective = '"use strict";';
   const helperInsertionIndex = currentSource.startsWith(strictDirective)
     ? strictDirective.length
     : 0;
   return (
-    patchedSource.slice(0, helperInsertionIndex) +
-    helper +
-    patchedSource.slice(helperInsertionIndex)
+    fullyPatchedSource.slice(0, helperInsertionIndex) +
+    helpers +
+    fullyPatchedSource.slice(helperInsertionIndex)
   );
 }
 
@@ -429,96 +484,6 @@ function applyLinuxBrowserUseSocketDirectoryPatch(currentSource) {
   );
 }
 
-function applyLinuxChromeExtensionStatusPatch(currentSource) {
-  if (currentSource.includes("codexLinuxChromeProfileRoots")) {
-    return currentSource;
-  }
-
-  const fsVar = requireName(currentSource, "node:fs");
-  const osVar = requireName(currentSource, "node:os");
-  const pathVar = requireName(currentSource, "node:path");
-  if (fsVar == null || osVar == null || pathVar == null) {
-    console.warn(
-      "WARN: Could not find fs/os/path aliases — skipping Linux Chrome extension status patch",
-    );
-    return currentSource;
-  }
-
-  const unsupportedMessage =
-    "Opening Chrome extension settings is only supported on macOS and Windows";
-  const unsupportedMessageIndex = currentSource.indexOf(unsupportedMessage);
-  const openFunctionStart =
-    unsupportedMessageIndex === -1
-      ? -1
-      : currentSource.lastIndexOf("async function ", unsupportedMessageIndex);
-  const blockStart =
-    openFunctionStart === -1
-      ? -1
-      : currentSource.lastIndexOf("function ", openFunctionStart - 1);
-  const blockEnd =
-    openFunctionStart === -1
-      ? -1
-      : currentSource.indexOf("function ", openFunctionStart + "async function ".length);
-  const originalBlock = blockEnd === -1 ? null : currentSource.slice(blockStart, blockEnd);
-  if (
-    blockStart === -1 ||
-    blockEnd === -1 ||
-    !originalBlock.includes(unsupportedMessage)
-  ) {
-    console.warn(
-      "WARN: Could not find Chrome extension status functions — skipping Linux Chrome extension status patch",
-    );
-    return currentSource;
-  }
-
-  const statusFunctionName = /^function ([A-Za-z_$][\w$]*)\(\{extensionId:/.exec(
-    originalBlock,
-  )?.[1];
-  const openFunctionName = /async function ([A-Za-z_$][\w$]*)\(\{extensionId:/.exec(
-    originalBlock,
-  )?.[1];
-  const detectChromeFunctionName =
-    /detectChromeCommand:[A-Za-z_$][\w$]*=([A-Za-z_$][\w$]*)/.exec(originalBlock)?.[1];
-  const runCommandFunctionName =
-    /runCommand:[A-Za-z_$][\w$]*=([A-Za-z_$][\w$]*)/.exec(originalBlock)?.[1];
-  const extensionUrlFunctionName = /await [A-Za-z_$][\w$]*\([A-Za-z_$][\w$]*,\[([A-Za-z_$][\w$]*)\(e\)\]\)/.exec(
-    originalBlock,
-  )?.[1];
-  const macOpenFunctionName = /await [A-Za-z_$][\w$]*\(([A-Za-z_$][\w$]*),\[`-b`,/.exec(
-    originalBlock,
-  )?.[1];
-  const macBundleIdName = /await [A-Za-z_$][\w$]*\([A-Za-z_$][\w$]*,\[`-b`,([A-Za-z_$][\w$]*),/.exec(
-    originalBlock,
-  )?.[1];
-  const extensionIdValidatorName = /let [A-Za-z_$][\w$]*=([A-Za-z_$][\w$]*)\(e\),/.exec(
-    originalBlock,
-  )?.[1];
-  const profileDirFunctionName = /[A-Za-z_$][\w$]*=([A-Za-z_$][\w$]*)\(\{homeDir:/.exec(
-    originalBlock,
-  )?.[1];
-  if (
-    statusFunctionName == null ||
-    openFunctionName == null ||
-    detectChromeFunctionName == null ||
-    runCommandFunctionName == null ||
-    extensionUrlFunctionName == null ||
-    macOpenFunctionName == null ||
-    macBundleIdName == null ||
-    extensionIdValidatorName == null ||
-    profileDirFunctionName == null
-  ) {
-    console.warn(
-      "WARN: Could not identify Chrome extension status helper names — skipping Linux Chrome extension status patch",
-    );
-    return currentSource;
-  }
-
-  const replacement =
-    `function codexLinuxChromeProfileRoots({homeDir:__codexHomeDir,platform:__codexPlatform}){return __codexPlatform===\`linux\`?[(0,${pathVar}.join)(__codexHomeDir,\`.config\`,\`BraveSoftware\`,\`Brave-Browser\`),(0,${pathVar}.join)(__codexHomeDir,\`.config\`,\`google-chrome\`),(0,${pathVar}.join)(__codexHomeDir,\`.config\`,\`google-chrome-beta\`),(0,${pathVar}.join)(__codexHomeDir,\`.config\`,\`google-chrome-unstable\`),(0,${pathVar}.join)(__codexHomeDir,\`.config\`,\`chromium\`)]:[]}function codexLinuxChromeHasExtension({extensionId:__codexExtensionId,homeDir:__codexHomeDir,platform:__codexPlatform}){if(__codexPlatform!==\`linux\`)return!1;let __codexValidatedExtensionId=${extensionIdValidatorName}(__codexExtensionId);for(let __codexProfileRoot of codexLinuxChromeProfileRoots({homeDir:__codexHomeDir,platform:__codexPlatform})){if(!(0,${fsVar}.existsSync)(__codexProfileRoot))continue;for(let __codexProfileEntry of (0,${fsVar}.readdirSync)(__codexProfileRoot,{withFileTypes:!0}))if(__codexProfileEntry.isDirectory()&&(0,${fsVar}.existsSync)((0,${pathVar}.join)(__codexProfileRoot,__codexProfileEntry.name,\`Extensions\`,__codexValidatedExtensionId)))return!0}return!1}function codexLinuxChromeCommand(){let __codexPathEntries=(process.env.PATH??\`\`).split(\`:\`);for(let __codexBrowserCommand of[\`brave-browser\`,\`brave\`,\`google-chrome\`,\`google-chrome-stable\`,\`google-chrome-beta\`,\`google-chrome-unstable\`,\`chromium-browser\`,\`chromium\`])for(let __codexPathEntry of __codexPathEntries){if(__codexPathEntry.length===0)continue;let __codexCandidate=(0,${pathVar}.join)(__codexPathEntry,__codexBrowserCommand);try{if((0,${fsVar}.existsSync)(__codexCandidate)&&(0,${fsVar}.statSync)(__codexCandidate).isFile())return __codexCandidate}catch{}}return null}function ${statusFunctionName}({extensionId:__codexExtensionId,homeDir:__codexHomeDir=(0,${osVar}.homedir)(),localAppDataDir:__codexLocalAppDataDir=process.env.LOCALAPPDATA,platform:__codexPlatform=process.platform}){if(__codexPlatform===\`linux\`)return codexLinuxChromeHasExtension({extensionId:__codexExtensionId,homeDir:__codexHomeDir,platform:__codexPlatform});let __codexValidatedExtensionId=${extensionIdValidatorName}(__codexExtensionId),__codexProfileDir=${profileDirFunctionName}({homeDir:__codexHomeDir,localAppDataDir:__codexLocalAppDataDir,platform:__codexPlatform});return __codexProfileDir==null||!(0,${fsVar}.existsSync)(__codexProfileDir)?!1:(0,${fsVar}.readdirSync)(__codexProfileDir,{withFileTypes:!0}).some(__codexProfileEntry=>__codexProfileEntry.isDirectory()&&(0,${fsVar}.existsSync)((0,${pathVar}.join)(__codexProfileDir,__codexProfileEntry.name,\`Extensions\`,__codexValidatedExtensionId)))}async function ${openFunctionName}({extensionId:__codexExtensionId,platform:__codexPlatform=process.platform,detectChromeCommand:__codexDetectChromeCommand=${detectChromeFunctionName},runCommand:__codexRunCommand=${runCommandFunctionName}}){if(__codexPlatform===\`darwin\`){await __codexRunCommand(${macOpenFunctionName},[\`-b\`,${macBundleIdName},${extensionUrlFunctionName}(__codexExtensionId)]);return}if(__codexPlatform===\`win32\`){let __codexChromeCommand=__codexDetectChromeCommand();if(__codexChromeCommand==null)throw Error(\`Google Chrome is not installed\`);await __codexRunCommand(__codexChromeCommand,[${extensionUrlFunctionName}(__codexExtensionId)]);return}if(__codexPlatform===\`linux\`){let __codexChromeCommand=codexLinuxChromeCommand()??__codexDetectChromeCommand();if(__codexChromeCommand==null)throw Error(\`Google Chrome, Brave, or Chromium is not installed\`);await __codexRunCommand(__codexChromeCommand,[${extensionUrlFunctionName}(__codexExtensionId)]);return}throw Error(\`Opening Chrome extension settings is only supported on macOS, Windows, and Linux\`)}`;
-
-  return currentSource.slice(0, blockStart) + replacement + currentSource.slice(blockEnd);
-}
-
 function buildLinuxExternalOpenHelpers() {
   return (
     `function codexLinuxExternalOpenEnv(){let __codexEnv={...process.env};` +
@@ -576,5 +541,4 @@ module.exports = {
   applyLinuxExternalOpenEnvPatch,
   applyLinuxBrowserUseRouteLivenessPatch,
   applyLinuxBrowserUseSocketDirectoryPatch,
-  applyLinuxChromeExtensionStatusPatch,
 };

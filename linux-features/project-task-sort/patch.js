@@ -5,11 +5,6 @@ const currentCreationTime =
 const patchedCreationTime =
   currentCreationTime +
   "??(/^local:[\\da-f]{8}-[\\da-f]{4}-7[\\da-f]{3}-[89ab][\\da-f]{3}-[\\da-f]{12}$/i.test(e.key)?Number.parseInt(e.key.slice(6).replaceAll(`-`,``).slice(0,12),16):e.conversation.recencyAt??e.conversation.updatedAt)";
-const currentSortStateMarkers = [
-  "chatSortMode:t})}",
-  "projectSortMode:t})}",
-];
-
 function countOccurrences(source, needle) {
   return source.split(needle).length - 1;
 }
@@ -20,13 +15,6 @@ function applyProjectTaskSortPatch(source) {
   const unpatchedCount = currentCount - patchedCount;
 
   if (patchedCount === 1 && unpatchedCount === 0) {
-    return source;
-  }
-
-  if (!currentSortStateMarkers.every((marker) => source.includes(marker))) {
-    console.warn(
-      "WARN: Could not find current project task sort state markers - skipping project task sort feature patch",
-    );
     return source;
   }
 
@@ -46,7 +34,8 @@ const descriptors = [
     phase: "webview-asset",
     order: 20_900,
     ciPolicy: "optional",
-    pattern: /^app-initial~app-main~onboarding-page~projects-index-page~quick-chat-window-page~codex-micro~[^.]+\.js$/,
+    pattern:
+      /^app-initial~app-main~onboarding-page~projects-index-page~quick-chat-window-page~codex-micro~iqsnin5k-Bxmd3ja1\.js$/,
     missingDescription: "project task sort webview bundle",
     skipDescription: "project task creation timestamp feature patch",
     apply: applyProjectTaskSortPatch,
