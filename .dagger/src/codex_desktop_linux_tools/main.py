@@ -65,7 +65,7 @@ class CodexDesktopLinuxTools:
         if not prompt.strip():
             raise ValueError("prompt is required")
 
-        workspace_cwd = "/workspace" if cwd in ("", ".") else f"/workspace/{cwd.strip('/')}"
+        workspace_cwd = "/" if cwd in ("", ".") else f"/{cwd.strip('/')}"
         environment = (
             dag.env()
             .with_string_input("prompt", prompt, "the review assignment")
@@ -97,8 +97,8 @@ class CodexDesktopLinuxTools:
                 """
 You are a Dagger-native code review agent called by Codex.
 
-Use the $workspace directory as read-only source context. Treat $cwd as the
-intended working directory inside that workspace. Do not request or reveal
+The $workspace directory is exposed at the agent filesystem root. Treat $cwd as
+the intended working directory inside that workspace. Do not request or reveal
 secrets. Do not invent evidence. Inspect only what is needed to answer $prompt.
 
 Return findings first, ordered by severity, with exact file paths when relevant.
@@ -131,7 +131,7 @@ $prompt
                 [
                     "bash",
                     "-lc",
-                    "node --test scripts/dev/upstream-dmg-intel.test.js "
+                    "node --test scripts/dev/dagger-module.test.js scripts/dev/upstream-dmg-intel.test.js "
                     "&& node --check scripts/lib/upstream-dmg-intel.js "
                     "&& node --check scripts/dev/upstream-dmg-intel.js "
                     "&& jq empty scripts/dev/upstream-dmg-protected-surfaces.json",
