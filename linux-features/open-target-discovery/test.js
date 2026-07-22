@@ -60,6 +60,8 @@ const currentAppOpenInBridgeBundle =
   `${currentAppOpenTargetPrelude}class App{constructor(e,t){this.settingsStore=e;this.requestOpenInWorker=t}#n(){return this.requestOpenInWorker}async detectTarget({target:e}){let{command:t}=await this.#n()({method:\`get-target-command\`,params:UN(this.settingsStore,e)});return{available:t!=null}}}`;
 const currentAppOpenInTargetsBundle =
   '"open-in-targets":async({cwd:e,deferEnrichment:t=!1,hostId:r,nativeBrowserDiscovery:i=`scan`,path:a})=>{let o=this.getRequestAppServerClient(r??void 0),s=this.getSettingsStore();if(t&&a==null){let t=XN(s,e);return{preferredTarget:t,availableTargets:[],mode:`editor`,targets:uj(HN(s),o.hostConfig)}}let{allAvailableTargets:c,targetMetadata:l}=await WN(s,this.getOpenInWorker()),u=a?.replace(/^([ab])[\\\\/]/,``)??null,d=u!=null&&xF(u)&&!n.eo(o.hostConfig),f=u==null||d||n.eo(o.hostConfig)?null:this.resolveOpenFilePath(u,e),p=lj(o.hostConfig,c,l),m=new Set(p),h=YN(s,e,m),g=d||f!=null&&n.ys(f),_=f!=null&&KA(f),v=f!=null&&JA(f),y=g?await yF(i):_?await vF({filePath:f}):[];return{preferredTarget:h,availableTargets:Array.from(m),mode:g||v?`native`:`editor`,targets:l}}';
+const currentDmgOpenInTargetsBundle =
+  'class App{async getTargets({cwd:e,deferEnrichment:t=!1,hostId:r,nativeBrowserDiscovery:i=`scan`,path:a}){let{hostConfig:o}=this.executionHostRegistry.get(r??void 0);if(t&&a==null)return{mode:`editor`};let{allAvailableTargets:s,targetMetadata:c}=await I0(this.settingsStore,this.#n()),l=a?.replace(/^([ab])[\\\\/]/,``)??null,u=l!=null&&$0(l)&&!n.go(o),d=l==null||u||n.go(o)?null:Fj(l,e),f=t$(o,s,c),p=new Set(f),m=V0(this.settingsStore,e,p),h=u||d!=null&&n.Is(d),g=d!=null&&BQ(d),_=[];return{preferredTarget:m,availableTargets:Array.from(p),mode:h||g?`native`:`editor`,targets:[...c,..._]}}}';
 const currentAppOpenTargetSelectionBundle =
   "function lQ({targets:e,availableTargets:t,includeHiddenTargets:n=!1,mode:r=`editor`}){let i=e.filter(e=>e.appPath!=null);if(i.length>0)return i;if(r===`native`)return e.filter(e=>e.target===`systemDefault`||e.target===`fileManager`);let a=new Set(t);return e.filter(e=>a.has(e.target)&&(n||!e.hidden))}function uQ({preferredTarget:e,targets:t,availableTargets:n,includeHiddenTargets:r=!0,mode:i=`editor`}){let a=lQ({targets:t,availableTargets:n,includeHiddenTargets:r,mode:i});return a.length===0?null:e?a.find(t=>t.target===e)??a[0]??null:a[0]??null}function jnr(e){return e.appPath==null&&e.kind===`editor`}";
 
@@ -1280,6 +1282,14 @@ test("open-target discovery patches current app directory mode expression", () =
   assert.match(patched, /codexLinuxOpenTargetIsDirectory/);
   assert.match(patched, /_codexLinuxDirectory=e==null&&f!=null&&codexLinuxOpenTargetIsDirectory\(f\)/);
   assert.match(patched, /g=d\|\|[^,]+\|\|f!=null&&n\.ys\(f\)/);
+});
+
+test("open-target discovery patches current DMG getTargets directory mode expression", () => {
+  const patched = applyPatchTwice(applyOpenInTargetsDirectoryModePatch, currentDmgOpenInTargetsBundle);
+
+  assert.match(patched, /codexLinuxOpenTargetIsDirectory/);
+  assert.match(patched, /_codexLinuxDirectory=e==null&&d!=null&&codexLinuxOpenTargetIsDirectory\(d\)/);
+  assert.match(patched, /h=u\|\|[^,]+\|\|d!=null&&n\.Is\(d\)/);
 });
 
 test("open-target discovery native selector includes available directory-capable targets", () => {

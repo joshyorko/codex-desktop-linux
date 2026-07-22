@@ -727,12 +727,20 @@ function applyOpenInTargetsDirectoryModePatch(currentSource) {
     return currentSource;
   }
   const propertyIndex = currentSource.indexOf('"open-in-targets":async');
-  if (propertyIndex === -1) {
+  const methodMatch = currentSource.match(
+    /async getTargets\(\{cwd:([A-Za-z_$][\w$]*)[,}]/u,
+  );
+  if (propertyIndex === -1 && methodMatch == null) {
     return currentSource;
   }
 
-  const arrowIndex = currentSource.indexOf("=>{", propertyIndex);
-  const block = findBalancedBlock(currentSource, arrowIndex === -1 ? -1 : arrowIndex + 2);
+  const handlerIndex = propertyIndex === -1 ? methodMatch.index : propertyIndex;
+  const blockMarker = propertyIndex === -1 ? "){" : "=>{";
+  const blockMarkerIndex = currentSource.indexOf(blockMarker, handlerIndex);
+  const block = findBalancedBlock(
+    currentSource,
+    blockMarkerIndex === -1 ? -1 : blockMarkerIndex + blockMarker.length - 1,
+  );
   if (block == null) {
     warn("Could not find open-in-targets path mode expression");
     return currentSource;
@@ -751,7 +759,9 @@ function applyOpenInTargetsDirectoryModePatch(currentSource) {
     return currentSource;
   }
 
-  const cwdVar = currentSource.match(/"open-in-targets":async\(\{cwd:([A-Za-z_$][\w$]*)[,}]/u)?.[1];
+  const cwdVar =
+    currentSource.match(/"open-in-targets":async\(\{cwd:([A-Za-z_$][\w$]*)[,}]/u)?.[1] ??
+    methodMatch?.[1];
   if (cwdVar == null) {
     warn("Could not find open-in-targets cwd variable");
     return currentSource;
