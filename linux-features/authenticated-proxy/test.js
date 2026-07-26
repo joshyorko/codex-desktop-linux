@@ -371,7 +371,7 @@ test("routes current authenticated proxy desktop fetch shape through ClientReque
     "let c=require(`electron`);",
     "async function boot(){await c.app.whenReady()}",
     "class Fetcher{",
-    "async performDesktopFetch(){let t={},r=`GET`,i=null,o=`https://chatgpt.com/wham/usage`,s={aborted:false,addEventListener(){},removeEventListener(){}},l=true,h=()=>null,g=async e=>{let n=this.cloneHeaders(t);let p=i==null?await c.net.fetch(o,{method:r,headers:n,body:h(),signal:s,credentials:l?`include`:`same-origin`}):await this.performProgressRequest({body:h(),headers:n,method:r,onUploadProgress:i,resolvedUrl:o,signal:s,useSessionCookies:l});return p};return g({})}",
+    "async performDesktopFetch(){let t={},r=`GET`,i=null,o=`follow`,s=`https://chatgpt.com/wham/usage`,a={aborted:false,addEventListener(){},removeEventListener(){}},l=true,h=()=>null,g=async e=>{let n=this.cloneHeaders(t);let p=i==null?await c.net.fetch(s,{method:r,headers:n,body:h(),redirect:o,signal:a,credentials:l?`include`:`same-origin`}):await this.performProgressRequest({body:h(),headers:n,method:r,onUploadProgress:i,resolvedUrl:s,signal:a,useSessionCookies:l});return p};return g({})}",
     "performProgressRequest({body:e,headers:t,method:n,onUploadProgress:r,resolvedUrl:i,signal:a,useSessionCookies:o}){return new Promise((s,l)=>{let u=c.net.request({method:n,url:i,headers:t,useSessionCookies:o}),d=-1,f=()=>{let e=u.getUploadProgress();!e.started||e.current===d||(d=e.current,r({loaded:e.current,total:e.total}))},p=setInterval(f,50),m=()=>{clearInterval(p)},h=()=>{m(),a.removeEventListener(`abort`,g)},g=()=>{h(),u.abort(),l(new DOMException(`The operation was aborted`,`AbortError`))};if(a.addEventListener(`abort`,g,{once:!0}),a.aborted){g();return}u.on(`error`,e=>{h(),l(e)}),u.on(`response`,e=>{f(),m();let t=[];e.on(`data`,e=>{t.push(e)}),e.on(`error`,e=>{h(),l(e)}),e.on(`end`,()=>{h();let n=Buffer.concat(t),r=new Headers;for(let[t,n]of Object.entries(e.headers))for(let e of Array.isArray(n)?n:[n])r.append(t,e);s(new Response(n.length===0?null:n,{status:e.statusCode,statusText:e.statusMessage,headers:r}))})});let _=e instanceof ArrayBuffer?Buffer.from(e):e;u.end(_)})}",
     "cloneHeaders(e){return e}",
     "}",
@@ -493,7 +493,7 @@ test("routes current authenticated proxy desktop fetch shape through ClientReque
   assert.deepEqual(credentials, { username: "user", password: "p@ss" });
 });
 
-test("authenticated-proxy tests fail when current desktop fetch shape drifts", () => {
+test("authenticated-proxy leaves the main bundle byte-identical when current desktop fetch shape drifts", () => {
   const source = [
     "let a=require(`electron`);",
     "async function boot(){await a.app.whenReady()}",
@@ -503,8 +503,15 @@ test("authenticated-proxy tests fail when current desktop fetch shape drifts", (
     "}",
   ].join("");
 
-  assert.throws(
-    () => applyPatchTwiceWithoutWarnings(applyAuthenticatedProxyPatch, source),
-    /Could not route Linux proxy-auth desktop fetches through ClientRequest|Expected values to be strictly deep-equal/,
-  );
+  const warnings = [];
+  const originalWarn = console.warn;
+  console.warn = (...args) => warnings.push(args.join(" "));
+  try {
+    assert.equal(applyAuthenticatedProxyPatch(source), source);
+  } finally {
+    console.warn = originalWarn;
+  }
+  assert.deepEqual(warnings, [
+    "WARN: Could not route Linux proxy-auth desktop fetches through ClientRequest",
+  ]);
 });

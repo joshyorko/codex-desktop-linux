@@ -87,15 +87,28 @@ function applyCopilotReasoningEffortModelListPatch(currentSource) {
 function applyCopilotReasoningEffortUiPatch(currentSource) {
   let patchedSource = currentSource;
 
+  const consolidatedComposerGateRegex =
+    /([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)\?\.authMethod===`copilot`,([\s\S]{0,400}?)([A-Za-z_$][\w$]*)=!([A-Za-z_$][\w$]*)&&!\1&&!0(?=[,;])/;
+  const patchedConsolidatedComposerGateRegex =
+    /([A-Za-z_$][\w$]*)=[A-Za-z_$][\w$]*\?\.authMethod===`copilot`,[\s\S]{0,400}?[A-Za-z_$][\w$]*=![A-Za-z_$][\w$]*&&!0(?=[,;])/;
   const currentComposerGateRegex =
     /([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)\?\.authMethod===`copilot`,([A-Za-z_$][\w$]*)=!([A-Za-z_$][\w$]*)(?:&&!\1)?(?=,)/;
-  const currentComposerGateMatch = currentComposerGateRegex.exec(patchedSource);
+  const currentComposerGateMatch =
+    consolidatedComposerGateRegex.exec(patchedSource) ??
+    currentComposerGateRegex.exec(patchedSource);
   if (currentComposerGateMatch) {
     const authMethodVar = currentComposerGateMatch[1];
-    patchedSource = patchedSource.replace(
-      currentComposerGateRegex,
-      "$1=$2?.authMethod===`copilot`,$3=!$4",
-    );
+    if (currentComposerGateMatch.length === 6) {
+      patchedSource = patchedSource.replace(
+        consolidatedComposerGateRegex,
+        "$1=$2?.authMethod===`copilot`,$3$4=!$5&&!0",
+      );
+    } else {
+      patchedSource = patchedSource.replace(
+        currentComposerGateRegex,
+        "$1=$2?.authMethod===`copilot`,$3=!$4",
+      );
+    }
 
     const currentDropdownNeedle = `reasoningEffortDisabled:${authMethodVar}`;
     const currentDropdownIndex = patchedSource.indexOf(
@@ -116,6 +129,7 @@ function applyCopilotReasoningEffortUiPatch(currentSource) {
       );
     }
   } else if (
+    !patchedConsolidatedComposerGateRegex.test(patchedSource) &&
     patchedSource.includes("composer.increaseReasoningEffort") &&
     patchedSource.includes("reasoningEffortDisabled:")
   ) {
@@ -150,7 +164,7 @@ module.exports = {
       id: "settings",
       name: "copilot-reasoning-effort-settings",
       phase: "webview-asset",
-      pattern: /^app-initial~app-main~new-thread-panel-page~onboarding-page~projects-index-page~appgen-libra~2gcv58yj-[^.]+\.js$/,
+      pattern: /^app-initial-[^.]+\.js$/,
       missingDescription: "model settings bundle",
       skipDescription: "Copilot reasoning effort settings patch",
       apply: applyCopilotReasoningEffortSettingsPatch,
@@ -159,7 +173,7 @@ module.exports = {
       id: "model-list",
       name: "copilot-reasoning-effort-model-list",
       phase: "webview-asset",
-      pattern: /^app-initial~avatarOverlayCompositionSurface~artifact-tab-content\.electron~app-main~plugin-d~kw7nl1sl-[^.]+\.js$/,
+      pattern: /^app-initial-[^.]+\.js$/,
       missingDescription: "model list bundle",
       skipDescription: "Copilot reasoning effort model list patch",
       apply: applyCopilotReasoningEffortModelListPatch,
@@ -168,7 +182,7 @@ module.exports = {
       id: "ui",
       name: "copilot-reasoning-effort-ui",
       phase: "webview-asset",
-      pattern: /^app-initial~app-main~settings-command-menu-section-items~new-thread-panel-page~settings-pag~unq8yzli-[^.]+\.js$/,
+      pattern: /^app-initial-[^.]+\.js$/,
       missingDescription: "current composer bundle",
       skipDescription: "Copilot reasoning effort UI patch",
       apply: applyCopilotReasoningEffortUiPatch,

@@ -9,7 +9,7 @@ function warn(message, patchName) {
 
 function applyApiKeyModelVisibilityPatch(source) {
   const modelVisibilityPattern = new RegExp(
-    `(function ${JS_IDENT}\\(\\{authMethod:(${JS_IDENT}),availableModels:${JS_IDENT},` +
+    `(function ${JS_IDENT}\\(\\{(?:additionalAvailableModels:${JS_IDENT},)?authMethod:(${JS_IDENT}),availableModels:${JS_IDENT},` +
       `defaultModel:${JS_IDENT},enabledReasoningEfforts:${JS_IDENT},` +
       `includeUltraReasoningEffort:${JS_IDENT},models:${JS_IDENT},` +
       `useHiddenModels:(${JS_IDENT})\\}\\)\\{let[\\s\\S]{0,600}?[,;]${JS_IDENT}=)` +
@@ -17,7 +17,7 @@ function applyApiKeyModelVisibilityPatch(source) {
     "g",
   );
   const patchedVisibilityPattern = new RegExp(
-    `function ${JS_IDENT}\\(\\{authMethod:(${JS_IDENT}),availableModels:${JS_IDENT},` +
+    `function ${JS_IDENT}\\(\\{(?:additionalAvailableModels:${JS_IDENT},)?authMethod:(${JS_IDENT}),availableModels:${JS_IDENT},` +
       `defaultModel:${JS_IDENT},enabledReasoningEfforts:${JS_IDENT},` +
       `includeUltraReasoningEffort:${JS_IDENT},models:${JS_IDENT},` +
       `useHiddenModels:(${JS_IDENT})\\}\\)\\{let[\\s\\S]{0,600}?[,;]${JS_IDENT}=` +
@@ -55,7 +55,7 @@ const descriptors = [
     phase: "webview-asset",
     order: 20550,
     ciPolicy: "optional",
-    pattern: /^app-initial~app-main~.*\.js$/,
+    pattern: /^app-initial-[^.]+\.js$/,
     missingDescription: "app main webview bundle",
     skipDescription: "API key model visibility patch",
     apply: applyApiKeyModelVisibilityPatch,

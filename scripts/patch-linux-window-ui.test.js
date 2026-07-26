@@ -475,7 +475,7 @@ test("semantic asset patch skips unknown contracts without writing", () => {
 
 test("Linux settings search hides controls that cannot render", () => {
   const source = [
-    "function qn(e){let t=(0,Zn.c)(17),n=re(),r=Bn(e),{data:i}=_(e),a=i?.isSystemBackdropSupported!==!1,o=i?.platform===`darwin`,{data:s}=T(k,e.selectedHostId),c,l=c;if(a){let e;e=e=>e.sectionSlug===`appearance`&&!a?{...e,messages:e.messages.filter(Jn)}:e.sectionSlug===`agent`?{...e,terms:[]}:e,m=r.map(e)}else m=r;return m}",
+    "function qn(e){let t=(0,Zn.c)(15),n=re(),r=Bn(e),{data:i}=_(e),a=i?.isSystemBackdropSupported!==!1,{data:s}=T(k,e.selectedHostId),c,l=c;if(a){let e;e=e=>e.sectionSlug===`appearance`&&!a?{...e,messages:e.messages.filter(Jn)}:e.sectionSlug===`agent`?{...e,terms:[]}:e,m=r.map(e)}else m=r;return m}",
     "function Jn(e){return!Qn.includes(e.id)}",
   ].join("");
 
@@ -485,7 +485,7 @@ test("Linux settings search hides controls that cannot render", () => {
   assert.match(patched, /settings\.general\.appearance\.dockIcon\.label/);
   assert.match(
     patched,
-    /return m\.map\(e=>codexLinuxFilterSettingsSearchSection\(e,o\)\)/,
+    /return m\.map\(codexLinuxFilterSettingsSearchSection\)/,
   );
   assert.equal(
     (patched.match(/function codexLinuxFilterSettingsSearchSection\(/g) || []).length,
@@ -511,15 +511,8 @@ test("Linux settings search hides controls that cannot render", () => {
     Array.from(context.filter({
       sectionSlug: "appearance",
       messages: [dockMessage, themeMessage],
-    }, false).messages, (message) => message.id),
+    }).messages, (message) => message.id),
     [themeMessage.id],
-  );
-  assert.deepEqual(
-    Array.from(context.filter({
-      sectionSlug: "appearance",
-      messages: [dockMessage, themeMessage],
-    }, true).messages, (message) => message.id),
-    [dockMessage.id, themeMessage.id],
   );
 });
 
@@ -583,7 +576,7 @@ test("subagent nickname metadata patch accepts current upstream patched aliases"
   assert.deepEqual(warnings, []);
 });
 
-test("subagent metadata descriptor ignores matching sibling bundles without metadata", () => {
+test("subagent metadata descriptor patches the current monolithic app bundle", () => {
   const descriptor = corePatchDescriptors().find((candidate) =>
     candidate.id === "subagent-nickname-metadata-shape",
   );
@@ -601,18 +594,17 @@ test("subagent metadata descriptor ignores matching sibling bundles without meta
       "function Xl(e){return e==null?null:Zl(e.agentNickname)??Zl(B(e.source)?.agentNickname)}",
       "function Zl(e){if(e==null)return null;let t=e.trim();return t.length===0?null:t}",
     ].join("");
-    fs.writeFileSync(path.join(assetsDir, "app-server-manager-signals-test.js"), siblingSource);
-    fs.writeFileSync(path.join(assetsDir, "use-host-config-test.js"), metadataSource);
+    const assetPath = path.join(assetsDir, "app-initial-BTphDPeq.js");
+    fs.writeFileSync(assetPath, siblingSource + metadataSource);
 
     const { value: result, warnings } = captureWarns(() =>
       patchAssetFiles(tempRoot, descriptor.pattern, descriptor.apply, "missing subagent metadata bundle"),
     );
 
-    assert.deepEqual(result, { matched: 2, changed: 1 });
+    assert.deepEqual(result, { matched: 1, changed: 1 });
     assert.deepEqual(warnings, []);
-    assert.equal(fs.readFileSync(path.join(assetsDir, "app-server-manager-signals-test.js"), "utf8"), siblingSource);
     assert.match(
-      fs.readFileSync(path.join(assetsDir, "use-host-config-test.js"), "utf8"),
+      fs.readFileSync(assetPath, "utf8"),
       /Zl\(e\.agentNickname\)\?\?Zl\(e\.agent_nickname\)\?\?Zl\(B\(e\.source\)\?\.agentNickname\)/,
     );
   } finally {
@@ -1121,7 +1113,7 @@ test("default core patch descriptors are grouped and unique", () => {
   );
   assert.equal(
     computerUseHostPlatform.pattern.test(
-      "app-initial~artifact-tab-content.electron~notebook-preview-panel~app-main~settings-command-~cajo70vh-C4Uu6T2D.js",
+      "app-initial-BHB6SClA.js",
     ),
     true,
   );
@@ -1197,7 +1189,7 @@ test("app-server feature enablement descriptor matches current app-main chunks",
   assert.equal(descriptor.pattern.test("experimental-feature-visibility-Bvp90zWX.js"), false);
 });
 
-test("window controls safe-area descriptor matches current app shell chunks", () => {
+test("window controls safe-area descriptor matches the current monolithic app chunk", () => {
   const descriptor = corePatchDescriptors().find(
     (descriptor) => descriptor.id === "linux-window-controls-safe-area",
   );
@@ -1210,9 +1202,7 @@ test("window controls safe-area descriptor matches current app shell chunks", ()
     false,
   );
   assert.equal(
-    descriptor.pattern.test(
-      "app-initial~avatarOverlayCompositionSurface~artifact-tab-content.electron~app-main~appgen-s~j5d6n91g-DVu-pwEX.js",
-    ),
+    descriptor.pattern.test("app-initial-BTphDPeq.js"),
     true,
   );
   assert.equal(
@@ -1223,10 +1213,13 @@ test("window controls safe-area descriptor matches current app shell chunks", ()
   );
 });
 
-test("optional webview descriptors follow the current upstream chunk split", () => {
+test("optional webview descriptors follow the current monolithic app chunk", () => {
   const descriptors = corePatchDescriptors();
   const automationUpdate = descriptors.find(
     (descriptor) => descriptor.id === "automation-update-eager-tool",
+  );
+  const browserUseAvailability = descriptors.find(
+    (descriptor) => descriptor.id === "linux-browser-use-availability",
   );
   const tooltipCollision = descriptors.find(
     (descriptor) => descriptor.id === "linux-tooltip-window-controls-collision",
@@ -1234,14 +1227,14 @@ test("optional webview descriptors follow the current upstream chunk split", () 
 
   assert.ok(automationUpdate);
   assert.equal(
-    automationUpdate.pattern.test("app-initial~app-main~onboarding-page-CIkoyvFz.js"),
+    automationUpdate.pattern.test("app-initial-BTphDPeq.js"),
     true,
   );
   assert.equal(
     automationUpdate.pattern.test(
       "app-initial~app-main~onboarding-page~hotkey-window-thread-page~quick-chat-window-page~chatg~f5p8e1kp-BULs9Wt5.js",
     ),
-    true,
+    false,
   );
   assert.equal(
     automationUpdate.assetMatch(
@@ -1253,11 +1246,20 @@ test("optional webview descriptors follow the current upstream chunk split", () 
     automationUpdate.assetMatch("function unrelated(){return{deferLoading:!0}}"),
     false,
   );
+  assert.ok(browserUseAvailability);
+  assert.equal(
+    browserUseAvailability.pattern.test("app-initial-BTphDPeq.js"),
+    true,
+  );
+  assert.equal(
+    browserUseAvailability.pattern.test(
+      "use-in-app-browser-use-availability-B4Bdb14G.js",
+    ),
+    false,
+  );
   assert.ok(tooltipCollision);
   assert.equal(
-    tooltipCollision.pattern.test(
-      "app-initial~avatarOverlayCompositionSurface~artifact-tab-content.electron~notebook-preview-~kr7rxhqe-BaAm4SxE.js",
-    ),
+    tooltipCollision.pattern.test("app-initial-BTphDPeq.js"),
     true,
   );
   assert.equal(
@@ -1312,25 +1314,24 @@ test("opt-in patch descriptors are recognized as non-critical drift", () => {
   ]);
 });
 
-test("fast-mode guard descriptor follows upstream service-tier bundle names", () => {
+test("fast-mode guard descriptor targets the current monolithic app bundle", () => {
   const descriptor = corePatchDescriptors().find((descriptor) =>
     descriptor.id === "linux-fast-mode-model-guard",
   );
 
-  assert.ok(descriptor.pattern.test("use-is-fast-mode-enabled-abc.js"));
-  assert.ok(descriptor.pattern.test("read-service-tier-for-request-BJ8QN0Q7.js"));
-  assert.ok(descriptor.pattern.test("use-service-tier-settings-DFXPADNF.js"));
-  assert.ok(descriptor.pattern.test("app-server-manager-signals-BOGyjFm3.js"));
+  assert.ok(descriptor.pattern.test("app-initial-BTphDPeq.js"));
+  assert.equal(descriptor.pattern.test("use-is-fast-mode-enabled-abc.js"), false);
   assert.equal(descriptor.pattern.test("service-tier-icons-CsNhab5W.js"), false);
 });
 
-test("subagent nickname metadata descriptor follows upstream metadata bundle names", () => {
+test("subagent nickname metadata descriptor targets the current monolithic app bundle", () => {
   const descriptor = corePatchDescriptors().find((descriptor) =>
     descriptor.id === "subagent-nickname-metadata-shape",
   );
 
-  assert.ok(descriptor.pattern.test("app-server-manager-signals-BOGyjFm3.js"));
-  assert.ok(descriptor.pattern.test("use-host-config-Dpd_LQBD.js"));
+  assert.ok(descriptor.pattern.test("app-initial-BTphDPeq.js"));
+  assert.equal(descriptor.pattern.test("app-server-manager-signals-BOGyjFm3.js"), false);
+  assert.equal(descriptor.pattern.test("use-host-config-Dpd_LQBD.js"), false);
   assert.equal(descriptor.pattern.test("thread-context-inputs-D5uMjcUB.js"), false);
 });
 
@@ -1357,7 +1358,7 @@ function currentTrayLifecycleBundleFixture() {
 
 function currentTrayMenuBundleFixture() {
   return [
-    "var sW=class{trayMenuThreads={runningThreads:[],unreadThreads:[],pinnedThreads:[],recentThreads:[],usageLimits:[]};constructor(){this.tray={on(){},setContextMenu(){},popUpContextMenu(){}}}getNativeTrayMenuItems(){let{pinnedThreads:e,recentThreads:t,runningThreads:r,unreadThreads:i,usageLimits:a}=this.trayMenuThreads,o=this.nativeIntl.formatMessage({messageId:vc,defaultMessage:yc}),s=this.nativeIntl.formatMessage({messageId:gc,defaultMessage:_c}),c=uW({label:this.nativeIntl.formatMessage({messageId:oc,defaultMessage:sc}),moreLabel:s,threads:r,projectlessLabel:o,onOpenThread:this.onTrayMenuOpenRecentThread}),h=[c].filter(e=>e.length>0).flatMap((e,t)=>t===0?e:[{type:`separator`},...e]);return[...h,...h.length>0?[{type:`separator`}]:[],{label:this.nativeIntl.formatMessage({messageId:nc,defaultMessage:rc}),click:()=>{this.onTrayMenuOpenNewThread()}},{type:`separator`},{label:fW(this.appName),click:()=>{n.app.quit()}}]}};",
+    "var sW=class{trayMenuThreads={runningThreads:[],unreadThreads:[],pinnedThreads:[],recentThreads:[],usageLimits:[]};constructor(){this.tray={on(){},setContextMenu(){},popUpContextMenu(){}}}getNativeTrayMenuItems(){let{pinnedThreads:e,recentThreads:t,runningThreads:r,unreadThreads:i,usageLimits:a}=this.trayMenuThreads,o=this.nativeIntl.formatMessage({messageId:vc,defaultMessage:yc}),s=this.nativeIntl.formatMessage({messageId:gc,defaultMessage:_c}),c=uW({label:this.nativeIntl.formatMessage({messageId:oc,defaultMessage:sc}),moreLabel:s,threads:r,projectlessLabel:o,onOpenThread:this.onTrayMenuOpenRecentThread}),h=[c].filter(e=>e.length>0).flatMap((e,t)=>t===0?e:[{type:`separator`},...e]);return[...h,...h.length>0?[{type:`separator`}]:[],{label:this.nativeIntl.formatMessage({messageId:nc,defaultMessage:rc}),click:()=>{this.onTrayMenuOpenNewThread()}},{type:`separator`},{label:this.systemQuitMenuItemLabel,click:()=>{n.app.quit()}}]}};",
   ].join("");
 }
 
@@ -1370,7 +1371,7 @@ function singleInstanceBundleFixture() {
 
 function explicitQuitBundleFixture() {
   return [
-    "var pb=class{getNativeTrayMenuItems(){return[{label:rB(this.appName),click:()=>{n.app.quit()}}]}};",
+    "var pb=class{getNativeTrayMenuItems(){return[{label:this.systemQuitMenuItemLabel,click:()=>{n.app.quit()}}]}};",
     "if(o.type===`quit-app`){n.app.quit();return}",
   ].join("");
 }
@@ -1647,7 +1648,7 @@ function createModernNativeKeyboardShortcutsSettingsFixture() {
     ].join(""),
   );
   writeAsset(
-    "settings-page-A.js",
+    "app-initial-BTphDPeq.js",
     [
       'import{n as routeModule,s as routeToESM}from"./rolldown-runtime-A.js";',
       'import{I as routeJsxFactory,R as routeReactFactory}from"./shared-runtime-A.js";',
@@ -1720,10 +1721,8 @@ function renderGeneratedSettingsTree(element, Component) {
   ];
 }
 
-// The current route map can be hoisted into a hashed app chunk while the
-// settings-page bundle carries only navigation metadata.
 function createSplitRouteNativeKeyboardShortcutsSettingsFixture({
-  routeChunkName = "app-initial~app-main~automations-page-A.js",
+  routeChunkName = "app-initial-BTphDPeq.js",
 } = {}) {
   const extractedDir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-split-route-shortcuts-"));
   const assetsDir = path.join(extractedDir, "webview", "assets");
@@ -1835,7 +1834,7 @@ function currentBootstrapUpdaterBundleFixture() {
     "var g6={enabled:!1,running:!1,state:`disabled`};",
     "async function v6(){",
     "let{startedAtMs:e,buildFlavor:i,desktopSentry:o,sparkleManager:s,productionAppcastStateStore:Q,setSparkleBridgeHandlers:c,setSecondInstanceArgsHandler:l}=n.k(),d=n.P.shouldIncludeSparkle(i,process.platform,process.env)||process.platform===`linux`;",
-    "let ee=new G5,P=null,te=e=>{if(e?.quitImmediately===!1){ee.allowQuitTemporarilyForUpdateInstall();return}ee.allowQuitTemporarilyForUpdateInstall(),r.app.quit()},F=F3({}),oe=iZ({}),se=oe.getWindowContext();",
+    "let ee=new G5,P=null,W=null,te=e=>{if(e?.quitImmediately===!1){ee.allowQuitTemporarilyForUpdateInstall();return}ee.allowQuitTemporarilyForUpdateInstall(),r.app.quit()},F=F3({}),oe=iZ({}),se=oe.getWindowContext();",
     "c({onDownloadProgressChanged:()=>{se.broadcastAppUpdateState()},onInstallProgressChanged:()=>{T&&se.broadcastAppUpdateState()},onUpdateReadyChanged:()=>{se.broadcastAppUpdateState()},onUpdateLifecycleStateChanged:()=>{se.broadcastAppUpdateState()},onRelaunchNoticeChanged:()=>{se.broadcastAppUpdateState()},onInstallUpdatesRequested:e=>{te(e)},isTrustedIpcEvent:M});",
     "}exports.runMainAppStartup=v6;",
   ].join("");
@@ -2660,7 +2659,7 @@ test("marks Linux quit-in-progress for the tray quit path", () => {
 
   assert.match(
     patched,
-    /\{label:rB\(this\.appName\),click:\(\)=>\{typeof codexLinuxPrepareForExplicitQuit===`function`\?codexLinuxPrepareForExplicitQuit\(\):typeof codexLinuxMarkQuitInProgress===`function`&&codexLinuxMarkQuitInProgress\(\),n\.app\.quit\(\)\}\}/,
+    /\{label:this\.systemQuitMenuItemLabel,click:\(\)=>\{typeof codexLinuxPrepareForExplicitQuit===`function`\?codexLinuxPrepareForExplicitQuit\(\):typeof codexLinuxMarkQuitInProgress===`function`&&codexLinuxMarkQuitInProgress\(\),n\.app\.quit\(\)\}\}/,
   );
 });
 
@@ -2677,31 +2676,9 @@ test("marks Linux quit-in-progress for the quit-app IPC path", () => {
   );
 });
 
-test("supports explicit tray quit patching when minified aliases drift", () => {
-  const source =
-    "let x=require(`electron`);var q=class{getNativeTrayMenuItems(){return[{label:rB(this.appName),click:()=>{x.app.quit()}}]}};if(m.type===`quit-app`){x.app.quit();return}";
-  const patched = applyPatchTwice(applyLinuxExplicitTrayQuitPatch, source);
-
-  assert.match(
-    patched,
-    /\{label:rB\(this\.appName\),click:\(\)=>\{typeof codexLinuxPrepareForExplicitQuit===`function`\?codexLinuxPrepareForExplicitQuit\(\):typeof codexLinuxMarkQuitInProgress===`function`&&codexLinuxMarkQuitInProgress\(\),x\.app\.quit\(\)\}\}/,
-  );
-});
-
-test("supports explicit tray quit patching when upstream renames the quit label helper", () => {
-  const source =
-    "let n=require(`electron`);var q=class{getNativeTrayMenuItems(){return[{label:mH(this.appName),click:()=>{n.app.quit()}}]}};function mH(e){let t=n.Menu.buildFromTemplate([{role:`quit`}]);return(Array.isArray(t)?t:t.items)[0]?.label??`Quit ${e}`}";
-  const patched = applyPatchTwice(applyLinuxExplicitTrayQuitPatch, source);
-
-  assert.match(
-    patched,
-    /\{label:mH\(this\.appName\),click:\(\)=>\{typeof codexLinuxPrepareForExplicitQuit===`function`\?codexLinuxPrepareForExplicitQuit\(\):typeof codexLinuxMarkQuitInProgress===`function`&&codexLinuxMarkQuitInProgress\(\),n\.app\.quit\(\)\}\}/,
-  );
-});
-
 test("supports explicit IPC quit patching when minified aliases drift", () => {
   const source =
-    "let x=require(`electron`);var q=class{getNativeTrayMenuItems(){return[{label:rB(this.appName),click:()=>{x.app.quit()}}]}};if(m.type===`quit-app`){x.app.quit();return}";
+    "let x=require(`electron`);if(m.type===`quit-app`){x.app.quit();return}";
   const patched = applyPatchTwice(applyLinuxExplicitIpcQuitPatch, source);
 
   assert.match(
@@ -2713,8 +2690,8 @@ test("supports explicit IPC quit patching when minified aliases drift", () => {
 test("patches remaining explicit quit handlers when another copy is already patched", () => {
   const quitMarkerExpression =
     "typeof codexLinuxPrepareForExplicitQuit===`function`?codexLinuxPrepareForExplicitQuit():typeof codexLinuxMarkQuitInProgress===`function`&&codexLinuxMarkQuitInProgress(),";
-  const patchedTrayQuit = `{label:rB(this.appName),click:()=>{${quitMarkerExpression}n.app.quit()}}`;
-  const unpatchedTrayQuit = "{label:rB(this.appName),click:()=>{n.app.quit()}}";
+  const patchedTrayQuit = `{label:this.systemQuitMenuItemLabel,click:()=>{${quitMarkerExpression}n.app.quit()}}`;
+  const unpatchedTrayQuit = "{label:this.systemQuitMenuItemLabel,click:()=>{n.app.quit()}}";
   const patchedIpcQuit = `if(o.type===\`quit-app\`){${quitMarkerExpression}n.app.quit();return}`;
   const unpatchedIpcQuit = "if(o.type===`quit-app`){n.app.quit();return}";
 
@@ -2730,7 +2707,7 @@ test("patches remaining explicit quit handlers when another copy is already patc
   assert.equal((patchedTray.match(/codexLinuxPrepareForExplicitQuit\(\)/g) ?? []).length, 2);
   assert.match(
     patchedTray,
-    /function createSecondTray\(\)\{return \{label:rB\(this\.appName\),click:\(\)=>\{typeof codexLinuxPrepareForExplicitQuit===`function`\?codexLinuxPrepareForExplicitQuit\(\):typeof codexLinuxMarkQuitInProgress===`function`&&codexLinuxMarkQuitInProgress\(\),n\.app\.quit\(\)\}\}\}/,
+    /function createSecondTray\(\)\{return \{label:this\.systemQuitMenuItemLabel,click:\(\)=>\{typeof codexLinuxPrepareForExplicitQuit===`function`\?codexLinuxPrepareForExplicitQuit\(\):typeof codexLinuxMarkQuitInProgress===`function`&&codexLinuxMarkQuitInProgress\(\),n\.app\.quit\(\)\}\}\}/,
   );
   assert.equal((patchedIpc.match(/codexLinuxPrepareForExplicitQuit\(\)/g) ?? []).length, 2);
   assert.match(
@@ -3402,62 +3379,40 @@ test("patches current webview opaque window default bundle shapes", () => {
   );
 });
 
-test("patches current comment preload screenshot anchor and marker shapes", () => {
+test("patches the current comment preload screenshot anchor shape", () => {
   const source = [
-    "let Xe=(M?j?.kind===`comment`?ge:[]:Ye==null?ge:ge.filter(e=>e.id!==Ye.id)).flatMap(e=>{let t=pe.get(e.id);if(t==null)return[];return[{comment:e,commentNumber:t}]}),",
-    "let at=null,ot=`hover-box`,st;if(M&&j?.annotation.anchor.kind===`element`){let e=tt==null?null:ed(tt);at=e?.rect??Td(j.annotation.anchor),st=e?.borderRadius,ot=Wd(j.annotation.anchor,at,S.width,S.height)}else if(M&&j?.kind===`comment`&&j.annotation.anchor.kind===`region`)at=Td(j.annotation.anchor),ot=Hd(j.annotation.anchor,at,S.width,S.height);",
+    "let mt=Te;M?.kind===`comment`?mt=pt?[M.annotation]:Te:pt||P?mt=[]:ft!=null&&(mt=Te.filter(e=>e.id!==ft.id));",
+    "let ht=mt.flatMap(e=>[e]),kt=null,At=`hover-box`,jt,Mt=0,I=[];",
+    "if(P&&M?.annotation.anchor.kind===`element`){Mt=xt[0]??0;let e=bt==null?null:hs(bt),t=e?.rect??Ss(M.annotation.anchor);jt=e?.borderRadius,At=Vs(M.annotation.anchor,t,C.width,C.height),kt=Is(M.annotation.anchor,t,bt),I=bc(F,C,{clipToVisibleArea:!0})}",
   ].join("");
 
   const patched = applyPatchTwice(applyBrowserAnnotationScreenshotPatch, source);
 
   assert.match(
     patched,
-    /Xe=\(M\?j\?\.kind===`comment`\?ge\.filter\(e=>e\.id===j\.annotation\.id\):\[\]:Ye==null\?ge:ge\.filter\(e=>e\.id!==Ye\.id\)\)\.flatMap/,
+    /if\(P&&M\?\.annotation\.anchor\.kind===`element`\)\{Mt=xt\[0\]\?\?0;let t=Ss\(M\.annotation\.anchor\);jt=void 0,At=Vs/,
   );
-  assert.match(
-    patched,
-    /if\(M&&j\?\.annotation\.anchor\.kind===`element`\)\{at=Td\(j\.annotation\.anchor\),st=void 0,ot=Wd\(j\.annotation\.anchor,at,S\.width,S\.height\)\}/,
-  );
+  assert.match(patched, /M\?\.kind===`comment`\?mt=pt\?\[M\.annotation\]:Te/);
+  assert.doesNotMatch(patched, /e\?\.rect\?\?Ss/);
 });
 
-test("patches drifted comment preload screenshot anchor helper names", () => {
+test("keeps the current stored annotation anchor shape unchanged", () => {
   const source =
-    "let rect=null,css=`hover-box`,radius;if(enabled&&selected?.annotation.anchor.kind===`element`){let e=node==null?null:measure(node);rect=e?.rect??anchorRect(selected.annotation.anchor),radius=e?.borderRadius,css=highlight(selected.annotation.anchor,rect,viewport.width,viewport.height)}";
+    "if(P&&M?.annotation.anchor.kind===`element`){Mt=xt[0]??0;let t=Ss(M.annotation.anchor);jt=void 0,At=Vs(M.annotation.anchor,t,C.width,C.height)}";
 
-  const patched = applyPatchTwice(applyBrowserAnnotationScreenshotPatch, source);
-
-  assert.match(
-    patched,
-    /if\(enabled&&selected\?\.annotation\.anchor\.kind===`element`\)\{rect=anchorRect\(selected\.annotation\.anchor\),radius=void 0,css=highlight\(selected\.annotation\.anchor,rect,viewport\.width,viewport\.height\)\}/,
-  );
-  assert.doesNotMatch(patched, /\bWd\(/);
-  assert.doesNotMatch(patched, /\bS\.width\b/);
+  assert.equal(applyPatchTwice(applyBrowserAnnotationScreenshotPatch, source), source);
 });
 
-test("patches current comment preload screenshot marker selection list", () => {
-  const source =
-    "let Ue=M?.annotation.id??null,We=M?.kind===`comment`?[M.annotation]:he,Ge=M!=null&&g!=null,Ke=m?.target.mode===`create`?oo(m.anchor):null,qe=m?.target.mode===`create`&&m.anchor.type===`element`?m.anchor.viewportSize:void 0,Je=Ke==null?null:he.find(e=>le(e.anchor,Ke))??null,Ye=(Ge?M?.kind===`comment`?he:[]:Je==null?he:he.filter(e=>e.id!==Je.id)).flatMap(e=>{let t=fe.get(e.id);if(t==null)return[];return[{comment:e,commentNumber:t}]})";
-
-  const patched = applyPatchTwice(applyBrowserAnnotationScreenshotPatch, source);
-
-  assert.match(
-    patched,
-    /Ye=\(Ge\?M\?\.kind===`comment`\?We:\[\]:Je==null\?he:he\.filter\(e=>e\.id!==Je\.id\)\)\.flatMap/,
+test("reports current comment preload screenshot anchor drift", () => {
+  const source = "if(P&&M?.annotation.anchor.kind===`element`){renderDriftedAnchor()}";
+  const { value, warnings } = captureWarns(() =>
+    applyBrowserAnnotationScreenshotPatch(source),
   );
-  assert.doesNotMatch(patched, /Ge\?M\?\.kind===`comment`\?he:\[\]/);
-});
 
-test("patches Electron 42 comment preload screenshot marker selection list", () => {
-  const source =
-    "let Ue=g==null?null:ge.find(e=>e.id===g)??null,We=g==null?null:we.find(e=>e.id===g)??null,A=Ue==null?We==null?null:{kind:`design`,annotation:We}:{kind:`comment`,annotation:Ue},Ge=A?.annotation.id??null,Ke=A?.kind===`comment`?[A.annotation]:ge,qe=A!=null&&g!=null,Je=m?.target.mode===`create`?ho(m.anchor):null,Ye=m?.target.mode===`create`&&m.anchor.type===`element`?m.anchor.viewportSize:void 0,Xe=Je==null?null:ge.find(e=>ue(e.anchor,Je))??null,Ze=(qe?A?.kind===`comment`?ge:[]:Xe==null?ge:ge.filter(e=>e.id!==Xe.id)).flatMap(e=>{let t=fe.get(e.id);if(t==null)return[];return[{comment:e,commentNumber:t}]})";
-
-  const patched = applyPatchTwice(applyBrowserAnnotationScreenshotPatch, source);
-
-  assert.match(
-    patched,
-    /Ze=\(qe\?A\?\.kind===`comment`\?Ke:\[\]:Xe==null\?ge:ge\.filter\(e=>e\.id!==Xe\.id\)\)\.flatMap/,
-  );
-  assert.doesNotMatch(patched, /qe\?A\?\.kind===`comment`\?ge:\[\]/);
+  assert.equal(value, source);
+  assert.deepEqual(warnings, [
+    "WARN: Could not find browser annotation screenshot element highlight — skipping screenshot anchor patch",
+  ]);
 });
 
 test("guards fast-mode model tier lookup when serviceTiers is missing", () => {
@@ -5427,7 +5382,6 @@ test("adds Linux desktop settings route when upstream owns Keyboard Shortcuts", 
     /var i_e=\{"linux-desktop":Z\(async\(\)=>\(await s\(async\(\)=>\{let\{LinuxDesktopSettings:e\}=await import\(`\.\/linux-desktop-settings-linux\.js`\)/,
   );
   assert.match(patched, /qge=\[`general-settings`,`linux-desktop`,`import`,`appearance`/);
-  assert.match(patched, /slugs:\[`general-settings`,`linux-desktop`,`import`,`appearance`/);
 });
 
 test("adds physical-key fallback for current native shortcut runtime", () => {
@@ -5672,7 +5626,7 @@ test("renders the generated Linux desktop settings page with working switches", 
     };
     const React = { Component, Fragment: "fragment" };
     const routeSettingsSource = fs.readFileSync(
-      path.join(assetsDir, "settings-page-A.js"),
+      path.join(assetsDir, "app-initial-BTphDPeq.js"),
       "utf8",
     );
     assert.match(
@@ -5772,7 +5726,7 @@ test("skips old Keybinds settings generation when native Keyboard Shortcuts are 
 test("skips Linux settings without writing assets when the active route runtime cannot be inferred", () => {
   const { extractedDir, assetsDir } = createModernNativeKeyboardShortcutsSettingsFixture();
   try {
-    const nativeSettingsPath = path.join(assetsDir, "settings-page-A.js");
+    const nativeSettingsPath = path.join(assetsDir, "app-initial-BTphDPeq.js");
     const nativeSettingsSource = fs.readFileSync(nativeSettingsPath, "utf8").replace(
       "(0,RouteReact.useState)(null)",
       "RouteReact.useState(null)",
@@ -6022,7 +5976,7 @@ test("does not leave generated Linux settings fallbacks when later current-DMG r
   try {
     fs.rmSync(path.join(assetsDir, "settings-row-A.js"));
     fs.writeFileSync(
-      path.join(assetsDir, "settings-page-A.js"),
+      path.join(assetsDir, "app-initial-BTphDPeq.js"),
       "settings.nav.keyboard-shortcuts;var icons={\"general-settings\":wt,\"keyboard-shortcuts\":xn};",
       "utf8",
     );
@@ -6039,7 +5993,7 @@ test("does not leave generated Linux settings fallbacks when later current-DMG r
   }
 });
 
-test("adds Linux desktop settings when the lazy route map is hoisted into a separate app chunk", () => {
+test("adds Linux desktop settings in the current monolithic app bundle", () => {
   const { extractedDir, assetsDir } = createSplitRouteNativeKeyboardShortcutsSettingsFixture();
   try {
     const { value: result, warnings } = captureWarns(() => patchKeybindsSettingsAssets(extractedDir));
@@ -6059,13 +6013,6 @@ test("adds Linux desktop settings when the lazy route map is hoisted into a sepa
     );
     assert.doesNotMatch(linuxDesktopSource, /function LinuxSwitch/);
 
-    // The current navigation bundle carries slug order and groups without a
-    // separate slug-to-icon map.
-    const settingsPageSource = fs.readFileSync(path.join(assetsDir, "settings-page-A.js"), "utf8");
-    assert.doesNotMatch(settingsPageSource, /linux-desktop-settings-linux\.js/);
-    assert.doesNotMatch(settingsPageSource, /codexLinuxDesktopSettings/);
-    assert.match(settingsPageSource, /=\[`general-settings`,`linux-desktop`,`import`,`profile`/);
-    assert.match(settingsPageSource, /slugs:\[`general-settings`,`linux-desktop`,`import`,`profile`/);
     const visibleSectionsSource = fs.readFileSync(
       path.join(assetsDir, "use-visible-settings-sections-A.js"),
       "utf8",
@@ -6079,10 +6026,9 @@ test("adds Linux desktop settings when the lazy route map is hoisted into a sepa
       /case`linux-desktop`:return!0;case`general-settings`:case`agent`:case`personalization`:return!0/,
     );
 
-    // The lazy route is registered in the hoisted app chunk, reusing the bundle's
-    // own lazy/preload aliases against the bare (no `var`) map assignment.
+    // The lazy route reuses the bundle's own lazy/preload aliases.
     const routeChunkSource = fs.readFileSync(
-      path.join(assetsDir, "app-initial~app-main~automations-page-A.js"),
+      path.join(assetsDir, "app-initial-BTphDPeq.js"),
       "utf8",
     );
     assert.match(
@@ -6099,7 +6045,7 @@ test("adds Linux desktop settings when the lazy route map is hoisted into a sepa
 });
 
 test("composes Linux desktop section metadata and route patches in the same asset", () => {
-  const routeChunkName = "app-initial~app-main~automations-page-A.js";
+  const routeChunkName = "app-initial-BTphDPeq.js";
   const { extractedDir, assetsDir } = createSplitRouteNativeKeyboardShortcutsSettingsFixture({
     routeChunkName,
   });
@@ -6131,32 +6077,6 @@ test("composes Linux desktop section metadata and route patches in the same asse
     const secondResult = patchKeybindsSettingsAssets(extractedDir);
     assert.equal(secondResult.matched, true);
     assert.equal(secondResult.changed, 0);
-  } finally {
-    fs.rmSync(extractedDir, { recursive: true, force: true });
-  }
-});
-
-test("finds Linux desktop settings route map in hashed settings-page chunks", () => {
-  const routeChunkName = "app-initial~settings-page-A.js";
-  const { extractedDir, assetsDir } = createSplitRouteNativeKeyboardShortcutsSettingsFixture({
-    routeChunkName,
-  });
-  try {
-    const { value: result, warnings } = captureWarns(() => patchKeybindsSettingsAssets(extractedDir));
-
-    assert.equal(result.matched, true);
-    assert.deepEqual(warnings, []);
-    assert.equal(fs.existsSync(path.join(assetsDir, linuxDesktopSettingsAsset)), true);
-
-    const routeChunkSource = fs.readFileSync(path.join(assetsDir, routeChunkName), "utf8");
-    assert.match(
-      routeChunkSource,
-      /"linux-desktop":Ya\(async\(\)=>\(await Pr\(async\(\)=>\{let\{LinuxDesktopSettings:e\}=await import\(`\.\/linux-desktop-settings-linux\.js\?v=[a-f0-9]{12}`\);return\{LinuxDesktopSettings:e\}\},\[\],import\.meta\.url\)\)\.LinuxDesktopSettings\),"general-settings":/,
-    );
-
-    const settingsPageSource = fs.readFileSync(path.join(assetsDir, "settings-page-A.js"), "utf8");
-    assert.doesNotMatch(settingsPageSource, /codexLinuxDesktopSettings/);
-    assert.match(settingsPageSource, /=\[`general-settings`,`linux-desktop`,`import`,`profile`/);
   } finally {
     fs.rmSync(extractedDir, { recursive: true, force: true });
   }
@@ -6813,17 +6733,23 @@ test("adds Linux package updater to current bootstrap updater wiring", () => {
 });
 
 test("fails soft when the current updater callback bridge drifts", () => {
-  const source = currentBootstrapUpdaterBundleFixture().replace(
-    "let ee=new G5,P=null,te=e=>",
-    "let ee=G5(),P=null,te=e=>",
-  );
+  for (const source of [
+    currentBootstrapUpdaterBundleFixture().replace(
+      "let ee=new G5,P=null,W=null,te=e=>",
+      "let ee=G5(),P=null,W=null,te=e=>",
+    ),
+    currentBootstrapUpdaterBundleFixture().replace(
+      "let ee=new G5,P=null,W=null,te=e=>",
+      "let ee=new G5,P=null,te=e=>",
+    ),
+  ]) {
+    const { value: patched, warnings } = captureWarns(() =>
+      applyLinuxAppUpdaterBridgePatch(source),
+    );
 
-  const { value: patched, warnings } = captureWarns(() =>
-    applyLinuxAppUpdaterBridgePatch(source),
-  );
-
-  assert.equal(patched, source);
-  assert.match(warnings.join("\n"), /Could not find current updater callback bridge/);
+    assert.equal(patched, source);
+    assert.match(warnings.join("\n"), /Could not find current updater callback bridge/);
+  }
 });
 
 test("enables the existing app update menu on Linux", () => {
@@ -7780,11 +7706,11 @@ test("keeps already patched external Browser Use availability unchanged", () => 
   assert.equal(applyPatchTwice(applyLinuxBrowserUseExternalAvailabilityPatch, source), source);
 });
 
-test("external Browser Use availability descriptor matches the current bundle name", () => {
+test("external Browser Use availability descriptor matches the current monolithic bundle", () => {
   const descriptor = require("./patches/core/all-linux/webview/browser-use-external-availability/patch.js");
 
-  assert.match("use-is-plugins-enabled-current.js", descriptor.pattern);
-  assert.match("use-in-app-browser-use-availability-B4Bdb14G.js", descriptor.pattern);
+  assert.match("app-initial-BTphDPeq.js", descriptor.pattern);
+  assert.doesNotMatch("use-in-app-browser-use-availability-B4Bdb14G.js", descriptor.pattern);
 });
 
 test("allows Browser Use non-local navigation on Linux without the upstream rollout flag", () => {
@@ -8405,7 +8331,7 @@ const browserUseRecoveryHostSource =
 const browserUseHiddenHostSource =
   "function f(e){return e}function A(e){let{browserUseTabIdsKey:n,conversationId:r}=e,c=e.isRouteOwner,B=e.visibleTabs;if(!c&&B.size>0)return null;let H=Symbol.for(`react.early_return_sentinel`);bb0:{let e=e=>!B.has(e);let a=n.split(`\\0`).map(f).filter(e);if(a.length===0){H=null;break bb0}return a}if(H!==Symbol.for(`react.early_return_sentinel`))return H}";
 
-test("patches the current split Browser webview store and host", () => {
+test("patches the current monolithic Browser webview store and host contracts", () => {
   const patchedStore = applyPatchTwice(
     applyLinuxBrowserUseWebviewRemountStorePatch,
     browserUseRecoveryStoreSource,
@@ -8638,7 +8564,7 @@ test("patches the current split Browser webview store and host", () => {
   assert.equal(store.linuxBrowserUseRecoveryStates.size, 0);
 });
 
-test("Browser webview recovery descriptors target the current renderer chunks", () => {
+test("Browser webview recovery descriptors target the current monolithic renderer chunk", () => {
   const descriptors = require("./patches/core/all-linux/webview/browser-use-attach-recovery/patch.js");
   const storeDescriptor = descriptors.find(
     (descriptor) => descriptor.id === "linux-browser-use-webview-attach-recovery-store",
@@ -8654,19 +8580,19 @@ test("Browser webview recovery descriptors target the current renderer chunks", 
   assert.ok(hostDescriptor);
   assert.ok(hiddenHostDescriptor);
   assert.match(
-    "app-initial~artifact-tab-content.electron~app-main~appgen-settings-page~page~pull-request-r~mxek7o2y-BH5mkLvE.js",
+    "app-initial-BTphDPeq.js",
     storeDescriptor.pattern,
   );
   assert.doesNotMatch(
-    "app-initial~app-main~onboarding-page-CIkoyvFz.js",
+    "app-initial~artifact-tab-content.electron~app-main~legacy.js",
     storeDescriptor.pattern,
   );
   assert.match(
-    "app-initial~app-main~pull-request-route~onboarding-page~hotkey-window-thread-page~quick-cha~mo2avlln-Be1pn_Z1.js",
+    "app-initial-BTphDPeq.js",
     hostDescriptor.pattern,
   );
   assert.doesNotMatch(
-    "app-initial~app-main~onboarding-page-CIkoyvFz.js",
+    "app-initial~app-main~onboarding-page-legacy.js",
     hostDescriptor.pattern,
   );
   assert.match(
@@ -8679,7 +8605,7 @@ test("Browser webview recovery descriptors target the current renderer chunks", 
   );
 });
 
-test("current split Browser webview assets apply all recovery descriptors without report drift", () => {
+test("current monolithic Browser webview asset applies all recovery descriptors without report drift", () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "codex-browser-webview-current-"));
   try {
     const buildDir = path.join(tempRoot, ".vite", "build");
@@ -8688,18 +8614,8 @@ test("current split Browser webview assets apply all recovery descriptors withou
     fs.mkdirSync(assetsDir, { recursive: true });
     fs.writeFileSync(path.join(buildDir, "main.js"), "module.exports={}");
     fs.writeFileSync(
-      path.join(
-        assetsDir,
-        "app-initial~artifact-tab-content.electron~app-main~appgen-settings-page~page~pull-request-r~mxek7o2y-BH5mkLvE.js",
-      ),
-      browserUseRecoveryStoreSource,
-    );
-    fs.writeFileSync(
-      path.join(
-        assetsDir,
-        "app-initial~app-main~pull-request-route~onboarding-page~hotkey-window-thread-page~quick-cha~mo2avlln-Be1pn_Z1.js",
-      ),
-      browserUseRecoveryHostSource,
+      path.join(assetsDir, "app-initial-BTphDPeq.js"),
+      `${browserUseRecoveryStoreSource}${browserUseRecoveryHostSource}`,
     );
     fs.writeFileSync(
       path.join(assetsDir, "browser-sidebar-hidden-browser-use-webview-host-DbLBblbO.js"),
@@ -8733,16 +8649,14 @@ test("current split Browser webview assets apply all recovery descriptors withou
   }
 });
 
-test("reports drift when current split Browser recovery assets lose their primary needles", () => {
+test("reports drift when current Browser recovery assets lose their primary needles", () => {
   const cases = [
     {
-      assetName:
-        "app-initial~artifact-tab-content.electron~app-main~appgen-settings-page~page~pull-request-r~mxek7o2y-BH5mkLvE.js",
+      assetName: "app-initial-BTphDPeq.js",
       patchName: "linux-browser-use-webview-attach-recovery-store",
     },
     {
-      assetName:
-        "app-initial~app-main~pull-request-route~onboarding-page~hotkey-window-thread-page~quick-cha~mo2avlln-Be1pn_Z1.js",
+      assetName: "app-initial-BTphDPeq.js",
       patchName: "linux-browser-use-webview-attach-recovery-host",
     },
     {
@@ -9012,7 +8926,7 @@ test("Computer Use availability descriptor matches the current settings bundle n
   assert.match("computer-use-settings-DsM_pz8i.js", descriptor.pattern);
   assert.match("plugins-page-gTuUJ93E.js", pluginsDescriptor.pattern);
   assert.match(
-    "app-initial~avatarOverlayCompositionSurface~artifact-tab-content.electron~notebook-preview-~iaq4jiqv-current.js",
+    "app-initial-BHB6SClA.js",
     installFlowDescriptor.pattern,
   );
   assert.equal(descriptor.ciPolicy, "required-upstream");
@@ -9328,6 +9242,22 @@ test("loads current Computer Use plugin details on Linux despite the upstream av
 
   assert.match(patched, /let g=m&&i!==`computer-use`,_;/);
   assert.doesNotMatch(patched, /let g=m,_;/);
+});
+
+test("loads July 24 Computer Use plugin details through the expanded availability chain", () => {
+  const source =
+    "function n4i(e){let t=cache(31),{hostId:n,marketplacePath:r,pluginName:i,remoteMarketplaceName:a,enabled:o}=e," +
+    "s=o===void 0?!0:o,c=n??`local`,l;t[0]===c?l=t[1]:(l={hostId:c},t[0]=c,t[1]=l);" +
+    "let u=hostReady(l),d=environment(),f;t[2]===i?f=t[3]:(f=i!=null&&isAvailabilityGated(i),t[2]=i,t[3]=f);" +
+    "let p=f,m;t[4]!==c||t[5]!==p?(m={enabled:p,hostId:c},t[4]=c,t[5]=p,t[6]=m):m=t[6];" +
+    "let h=useComputerUseAvailability(m),g=(r!=null||a!=null)&&i!=null,_=u&&s&&g&&p&&h.isLoading,v=u&&s&&g&&(!p||h.available);" +
+    "let b=async()=>{if(i==null)throw Error(`plugin detail query requires pluginName`);return read(`read-plugin`,{hostId:c,pluginName:i})};" +
+    "return useQuery({queryFn:b,enabled:v})}";
+
+  const patched = applyPatchTwice(applyLinuxComputerUseInstallFlowPatch, source);
+
+  assert.match(patched, /let p=f&&i!==`computer-use`,m;/);
+  assert.doesNotMatch(patched, /let p=f,m;/);
 });
 
 test("rejects current Computer Use plugin detail drift byte-identically", () => {

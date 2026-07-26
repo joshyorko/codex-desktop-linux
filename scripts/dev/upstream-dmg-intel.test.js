@@ -69,7 +69,12 @@ const registry = {
         {
           id: "micro-service-entrypoint",
           pathPatterns: ["codex-micro-service.*\\.js$"],
-          contentNeedles: ["@worklouder/device-kit-oai", "DeviceType", "Project2077"],
+          contentNeedles: [
+            "@worklouder/device-kit-oai",
+            "DeviceType",
+            "CodexMicro",
+            "CreatorMicroV2",
+          ],
         },
         {
           id: "work-louder-device-kits",
@@ -197,7 +202,7 @@ function writeWorkLouderControlSurface({ asarExtracted, includeHid = true, resou
     path.join(asarExtracted, ".vite/build/codex-micro-service-fixture.js"),
     [
       "import { DeviceType, WLDeviceDiscovery } from '@worklouder/device-kit-oai';",
-      "const device = DeviceType.Project2077;",
+      "const device = [DeviceType.CodexMicro, DeviceType.CreatorMicroV2];",
       "WLDeviceDiscovery.start(device);",
       "require('node-hid');",
     ].join("\n"),
@@ -222,7 +227,7 @@ function writeWorkLouderControlSurface({ asarExtracted, includeHid = true, resou
     path.join(wlKit, "dist/index.js"),
     [
       "const HID = require('node-hid');",
-      "export const DeviceType = { Project2077: 'Project2077' };",
+      "export const DeviceType = { CodexMicro: 'CodexMicro', CreatorMicroV2: 'CreatorMicroV2' };",
       "export class WLDeviceDiscovery { static start() { return HID; } }",
     ].join(" "),
   );
@@ -233,7 +238,7 @@ function writeWorkLouderControlSurface({ asarExtracted, includeHid = true, resou
     });
     writeFile(
       path.join(hid, "prebuilds/HID-darwin-arm64/node-napi-v4.node"),
-      "Mach-O node-hid Project2077",
+      "Mach-O node-hid CodexMicro CreatorMicroV2",
       0o755,
     );
   }
@@ -244,6 +249,7 @@ function createFixtureApp(root, variant = "baseline") {
   const resources = path.join(appDir, "Contents/Resources");
   const asarExtracted = path.join(resources, "app.asar.extracted");
   const recordPlugin = path.join(resources, "plugins/openai-bundled/plugins/record-and-replay");
+  const computerPlugin = path.join(resources, "plugins/openai-bundled/plugins/computer-use");
   const chromePlugin = path.join(resources, "plugins/openai-bundled/plugins/chrome");
 
   writeFile(
@@ -324,15 +330,37 @@ function createFixtureApp(root, variant = "baseline") {
     version: "1.0.0",
     mcpServers: {
       "event-stream": {
-        command: "SkyComputerUseClient",
+        command: "./bin/computer-use-client-launcher",
       },
     },
     skills: [{ name: "record-and-replay", path: "skills/record-and-replay/SKILL.md" }],
   });
+  writeJson(path.join(computerPlugin, ".codex-plugin/plugin.json"), {
+    id: "computer-use",
+    name: "computer-use",
+    version: "1.0.0",
+    mcpServers: {
+      "computer-use": {
+        command: "./bin/computer-use-client-launcher",
+      },
+    },
+  });
+  writeJson(path.join(computerPlugin, ".mcp.json"), {
+    mcpServers: {
+      "computer-use": {
+        command: "./bin/computer-use-client-launcher",
+      },
+    },
+  });
+  writeFile(
+    path.join(computerPlugin, "bin/computer-use-client-launcher"),
+    "#!/bin/sh\nexec computer-use-client \"$@\"\n",
+    0o755,
+  );
   writeJson(path.join(recordPlugin, ".mcp.json"), {
     mcpServers: {
       "event-stream": {
-        command: "SkyComputerUseClient",
+        command: "./bin/computer-use-client-launcher",
         tools:
           variant === "candidate"
             ? ["event_stream_start", "browser_trace", "speech_context", "skysight_snapshot"]
@@ -446,6 +474,38 @@ test("protects the current Hatch Pet skill and Linux bundled-skill staging owner
       "scripts/lib/bundled-plugins.sh",
       "tests/scripts_smoke.sh",
     ]);
+  }));
+
+test("protects the current Computer Use launcher contract", () =>
+  withTempDir((workspace) => {
+    const computerUseSurface = productionRegistry.surfaces.find(
+      (surface) => surface.id === "computer_use_plugin",
+    );
+    assert.ok(computerUseSurface, "expected production registry to protect Computer Use");
+
+    const appDir = createFixtureApp(workspace, "candidate");
+    const protectedSurfaces = extractProtectedSurfaces({
+      inventory: createInventory({
+        registry: {
+          version: productionRegistry.version,
+          surfaces: [computerUseSurface],
+        },
+        sourcePath: appDir,
+      }),
+      registry: {
+        version: productionRegistry.version,
+        surfaces: [computerUseSurface],
+      },
+      repoRoot: process.cwd(),
+    });
+    const surface = protectedSurfaces.surfacesById.computer_use_plugin;
+
+    assert.equal(surface.status, "PRESENT");
+    assert.ok(
+      surface.satisfiedAnchors.some(
+        (anchor) => anchor.id === "computer-use-client-launcher",
+      ),
+    );
   }));
 
 test("marks Chronicle settings toggle surface partial when the Memory master toggle path disappears", () =>

@@ -1139,6 +1139,41 @@ patch_browser_client_linux_socket_dir() {
     fi
 }
 
+patch_browser_use_node_repl_process_env_import() {
+    local client="$1"
+
+    if grep -q "codexLinuxBrowserUseProcessEnv" "$client"; then
+        return 0
+    fi
+
+    python3 - "$client" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+path = Path(sys.argv[1])
+source = path.read_text(encoding="utf-8")
+pattern = re.compile(
+    r'import\{env as (?P<binding>[A-Za-z_$][\w$]*)\}from"node:process";'
+)
+match = pattern.search(source)
+if match is None:
+    if '"node:process"' in source:
+        print(
+            "WARN: Could not find Browser Use node:process env import — leaving browser-client.mjs unchanged",
+            file=sys.stderr,
+        )
+    raise SystemExit(0)
+
+binding = match.group("binding")
+replacement = (
+    "var codexLinuxBrowserUseProcessEnv=globalThis.nodeRepl?.env??{},"
+    f"{binding}=codexLinuxBrowserUseProcessEnv;"
+)
+path.write_text(source[:match.start()] + replacement + source[match.end():], encoding="utf-8")
+PY
+}
+
 normalize_plugin_script_executable_modes() {
     local target_plugin="$1"
     local scripts_dir="$target_plugin/scripts"
@@ -1180,6 +1215,7 @@ stage_chrome_plugin_from_upstream() {
     cp -R "$source_plugin" "$target_plugin"
     remove_macos_sidecar_files "$target_plugin"
     patch_chrome_plugin_for_linux "$target_plugin"
+    patch_browser_use_node_repl_process_env_import "$target_plugin/scripts/browser-client.mjs"
     patch_browser_use_node_repl_env_guard "$target_plugin/scripts/browser-client.mjs"
     patch_browser_use_node_repl_config_shim "$target_plugin/scripts/browser-client.mjs"
     patch_browser_use_native_pipe_import_meta_bridge "$target_plugin/scripts/browser-client.mjs"
@@ -1389,7 +1425,9 @@ value = match.group("value")
 shim = r'''
 function codexLinuxBrowserUseConfigShim() {
   let repl = globalThis.nodeRepl;
-  if (repl == null || repl.config != null) return;
+  if (repl == null) return;
+  codexLinuxBrowserUseNodeReplMethodShim(repl);
+  if (repl.config != null) return;
   let config = {
     read: async () => ({ config: await codexLinuxBrowserUseReadToml("config.toml") }),
     readRequirements: async () => ({ requirements: null }),
@@ -1410,6 +1448,30 @@ function codexLinuxBrowserUseConfigShim() {
       Object.defineProperty(prototype, "config", {
         configurable: true,
         get: () => config,
+      });
+    }
+  } catch {}
+}
+
+function codexLinuxBrowserUseNodeReplMethodShim(repl) {
+  // Older Linux node_repl builds do not expose browser notification hooks.
+  codexLinuxBrowserUseDefineNodeReplMethod(repl, "addAfterSubmittedCodeHook", () => () => undefined);
+}
+
+function codexLinuxBrowserUseDefineNodeReplMethod(repl, name, value) {
+  if (typeof repl?.[name] == "function") return;
+
+  try {
+    repl[name] = value;
+    if (typeof repl[name] == "function") return;
+  } catch {}
+
+  try {
+    let prototype = Object.getPrototypeOf(repl);
+    if (prototype != null && Object.getOwnPropertyDescriptor(prototype, name) == null) {
+      Object.defineProperty(prototype, name, {
+        configurable: true,
+        value,
       });
     }
   } catch {}
@@ -1640,6 +1702,7 @@ stage_browser_plugin_from_upstream() {
     rm -rf "$target_plugin"
     cp -R "$source_plugin" "$target_plugin"
     remove_macos_sidecar_files "$target_plugin"
+    patch_browser_use_node_repl_process_env_import "$target_client"
     patch_browser_use_node_repl_env_guard "$target_client"
     patch_browser_use_node_repl_config_shim "$target_client"
     patch_browser_use_native_pipe_import_meta_bridge "$target_client"

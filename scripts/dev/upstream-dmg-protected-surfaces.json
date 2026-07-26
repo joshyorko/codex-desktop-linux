@@ -259,7 +259,7 @@
             "event-stream"
           ],
           "mcpCommandPatterns": [
-            "SkyComputerUseClient"
+            "\\./bin/computer-use-client-launcher"
           ],
           "mcpArgs": [
             "event-stream",
@@ -338,7 +338,7 @@
         "computer-use",
         "Computer Use",
         "codex-computer-use",
-        "SkyComputerUseClient",
+        "computer-use-client-launcher",
         "enableComputerUse",
         "accessibility_snapshot"
       ],
@@ -357,9 +357,9 @@
           ]
         },
         {
-          "id": "computer-use-sky-client",
-          "nativeBinaryPatterns": [
-            "plugins/openai-bundled/plugins/computer-use/.*SkyComputerUseClient"
+          "id": "computer-use-client-launcher",
+          "pathPatterns": [
+            "plugins/openai-bundled/plugins/computer-use/bin/computer-use-client-launcher"
           ]
         }
       ],
@@ -799,7 +799,8 @@
           "contentNeedles": [
             "@worklouder/device-kit-oai",
             "DeviceType",
-            "Project2077"
+            "CodexMicro",
+            "CreatorMicroV2"
           ]
         },
         {

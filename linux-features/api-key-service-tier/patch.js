@@ -15,7 +15,7 @@ const PATCHED_SERVICE_TIER_GATE = new RegExp(
 );
 const PATCHED_MODEL_MARKER = new RegExp(`${MODEL_MARKER}:${JS_IDENT}===\\\`apikey\\\``);
 const MODEL_LIST_MAPPING_SHAPE = new RegExp(
-  `function ${JS_IDENT}\\(\\{authMethod:${JS_IDENT},availableModels:${JS_IDENT},` +
+  `function ${JS_IDENT}\\(\\{(?:additionalAvailableModels:${JS_IDENT},)?authMethod:${JS_IDENT},availableModels:${JS_IDENT},` +
     `defaultModel:${JS_IDENT},enabledReasoningEfforts:${JS_IDENT},` +
     `includeUltraReasoningEffort:${JS_IDENT},models:${JS_IDENT},useHiddenModels:${JS_IDENT}\\}\\)` +
     `\\{[\\s\\S]{0,3000}?supportedReasoningEfforts[\\s\\S]{0,1200}?isDefault`,
@@ -61,7 +61,7 @@ function applyApiKeyModelMarkerPatch(source) {
   }
 
   const modelListPattern = new RegExp(
-    `(function ${JS_IDENT}\\(\\{authMethod:(${JS_IDENT}),availableModels:${JS_IDENT},` +
+    `(function ${JS_IDENT}\\(\\{(?:additionalAvailableModels:${JS_IDENT},)?authMethod:(${JS_IDENT}),availableModels:${JS_IDENT},` +
       `defaultModel:${JS_IDENT},enabledReasoningEfforts:${JS_IDENT},` +
       `includeUltraReasoningEffort:${JS_IDENT},models:${JS_IDENT},useHiddenModels:${JS_IDENT}\\}\\)` +
       `\\{[\\s\\S]{0,1800}?[,;]${JS_IDENT}=\\{\\.\\.\\.${JS_IDENT},supportedReasoningEfforts:${JS_IDENT})(\\})`,
@@ -194,7 +194,7 @@ const descriptors = [
     phase: "webview-asset",
     order: 20600,
     ciPolicy: "optional",
-    pattern: /^app-initial~app-main~new-thread-panel-page~onboarding-page~appgen-library-page~hotkey-windo~l46phxln-[^.]+\.js$/,
+    pattern: /^app-initial-[^.]+\.js$/,
     missingDescription: "current API key service tier gate bundle",
     skipDescription: "API key service tier gate patch",
     apply: applyCurrentGatePatch,
@@ -204,7 +204,7 @@ const descriptors = [
     phase: "webview-asset",
     order: 20605,
     ciPolicy: "optional",
-    pattern: /^app-initial~avatarOverlayCompositionSurface~artifact-tab-content\.electron~app-main~plugin-d~kw7nl1sl-[^.]+\.js$/,
+    pattern: /^app-initial-[^.]+\.js$/,
     missingDescription: "current API key service tier model bundle",
     skipDescription: "API key model service tier marker patch",
     apply: applyCurrentModelPatch,
@@ -214,7 +214,7 @@ const descriptors = [
     phase: "webview-asset",
     order: 20610,
     ciPolicy: "optional",
-    pattern: /^app-initial~artifact-tab-content\.electron~notebook-preview-panel~app-main~business-checkout~oxnpxkxc-[^.]+\.js$/,
+    pattern: /^app-initial-[^.]+\.js$/,
     missingDescription: "current API key service tier fallback bundle",
     skipDescription: "API key fallback fast tier patch",
     apply: applyCurrentFallbackFastTierPatch,
