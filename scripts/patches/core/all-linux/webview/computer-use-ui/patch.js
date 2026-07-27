@@ -8,6 +8,8 @@ const {
   applyLinuxComputerUseRendererAvailabilityPatch,
   applyLinuxComputerUseInstallFlowPatch,
   applyLinuxComputerUsePluginsPageAvailabilityPatch,
+  matchesLinuxComputerUseHostPlatformContract,
+  matchesLinuxComputerUseInstallFlowContract,
 } = require("../../../../impl/computer-use.js");
 
 module.exports = [
@@ -40,7 +42,8 @@ module.exports = [
     ciPolicy: "opt-in",
     enabled: (context) => context.enableComputerUseUi,
     pattern: /^app-initial-[^.]+\.js$/,
-    missingDescription: "current Computer Use host-platform bundle",
+    assetMatch: matchesLinuxComputerUseHostPlatformContract,
+    missingDescription: "current Computer Use host-platform app-initial contract",
     skipDescription: "Linux Computer Use host-platform patch",
     apply: applyLinuxComputerUseHostPlatformPatch,
   }),
@@ -51,7 +54,8 @@ module.exports = [
     ciPolicy: "required-upstream",
     enabled: (context) => context.enableComputerUseUi,
     pattern: /^app-initial-[^.]+\.js$/,
-    missingDescription: "current Computer Use install flow bundle",
+    assetMatch: matchesLinuxComputerUseInstallFlowContract,
+    missingDescription: "current Computer Use install flow app-initial contract",
     skipDescription: "Linux Computer Use install flow patch",
     apply: applyLinuxComputerUseInstallFlowPatch,
   }),

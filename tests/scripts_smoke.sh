@@ -9074,7 +9074,7 @@ const x={o:e=>e};let s=require(`node:url`),n=require(`electron`);n=x.o(n);let l=
 var pb=class{getNativeTrayMenuItems(){return[{label:this.systemQuitMenuItemLabel,click:()=>{n.app.quit()}}]}};
 function qB(r,o){if(o.type===`quit-app`){n.app.quit();return}return o}
 n.app.on(`before-quit`,o=>{let s=BI(),c=t.sr().some(e=>e.status===`ACTIVE`);if(e||i.canQuitWithoutPrompt()||r||!s&&!c){g=!0,a.markAppQuitting();return}let l=n.app.getName();if(n.dialog.showMessageBoxSync({type:`warning`,buttons:[`Quit`,`Cancel`],defaultId:0,cancelId:1,noLink:!0,title:`Quit ${l}?`,message:`Quit ${l}?`,detail:vB({hasInProgressLocalConversation:s,hasEnabledAutomations:c})})!==0){o.preventDefault();return}i.markQuitApproved(),g=!0,a.markAppQuitting()});
-n.app.on(`will-quit`,e=>{if(g=!0,!h){if(i.shouldSkipDrainBeforeQuit()){mB({hotkeyWindowLifecycleManager:c,globalDictationLifecycleManager:l,flushAndDisposeContexts:d,disposables:f});return}e.preventDefault(),h=!0,c.dispose(),l.dispose(),Promise.all([u.flush(),p.flush()]).finally(()=>{d(),f.dispose(),n.app.quit()})}});
+l.app.on(`will-quit`,e=>{if(y=!0,v)return;let t=()=>{U5(h,N5).then(()=>{g.dispose(),l.app.quit()})};if(r.shouldSkipDrainBeforeQuit()){e.preventDefault(),v=!0,c.dispose(),u.dispose(),Promise.allSettled([p(),m()]).then(t);return}e.preventDefault(),v=!0,c.dispose(),u.dispose(),Promise.allSettled([d.flush(),f.flush(),p(),m()]).then(t)});
 JS
 )"
     make_fake_extracted_asar "$extracted" "$bundle_body"
@@ -9086,9 +9086,18 @@ JS
     assert_contains "$extracted/.vite/build/main-test.js" 'if(o.type===`quit-app`){typeof codexLinuxPrepareForExplicitQuit===`function`?codexLinuxPrepareForExplicitQuit():typeof codexLinuxMarkQuitInProgress===`function`&&codexLinuxMarkQuitInProgress(),n.app.quit();return}'
     assert_contains "$extracted/.vite/build/main-test.js" 'if((typeof codexLinuxShouldBypassQuitPrompt===`function`&&codexLinuxShouldBypassQuitPrompt())||e||i.canQuitWithoutPrompt()||r||!s&&!c){process.platform===`linux`&&typeof codexLinuxMarkQuitInProgress===`function`&&codexLinuxMarkQuitInProgress(),g=!0,a.markAppQuitting();return}'
     assert_contains "$extracted/.vite/build/main-test.js" 'process.platform===`linux`&&typeof codexLinuxMarkQuitInProgress===`function`&&codexLinuxMarkQuitInProgress(),i.markQuitApproved(),g=!0,a.markAppQuitting()'
-    assert_contains "$extracted/.vite/build/main-test.js" 'codexLinuxFinalizeQuit=()=>{d(),f.dispose(),n.app.quit()},codexLinuxDrainPromise=Promise.all('
+    assert_contains "$extracted/.vite/build/main-test.js" 'codexLinuxLogQuitDrainResults=e=>{'
+    assert_contains "$extracted/.vite/build/main-test.js" 'codexLinuxFinalizeQuit=()=>{'
+    assert_not_contains "$extracted/.vite/build/main-test.js" 'codexLinuxQuitFinalized'
+    assert_contains "$extracted/.vite/build/main-test.js" 'WARN: Linux quit drain cleanup failed'
+    assert_contains "$extracted/.vite/build/main-test.js" 'WARN: Linux quit context cleanup failed'
+    assert_contains "$extracted/.vite/build/main-test.js" 'WARN: Linux quit disposables cleanup failed'
+    assert_contains "$extracted/.vite/build/main-test.js" 'finally{l.app.exit(0)}'
+    assert_not_contains "$extracted/.vite/build/main-test.js" 'finally{l.app.quit()}'
+    assert_occurrence_count "$extracted/.vite/build/main-test.js" 'codexLinuxRunQuitDrain(()=>{' '2'
+    assert_contains "$extracted/.vite/build/main-test.js" 'Promise.resolve().then(e).then(codexLinuxLogQuitDrainResults),new Promise'
     assert_contains "$extracted/.vite/build/main-test.js" 'codexLinuxExplicitQuitDrainTimeoutMs'
-    assert_contains "$extracted/.vite/build/main-test.js" 'setTimeout(e,typeof codexLinuxExplicitQuitDrainTimeoutMs'
+    assert_contains "$extracted/.vite/build/main-test.js" 'setTimeout(()=>e(Error(`Linux quit drain timed out`)),typeof codexLinuxExplicitQuitDrainTimeoutMs'
     assert_not_contains "$extracted/.vite/build/main-test.js" '\`number\`'
     assert_not_contains "$output_log" 'WARN: Could not find tray quit menu handler'
     assert_not_contains "$output_log" 'WARN: Could not find quit-app IPC handler'
@@ -9192,7 +9201,9 @@ NODE
     assert_occurrence_count "$extracted/.vite/build/main-test.js" 'codexLinuxShouldBypassQuitPrompt=()=>codexLinuxExplicitQuitApproved===!0' '1'
     assert_occurrence_count "$extracted/.vite/build/main-test.js" 'typeof codexLinuxPrepareForExplicitQuit===`function`?codexLinuxPrepareForExplicitQuit():typeof codexLinuxMarkQuitInProgress===`function`&&codexLinuxMarkQuitInProgress()' '2'
     assert_occurrence_count "$extracted/.vite/build/main-test.js" 'typeof codexLinuxShouldBypassQuitPrompt===`function`&&codexLinuxShouldBypassQuitPrompt()' '1'
-    assert_occurrence_count "$extracted/.vite/build/main-test.js" 'codexLinuxDrainPromise=Promise.all(' '1'
+    assert_occurrence_count "$extracted/.vite/build/main-test.js" 'codexLinuxLogQuitDrainResults=e=>{' '1'
+    assert_occurrence_count "$extracted/.vite/build/main-test.js" 'codexLinuxFinalizeQuit=()=>{' '1'
+    assert_occurrence_count "$extracted/.vite/build/main-test.js" 'codexLinuxRunQuitDrain(()=>{' '2'
 }
 
 test_keybinds_settings_tab_patch_smoke() {
@@ -9872,14 +9883,13 @@ test_linux_computer_use_ui_opt_in_smoke() {
     local fake_home="$workspace/home"
     local output_log="$workspace/output.log"
     local main_bundle="$extracted/.vite/build/main-test.js"
-    local settings_asset="$extracted/webview/assets/computer-use-settings-DsM_pz8i.js"
+    local settings_asset="$extracted/webview/assets/computer-use-settings-BzkBOuLk.js"
     local plugins_asset="$extracted/webview/assets/plugins-page-gTuUJ93E.js"
-    local app_initial_asset="$extracted/webview/assets/app-initial-current.js"
+    local app_initial_asset="$extracted/webview/assets/app-initial-BHB6SClA.js"
     local bundle_body
     local settings_body
     local plugins_body
-    local host_platform_body
-    local install_flow_body
+    local app_initial_body
 
     mkdir -p "$workspace" "$fake_home/.config/codex-desktop"
 
@@ -9897,23 +9907,20 @@ JS
 function Ht(){let e=cache(24),{selectedHostId:t}=host(),n=data(t),i={hostId:t};let a=useAvailability(i),{platform:o}=usePlatform(),s=hostKind(t)===`local`,c=flag(`188145323`);let f=jsx(Settings,{computerUseAvailability:a,platform:o});let h=a.available?jsx(AllowedApps,{}):null;return jsx(Page,{children:[f,h]})}function Wt(e){let t=cache(35),{computerUseAvailability:n,platform:i}=e,{selectedHostId:s}=host();let g=[];let _=usePlugins(s,g),v=useMarketplacePath(s),y=useFlag(firstFlag),b=useFlag(secondFlag),x;x=selectPlugin(_.availablePlugins,computerUsePluginName,v);return x}
 JS
 )"
-    host_platform_body="$(cat <<'JS'
-function Se(e){return e===`macOS`||e===`windows`}function Ce(e){let t=cache(16),{enabled:n,hostId:r}=e,i=n===void 0?!0:n,{isLoading:a,platform:o}=usePlatform(),s=flag(`1506311413`),c;t[0]===r?c=t[1]:(c={featureName:`computer_use`,hostId:r},t[0]=r,t[1]=c);let l=useFeature(c),u=o===`windows`&&!a,d=i&&u,f;t[2]===d?f=t[3]:(f={enabled:d},t[2]=d,t[3]=f);let p=useWindowsFeature(f),m=l.isLoading||u&&p.isLoading,h=l.enabled&&(!u||p.enabled),g;t[4]!==h||t[5]!==i||t[6]!==m||t[7]!==s||t[8]!==a||t[9]!==o?(g=resolveAvailability({areRequiredFeaturesEnabled:h,enabled:i,isAnyFeatureLoading:m,isComputerUseGateEnabled:s,isHostCompatiblePlatform:Se(o),isPlatformLoading:a,windowType:`electron`}),t[4]=h,t[5]=i,t[6]=m,t[7]=s,t[8]=a,t[9]=o,t[10]=g):g=t[10];return g}
-JS
-)"
     plugins_body="$(cat <<'JS'
 function Si({installedPlugins:e}){return [{remoteMarketplaceName:`openai-curated`,plugin:{id:`computer-use`,name:`computer-use`,source:{type:`remote`}}},...e]}let Pt=[{plugin:{id:`installed`,name:`installed`}}],Qt=[],nn=[],zr=[{remoteMarketplaceName:`openai-curated`,plugin:{id:`computer-use`,name:`computer-use`,source:{type:`remote`}}}],xi=e=>true,Ft=[{marketplaceName:`openai-bundled`,marketplacePath:`/marketplace.json`,plugin:{id:`computer-use@openai-bundled`,name:`computer-use`,source:{type:`local`}}},{plugin:{id:`installed`,name:`installed`}},{plugin:{id:`other-missing`,name:`other-missing`}}],Vr=Si({installedPlugins:Ft,sharedWithYouPlugins:Qt??[],workspacePlugins:nn??[]}),fi=zr.filter(xi),Ai={connectedPlugins:Vr,featuredPluginIds:[],plugins:fi},Ji=new Set([...Pt,...Qt??[],...nn??[]].map(e=>e.plugin.id)),Xi=new Set(Vr.filter(e=>!Ji.has(e.plugin.id)).map(e=>e.plugin.id));
 JS
 )"
-    install_flow_body="$(cat <<'JS'
-function Ke(e){let t=cache(31),{hostId:n,marketplacePath:r,pluginName:i,remoteMarketplaceName:a,enabled:o}=e,c=o===void 0?!0:o,l=n??`local`,d;t[0]===l?d=t[1]:(d={hostId:l},t[0]=l,t[1]=d);let f=hostReady(d),p=environment(),m;t[2]===i?m=t[3]:(m=i!=null&&isAvailabilityGated(i),t[2]=i,t[3]=m);let g=m,_;t[4]!==l||t[5]!==g?(_={enabled:g,hostId:l},t[4]=l,t[5]=g,t[6]=_):_=t[6];let v=useComputerUseAvailability(_),y=(r!=null||a!=null)&&i!=null,b=f&&c&&y&&g&&v.isLoading,x=f&&c&&y&&(!g||v.available);let query=async()=>{if(i==null)throw Error(`plugin detail query requires pluginName`);return read(`read-plugin`,{hostId:l,pluginName:i})};return useQuery({queryFn:query,enabled:x})}
+    app_initial_body="$(cat <<'JS'
+function K3r(e){return e===`macOS`||e===`windows`}function q3r(e){let t=cache(16),{enabled:n,hostId:r}=e,i=n===void 0?!0:n,{isLoading:a,platform:o}=usePlatform(),s=flag(`1506311413`),c;t[0]===r?c=t[1]:(c={featureName:`computer_use`,hostId:r},t[0]=r,t[1]=c);let l=useFeature(c),u=o===`windows`&&!a,d=i&&u,f;t[2]===d?f=t[3]:(f={enabled:d},t[2]=d,t[3]=f);let p=useWindowsFeature(f),m=l.isLoading||u&&p.isLoading,h=l.enabled&&(!u||p.enabled),g;t[4]!==h||t[5]!==i||t[6]!==m||t[7]!==s||t[8]!==a||t[9]!==o?(g=X3r({areRequiredFeaturesEnabled:h,enabled:i,isAnyFeatureLoading:m,isComputerUseGateEnabled:s,isHostCompatiblePlatform:K3r(o),isPlatformLoading:a,windowType:`electron`}),t[4]=h,t[5]=i,t[6]=m,t[7]=s,t[8]=a,t[9]=o,t[10]=g):g=t[10];return g}
+function i4i(e){let t=cache(31),{hostId:n,marketplacePath:r,pluginName:i,remoteMarketplaceName:a,enabled:o}=e,s=o===void 0?!0:o,c=n??`local`,l;t[0]===c?l=t[1]:(l={hostId:c},t[0]=c,t[1]=l);let u=hostReady(l),d=environment(),f;t[2]===i?f=t[3]:(f=i!=null&&isAvailabilityGated(i),t[2]=i,t[3]=f);let p=f,m;t[4]!==c||t[5]!==p?(m={enabled:p,hostId:c},t[4]=c,t[5]=p,t[6]=m):m=t[6];let h=useComputerUseAvailability(m),g=(r!=null||a!=null)&&i!=null,v=u&&s&&g&&(!p||h.available);let b=async()=>{if(i==null)throw Error(`plugin detail query requires pluginName`);return read(`read-plugin`,{hostId:c,marketplacePath:r,pluginName:i})};return useQuery({queryFn:b,enabled:v})}
 JS
 )"
 
     make_fake_extracted_asar "$extracted" "$bundle_body"
     printf '%s\n' "$settings_body" > "$settings_asset"
     printf '%s\n' "$plugins_body" > "$plugins_asset"
-    printf '%s\n%s\n' "$host_platform_body" "$install_flow_body" > "$app_initial_asset"
+    printf '%s\n' "$app_initial_body" > "$app_initial_asset"
 
     env -u CODEX_LINUX_ENABLE_COMPUTER_USE_UI -u CODEX_LINUX_APP_ID -u CODEX_APP_ID -u CODEX_LINUX_SETTINGS_FILE \
         HOME="$fake_home" XDG_CONFIG_HOME="$fake_home/.config" \
@@ -9930,7 +9937,7 @@ JS
     printf '%s\n' "$bundle_body" > "$main_bundle"
     printf '%s\n' "$settings_body" > "$settings_asset"
     printf '%s\n' "$plugins_body" > "$plugins_asset"
-    printf '%s\n%s\n' "$host_platform_body" "$install_flow_body" > "$app_initial_asset"
+    printf '%s\n' "$app_initial_body" > "$app_initial_asset"
 
     env -u CODEX_LINUX_APP_ID -u CODEX_APP_ID -u CODEX_LINUX_SETTINGS_FILE \
         CODEX_LINUX_ENABLE_COMPUTER_USE_UI=1 HOME="$fake_home" XDG_CONFIG_HOME="$fake_home/.config" \
@@ -9941,8 +9948,8 @@ JS
     assert_contains "$settings_asset" 'marketplaceName:`openai-bundled`'
     assert_contains "$plugins_asset" 'computer-use@openai-bundled'
     assert_contains "$plugins_asset" '.map(e=>e.plugin?.name===`computer-use`'
-    assert_contains "$app_initial_asset" 'isHostCompatiblePlatform:o===`linux`||Se(o)'
-    assert_contains "$app_initial_asset" 'let g=m&&i!==`computer-use`,_;'
+    assert_contains "$app_initial_asset" 'isHostCompatiblePlatform:o===`linux`||K3r(o)'
+    assert_contains "$app_initial_asset" 'let p=f&&i!==`computer-use`,m;'
 
     node "$REPO_DIR/scripts/patch-linux-window-ui.js" "$extracted" >"$output_log" 2>&1
     assert_occurrence_count "$settings_asset" 'available:!0,isFetching:!1,isLoading:!1' '1'
@@ -9955,7 +9962,7 @@ JS
     printf '%s\n' "$bundle_body" > "$main_bundle"
     printf '%s\n' "$settings_body" > "$settings_asset"
     printf '%s\n' "$plugins_body" > "$plugins_asset"
-    printf '%s\n%s\n' "$host_platform_body" "$install_flow_body" > "$app_initial_asset"
+    printf '%s\n' "$app_initial_body" > "$app_initial_asset"
     printf '%s\n' '{"codex-linux-computer-use-ui-enabled": true}' > "$fake_home/.config/codex-desktop/settings.json"
 
     env -u CODEX_LINUX_ENABLE_COMPUTER_USE_UI -u CODEX_LINUX_APP_ID -u CODEX_APP_ID -u CODEX_LINUX_SETTINGS_FILE \
@@ -9966,6 +9973,8 @@ JS
     assert_contains "$settings_asset" 'available:!0,isFetching:!1,isLoading:!1'
     assert_contains "$settings_asset" 'marketplaceName:`openai-bundled`'
     assert_contains "$plugins_asset" '.map(e=>e.plugin?.name===`computer-use`'
+    assert_contains "$app_initial_asset" 'isHostCompatiblePlatform:o===`linux`||K3r(o)'
+    assert_contains "$app_initial_asset" 'let p=f&&i!==`computer-use`,m;'
 }
 
 test_linux_file_manager_patch_fails_soft() {
@@ -10804,6 +10813,112 @@ test_launcher_warm_start_recovery() {
         bash "$REPO_DIR/tests/launcher_warm_start_recovery.sh"
 }
 
+test_launcher_window_reopen_behavior() {
+    local nominal_log="$TMP_DIR/launcher-window-reopen-nominal.log"
+    local mutation_log="$TMP_DIR/launcher-window-reopen-mutation.log"
+    local mutation_control_log="$TMP_DIR/launcher-window-reopen-mutation-control.log"
+    local no_pidfd_log="$TMP_DIR/launcher-window-reopen-no-pidfd.log"
+    local no_pidfd_tmp="$TMP_DIR/launcher-window-reopen-no-pidfd-missing"
+    local probe_failure_bin="$TMP_DIR/launcher-window-reopen-probe-failure-bin"
+    local probe_failure_log="$TMP_DIR/launcher-window-reopen-probe-failure.log"
+    local status
+
+    info "Checking healthy resident reopen handoff behavior"
+    set +e
+    bash "$REPO_DIR/tests/launcher_window_reopen_behavior.sh" \
+        > "$nominal_log" 2>&1
+    status=$?
+    set -e
+    if [ "$status" -eq 77 ]; then
+        if ! grep -Fxq \
+            'launcher window-reopen behavior test skipped: pidfd cleanup unavailable' \
+            "$nominal_log" \
+            || ! grep -Fq '"reason":"pidfd-cleanup-unavailable"' "$nominal_log"; then
+            cat "$nominal_log" >&2
+            fail "Window-reopen behavior harness returned an invalid pidfd skip result"
+        fi
+        cat "$nominal_log"
+        return 0
+    fi
+    if [ "$status" -ne 0 ] \
+        || ! grep -Fxq 'launcher window-reopen behavior test passed' "$nominal_log" \
+        || ! grep -Fq '"outcome":"preserved"' "$nominal_log"; then
+        cat "$nominal_log" >&2
+        fail "Window-reopen behavior harness nominal run failed (status $status)"
+    fi
+    cat "$nominal_log"
+
+    set +e
+    CODEX_TEST_FORCE_RESIDENT_REPLACEMENT=1 \
+        bash "$REPO_DIR/tests/launcher_window_reopen_behavior.sh" \
+        > "$mutation_log" 2>&1
+    status=$?
+    set -e
+    if [ "$status" -ne 86 ] \
+        || ! grep -Fxq \
+            'launcher window-reopen behavior mutation detected: healthy resident replacement' \
+            "$mutation_log" \
+        || ! grep -Fq '"outcome":"resident-replacement-detected"' "$mutation_log"; then
+        cat "$mutation_log" >&2
+        fail "Window-reopen behavior harness did not report the expected resident-replacement regression (status $status)"
+    fi
+
+    set +e
+    CODEX_TEST_FORCE_RESIDENT_REPLACEMENT=1 \
+        CODEX_TEST_MUTATION_CONTROL_ONLY=1 \
+        bash "$REPO_DIR/tests/launcher_window_reopen_behavior.sh" \
+        > "$mutation_control_log" 2>&1
+    status=$?
+    set -e
+    if [ "$status" -ne 0 ] \
+        || ! grep -Fxq \
+            'launcher window-reopen behavior mutation control passed' \
+            "$mutation_control_log" \
+        || ! grep -Fq '"outcome":"mutation-control-preserved"' "$mutation_control_log" \
+        || grep -Fq 'resident-replacement-detected' "$mutation_control_log"; then
+        cat "$mutation_control_log" >&2
+        fail "Window-reopen behavior harness mutation control failed (status $status)"
+    fi
+
+    rm -rf "$no_pidfd_tmp"
+    set +e
+    CODEX_TEST_FORCE_NO_PIDFD=1 TMPDIR="$no_pidfd_tmp" \
+        bash "$REPO_DIR/tests/launcher_window_reopen_behavior.sh" \
+        > "$no_pidfd_log" 2>&1
+    status=$?
+    set -e
+    if [ "$status" -ne 77 ] \
+        || ! grep -Fxq \
+            'launcher window-reopen behavior test skipped: pidfd cleanup unavailable' \
+            "$no_pidfd_log" \
+        || ! grep -Fq '"reason":"pidfd-cleanup-unavailable"' "$no_pidfd_log"; then
+        cat "$no_pidfd_log" >&2
+        fail "Window-reopen behavior harness did not report the expected safe no-pidfd skip (status $status)"
+    fi
+    [ ! -e "$no_pidfd_tmp" ] \
+        || fail "Window-reopen behavior harness created a workspace before the pidfd capability gate"
+
+    mkdir -p "$probe_failure_bin"
+    printf '%s\n' '#!/usr/bin/env bash' 'exit 9' > "$probe_failure_bin/python3"
+    chmod +x "$probe_failure_bin/python3"
+    set +e
+    PATH="$probe_failure_bin:$PATH" TMPDIR="$no_pidfd_tmp" \
+        bash "$REPO_DIR/tests/launcher_window_reopen_behavior.sh" \
+        > "$probe_failure_log" 2>&1
+    status=$?
+    set -e
+    if [ "$status" -ne 1 ] \
+        || ! grep -Fxq \
+            'launcher window-reopen behavior test failed: pidfd capability probe failed' \
+            "$probe_failure_log" \
+        || grep -Fq 'pidfd-cleanup-unavailable' "$probe_failure_log"; then
+        cat "$probe_failure_log" >&2
+        fail "Window-reopen behavior harness misclassified a pidfd probe setup failure (status $status)"
+    fi
+    [ ! -e "$no_pidfd_tmp" ] \
+        || fail "Window-reopen behavior harness created a workspace after a pidfd probe failure"
+}
+
 test_notification_actions_bridge_accepts_prebuilt_binary() {
     local workspace="$TMP_DIR/notification-actions-bridge"
     local source_binary="$workspace/prebuilt/codex-notification-actions-linux"
@@ -10954,6 +11069,7 @@ main() {
     test_launcher_marketplace_metadata_atomic_staging
     test_launcher_template_sanity
     test_launcher_warm_start_recovery
+    test_launcher_window_reopen_behavior
     test_launcher_cli_resolution_policy
     test_webview_server_cache_policy
     test_process_detection_helper_cmdline_shapes

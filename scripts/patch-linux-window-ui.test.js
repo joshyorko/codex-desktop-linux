@@ -132,6 +132,7 @@ const {
 const {
   applyExtractedAppPatchDescriptors,
   applyMainBundlePatchDescriptors,
+  applyWebviewAssetPatchDescriptors,
   discoverCorePatchDescriptors,
   normalizePatchDescriptors,
 } = require("./patches/engine.js");
@@ -1102,22 +1103,28 @@ test("default core patch descriptors are grouped and unique", () => {
   );
   const computerUseInstallFlow = descriptors.find((descriptor) => descriptor.id === "linux-computer-use-install-flow");
   assert.equal(
-    computerUseInstallFlow.pattern.test(
-      "app-initial~avatarOverlayCompositionSurface~artifact-tab-content.electron~notebook-preview-~iaq4jiqv-current.js",
-    ),
+    computerUseInstallFlow.pattern.test("app-initial-BHB6SClA.js"),
     true,
   );
-  assert.equal(computerUseInstallFlow.pattern.test("app-initial~app-main-current.js"), false);
+  assert.equal(computerUseInstallFlow.pattern.test("computer-use-settings-BzkBOuLk.js"), false);
+  assert.equal(
+    computerUseInstallFlow.assetMatch(currentComputerUseInstallFlow26721Fixture()),
+    true,
+  );
+  assert.equal(computerUseInstallFlow.assetMatch("function unrelatedAppInitial(){}"), false);
   const computerUseHostPlatform = descriptors.find(
     (descriptor) => descriptor.id === "linux-computer-use-host-platform",
   );
   assert.equal(
-    computerUseHostPlatform.pattern.test(
-      "app-initial-BHB6SClA.js",
-    ),
+    computerUseHostPlatform.pattern.test("app-initial-BHB6SClA.js"),
     true,
   );
-  assert.equal(computerUseHostPlatform.pattern.test("app-initial~app-main-current.js"), false);
+  assert.equal(computerUseHostPlatform.pattern.test("computer-use-settings-BzkBOuLk.js"), false);
+  assert.equal(
+    computerUseHostPlatform.assetMatch(currentComputerUseHostPlatform26721Fixture()),
+    true,
+  );
+  assert.equal(computerUseHostPlatform.assetMatch("function unrelatedAppInitial(){}"), false);
   assert.equal(
     descriptors.find((descriptor) => descriptor.id === "linux-terminal-user-path")?.ciPolicy,
     "optional",
@@ -1384,8 +1391,106 @@ function beforeQuitConfirmationBundleFixture() {
 
 function willQuitDrainBundleFixture() {
   return [
-    "n.app.on(`will-quit`,e=>{if(g=!0,!h){if(i.shouldSkipDrainBeforeQuit()){mB({hotkeyWindowLifecycleManager:c,globalDictationLifecycleManager:l,flushAndDisposeContexts:d,disposables:f});return}e.preventDefault(),h=!0,c.dispose(),l.dispose(),Promise.all([u.flush(),p.flush()]).finally(()=>{d(),f.dispose(),n.app.quit()})}});",
+    "l.app.on(`will-quit`,e=>{if(y=!0,v)return;let t=()=>{U5(h,N5).then(()=>{g.dispose(),l.app.quit()})};if(r.shouldSkipDrainBeforeQuit()){e.preventDefault(),v=!0,c.dispose(),u.dispose(),Promise.allSettled([p(),m()]).then(t);return}e.preventDefault(),v=!0,c.dispose(),u.dispose(),Promise.allSettled([d.flush(),f.flush(),p(),m()]).then(t)});",
   ].join("");
+}
+
+async function runPatchedLinuxWillQuit(options = {}) {
+  const patched = applyLinuxWillQuitDrainTimeoutPatch(willQuitDrainBundleFixture());
+  const state = {
+    exitCalls: 0,
+    exitCodes: [],
+    handler: null,
+    handlerError: null,
+    lifecycleDisposeCalls: 0,
+    preventDefaultCalls: 0,
+    quitCalls: 0,
+    warnings: [],
+  };
+  let resolveQuit;
+  const quitPromise = new Promise((resolve, reject) => {
+    const timeout = setTimeout(
+      () => reject(new Error("Linux will-quit handler did not terminate the app")),
+      250,
+    );
+    resolveQuit = () => {
+      clearTimeout(timeout);
+      resolve();
+    };
+  });
+  const lifecycleManager = {
+    dispose() {
+      state.lifecycleDisposeCalls += 1;
+      if (state.lifecycleDisposeCalls === options.lifecycleDisposeThrowsAt) {
+        throw new Error("lifecycle disposer failed");
+      }
+    },
+  };
+  const context = {
+    N5: 5,
+    U5: options.contextDispose ?? (() => Promise.resolve()),
+    c: lifecycleManager,
+    codexLinuxExplicitQuitDrainTimeoutMs: options.timeoutMs ?? 5,
+    codexLinuxIsQuitInProgress: () => true,
+    console: {
+      warn(...args) {
+        state.warnings.push(args.map(String).join(" "));
+      },
+    },
+    d: { flush: options.globalStateFlush ?? (() => Promise.resolve()) },
+    f: { flush: options.settingsFlush ?? (() => Promise.resolve()) },
+    g: { dispose: options.disposablesDispose ?? (() => {}) },
+    h: {},
+    l: {
+      app: {
+        exit(exitCode) {
+          state.exitCalls += 1;
+          state.exitCodes.push(exitCode);
+          resolveQuit();
+        },
+        on(eventName, handler) {
+          assert.equal(eventName, "will-quit");
+          state.handler = handler;
+        },
+        quit() {
+          state.quitCalls += 1;
+          resolveQuit();
+        },
+      },
+    },
+    m: options.flushTracing ?? (() => Promise.resolve()),
+    p: options.stopCodexMicro ?? (() => Promise.resolve()),
+    process: { platform: options.platform ?? "linux" },
+    Promise,
+    r: {
+      shouldSkipDrainBeforeQuit() {
+        return options.shouldSkipDrain === true;
+      },
+    },
+    setTimeout,
+    u: lifecycleManager,
+    v: false,
+    y: false,
+  };
+  if (options.omitQuitStateHelper === true) {
+    delete context.codexLinuxIsQuitInProgress;
+  }
+
+  vm.runInNewContext(patched, context);
+  assert.equal(typeof state.handler, "function");
+  try {
+    state.handler({
+      preventDefault() {
+        state.preventDefaultCalls += 1;
+      },
+    });
+  } catch (error) {
+    state.handlerError = error;
+  }
+  await quitPromise;
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(state.handlerError, null);
+  return state;
 }
 
 function computerUseGateBundleFixture() {
@@ -2635,7 +2740,7 @@ test("bypasses the upstream before-quit confirmation after a Linux explicit quit
   );
 });
 
-test("adds a bounded will-quit drain fallback for Linux explicit quit", () => {
+test("adds a bounded will-quit drain fallback on Linux", () => {
   const source = `${currentMainBundlePrefix}${willQuitDrainBundleFixture()}`;
   const patched = applyPatchTwice(
     applyLinuxWillQuitDrainTimeoutPatch,
@@ -2643,11 +2748,253 @@ test("adds a bounded will-quit drain fallback for Linux explicit quit", () => {
   );
 
   assert.match(patched, /codexLinuxExplicitQuitDrainTimeoutMs=3e3/);
-  assert.match(patched, /\(\(\)=>\{let codexLinuxFinalizeQuit=\(\)=>\{d\(\),f\.dispose\(\),n\.app\.quit\(\)\},codexLinuxDrainPromise=Promise\.all\(\[u\.flush\(\),p\.flush\(\)\]\);/);
-  assert.match(patched, /if\(process\.platform===`linux`&&\(typeof codexLinuxIsQuitInProgress===`function`&&codexLinuxIsQuitInProgress\(\)\)\)\{Promise\.race\(\[codexLinuxDrainPromise,new Promise\(e=>setTimeout\(e,typeof codexLinuxExplicitQuitDrainTimeoutMs===`number`\?codexLinuxExplicitQuitDrainTimeoutMs:3e3\)\)\]\)\.finally\(codexLinuxFinalizeQuit\);return\}/);
+  assert.match(
+    patched,
+    /codexLinuxLogQuitDrainResults=e=>\{for\(let t of e\)if\(t\.status===`rejected`\)try\{console\.warn\(`WARN: Linux quit drain cleanup failed`,t\.reason\)\}catch\{\};return e\}/,
+  );
+  assert.doesNotMatch(patched, /codexLinuxQuitFinalized/);
+  assert.match(
+    patched,
+    /Promise\.resolve\(\)\.then\(\(\)=>U5\(h,N5\)\)\.catch\(e=>\{try\{console\.warn\(`WARN: Linux quit context cleanup failed`,e\)\}catch\{\}\}\)/,
+  );
+  assert.match(
+    patched,
+    /try\{g\.dispose\(\)\}catch\(e\)\{try\{console\.warn\(`WARN: Linux quit disposables cleanup failed`,e\)\}catch\{\}\}finally\{l\.app\.exit\(0\)\}/,
+  );
+  assert.match(
+    patched,
+    /Promise\.race\(\[Promise\.resolve\(\)\.then\(e\)\.then\(codexLinuxLogQuitDrainResults\),new Promise\(\(_,e\)=>setTimeout\(\(\)=>e\(Error\(`Linux quit drain timed out`\)\),typeof codexLinuxExplicitQuitDrainTimeoutMs===`number`\?codexLinuxExplicitQuitDrainTimeoutMs:3e3\)\)\]\)\.catch\(e=>\{try\{console\.warn\(`WARN: Linux quit drain cleanup failed`,e\)\}catch\{\}\}\)\.then\(codexLinuxFinalizeQuit\)/,
+  );
+  assert.match(
+    patched,
+    /codexLinuxRunQuitDrain=e=>\{if\(process\.platform===`linux`\)\{/,
+  );
+  assert.equal(
+    (patched.match(/codexLinuxRunQuitDrain\(\(\)=>\{/g) ?? []).length,
+    2,
+  );
+  assert.equal(
+    (patched.match(/\.then\(codexLinuxLogQuitDrainResults\)/g) ?? []).length,
+    1,
+  );
   assert.doesNotMatch(patched, /\\`number\\`/);
-  assert.match(patched, /codexLinuxDrainPromise\.finally\(codexLinuxFinalizeQuit\)\}\)\(\)/);
+  assert.match(patched, /e\(\)\.then\(t\)\}/);
+  assert.doesNotMatch(patched, /Promise\.allSettled\([^;]+\.then\(t\)/);
   assert.doesNotThrow(() => new Function(patched));
+});
+
+test("Linux will-quit reaches app.exit exactly once when a disposer throws", async () => {
+  const state = await runPatchedLinuxWillQuit({
+    disposablesDispose() {
+      throw new Error("disposer failed");
+    },
+  });
+
+  assert.equal(state.preventDefaultCalls, 1);
+  assert.equal(state.lifecycleDisposeCalls, 2);
+  assert.equal(state.exitCalls, 1);
+  assert.deepEqual(state.exitCodes, [0]);
+  assert.equal(state.quitCalls, 0);
+  assert.deepEqual(state.warnings, [
+    "WARN: Linux quit disposables cleanup failed Error: disposer failed",
+  ]);
+});
+
+test("Linux will-quit reaches app.exit after the drain deadline", async () => {
+  let resolveGlobalState;
+  const stalledGlobalState = new Promise((resolve) => {
+    resolveGlobalState = resolve;
+  });
+  const state = await runPatchedLinuxWillQuit({
+    globalStateFlush: () => stalledGlobalState,
+    timeoutMs: 5,
+  });
+
+  assert.equal(state.exitCalls, 1);
+  assert.deepEqual(state.exitCodes, [0]);
+  assert.equal(state.quitCalls, 0);
+  assert.deepEqual(state.warnings, [
+    "WARN: Linux quit drain cleanup failed Error: Linux quit drain timed out",
+  ]);
+  resolveGlobalState();
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(state.exitCalls, 1);
+  assert.equal(state.quitCalls, 0);
+});
+
+test("Linux will-quit logs rejected asynchronous drain work before exit", async () => {
+  const state = await runPatchedLinuxWillQuit({
+    globalStateFlush: () => Promise.reject(new Error("global-state flush rejected")),
+  });
+
+  assert.equal(state.exitCalls, 1);
+  assert.deepEqual(state.exitCodes, [0]);
+  assert.equal(state.quitCalls, 0);
+  assert.deepEqual(state.warnings, [
+    "WARN: Linux quit drain cleanup failed Error: global-state flush rejected",
+  ]);
+});
+
+test("Linux will-quit reaches app.exit when pre-drain disposal throws synchronously", async () => {
+  const state = await runPatchedLinuxWillQuit({
+    lifecycleDisposeThrowsAt: 1,
+  });
+
+  assert.equal(state.preventDefaultCalls, 1);
+  assert.equal(state.lifecycleDisposeCalls, 1);
+  assert.equal(state.exitCalls, 1);
+  assert.deepEqual(state.exitCodes, [0]);
+  assert.equal(state.quitCalls, 0);
+  assert.deepEqual(state.warnings, [
+    "WARN: Linux quit drain cleanup failed Error: lifecycle disposer failed",
+  ]);
+});
+
+test("Linux will-quit reaches app.exit when drain setup throws synchronously", async () => {
+  const state = await runPatchedLinuxWillQuit({
+    globalStateFlush() {
+      throw new Error("global-state flush failed");
+    },
+  });
+
+  assert.equal(state.preventDefaultCalls, 1);
+  assert.equal(state.lifecycleDisposeCalls, 2);
+  assert.equal(state.exitCalls, 1);
+  assert.deepEqual(state.exitCodes, [0]);
+  assert.equal(state.quitCalls, 0);
+  assert.deepEqual(state.warnings, [
+    "WARN: Linux quit drain cleanup failed Error: global-state flush failed",
+  ]);
+});
+
+test("Linux will-quit reaches app.exit when the quit-state helper is outside its scope", async () => {
+  let resolveGlobalState;
+  const stalledGlobalState = new Promise((resolve) => {
+    resolveGlobalState = resolve;
+  });
+  const state = await runPatchedLinuxWillQuit({
+    globalStateFlush: () => stalledGlobalState,
+    omitQuitStateHelper: true,
+    timeoutMs: 5,
+  });
+
+  assert.equal(state.exitCalls, 1);
+  assert.deepEqual(state.exitCodes, [0]);
+  assert.equal(state.quitCalls, 0);
+  resolveGlobalState();
+});
+
+test("Linux will-quit continues cleanup when bounded context disposal rejects", async () => {
+  let disposablesCalls = 0;
+  const state = await runPatchedLinuxWillQuit({
+    contextDispose: () => Promise.reject(new Error("context failed")),
+    disposablesDispose() {
+      disposablesCalls += 1;
+    },
+  });
+
+  assert.equal(disposablesCalls, 1);
+  assert.equal(state.exitCalls, 1);
+  assert.deepEqual(state.exitCodes, [0]);
+  assert.equal(state.quitCalls, 0);
+  assert.deepEqual(state.warnings, [
+    "WARN: Linux quit context cleanup failed Error: context failed",
+  ]);
+});
+
+test("non-Linux will-quit preserves the upstream drain path", async () => {
+  let resolveGlobalState;
+  let quitReached = false;
+  const stalledGlobalState = new Promise((resolve) => {
+    resolveGlobalState = resolve;
+  });
+  const run = runPatchedLinuxWillQuit({
+    globalStateFlush: () => stalledGlobalState,
+    platform: "darwin",
+    settingsFlush: () => Promise.reject(new Error("non-Linux rejected member")),
+    timeoutMs: 5,
+  }).then((state) => {
+    quitReached = true;
+    return state;
+  });
+
+  await new Promise((resolve) => setTimeout(resolve, 15));
+  assert.equal(quitReached, false);
+  resolveGlobalState();
+
+  const state = await run;
+  assert.equal(state.exitCalls, 0);
+  assert.equal(state.quitCalls, 1);
+  assert.deepEqual(state.warnings, []);
+});
+
+test("current will-quit drift fails the required lifecycle patch", () => {
+  const source = willQuitDrainBundleFixture().replace(
+    "U5(h,N5)",
+    "U5(h,N5,unexpected)",
+  );
+  const descriptor = corePatchDescriptors().find(
+    (candidate) => candidate.id === "linux-explicit-quit-drain-timeout",
+  );
+  const report = createPatchReport();
+  const { value: result, warnings } = captureWarns(() =>
+    applyMainBundlePatchDescriptors(source, [descriptor], {}, report),
+  );
+
+  assert.equal(result.patchedSource, source);
+  assert.deepEqual(warnings, [
+    "WARN: Could not uniquely match current will-quit drain sequence — skipping Linux explicit quit drain timeout patch",
+  ]);
+  assert.equal(report.patches[0]?.status, "failed-required");
+  assert.equal(report.patches[0]?.reason, warnings[0]);
+});
+
+test("missing, renamed, or ambiguous will-quit targets fail the required lifecycle patch", () => {
+  const sources = [
+    willQuitDrainBundleFixture().replace(
+      "shouldSkipDrainBeforeQuit()",
+      "skipDrainBeforeQuit()",
+    ),
+    "l.app.on(`ready`,()=>{})",
+    `${willQuitDrainBundleFixture()}${willQuitDrainBundleFixture()}`,
+  ];
+  const descriptor = corePatchDescriptors().find(
+    (candidate) => candidate.id === "linux-explicit-quit-drain-timeout",
+  );
+
+  for (const source of sources) {
+    const report = createPatchReport();
+    const { value: result, warnings } = captureWarns(() =>
+      applyMainBundlePatchDescriptors(source, [descriptor], {}, report),
+    );
+
+    assert.equal(result.patchedSource, source);
+    assert.deepEqual(warnings, [
+      "WARN: Could not uniquely match current will-quit drain sequence — skipping Linux explicit quit drain timeout patch",
+    ]);
+    assert.equal(report.patches[0]?.status, "failed-required");
+    assert.equal(report.patches[0]?.reason, warnings[0]);
+  }
+});
+
+test("a non-exiting Linux finalizer is not accepted as already applied", () => {
+  const previousBrokenPatch = applyLinuxWillQuitDrainTimeoutPatch(
+    willQuitDrainBundleFixture(),
+  ).replace("l.app.exit(0)", "l.app.quit()") + "finally{z.app.exit(0)}";
+  const descriptor = corePatchDescriptors().find(
+    (candidate) => candidate.id === "linux-explicit-quit-drain-timeout",
+  );
+  const report = createPatchReport();
+  const { value: result, warnings } = captureWarns(() =>
+    applyMainBundlePatchDescriptors(previousBrokenPatch, [descriptor], {}, report),
+  );
+
+  assert.equal(result.patchedSource, previousBrokenPatch);
+  assert.deepEqual(warnings, [
+    "WARN: Could not uniquely match current will-quit drain sequence — skipping Linux explicit quit drain timeout patch",
+  ]);
+  assert.equal(report.patches[0]?.status, "failed-required");
+  assert.equal(report.patches[0]?.reason, warnings[0]);
 });
 
 test("marks Linux quit-in-progress for the tray quit path", () => {
@@ -8979,6 +9326,7 @@ test("reuses current bundled-plugin metadata for the synthetic Computer Use card
     remoteMarketplaceName: null,
     plugin: { id: "chrome@openai-bundled", name: "chrome", installed: true, enabled: true },
   };
+  let lastSelectedPlugin = null;
 
   function availablePluginsFor({
     availablePlugins = [chromeDonor],
@@ -9003,7 +9351,9 @@ test("reuses current bundled-plugin metadata for the synthetic Computer Use card
       secondFlag: "second",
       selectPlugin: (plugins) => {
         selectedPlugins = plugins;
-        return null;
+        lastSelectedPlugin =
+          plugins.find((plugin) => plugin.plugin?.name === "computer-use") ?? null;
+        return lastSelectedPlugin;
       },
       useAvailability: () => ({ available: false }),
       useFlag: () => false,
@@ -9026,6 +9376,9 @@ test("reuses current bundled-plugin metadata for the synthetic Computer Use card
   assert.equal(plugins[1].plugin.name, "computer-use");
   assert.equal(plugins[1].marketplacePath, bundledMarketplaceManifest);
   assert.notEqual(plugins[1].marketplacePath, incorrectHomeRelativeManifest);
+  assert.equal(lastSelectedPlugin, plugins[1]);
+  assert.equal(lastSelectedPlugin.marketplaceName, "openai-bundled");
+  assert.equal(lastSelectedPlugin.marketplacePath, bundledMarketplaceManifest);
 
   const laterValidDonor = {
     marketplaceName: "openai-bundled",
@@ -9199,16 +9552,41 @@ test("does not report partial current Computer Use settings patches as applied",
   ]);
 });
 
-test("allows the current Computer Use host platform on Linux", () => {
-  const source =
-    "function Se(e){return e===`macOS`||e===`windows`}" +
-    "function Ce(e){let t=cache(16),{enabled:n,hostId:r}=e,i=n===void 0?!0:n,{isLoading:a,platform:o}=usePlatform(),s=flag(`1506311413`),c;t[0]===r?c=t[1]:(c={featureName:`computer_use`,hostId:r},t[0]=r,t[1]=c);let l=useFeature(c),u=o===`windows`&&!a,d=i&&u,f;t[2]===d?f=t[3]:(f={enabled:d},t[2]=d,t[3]=f);let p=useWindowsFeature(f),m=l.isLoading||u&&p.isLoading,h=l.enabled&&(!u||p.enabled),g;t[4]!==h||t[5]!==i||t[6]!==m||t[7]!==s||t[8]!==a||t[9]!==o?(g=resolveAvailability({areRequiredFeaturesEnabled:h,enabled:i,isAnyFeatureLoading:m,isComputerUseGateEnabled:s,isHostCompatiblePlatform:Se(o),isPlatformLoading:a,windowType:`electron`}),t[4]=h,t[5]=i,t[6]=m,t[7]=s,t[8]=a,t[9]=o,t[10]=g):g=t[10];return g}";
+function currentComputerUseHostPlatform26721Fixture() {
+  return (
+    "function K3r(e){return e===`macOS`||e===`windows`}" +
+    "function q3r(e){let t=cache(16),{enabled:n,hostId:r}=e,i=n===void 0?!0:n,{isLoading:a,platform:o}=usePlatform(),s=flag(`1506311413`),c;" +
+    "t[0]===r?c=t[1]:(c={featureName:`computer_use`,hostId:r},t[0]=r,t[1]=c);" +
+    "let l=useFeature(c),u=o===`windows`&&!a,d=i&&u,f;t[2]===d?f=t[3]:(f={enabled:d},t[2]=d,t[3]=f);" +
+    "let p=useWindowsFeature(f),m=l.isLoading||u&&p.isLoading,h=l.enabled&&(!u||p.enabled),g;" +
+    "t[4]!==h||t[5]!==i||t[6]!==m||t[7]!==s||t[8]!==a||t[9]!==o?" +
+    "(g=X3r({areRequiredFeaturesEnabled:h,enabled:i,isAnyFeatureLoading:m,isComputerUseGateEnabled:s,isHostCompatiblePlatform:K3r(o),isPlatformLoading:a,windowType:`electron`})," +
+    "t[4]=h,t[5]=i,t[6]=m,t[7]=s,t[8]=a,t[9]=o,t[10]=g):g=t[10];return g}"
+  );
+}
 
-  const patched = applyPatchTwice(applyLinuxComputerUseHostPlatformPatch, source);
+function currentComputerUseInstallFlow26721Fixture() {
+  return (
+    "function i4i(e){let t=cache(31),{hostId:n,marketplacePath:r,pluginName:i,remoteMarketplaceName:a,enabled:o}=e," +
+    "s=o===void 0?!0:o,c=n??`local`,l;t[0]===c?l=t[1]:(l={hostId:c},t[0]=c,t[1]=l);" +
+    "let u=hostReady(l),d=environment(),f;t[2]===i?f=t[3]:(f=i!=null&&isAvailabilityGated(i),t[2]=i,t[3]=f);" +
+    "let p=f,m;t[4]!==c||t[5]!==p?(m={enabled:p,hostId:c},t[4]=c,t[5]=p,t[6]=m):m=t[6];" +
+    "let h=useComputerUseAvailability(m),g=(r!=null||a!=null)&&i!=null,v=u&&s&&g&&(!p||h.available);" +
+    "let b=async()=>{if(i==null)throw Error(`plugin detail query requires pluginName`);" +
+    "return read(`read-plugin`,{hostId:c,...pluginLocation({marketplacePath:r,remoteMarketplaceName:a}),pluginName:i})};" +
+    "return useQuery({queryFn:b,enabled:v})}"
+  );
+}
+
+test("allows the exact 26.721 Computer Use host platform contract on Linux", () => {
+  const patched = applyPatchTwice(
+    applyLinuxComputerUseHostPlatformPatch,
+    currentComputerUseHostPlatform26721Fixture(),
+  );
 
   assert.match(
     patched,
-    /g=resolveAvailability\(\{areRequiredFeaturesEnabled:h,enabled:i,isAnyFeatureLoading:m,isComputerUseGateEnabled:s,isHostCompatiblePlatform:o===`linux`\|\|Se\(o\),isPlatformLoading:a,windowType:`electron`\}\)/,
+    /g=X3r\(\{areRequiredFeaturesEnabled:h,enabled:i,isAnyFeatureLoading:m,isComputerUseGateEnabled:s,isHostCompatiblePlatform:o===`linux`\|\|K3r\(o\),isPlatformLoading:a,windowType:`electron`\}\)/,
   );
   assert.doesNotMatch(patched, /areRequiredFeaturesEnabled:o===`linux`|isComputerUseGateEnabled:o===`linux`/);
 });
@@ -9226,22 +9604,60 @@ test("rejects current Computer Use host-platform drift byte-identically", () => 
   assert.deepEqual(warnings, [
     "WARN: Could not find current Computer Use host-platform gate — skipping Linux Computer Use host-platform patch",
   ]);
+  const hostDescriptor =
+    require("./patches/core/all-linux/webview/computer-use-ui/patch.js")
+      .find(({ id }) => id === "linux-computer-use-host-platform");
+  assert.equal(hostDescriptor.assetMatch(source), false);
 });
 
-test("loads current Computer Use plugin details on Linux despite the upstream availability gate", () => {
-  const source =
-    "function Ke(e){let t=cache(31),{hostId:n,marketplacePath:r,pluginName:i,remoteMarketplaceName:a,enabled:o}=e," +
-    "c=o===void 0?!0:o,l=n??`local`,d;t[0]===l?d=t[1]:(d={hostId:l},t[0]=l,t[1]=d);" +
-    "let f=hostReady(d),p=environment(),m;t[2]===i?m=t[3]:(m=i!=null&&isAvailabilityGated(i),t[2]=i,t[3]=m);" +
-    "let g=m,_;t[4]!==l||t[5]!==g?(_={enabled:g,hostId:l},t[4]=l,t[5]=g,t[6]=_):_=t[6];" +
-    "let v=useComputerUseAvailability(_),y=(r!=null||a!=null)&&i!=null,b=f&&c&&y&&g&&v.isLoading,x=f&&c&&y&&(!g||v.available);" +
-    "let query=async()=>{if(i==null)throw Error(`plugin detail query requires pluginName`);return read(`read-plugin`,{hostId:l,pluginName:i})};" +
-    "return useQuery({queryFn:query,enabled:x})}";
+test("loads the exact 26.721 Computer Use plugin detail contract on Linux", async () => {
+  const patched = applyPatchTwice(
+    applyLinuxComputerUseInstallFlowPatch,
+    currentComputerUseInstallFlow26721Fixture(),
+  );
 
-  const patched = applyPatchTwice(applyLinuxComputerUseInstallFlowPatch, source);
+  assert.match(patched, /let p=f&&i!==`computer-use`,m;/);
+  assert.doesNotMatch(patched, /let p=f,m;/);
 
-  assert.match(patched, /let g=m&&i!==`computer-use`,_;/);
-  assert.doesNotMatch(patched, /let g=m,_;/);
+  const marketplacePath =
+    "/tmp/codex-test/openai-bundled/.agents/plugins/marketplace.json";
+  let pluginRead = null;
+  const query = vm.runInNewContext(
+    `${patched};i4i(${JSON.stringify({
+      hostId: "local",
+      marketplacePath,
+      pluginName: "computer-use",
+    })})`,
+    {
+      cache: (size) => new Array(size),
+      environment: () => "desktop",
+      hostReady: () => true,
+      isAvailabilityGated: () => true,
+      pluginLocation: ({ marketplacePath: selectedMarketplacePath }) => ({
+        marketplacePath: selectedMarketplacePath,
+      }),
+      read: async (method, params) => {
+        pluginRead = { method, params };
+        return { plugin: { name: "computer-use" } };
+      },
+      useComputerUseAvailability: () => ({ available: false }),
+      useQuery: (options) => options,
+    },
+  );
+
+  assert.equal(query.enabled, true);
+  await query.queryFn();
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(pluginRead)),
+    {
+      method: "read-plugin",
+      params: {
+        hostId: "local",
+        marketplacePath,
+        pluginName: "computer-use",
+      },
+    },
+  );
 });
 
 test("loads July 24 Computer Use plugin details through the expanded availability chain", () => {
@@ -9275,6 +9691,56 @@ test("rejects current Computer Use plugin detail drift byte-identically", () => 
   assert.deepEqual(warnings, [
     "WARN: Could not find current Computer Use plugin detail availability gate — skipping Linux Computer Use install flow patch",
   ]);
+  const installFlowDescriptor =
+    require("./patches/core/all-linux/webview/computer-use-ui/patch.js")
+      .find(({ id }) => id === "linux-computer-use-install-flow");
+  assert.equal(installFlowDescriptor.assetMatch(source), false);
+});
+
+test("warns precisely and preserves drifted 26.721 app-initial near-misses", () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "codex-computer-use-near-miss-"));
+  try {
+    const assetsDir = path.join(tempRoot, "webview", "assets");
+    fs.mkdirSync(assetsDir, { recursive: true });
+    const assetPath = path.join(assetsDir, "app-initial-near-miss.js");
+    const source =
+      "const feature={featureName:`computer_use`};" +
+      "result=helper({areRequiredFeaturesEnabled:a,enabled:b,isAnyFeatureLoading:c,isComputerUseGateEnabled:d,isHostCompatiblePlatform:drifted(platform,other),isPlatformLoading:e,windowType:`electron`});" +
+      "function usePluginDetail(e){let{pluginName:i}=e,f=i!=null&&isAvailabilityGated(i);" +
+      "let p=drifted(f),m;m={enabled:p};let h=useComputerUseAvailability(m),v=!p||h.available;" +
+      "let query=()=>{if(i==null)throw Error(`plugin detail query requires pluginName`);" +
+      "return read(`read-plugin`,{pluginName:i})};return useQuery({queryFn:query,enabled:v})}";
+    fs.writeFileSync(assetPath, source);
+    const descriptors =
+      require("./patches/core/all-linux/webview/computer-use-ui/patch.js")
+        .filter(({ id }) =>
+          id === "linux-computer-use-host-platform" ||
+          id === "linux-computer-use-install-flow");
+    const report = createPatchReport();
+    const { warnings } = captureWarns(() =>
+      applyWebviewAssetPatchDescriptors(
+        tempRoot,
+        descriptors,
+        { enableComputerUseUi: true },
+        report,
+      ),
+    );
+
+    assert.equal(fs.readFileSync(assetPath, "utf8"), source);
+    assert.deepEqual(warnings, [
+      `WARN: Could not find current Computer Use host-platform app-initial contract in ${assetsDir} — skipping Linux Computer Use host-platform patch`,
+      `WARN: Could not find current Computer Use install flow app-initial contract in ${assetsDir} — skipping Linux Computer Use install flow patch`,
+    ]);
+    assert.deepEqual(
+      report.patches.map(({ name, status }) => ({ name, status })),
+      [
+        { name: "linux-computer-use-host-platform", status: "skipped-optional" },
+        { name: "linux-computer-use-install-flow", status: "failed-required" },
+      ],
+    );
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
 });
 
 test("reconciles the global Plugins page to the installed Computer Use plugin", () => {
@@ -10040,7 +10506,7 @@ test("missing icon asset skips only icon patches", () => {
   }
 });
 
-test("patchExtractedApp scans current Computer Use settings bundles when UI is enabled", () => {
+test("patchExtractedApp selects the exact 26.721 Computer Use app-initial contract", () => {
   withIsolatedHome(() => {
     process.env[COMPUTER_USE_UI_ENV_VAR] = "1";
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "codex-computer-use-apps-assets-test-"));
@@ -10061,7 +10527,7 @@ test("patchExtractedApp scans current Computer Use settings bundles when UI is e
         ].join(""),
       );
       fs.writeFileSync(
-        path.join(assetsDir, "computer-use-settings-DsM_pz8i.js"),
+        path.join(assetsDir, "computer-use-settings-BzkBOuLk.js"),
         "function Ht(){let e=cache(24),{selectedHostId:t}=host(),n=data(t),i={hostId:t};" +
           "let a=useAvailability(i),{platform:o}=usePlatform(),s=hostKind(t)===`local`,c=flag(`188145323`);" +
           "let f=jsx(Settings,{computerUseAvailability:a,platform:o});let h=a.available?jsx(AllowedApps,{}):null;return jsx(Page,{children:[f,h]})}" +
@@ -10069,58 +10535,45 @@ test("patchExtractedApp scans current Computer Use settings bundles when UI is e
           "let g=[];let _=usePlugins(s,g),v=useMarketplacePath(s),y=useFlag(firstFlag),b=useFlag(secondFlag),x;" +
           "x=selectPlugin(_.availablePlugins,computerUsePluginName,v);return x}",
       );
+      const appInitialSource =
+        currentComputerUseHostPlatform26721Fixture() +
+        currentComputerUseInstallFlow26721Fixture();
       fs.writeFileSync(
-        path.join(
-          assetsDir,
-          "app-initial~avatarOverlayCompositionSurface~artifact-tab-content.electron~notebook-preview-~iaq4jiqv-current.js",
-        ),
-        "function Ke(e){let t=cache(31),{hostId:n,marketplacePath:r,pluginName:i,remoteMarketplaceName:a,enabled:o}=e," +
-          "c=o===void 0?!0:o,l=n??`local`,d;t[0]===l?d=t[1]:(d={hostId:l},t[0]=l,t[1]=d);" +
-          "let f=hostReady(d),p=environment(),m;t[2]===i?m=t[3]:(m=i!=null&&isAvailabilityGated(i),t[2]=i,t[3]=m);" +
-          "let g=m,_;t[4]!==l||t[5]!==g?(_={enabled:g,hostId:l},t[4]=l,t[5]=g,t[6]=_):_=t[6];" +
-          "let v=useComputerUseAvailability(_),y=(r!=null||a!=null)&&i!=null,b=f&&c&&y&&g&&v.isLoading,x=f&&c&&y&&(!g||v.available);" +
-          "let query=async()=>{if(i==null)throw Error(`plugin detail query requires pluginName`);return read(`read-plugin`,{hostId:l,pluginName:i})};" +
-          "return useQuery({queryFn:query,enabled:x})}",
+        path.join(assetsDir, "app-initial-BHB6SClA.js"),
+        appInitialSource,
       );
+      const unrelatedAppInitialSource =
+        "function unrelatedAppInitial(){return `plugin detail query requires pluginName`}" +
+        "const unrelatedFeature={featureName:`computer_use`};";
       fs.writeFileSync(
-        path.join(
-          assetsDir,
-          "app-initial~artifact-tab-content.electron~notebook-preview-panel~app-main~settings-command-~cajo70vh-C4Uu6T2D.js",
-        ),
-        "function Se(e){return e===`macOS`||e===`windows`}" +
-          "function Ce(e){let t=cache(16),{enabled:n,hostId:r}=e,i=n===void 0?!0:n,{isLoading:a,platform:o}=usePlatform(),s=flag(`1506311413`),c;t[0]===r?c=t[1]:(c={featureName:`computer_use`,hostId:r},t[0]=r,t[1]=c);let l=useFeature(c),u=o===`windows`&&!a,d=i&&u,f;t[2]===d?f=t[3]:(f={enabled:d},t[2]=d,t[3]=f);let p=useWindowsFeature(f),m=l.isLoading||u&&p.isLoading,h=l.enabled&&(!u||p.enabled),g;t[4]!==h||t[5]!==i||t[6]!==m||t[7]!==s||t[8]!==a||t[9]!==o?(g=resolveAvailability({areRequiredFeaturesEnabled:h,enabled:i,isAnyFeatureLoading:m,isComputerUseGateEnabled:s,isHostCompatiblePlatform:Se(o),isPlatformLoading:a,windowType:`electron`}),t[4]=h,t[5]=i,t[6]=m,t[7]=s,t[8]=a,t[9]=o,t[10]=g):g=t[10];return g}",
+        path.join(assetsDir, "app-initial-unrelated.js"),
+        unrelatedAppInitialSource,
       );
       fs.writeFileSync(path.join(tempRoot, "package.json"), JSON.stringify({ name: "codex" }));
 
       const firstReport = createPatchReport();
       patchExtractedApp(tempRoot, { report: firstReport });
 
-      const settingsPath = path.join(assetsDir, "computer-use-settings-DsM_pz8i.js");
-      const detailPath = path.join(
-        assetsDir,
-        "app-initial~avatarOverlayCompositionSurface~artifact-tab-content.electron~notebook-preview-~iaq4jiqv-current.js",
-      );
-      const hostPlatformPath = path.join(
-        assetsDir,
-        "app-initial~artifact-tab-content.electron~notebook-preview-panel~app-main~settings-command-~cajo70vh-C4Uu6T2D.js",
-      );
+      const settingsPath = path.join(assetsDir, "computer-use-settings-BzkBOuLk.js");
+      const appInitialPath = path.join(assetsDir, "app-initial-BHB6SClA.js");
+      const unrelatedAppInitialPath = path.join(assetsDir, "app-initial-unrelated.js");
       const patchedSettings = fs.readFileSync(settingsPath, "utf8");
-      const patchedDetail = fs.readFileSync(detailPath, "utf8");
-      const patchedHostPlatform = fs.readFileSync(hostPlatformPath, "utf8");
+      const patchedAppInitial = fs.readFileSync(appInitialPath, "utf8");
 
       assert.match(
         patchedSettings,
         /o===`linux`&&\(a=\{\.\.\.a,available:!0,isFetching:!1,isLoading:!1\}\);/,
       );
       assert.match(patchedSettings, /marketplaceName:`openai-bundled`/);
-      assert.match(patchedDetail, /let g=m&&i!==`computer-use`,_;/);
+      assert.match(patchedAppInitial, /let p=f&&i!==`computer-use`,m;/);
+      assert.match(
+        patchedAppInitial,
+        /g=X3r\(\{areRequiredFeaturesEnabled:h,enabled:i,isAnyFeatureLoading:m,isComputerUseGateEnabled:s,isHostCompatiblePlatform:o===`linux`\|\|K3r\(o\),isPlatformLoading:a,windowType:`electron`\}\)/,
+      );
+      assert.equal(fs.readFileSync(unrelatedAppInitialPath, "utf8"), unrelatedAppInitialSource);
       assert.equal(
         firstReport.patches.find((patch) => patch.name === "linux-computer-use-ui-availability")?.status,
         "applied",
-      );
-      assert.match(
-        patchedHostPlatform,
-        /g=resolveAvailability\(\{areRequiredFeaturesEnabled:h,enabled:i,isAnyFeatureLoading:m,isComputerUseGateEnabled:s,isHostCompatiblePlatform:o===`linux`\|\|Se\(o\),isPlatformLoading:a,windowType:`electron`\}\)/,
       );
       assert.equal(
         firstReport.patches.find((patch) => patch.name === "linux-computer-use-host-platform")?.status,
@@ -10130,13 +10583,21 @@ test("patchExtractedApp scans current Computer Use settings bundles when UI is e
         firstReport.patches.find((patch) => patch.name === "linux-computer-use-install-flow")?.status,
         "applied",
       );
+      assert.equal(
+        firstReport.patches.find((patch) => patch.name === "linux-computer-use-host-platform")?.assetName,
+        "app-initial-BHB6SClA.js",
+      );
+      assert.equal(
+        firstReport.patches.find((patch) => patch.name === "linux-computer-use-install-flow")?.assetName,
+        "app-initial-BHB6SClA.js",
+      );
 
       const secondReport = createPatchReport();
       patchExtractedApp(tempRoot, { report: secondReport });
 
       assert.equal(fs.readFileSync(settingsPath, "utf8"), patchedSettings);
-      assert.equal(fs.readFileSync(detailPath, "utf8"), patchedDetail);
-      assert.equal(fs.readFileSync(hostPlatformPath, "utf8"), patchedHostPlatform);
+      assert.equal(fs.readFileSync(appInitialPath, "utf8"), patchedAppInitial);
+      assert.equal(fs.readFileSync(unrelatedAppInitialPath, "utf8"), unrelatedAppInitialSource);
       assert.equal(
         secondReport.patches.find((patch) => patch.name === "linux-computer-use-ui-availability")?.status,
         "already-applied",
