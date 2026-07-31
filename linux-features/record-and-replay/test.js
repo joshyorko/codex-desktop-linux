@@ -16,6 +16,9 @@ const {
   stageEnabledLinuxFeatureInstall,
 } = require("../../scripts/lib/linux-features.js");
 const {
+  applyLinuxExternalOpenEnvPatch,
+} = require("../../scripts/patches/impl/main-process/browser.js");
+const {
   applyRecordReplayDictationTranscriptPatch,
   applyRecordReplayGlobalDictationTranscriptPatch,
   applyRecordReplayHudPatch,
@@ -238,7 +241,10 @@ test("record-and-replay bridge patch is idempotent and uses execFile", () => {
   assert.match(patched, /"linux-record-replay-import-skill":async/);
   assert.match(patched, /\.execFile\(n,e,\{encoding:"utf8",timeout:t,maxBuffer:16777216\}/);
   assert.match(patched, /codexLinuxRecordReplayWriteTempJson/);
-  assert.match(patched, /finally\{try\{fs\.unlinkSync\(c\)\}catch\{\}\}/);
+  assert.match(
+    patched,
+    /finally\{try\{require\("node:fs"\)\.unlinkSync\(c\)\}catch\{\}\}/,
+  );
   assert.match(patched, /"browser-trace"/);
   assert.match(patched, /"--trace-file"/);
   assert.doesNotMatch(patched, /exec\(/);
@@ -254,6 +260,28 @@ test("record-and-replay bridge patch is idempotent and uses execFile", () => {
   );
 });
 
+test("record-and-replay bridge remains complete after external-open composition", () => {
+  const source = [
+    '"use strict";let electron=require("electron");',
+    'const cp=require("node:child_process"),fs=require("node:fs"),path=require("node:path");',
+    "var tray={getChronicleSidecarControlState:()=>tt().skysight?$9:Se.appServerConnectionRegistry.getMaybeConnection(`local`)?.getChronicleSidecarControlState()??$9,toggleChronicleSidecar:async()=>{if(tt().skysight)return $9;let e=Se.appServerConnectionRegistry.getMaybeConnection(V);return e==null?$9:e.getChronicleSidecarControlState().running?e.pauseChronicleSidecar():e.resumeChronicleSidecar()}};",
+    'var bridge={"get-global-state":async({key:e})=>null};',
+  ].join("");
+  const chroniclePatched = applyChronicleSkysightMainBridgePatch(source);
+  const recordPatched = applyRecordReplayMainBridgePatch(chroniclePatched);
+  const composed = applyLinuxExternalOpenEnvPatch(recordPatched);
+  const { value, warnings } = captureWarns(() =>
+    applyRecordReplayMainBridgePatch(composed),
+  );
+
+  assert.equal(value, composed);
+  assert.deepEqual(warnings, []);
+  assert.match(
+    composed,
+    /require\("node:child_process"\)\.execFile\(/,
+  );
+});
+
 test("record-and-replay rejects incomplete current bridge variants byte-identically", () => {
   const source = [
     'const cp=require("node:child_process"),fs=require("node:fs"),path=require("node:path");',
@@ -262,13 +290,13 @@ test("record-and-replay rejects incomplete current bridge variants byte-identica
   ].join("");
   const chroniclePatched = applyChronicleSkysightMainBridgePatch(source);
   const patched = applyRecordReplayMainBridgePatch(chroniclePatched);
-  const bridgePayload = recordReplayBridgeSource({
-    fsVar: "fs",
-  });
-  const helperPayload = recordReplayHelperSource({
-    fsVar: "fs",
-    pathVar: "path",
-  });
+  const moduleExpressions = {
+    childProcessVar: 'require("node:child_process")',
+    fsVar: 'require("node:fs")',
+    pathVar: 'require("node:path")',
+  };
+  const bridgePayload = recordReplayBridgeSource(moduleExpressions);
+  const helperPayload = recordReplayHelperSource(moduleExpressions);
   const variants = {
     "missing current bridge handler": patched.replace(
       '"linux-record-replay-status":async',

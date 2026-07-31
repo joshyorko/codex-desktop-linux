@@ -1,6 +1,10 @@
 "use strict";
 
-const { requireName } = require("../../scripts/patches/lib/minified-js.js");
+const CHRONICLE_MODULE_EXPRESSIONS = Object.freeze({
+  childProcessVar: 'require("node:child_process")',
+  fsVar: 'require("node:fs")',
+  pathVar: 'require("node:path")',
+});
 
 function warn(message, patchName) {
   console.warn(`WARN: ${message} - skipping ${patchName}`);
@@ -72,11 +76,7 @@ function applyChronicleTrayPatch(currentSource) {
 }
 
 function hasCompleteChroniclePatch(source) {
-  const childProcessVar = requireName(source, "node:child_process");
-  const fsVar = requireName(source, "node:fs");
-  const pathVar = requireName(source, "node:path");
-  if (childProcessVar == null || fsVar == null || pathVar == null) return false;
-  const helper = recordReplayRuntimeHelperSource({ childProcessVar, fsVar, pathVar });
+  const helper = recordReplayRuntimeHelperSource(CHRONICLE_MODULE_EXPRESSIONS);
   const bridge = chronicleSkysightBridgeSource();
   return countOccurrences(source, helper) === 1
     && countOccurrences(source, bridge) === 1
@@ -95,19 +95,12 @@ function applyChronicleSkysightMainBridgePatch(currentSource) {
     warn("Could not find Chronicle tray control callbacks", patchName);
     return currentSource;
   }
-  const childProcessVar = requireName(currentSource, "node:child_process");
-  const fsVar = requireName(currentSource, "node:fs");
-  const pathVar = requireName(currentSource, "node:path");
-  if (childProcessVar == null || fsVar == null || pathVar == null) {
-    warn("Could not find Node module aliases", patchName);
-    return currentSource;
-  }
   const handlerNeedle = `"get-global-state":async({key:`;
   if (!currentSource.includes(handlerNeedle)) {
     warn("Could not find global-state bridge insertion point", patchName);
     return currentSource;
   }
-  const helper = recordReplayRuntimeHelperSource({ childProcessVar, fsVar, pathVar });
+  const helper = recordReplayRuntimeHelperSource(CHRONICLE_MODULE_EXPRESSIONS);
   const bridge = chronicleSkysightBridgeSource();
   const patched = `${helper}\n${currentSource.replace(handlerNeedle, `${bridge},${handlerNeedle}`)}`;
   return applyChronicleTrayPatch(patched);

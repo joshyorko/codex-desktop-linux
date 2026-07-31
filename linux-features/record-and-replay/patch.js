@@ -1,9 +1,12 @@
 "use strict";
 
-const { requireName } = require("../../scripts/patches/lib/minified-js.js");
-
 const RECORD_REPLAY_PLUGIN_NAME = "record-and-replay";
 const HUD_RUNTIME_VERSION = 5;
+const RECORD_REPLAY_MODULE_EXPRESSIONS = Object.freeze({
+  childProcessVar: 'require("node:child_process")',
+  fsVar: 'require("node:fs")',
+  pathVar: 'require("node:path")',
+});
 
 function warn(message, patchName) {
   console.warn(`WARN: ${message} - skipping ${patchName}`);
@@ -159,14 +162,8 @@ function recordReplayHelperSource({ fsVar, pathVar }) {
 }
 
 function hasCompleteRecordReplayMainBridgePatch(source) {
-  const fsVar = requireName(source, "node:fs");
-  const pathVar = requireName(source, "node:path");
-  if (fsVar == null || pathVar == null) {
-    return false;
-  }
-
-  const helperPayload = recordReplayHelperSource({ fsVar, pathVar });
-  const bridgePayload = recordReplayBridgeSource({ fsVar });
+  const helperPayload = recordReplayHelperSource(RECORD_REPLAY_MODULE_EXPRESSIONS);
+  const bridgePayload = recordReplayBridgeSource(RECORD_REPLAY_MODULE_EXPRESSIONS);
   const bridgeInsertion = `${bridgePayload},"get-global-state":async({key:`;
   return countOccurrences(source, helperPayload) === 1
     && countOccurrences(source, bridgePayload) === 1
@@ -192,22 +189,15 @@ function applyRecordReplayMainBridgePatch(currentSource) {
   }
 
   let patchedSource = currentSource;
-  const fsVar = requireName(currentSource, "node:fs");
-  const pathVar = requireName(currentSource, "node:path");
-  if (fsVar == null || pathVar == null) {
-    warn("Could not find Node module aliases", patchName);
-    return currentSource;
-  }
-
   const handlerNeedle = `"get-global-state":async({key:`;
   if (!currentSource.includes(handlerNeedle)) {
     warn("Could not find global-state bridge insertion point", patchName);
     return currentSource;
   }
 
-  patchedSource = `${recordReplayHelperSource({ fsVar, pathVar })}\n${patchedSource.replace(
+  patchedSource = `${recordReplayHelperSource(RECORD_REPLAY_MODULE_EXPRESSIONS)}\n${patchedSource.replace(
     handlerNeedle,
-    `${recordReplayBridgeSource({ fsVar })},${handlerNeedle}`,
+    `${recordReplayBridgeSource(RECORD_REPLAY_MODULE_EXPRESSIONS)},${handlerNeedle}`,
   )}`;
   return patchedSource;
 }
