@@ -1,6 +1,10 @@
 use anyhow::Result;
 use rmcp::{
-    handler::server::wrapper::{Json, Parameters},
+    handler::server::{
+        tool::ToolRouter,
+        wrapper::{Json, Parameters},
+    },
+    model::{Implementation, ServerCapabilities, ServerInfo},
     schemars::JsonSchema,
     tool, tool_handler, tool_router, ServerHandler, ServiceExt,
 };
@@ -25,10 +29,36 @@ use crate::{
 
 const DEFAULT_MAX_DURATION_SECONDS: u64 = 30 * 60;
 
-#[derive(Clone, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum McpMode {
+    EventStream,
+    Skysight,
+}
+
+const SKYSIGHT_TOOL_NAMES: &[&str] = &[
+    "doctor",
+    "skysight_list_exclusions",
+    "skysight_pause",
+    "skysight_resume",
+    "skysight_snapshot",
+    "skysight_start",
+    "skysight_status",
+    "skysight_stop",
+    "skysight_update_exclusion",
+];
+
+#[derive(Clone)]
 pub struct RecordReplayLinux {
     active_session: Arc<Mutex<Option<PathBuf>>>,
     last_session: Arc<Mutex<Option<PathBuf>>>,
+    mode: McpMode,
+    tool_router: ToolRouter<Self>,
+}
+
+impl Default for RecordReplayLinux {
+    fn default() -> Self {
+        Self::for_mode(McpMode::EventStream)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
@@ -604,15 +634,43 @@ impl RecordReplayLinux {
     }
 }
 
-#[tool_handler(
-    name = "event-stream",
-    version = "0.1.0-linux-alpha1",
-    instructions = "Use Event-stream to record Linux desktop/browser workflows and compile them into reusable Codex skills. Call doctor before first recording when readiness is uncertain. Use skysight_start or skysight_snapshot when recent activity context will help the skill draft. Use start/event_stream_start, let the user perform the workflow, call desktop_snapshot at meaningful app/window changes, call speech_context only for additional transcript text that is explicitly available, call browser_trace when browser/CDP trace evidence is available, optionally call mark for meaningful intent boundaries, call stop/event_stream_stop when the user says they are done, inspect the bundle, draft a skill prompt, create or refine SKILL.md, then import the skill when the user approves. Replay through Codex skills and Computer Use; do not replay raw pointer coordinates as the main architecture."
-)]
-impl ServerHandler for RecordReplayLinux {}
+#[tool_handler(router = self.tool_router)]
+impl ServerHandler for RecordReplayLinux {
+    fn get_info(&self) -> ServerInfo {
+        let (name, instructions) = match self.mode {
+            McpMode::EventStream => (
+                "event-stream",
+                "Use Event-stream to record Linux desktop/browser workflows and compile them into reusable Codex skills. Call doctor before first recording when readiness is uncertain. Use skysight_start or skysight_snapshot when recent activity context will help the skill draft. Use start/event_stream_start, let the user perform the workflow, call desktop_snapshot at meaningful app/window changes, call speech_context only for additional transcript text that is explicitly available, call browser_trace when browser/CDP trace evidence is available, optionally call mark for meaningful intent boundaries, call stop/event_stream_stop when the user says they are done, inspect the bundle, draft a skill prompt, create or refine SKILL.md, then import the skill when the user approves. Replay through Codex skills and Computer Use; do not replay raw pointer coordinates as the main architecture.",
+            ),
+            McpMode::Skysight => (
+                "chronicle-skysight",
+                "Use Skysight for explicit Linux activity-memory capture. Status and doctor calls are passive. Start continuous capture only when the user requests it, honor exclusions, and use pause, resume, stop, or snapshot to control bounded local evidence.",
+            ),
+        };
+        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+            .with_server_info(Implementation::new(name, env!("CARGO_PKG_VERSION")))
+            .with_instructions(instructions)
+    }
+}
 
-pub async fn serve_mcp() -> Result<()> {
-    let service = RecordReplayLinux::default();
+pub fn tool_names(mode: McpMode) -> Vec<String> {
+    RecordReplayLinux::router_for_mode(mode)
+        .list_all()
+        .into_iter()
+        .map(|tool| tool.name.into_owned())
+        .collect()
+}
+
+pub async fn serve_event_stream_mcp() -> Result<()> {
+    serve_mcp_mode(McpMode::EventStream).await
+}
+
+pub async fn serve_skysight_mcp() -> Result<()> {
+    serve_mcp_mode(McpMode::Skysight).await
+}
+
+async fn serve_mcp_mode(mode: McpMode) -> Result<()> {
+    let service = RecordReplayLinux::for_mode(mode);
     let cleanup_service = service.clone();
     let server_result: Result<()> = async move {
         service
@@ -623,14 +681,36 @@ pub async fn serve_mcp() -> Result<()> {
         Ok(())
     }
     .await;
-    let cleanup_result =
-        cleanup_service.stop_owned_skysight_for_active_session("event-stream-shutdown");
+    let cleanup_result = if mode == McpMode::EventStream {
+        cleanup_service.stop_owned_skysight_for_active_session("event-stream-shutdown")
+    } else {
+        Ok(())
+    };
     server_result?;
     cleanup_result?;
     Ok(())
 }
 
 impl RecordReplayLinux {
+    fn for_mode(mode: McpMode) -> Self {
+        Self {
+            active_session: Arc::new(Mutex::new(None)),
+            last_session: Arc::new(Mutex::new(None)),
+            mode,
+            tool_router: Self::router_for_mode(mode),
+        }
+    }
+
+    fn router_for_mode(mode: McpMode) -> ToolRouter<Self> {
+        let mut router = Self::tool_router();
+        if mode == McpMode::Skysight {
+            router
+                .map
+                .retain(|name, _route| SKYSIGHT_TOOL_NAMES.contains(&name.as_ref()));
+        }
+        router
+    }
+
     fn status_value(&self, command: &'static str) -> Value {
         let status = crate::refresh_runtime_status();
         let session_dir = status
