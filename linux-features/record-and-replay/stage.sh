@@ -1,20 +1,6 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-find_cargo_for_record_replay() {
-    if command -v cargo >/dev/null 2>&1; then
-        command -v cargo
-        return 0
-    fi
-
-    if [ -x "$HOME/.cargo/bin/cargo" ]; then
-        echo "$HOME/.cargo/bin/cargo"
-        return 0
-    fi
-
-    return 1
-}
-
 write_record_replay_marketplace_entry() {
     local marketplace="$1"
     node - "$marketplace" <<'NODE'
@@ -197,41 +183,8 @@ fs.writeFileSync(pluginPath, `${JSON.stringify(plugin, null, 2)}\n`);
 NODE
 }
 
-build_record_replay_backend() {
-    local source_binary="$SCRIPT_DIR/target/release/codex-record-replay-linux"
-    local cargo_cmd=""
-
-    if [ -n "${CODEX_RECORD_REPLAY_LINUX_SOURCE:-}" ]; then
-        [ -x "$CODEX_RECORD_REPLAY_LINUX_SOURCE" ] || {
-            echo "Record & Replay source is not executable: $CODEX_RECORD_REPLAY_LINUX_SOURCE" >&2
-            return 1
-        }
-        echo "Using prebuilt Record & Replay backend" >&2
-        printf '%s\n' "$CODEX_RECORD_REPLAY_LINUX_SOURCE"
-        return 0
-    fi
-
-    if ! cargo_cmd="$(find_cargo_for_record_replay)"; then
-        echo "cargo not found; Record & Replay backend cannot be built" >&2
-        echo "Install/use a Rust toolchain for this build, or set CODEX_RECORD_REPLAY_LINUX_SOURCE to an executable codex-record-replay-linux binary." >&2
-        return 1
-    fi
-
-    echo "Building Record & Replay backend..." >&2
-    if ! (cd "$SCRIPT_DIR" && "$cargo_cmd" build --release -p codex-record-replay-linux >&2); then
-        echo "Failed to build Record & Replay backend" >&2
-        return 1
-    fi
-
-    [ -x "$source_binary" ] || {
-        echo "Record & Replay backend missing after build: $source_binary" >&2
-        return 1
-    }
-    printf '%s\n' "$source_binary"
-}
-
-backend_binary="$(build_record_replay_backend)"
 native_target_dir="$INSTALL_DIR/resources/native"
+backend_binary="$native_target_dir/codex-record-replay-linux"
 plugin_template="$SCRIPT_DIR/linux-features/record-and-replay/plugin-template"
 target_plugin="$INSTALL_DIR/resources/plugins/openai-bundled/plugins/record-and-replay"
 target_marketplace="$INSTALL_DIR/resources/plugins/openai-bundled/.agents/plugins/marketplace.json"
@@ -241,9 +194,10 @@ target_marketplace="$INSTALL_DIR/resources/plugins/openai-bundled/.agents/plugin
     exit 1
 }
 
-mkdir -p "$native_target_dir"
-cp "$backend_binary" "$native_target_dir/codex-record-replay-linux"
-chmod 0755 "$native_target_dir/codex-record-replay-linux"
+[ -x "$backend_binary" ] || {
+    echo "Record & Replay requires the Chronicle / Skysight shared backend: $backend_binary" >&2
+    exit 1
+}
 
 stage_record_replay_plugin_base "$target_plugin" "$plugin_template"
 patch_record_replay_plugin_for_linux "$target_plugin"

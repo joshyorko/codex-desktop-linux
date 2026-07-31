@@ -49,6 +49,23 @@ function repoRoot() {
   return path.resolve(featureDir, "../..");
 }
 
+function stageSharedChronicleBackend(workspace, installDir, fakeBinary) {
+  execFileSync(
+    "bash",
+    [path.join(featureDir, "../chronicle-skysight/stage.sh")],
+    {
+      cwd: workspace,
+      env: {
+        ...process.env,
+        SCRIPT_DIR: repoRoot(),
+        INSTALL_DIR: installDir,
+        CODEX_RECORD_REPLAY_LINUX_SOURCE: fakeBinary,
+      },
+      stdio: "pipe",
+    },
+  );
+}
+
 function withTempFeatureRoot(enabled, fn) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-record-and-replay-feature-test-"));
   const originalConfig = process.env.CODEX_LINUX_FEATURES_CONFIG;
@@ -917,6 +934,7 @@ test("record-and-replay stage hook records marketplace entry and stages plugin",
     fs.writeFileSync(marketplace, JSON.stringify({ plugins: [{ name: "computer-use", source: { path: "./plugins/computer-use" } }] }));
     fs.writeFileSync(fakeBinary, "#!/bin/sh\nprintf '{\"ok\":true}\\n'\n");
     fs.chmodSync(fakeBinary, 0o755);
+    stageSharedChronicleBackend(workspace, installDir, fakeBinary);
 
     execFileSync("bash", [path.join(featureDir, "stage.sh")], {
       cwd: workspace,
@@ -924,7 +942,6 @@ test("record-and-replay stage hook records marketplace entry and stages plugin",
         ...process.env,
         SCRIPT_DIR: repoRoot(),
         INSTALL_DIR: installDir,
-        CODEX_RECORD_REPLAY_LINUX_SOURCE: fakeBinary,
       },
       stdio: "pipe",
     });
@@ -962,7 +979,7 @@ test("record-and-replay stage hook records marketplace entry and stages plugin",
   }
 });
 
-test("record-and-replay disabled rebuild exposes cleanup hook for staged payload", () => {
+test("record-and-replay cleanup preserves Chronicle shared backend", () => {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "codex-record-replay-cleanup-"));
   const originalRoot = process.env.CODEX_LINUX_FEATURES_ROOT;
   try {
@@ -995,7 +1012,7 @@ test("record-and-replay disabled rebuild exposes cleanup hook for staged payload
     });
     stageEnabledLinuxFeatureInstall(installDir, { featuresRoot });
 
-    assert.equal(fs.existsSync(staleNative), false);
+    assert.equal(fs.existsSync(staleNative), true);
     assert.equal(fs.existsSync(stalePlugin), false);
     const parsedMarketplace = JSON.parse(fs.readFileSync(marketplace, "utf8"));
     assert.deepEqual(parsedMarketplace.plugins.map((plugin) => plugin.name), ["computer-use"]);
@@ -1092,6 +1109,7 @@ test("record-and-replay stage hook uses the current upstream plugin shell when p
     fs.writeFileSync(marketplace, JSON.stringify({ plugins: [] }));
     fs.writeFileSync(fakeBinary, "#!/bin/sh\nprintf '{\"ok\":true}\\n'\n");
     fs.chmodSync(fakeBinary, 0o755);
+    stageSharedChronicleBackend(workspace, installDir, fakeBinary);
 
     execFileSync("bash", [path.join(featureDir, "stage.sh")], {
       cwd: workspace,
@@ -1100,7 +1118,6 @@ test("record-and-replay stage hook uses the current upstream plugin shell when p
         SCRIPT_DIR: repoRoot(),
         INSTALL_DIR: installDir,
         CODEX_UPSTREAM_APP_DIR: path.join(workspace, "upstream/ChatGPT.app"),
-        CODEX_RECORD_REPLAY_LINUX_SOURCE: fakeBinary,
       },
       stdio: "pipe",
     });
@@ -1180,6 +1197,7 @@ test("record-and-replay stage hook rejects the obsolete nested-app plugin shell"
     fs.writeFileSync(marketplace, JSON.stringify({ plugins: [] }));
     fs.writeFileSync(fakeBinary, "#!/bin/sh\nprintf '{\"ok\":true}\\n'\n");
     fs.chmodSync(fakeBinary, 0o755);
+    stageSharedChronicleBackend(workspace, installDir, fakeBinary);
 
     execFileSync("bash", [path.join(featureDir, "stage.sh")], {
       cwd: workspace,
@@ -1188,7 +1206,6 @@ test("record-and-replay stage hook rejects the obsolete nested-app plugin shell"
         SCRIPT_DIR: repoRoot(),
         INSTALL_DIR: installDir,
         CODEX_UPSTREAM_APP_DIR: path.join(workspace, "upstream/ChatGPT.app"),
-        CODEX_RECORD_REPLAY_LINUX_SOURCE: fakeBinary,
       },
       stdio: "pipe",
     });
@@ -1212,6 +1229,7 @@ test("record-and-replay stage hook borrows upstream webview icon when present", 
     fs.writeFileSync(path.join(assetsDir, "record-and-replay-plugin-icon-fixture.png"), "fake-png");
     fs.writeFileSync(fakeBinary, "#!/bin/sh\nprintf '{\"ok\":true}\\n'\n");
     fs.chmodSync(fakeBinary, 0o755);
+    stageSharedChronicleBackend(workspace, installDir, fakeBinary);
 
     execFileSync("bash", [path.join(featureDir, "stage.sh")], {
       cwd: workspace,
@@ -1219,7 +1237,6 @@ test("record-and-replay stage hook borrows upstream webview icon when present", 
         ...process.env,
         SCRIPT_DIR: repoRoot(),
         INSTALL_DIR: installDir,
-        CODEX_RECORD_REPLAY_LINUX_SOURCE: fakeBinary,
       },
       stdio: "pipe",
     });

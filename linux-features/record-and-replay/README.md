@@ -23,10 +23,11 @@ It is disabled by default. Enable it in `linux-features/features.json`:
 
 ## Build Prerequisite
 
-When this feature is enabled, staging builds `codex-record-replay-linux` with
-Cargo and copies the release binary into `resources/native/`, the staged plugin
-`bin/codex-record-replay-linux`, and the official-shaped plugin helper alias
-`bin/SkyLinuxComputerUseClient`. Builds without a Rust toolchain can set
+Record & Replay requires the `chronicle-skysight` feature. Chronicle / Skysight
+builds the shared `codex-record-replay-linux` backend with Cargo and stages it
+under `resources/native/`; Record & Replay reuses that executable for its
+plugin and official-shaped `bin/SkyLinuxComputerUseClient` alias. Builds
+without a Rust toolchain can set
 `CODEX_RECORD_REPLAY_LINUX_SOURCE` to an executable prebuilt
 `codex-record-replay-linux` binary.
 
@@ -38,9 +39,9 @@ Cargo and copies the release binary into `resources/native/`, the staged plugin
   opt-in native audio metadata/recordings when explicitly enabled, InputCapture/libei
   readiness, X11 session metadata, active desktop/window snapshots,
   diagnostics, and `draft-prompt.md`.
-- Exposes Linux Skysight pause/resume, status, snapshots, exclusions, and a
-  rolling evidence daemon through the same `event-stream` MCP server so
-  Chronicle-compatible resources can feed skill drafting.
+- Reuses the independently selectable Chronicle / Skysight activity-memory
+  foundation and also exposes its tools through the full `event-stream` MCP
+  server so Chronicle-compatible resources can feed skill drafting.
 - Feature availability, Chronicle permissions, and Skysight status polling are
   passive. Starting Record & Replay uses bounded session evidence by default;
   it does not start the continuous Skysight daemon.
