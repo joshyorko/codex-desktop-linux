@@ -26,6 +26,11 @@ const {
   recordReplayHelperSource,
   recordReplayHudRuntimeSource,
 } = require("./patch.js");
+const {
+  applyChronicleSkysightMainBridgePatch,
+  chronicleSkysightHelperSource: recordReplayChronicleHelperSource,
+  recordReplayRuntimeHelperSource,
+} = require("../chronicle-skysight/patch.js");
 
 const featureDir = __dirname;
 
@@ -135,6 +140,7 @@ test("record-and-replay patch descriptor loads only when feature is enabled", ()
   withTempFeatureConfig(["chronicle-skysight", "record-and-replay"], (root) => {
     const loaded = loadLinuxFeaturePatchDescriptors({ featuresRoot: root });
     assert.deepEqual(loaded.map((descriptor) => descriptor.id), [
+      "feature:chronicle-skysight:linux-chronicle-skysight-main-bridge",
       "feature:record-and-replay:record-and-replay-plugin-gate",
       "feature:record-and-replay:linux-record-replay-main-bridge",
       "feature:record-and-replay:record-replay-hud",
@@ -173,7 +179,8 @@ test("record-and-replay bridge patch is idempotent and uses execFile", () => {
     "var bridge={\"get-global-state\":async({key:e})=>null};",
   ].join("");
 
-  const patched = applyRecordReplayMainBridgePatch(source);
+  const chroniclePatched = applyChronicleSkysightMainBridgePatch(source);
+  const patched = applyRecordReplayMainBridgePatch(chroniclePatched);
   assert.notEqual(patched, source);
   assert.equal(applyRecordReplayMainBridgePatch(patched), patched);
   assert.match(patched, /"linux-record-replay-doctor":async/);
@@ -224,6 +231,10 @@ test("record-and-replay bridge patch is idempotent and uses execFile", () => {
   assert.doesNotMatch(patched, /"--target"/);
   assert.doesNotMatch(patched, /"--target-dir"/);
   assert.doesNotMatch(patched, /"--mode"/);
+  assert.doesNotMatch(
+    recordReplayBridgeSource({ fsVar: "fs" }),
+    /chronicle-permissions|linux-record-replay-skysight/,
+  );
 });
 
 test("record-and-replay rejects incomplete current bridge variants byte-identically", () => {
@@ -232,28 +243,16 @@ test("record-and-replay rejects incomplete current bridge variants byte-identica
     "var tray={getChronicleSidecarControlState:()=>tt().skysight?$9:Se.appServerConnectionRegistry.getMaybeConnection(`local`)?.getChronicleSidecarControlState()??$9,toggleChronicleSidecar:async()=>{if(tt().skysight)return $9;let e=Se.appServerConnectionRegistry.getMaybeConnection(V);return e==null?$9:e.getChronicleSidecarControlState().running?e.pauseChronicleSidecar():e.resumeChronicleSidecar()}};",
     'var bridge={"get-global-state":async({key:e})=>null};',
   ].join("");
-  const patched = applyRecordReplayMainBridgePatch(source);
+  const chroniclePatched = applyChronicleSkysightMainBridgePatch(source);
+  const patched = applyRecordReplayMainBridgePatch(chroniclePatched);
   const bridgePayload = recordReplayBridgeSource({
-    childProcessVar: "cp",
     fsVar: "fs",
-    pathVar: "path",
   });
   const helperPayload = recordReplayHelperSource({
-    childProcessVar: "cp",
     fsVar: "fs",
     pathVar: "path",
   });
-  const trayStart = patched.indexOf("var tray=");
-  const trayEnd = patched.indexOf(";var bridge=", trayStart);
-  const trayStatement = patched.slice(trayStart, trayEnd + 1);
   const variants = {
-    "legacy tray shape": patched
-      .replace(":tt().skysight?$9:", ":")
-      .replace("if(tt().skysight)return $9;", ""),
-    "missing Linux toggle branch": patched.replace(
-      "if(process.platform===`linux`)return codexLinuxChronicleToggleSidecar();",
-      "",
-    ),
     "missing current bridge handler": patched.replace(
       '"linux-record-replay-status":async',
       '"linux-record-replay-status-missing":async',
@@ -266,9 +265,8 @@ test("record-and-replay rejects incomplete current bridge variants byte-identica
       `${bridgePayload},"get-global-state":async`,
       `${bridgePayload},${bridgePayload},"get-global-state":async`,
     ),
-    "helper-only partial": `${helperPayload}\n${source}`,
+    "helper-only partial": `${helperPayload}\n${chroniclePatched}`,
     "duplicate helper payload": `${helperPayload}\n${patched}`,
-    "duplicate patched tray": `${patched}${trayStatement}`,
   };
 
   for (const [name, drifted] of Object.entries(variants)) {
@@ -281,7 +279,7 @@ test("record-and-replay rejects incomplete current bridge variants byte-identica
 });
 
 test("record-and-replay Chronicle helpers map Skysight status into upstream sidecar state", () => {
-  const helperSource = recordReplayHelperSource({
+  const helperSource = recordReplayRuntimeHelperSource({
     childProcessVar: "childProcess",
     fsVar: "fs",
     pathVar: "path",
@@ -338,7 +336,7 @@ test("record-and-replay Chronicle helpers map Skysight status into upstream side
 });
 
 test("record-and-replay Chronicle permissions probe is side-effect free", async () => {
-  const helperSource = recordReplayHelperSource({
+  const helperSource = recordReplayRuntimeHelperSource({
     childProcessVar: "childProcess",
     fsVar: "fs",
     pathVar: "path",
@@ -371,7 +369,7 @@ test("record-and-replay Chronicle permissions probe is side-effect free", async 
 });
 
 test("record-and-replay Chronicle setup probe starts stopped Linux Skysight", async () => {
-  const helperSource = recordReplayHelperSource({
+  const helperSource = recordReplayRuntimeHelperSource({
     childProcessVar: "childProcess",
     fsVar: "fs",
     pathVar: "path",
@@ -411,7 +409,7 @@ test("record-and-replay Chronicle setup probe starts stopped Linux Skysight", as
 });
 
 test("record-and-replay Chronicle setup probe enables summary agent when Settings turns Chronicle on", async () => {
-  const helperSource = recordReplayHelperSource({
+  const helperSource = recordReplayRuntimeHelperSource({
     childProcessVar: "childProcess",
     fsVar: "fs",
     pathVar: "path",
@@ -451,7 +449,7 @@ test("record-and-replay Chronicle setup probe enables summary agent when Setting
 });
 
 test("record-and-replay Chronicle setup probe does not churn start when summary agent is already enabled", async () => {
-  const helperSource = recordReplayHelperSource({
+  const helperSource = recordReplayRuntimeHelperSource({
     childProcessVar: "childProcess",
     fsVar: "fs",
     pathVar: "path",
@@ -498,7 +496,7 @@ test("record-and-replay generic Skysight start can pass summary agent true or fa
     "var tray={getChronicleSidecarControlState:()=>tt().skysight?$9:Se.appServerConnectionRegistry.getMaybeConnection(`local`)?.getChronicleSidecarControlState()??$9,toggleChronicleSidecar:async()=>{if(tt().skysight)return $9;let e=Se.appServerConnectionRegistry.getMaybeConnection(V);return e==null?$9:e.getChronicleSidecarControlState().running?e.pauseChronicleSidecar():e.resumeChronicleSidecar()}};",
     "var bridge={\"get-global-state\":async({key:e})=>null};",
   ].join("");
-  const patched = applyRecordReplayMainBridgePatch(source);
+  const patched = applyChronicleSkysightMainBridgePatch(source);
   assert.match(
     patched,
     /"linux-record-replay-skysight-start":async\(\{intervalSeconds:e,summaryAgent:t,source:r,owner:a\}=\{\}\)=>\{let n=\["skysight","start"\]/,
@@ -515,10 +513,10 @@ test("record-and-replay patch wires Linux Chronicle tray controls to Skysight", 
     "var tray={getChronicleSidecarControlState:()=>tt().skysight?$9:Se.appServerConnectionRegistry.getMaybeConnection(`local`)?.getChronicleSidecarControlState()??$9,toggleChronicleSidecar:async()=>{if(tt().skysight)return $9;let e=Se.appServerConnectionRegistry.getMaybeConnection(V);return e==null?$9:e.getChronicleSidecarControlState().running?e.pauseChronicleSidecar():e.resumeChronicleSidecar()}};",
     'var bridge={"get-global-state":async({key:e})=>null};',
   ].join("");
-  const patched = applyRecordReplayMainBridgePatch(source);
+  const patched = applyChronicleSkysightMainBridgePatch(source);
 
   assert.notEqual(patched, source);
-  assert.equal(applyRecordReplayMainBridgePatch(patched), patched);
+  assert.equal(applyChronicleSkysightMainBridgePatch(patched), patched);
   assert.match(patched, /getChronicleSidecarControlState:\(\)=>process\.platform===`linux`\?codexLinuxChronicleSidecarControlState\(\)/);
   assert.match(patched, /toggleChronicleSidecar:async\(\)=>\{if\(process\.platform===`linux`\)return codexLinuxChronicleToggleSidecar\(\)/);
   assert.match(patched, /if\(tt\(\)\.skysight\)return \$9/);
@@ -532,7 +530,7 @@ test("record-and-replay rejects partial current Chronicle tray drift byte-identi
     'var bridge={"get-global-state":async({key:e})=>null};',
   ].join("");
 
-  assert.equal(applyRecordReplayMainBridgePatch(source), source);
+  assert.equal(applyChronicleSkysightMainBridgePatch(source), source);
 });
 
 test("record-and-replay docs mention pause resume and Chronicle-compatible resources", () => {
