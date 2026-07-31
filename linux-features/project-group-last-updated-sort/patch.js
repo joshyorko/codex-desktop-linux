@@ -52,7 +52,7 @@ const descriptors = [
     phase: "webview-asset",
     order: 20_900,
     ciPolicy: "optional",
-    pattern: /^app-initial-[^.]+\.js$/,
+    pattern: /^app-initial-[A-Za-z0-9_-]+\.js$/,
     missingDescription: "project group sort webview bundle",
     skipDescription: "project group Last updated sorting feature patch",
     apply: applyProjectGroupLastUpdatedSortPatch,

@@ -1000,12 +1000,12 @@ test("assistant render patch preserves the current JSX runtime alias", () => {
 });
 
 test("assistant render patch covers the current shared assistant message call", () => {
-  const source = "return (0,DX.jsx)(Jft,{item:n,alwaysShowActions:V,assistantCopyText:_,turnId:v,processTargets:b,hookStats:D,threadDetailLevel:u,completedThreadGoal:O,after:C,electronAfter:w,conversationId:l,cwd:p,hostId:m,reportEntityType:h,markdownMediaCacheKey:e,projectlessOutputDirectory:q,forceCodeBlockWordWrap:ie,hasArtifacts:J,onAddSelectedTextToChat:r,onFileLinkOpen:E,onFork:F,renderCodeBlocksAsWritingBlocks:ie,showActionRow:H,showTimestampWithoutActions:U,showProcessBadges:i})";
+  const source = "return (0,t8.jsx)(K6c,{item:n,alwaysShowActions:re,assistantCopyText:b,turnId:x,processTargets:S,autoReviewStats:A,hookStats:j,threadDetailLevel:p,completedThreadGoal:M,after:T,electronAfter:E,conversationId:d,getVisualizeTurnTriggerType:f,cwd:g,hostId:_,reportEntityType:v,markdownMediaCacheKey:e,projectlessOutputDirectory:de,forceCodeBlockWordWrap:we,hasArtifacts:fe,onAddResponseTextAnnotation:r,onFileLinkOpen:k,onFork:B,renderCodeBlocksAsWritingBlocks:we,showActionRow:ie,showTimestampWithoutActions:ae,timestampHoverOnly:oe,showProcessBadges:i,allowCopyWhileStreaming:q})";
   const patched = twice(applyAssistantRenderPatch, source);
 
-  assert.match(patched, /DX\.Fragment/);
-  assert.match(patched, /\(0,DX\.jsx\)\("button"/);
-  assert.match(patched, /globalThis\.codexLinuxReadAloudClick\?\.\(n,_,l,e\.currentTarget\)/);
+  assert.match(patched, /t8\.Fragment/);
+  assert.match(patched, /\(0,t8\.jsx\)\("button"/);
+  assert.match(patched, /globalThis\.codexLinuxReadAloudClick\?\.\(n,b,d,e\.currentTarget\)/);
 });
 
 test("assistant runtime descriptor targets current shared assistant bundles", () => {
@@ -1021,6 +1021,7 @@ test("assistant runtime descriptor targets current shared assistant bundles", ()
     "index-current.js",
     "local-conversation-thread-current.js",
     "local-conversation-turn-current.js",
+    "app-initial~app-main~onboarding-page-zcfEkMl-.js",
     "app-initial~app-main~onboarding-page~hotkey-window-thread-page~editor-diff-page~thread-app-~current.js",
   ]) {
     assert.equal(descriptor.pattern.test(legacyName), false, legacyName);

@@ -1430,6 +1430,7 @@ SCRIPT
     assert_contains "$capture_dir/PKGBUILD" "pkgver=2026.03.24.120000+manual"
     assert_contains "$capture_dir/PKGBUILD" "pkgrel=1"
     assert_contains "$capture_dir/PKGBUILD" "ampersand&tmp"
+    assert_contains "$capture_dir/PKGBUILD" "cp -a --no-preserve=ownership"
     assert_not_contains "$capture_dir/PKGBUILD" "__STAGING_DIR__"
     assert_contains "$capture_dir/PKGBUILD" "install=codex-desktop.install"
     assert_occurrence_count "$capture_dir/PKGBUILD" "'polkit'" "1"
@@ -9224,6 +9225,9 @@ JS
     cat > "$extracted/webview/assets/use-visible-settings-sections-test.js" <<'JS'
 var Xge={"general-settings":xh,"keyboard-shortcuts":ks,appearance:Pf,agent:gU};function n_e(){let e=e=>{switch(e.slug){case`general-settings`:case`agent`:case`personalization`:return!0;case`keyboard-shortcuts`:return!0}}}
 JS
+    cat > "$extracted/webview/assets/settings-page-test.js" <<'JS'
+var nn=`general-settings.import.profile.appearance.keyboard-shortcuts`.split(`.`),rn=[{key:`personal`,heading:d({id:`settings.nav.heading.personal`,defaultMessage:`Personal`,description:`Heading for personal settings in the settings navigation`}),slugs:[`general-settings`,`import`,`profile`,`appearance`,`keyboard-shortcuts`]}];
+JS
     cat > "$extracted/webview/assets/app-initial-BTphDPeq.js" <<'JS'
 import{n as routeModule,s as routeToESM}from"./rolldown-runtime-test.js";import{I as routeJsxFactory,R as routeReactFactory}from"./shared-runtime-test.js";function Z(e){let r=(0,RouteReact.lazy)(e);function SettingsRouteWrapper(){let t=(0,RouteReact.useState)(null);return (0,RouteJsx.jsx)(r,{children:t})}return SettingsRouteWrapper}var RouteReact,RouteJsx;routeModule(()=>{RouteReact=routeToESM(routeReactFactory(),1),RouteJsx=routeJsxFactory()})();var c_e={"general-settings":Z(async()=>(await s(async()=>{let{GeneralSettings:e}=await import(`./general-settings-DZbwMmWz.js`);return{GeneralSettings:e}},[],import.meta.url)).GeneralSettings),"keyboard-shortcuts":Z(async()=>(await s(async()=>{let{KeyboardShortcutsSettings:e}=await import(`./keyboard-shortcuts-settings-test.js`);return{KeyboardShortcutsSettings:e}},[],import.meta.url)).KeyboardShortcutsSettings)};export{Z};
 JS
@@ -9255,6 +9259,7 @@ JS
     assert_contains "$extracted/webview/assets/settings-shared-test.js" "settings.section.linux-desktop"
     assert_contains "$extracted/webview/assets/use-visible-settings-sections-test.js" '"linux-desktop":xh,"general-settings":xh'
     assert_contains "$extracted/webview/assets/use-visible-settings-sections-test.js" 'case`linux-desktop`:return!0;case`general-settings`'
+    assert_contains "$extracted/webview/assets/settings-page-test.js" 'slugs:\[`general-settings`,`linux-desktop`,`import`'
     assert_contains "$extracted/webview/assets/app-initial-BTphDPeq.js" "linux-desktop-settings-linux.js?v="
     assert_contains "$extracted/webview/assets/app-initial-BTphDPeq.js" 'export{Z,'
     assert_contains "$extracted/webview/assets/app-initial-BTphDPeq.js" 'RouteReact as codexLinuxReact,RouteJsx as codexLinuxJsx'
@@ -9268,6 +9273,7 @@ JS
     assert_occurrence_count "$extracted/webview/assets/settings-shared-test.js" "settings.section.linux-desktop" '1'
     assert_occurrence_count "$extracted/webview/assets/use-visible-settings-sections-test.js" '"linux-desktop"' '1'
     assert_occurrence_count "$extracted/webview/assets/use-visible-settings-sections-test.js" 'case`linux-desktop`' '1'
+    assert_occurrence_count "$extracted/webview/assets/settings-page-test.js" '`linux-desktop`' '1'
     assert_occurrence_count "$extracted/webview/assets/app-initial-BTphDPeq.js" "linux-desktop-settings-linux.js" '1'
 }
 
@@ -9315,19 +9321,18 @@ test_browser_annotation_screenshot_patch_smoke() {
     mkdir -p "$workspace"
     make_fake_extracted_asar "$extracted" 'let D={removeMenu(){},setMenuBarVisibility(){},setIcon(){},once(){}};let n=require(`electron`),t=require(`node:path`),a=require(`node:fs`);...process.platform===`win32`?{autoHideMenuBar:!0}:{},process.platform===`win32`&&D.removeMenu(),foo)}),D.once(`ready-to-show`,()=>{})'
     cat > "$extracted/.vite/build/comment-preload.js" <<'JS'
-let mt=Te;M?.kind===`comment`?mt=pt?[M.annotation]:Te:pt||P?mt=[]:ft!=null&&(mt=Te.filter(e=>e.id!==ft.id));
-let ht=mt.flatMap(e=>[e]),kt=null,At=`hover-box`,jt,Mt=0,I=[];
-if(P&&M?.annotation.anchor.kind===`element`){Mt=xt[0]??0;let e=bt==null?null:hs(bt),t=e?.rect??Ss(M.annotation.anchor);jt=e?.borderRadius,At=Vs(M.annotation.anchor,t,C.width,C.height),kt=Is(M.annotation.anchor,t,bt),I=bc(F,C,{clipToVisibleArea:!0})}
+let Nt=Mt==null?[]:Pl(Mt),Pt=F==null?Nt:[],Ft=null,It=`hover-box`,Lt,Rt=[];
+if(pt&&N?.annotation.anchor.kind===`element`){let e=Dt==null?null:as(Dt),t=e?.rect??fs(N.annotation.anchor);Lt=e?.borderRadius,It=js(N.annotation.anchor,t,w.width,w.height),Ft=Es(N.annotation.anchor,t,Dt),Rt=uc(Ot,w,{clipToVisibleArea:!0,selectionIndexOffset:1,viewportSize:N.annotation.viewportSize})}
 JS
 
     node "$REPO_DIR/scripts/patch-linux-window-ui.js" "$extracted" >"$output_log" 2>&1
-    assert_contains "$extracted/.vite/build/comment-preload.js" 'let t=Ss(M.annotation.anchor);jt=void 0,At=Vs'
-    assert_contains "$extracted/.vite/build/comment-preload.js" 'M?\.kind===`comment`?mt=pt?\[M\.annotation\]:Te'
-    assert_not_contains "$extracted/.vite/build/comment-preload.js" 'e?.rect??Ss'
+    assert_contains "$extracted/.vite/build/comment-preload.js" 'let t=fs(N.annotation.anchor);Lt=void 0,It=js'
+    assert_contains "$extracted/.vite/build/comment-preload.js" 'selectionIndexOffset:1'
+    assert_not_contains "$extracted/.vite/build/comment-preload.js" 'e?.rect??fs'
 
     node "$REPO_DIR/scripts/patch-linux-window-ui.js" "$extracted" >"$output_log" 2>&1
-    assert_occurrence_count "$extracted/.vite/build/comment-preload.js" 'let t=Ss(M.annotation.anchor)' '1'
-    assert_occurrence_count "$extracted/.vite/build/comment-preload.js" 'M?\.kind===`comment`?mt=pt?\[M\.annotation\]:Te' '1'
+    assert_occurrence_count "$extracted/.vite/build/comment-preload.js" 'let t=fs(N.annotation.anchor)' '1'
+    assert_occurrence_count "$extracted/.vite/build/comment-preload.js" 'selectionIndexOffset:1' '1'
 }
 
 test_linux_single_instance_patch_smoke() {
