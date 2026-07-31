@@ -21,6 +21,10 @@ building packages, then list the feature ids you want:
 `features.json` is ignored by git so local choices do not leak into commits.
 Feature choices are read during the install/build pipeline; if you change this
 file after an app has already been generated, rerun the install/build step.
+Feature selectors also resolve manifest `requires` dependencies. For example,
+enabling `record-and-replay` enables `chronicle-skysight`, while
+`chronicle-skysight` remains independently selectable for activity memory
+without recording or skill composition.
 Native packages preserve the enabled feature id list and settings in the
 packaged update-builder bundle, so `codex-update-manager` rebuilds keep the
 same opt-in features across auto-updates.
