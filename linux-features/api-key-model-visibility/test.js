@@ -125,6 +125,29 @@ test("API-key hosts use visible CLI models instead of the desktop allowlist", ()
   assert.equal(catalog.defaultModel.model, "gpt-5.6-sol");
 });
 
+test("API-key hosts bypass the latest extracted model visibility helper", () => {
+  const source =
+    "function K({additionalAvailableModels:e,authMethod:t,availableModels:n,model:r,useHiddenModels:i}){" +
+    "return e?.has(r.model)===!0||(i&&t!==`amazonBedrock`?n.has(r.model):!r.hidden)}";
+  const patched = applyPatchTwice(applyApiKeyModelVisibilityPatch, source);
+  const visible = Function(`${patched};return K;`)();
+
+  assert.equal(visible({
+    additionalAvailableModels: undefined,
+    authMethod: "apikey",
+    availableModels: new Set(),
+    model: { model: "gpt-5.6-sol", hidden: false },
+    useHiddenModels: true,
+  }), true);
+  assert.equal(visible({
+    additionalAvailableModels: undefined,
+    authMethod: "apikey",
+    availableModels: new Set(),
+    model: { model: "codex-auto-review", hidden: true },
+    useHiddenModels: true,
+  }), false);
+});
+
 test("API-key hosts still exclude models marked hidden by the CLI", () => {
   const patched = applyApiKeyModelVisibilityPatch(modelCatalogFixture());
 

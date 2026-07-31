@@ -9421,6 +9421,25 @@ test("enables the current Computer Use settings contract on Linux", () => {
   assert.match(patched, /marketplaceName:`openai-bundled`/);
 });
 
+test("enables the latest Computer Use settings contract with compiler cache guards", () => {
+  const source =
+    "function Pn(){let i={hostId:t};let a=ct(i),{platform:o}=F(),s=r();" +
+    "let y=jsx(In,{computerUseAvailability:a,platform:o});" +
+    "let b=o===`macOS`&&a.available?jsx(Xn,{}):null;return y}" +
+    "function In(e){let{computerUseAvailability:n,platform:i}=e,{selectedHostId:c}=Ot(),S=[];" +
+    "let C=et(c,S),w=jt(c),T=I(te),D=I(l),O=r();" +
+    "let F=Vt(C.availablePlugins,cr,w);return n.available&&F}";
+
+  const patched = applyPatchTwice(applyLinuxComputerUseRendererAvailabilityPatch, source);
+
+  assert.match(
+    patched,
+    /o===`linux`&&\(a=\{\.\.\.a,available:!0,isFetching:!1,isLoading:!1\}\);/,
+  );
+  assert.match(patched, /CBundledMarketplaceDonor=C\.availablePlugins\.find/);
+  assert.match(patched, /marketplaceName:`openai-bundled`/);
+});
+
 test("reuses current bundled-plugin metadata for the synthetic Computer Use card", () => {
   const source =
     "function Ht(){let e=cache(24),{selectedHostId:t}=host(),n=data(t),i={hostId:t};" +

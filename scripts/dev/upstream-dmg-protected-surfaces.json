@@ -63,7 +63,8 @@
       "title": "Chronicle Settings enable/disable toggle paths",
       "category": "webview",
       "pathPatterns": [
-        "personalization-settings.*\\.js$"
+        "personalization-settings.*\\.js$",
+        "memory-settings-analytics.*\\.js$"
       ],
       "contentNeedles": [
         "chronicleSidecarPresent",
@@ -100,7 +101,7 @@
         {
           "id": "memory-master-toggle-chronicle-disable",
           "pathPatterns": [
-            "personalization-settings.*\\.js$"
+            "memory-settings-analytics.*\\.js$"
           ],
       "contentNeedles": [
         "chronicleDisable",
@@ -164,8 +165,8 @@
         {
           "id": "sky-control-strings",
           "nativeStringNeedles": [
-            "metadataPath",
-            "eventsPath",
+            "currentSegmentMetadataPath",
+            "currentSegmentEventsPath",
             "skysight"
           ]
         }
@@ -779,7 +780,7 @@
       "title": "Work Louder control-surface bundle hooks",
       "category": "native",
       "pathPatterns": [
-        "codex-micro-service.*\\.js$",
+        "(^|/)\\.vite/build/service-.*\\.js$",
         "@worklouder/(device-kit-oai|wl-device-kit)/package\\.json$",
         "(^|/)node-hid/package\\.json$",
         "(^|/)node-hid/prebuilds/[^/]+/node-napi-v[0-9]+\\.node$"
@@ -794,7 +795,7 @@
         {
           "id": "micro-service-entrypoint",
           "pathPatterns": [
-            "codex-micro-service.*\\.js$"
+            "(^|/)\\.vite/build/service-.*\\.js$"
           ],
           "contentNeedles": [
             "@worklouder/device-kit-oai",

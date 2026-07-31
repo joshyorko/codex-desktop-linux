@@ -23,6 +23,19 @@ function applyApiKeyModelVisibilityPatch(source) {
       `useHiddenModels:(${JS_IDENT})\\}\\)\\{let[\\s\\S]{0,600}?[,;]${JS_IDENT}=` +
       `\\2&&\\1!==\\\`amazonBedrock\\\`&&\\1!==\\\`apikey\\\`/\\*${PATCH_MARKER}\\*/(?=[,;])`,
   );
+  const latestModelVisibilityPattern = new RegExp(
+    `(function ${JS_IDENT}\\(\\{additionalAvailableModels:${JS_IDENT},authMethod:(${JS_IDENT}),` +
+      `availableModels:${JS_IDENT},model:${JS_IDENT},useHiddenModels:(${JS_IDENT})\\}\\)` +
+      `\\{return[\\s\\S]{0,250}?\\|\\|\\()` +
+      `\\3&&\\2!==\\\`amazonBedrock\\\`(?=\\?)`,
+    "g",
+  );
+  const latestPatchedVisibilityPattern = new RegExp(
+    `function ${JS_IDENT}\\(\\{additionalAvailableModels:${JS_IDENT},authMethod:(${JS_IDENT}),` +
+      `availableModels:${JS_IDENT},model:${JS_IDENT},useHiddenModels:(${JS_IDENT})\\}\\)` +
+      `\\{return[\\s\\S]{0,250}?\\|\\|\\(` +
+      `\\2&&\\1!==\\\`amazonBedrock\\\`&&\\1!==\\\`apikey\\\`/\\*${PATCH_MARKER}\\*/(?=\\?)`,
+  );
 
   const patched = source.replace(
     modelVisibilityPattern,
@@ -35,7 +48,17 @@ function applyApiKeyModelVisibilityPatch(source) {
     return patched;
   }
 
-  if (patchedVisibilityPattern.test(source)) {
+  const latestPatched = source.replace(
+    latestModelVisibilityPattern,
+    (_match, prefix, authMethodVar, useHiddenModelsVar) =>
+      `${prefix}${useHiddenModelsVar}&&${authMethodVar}!==\`amazonBedrock\`&&` +
+      `${authMethodVar}!==\`apikey\`/*${PATCH_MARKER}*/`,
+  );
+  if (latestPatched !== source) {
+    return latestPatched;
+  }
+
+  if (patchedVisibilityPattern.test(source) || latestPatchedVisibilityPattern.test(source)) {
     return source;
   }
 

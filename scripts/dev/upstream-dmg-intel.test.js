@@ -59,7 +59,7 @@ const registry = {
       title: "Work Louder control-surface bundle hooks",
       category: "native",
       pathPatterns: [
-        "codex-micro-service.*\\.js$",
+        "(^|/)\\.vite/build/service-.*\\.js$",
         "@worklouder/(device-kit-oai|wl-device-kit)/package\\.json$",
         "(^|/)node-hid/package\\.json$",
         "(^|/)node-hid/prebuilds/[^/]+/node-napi-v[0-9]+\\.node$",
@@ -68,7 +68,7 @@ const registry = {
       requiredEvidence: [
         {
           id: "micro-service-entrypoint",
-          pathPatterns: ["codex-micro-service.*\\.js$"],
+          pathPatterns: ["(^|/)\\.vite/build/service-.*\\.js$"],
           contentNeedles: [
             "@worklouder/device-kit-oai",
             "DeviceType",
@@ -116,7 +116,7 @@ const registry = {
       id: "chronicle_settings_toggles",
       title: "Chronicle settings toggle paths",
       category: "webview",
-      pathPatterns: ["personalization-settings"],
+      pathPatterns: ["personalization-settings", "memory-settings-analytics"],
       contentNeedles: [
         "chronicleSidecarPresent",
         "chronicleSidecarProcessState",
@@ -143,7 +143,7 @@ const registry = {
         },
         {
           id: "memory-master-toggle-chronicle-disable",
-          pathPatterns: ["personalization-settings"],
+          pathPatterns: ["memory-settings-analytics"],
           contentNeedles: [
             "function un",
             "chronicleDisable",
@@ -199,7 +199,7 @@ function writeWorkLouderControlSurface({ asarExtracted, includeHid = true, resou
   const hid = path.join(wlKit, "node_modules/node-hid");
 
   writeFile(
-    path.join(asarExtracted, ".vite/build/codex-micro-service-fixture.js"),
+    path.join(asarExtracted, ".vite/build/service-fixture.js"),
     [
       "import { DeviceType, WLDeviceDiscovery } from '@worklouder/device-kit-oai';",
       "const device = [DeviceType.CodexMicro, DeviceType.CreatorMicroV2];",
@@ -263,7 +263,7 @@ function createFixtureApp(root, variant = "baseline") {
   });
 
   const skyPayload =
-    "Mach-O SkyComputerUseClient event_stream recording_controls metadataPath eventsPath";
+    "Mach-O SkyComputerUseClient event_stream recording_controls currentSegmentMetadataPath currentSegmentEventsPath";
   const skyPath =
     variant === "candidate"
       ? path.join(resources, "native/sky/sky.node")
@@ -320,8 +320,11 @@ function createFixtureApp(root, variant = "baseline") {
       "const disable=async()=>o.mutateAsync({enabled:!1});",
       "return {name,state,enable,disable};",
       "}",
-      broadMemoryToggle,
     ].join(""),
+  );
+  writeFile(
+    path.join(resources, "webview/assets/memory-settings-analytics-fixture.js"),
+    broadMemoryToggle,
   );
 
   writeJson(path.join(recordPlugin, ".codex-plugin/plugin.json"), {
@@ -450,6 +453,47 @@ test("extracts protected surfaces, plugins, native binaries, and bridge calls fr
     );
   }));
 
+test("retains protected native strings beyond the inventory preview limit", () =>
+  withTempDir((workspace) => {
+    const appDir = path.join(workspace, "candidate.app");
+    const resources = path.join(appDir, "Contents/Resources");
+    const padding = Array.from(
+      { length: 5_001 },
+      (_, index) => `0-protected-string-padding-${String(index).padStart(5, "0")}`,
+    ).join("\0");
+    writeFile(
+      path.join(resources, "native/sky.node"),
+      `${padding}\0currentSegmentMetadataPath\0currentSegmentEventsPath\0`,
+      0o755,
+    );
+    const nativeRegistry = {
+      version: 1,
+      surfaces: [
+        {
+          id: "sky-segment-paths",
+          pathPatterns: ["native/sky\\.node$"],
+          requiredEvidence: [
+            {
+              id: "segment-paths",
+              nativeStringNeedles: [
+                "currentSegmentMetadataPath",
+                "currentSegmentEventsPath",
+              ],
+            },
+          ],
+        },
+      ],
+    };
+
+    const protectedSurfaces = extractProtectedSurfaces({
+      inventory: createInventory({ registry: nativeRegistry, sourcePath: appDir }),
+      registry: nativeRegistry,
+      repoRoot: process.cwd(),
+    });
+
+    assert.equal(protectedSurfaces.surfacesById["sky-segment-paths"].status, "PRESENT");
+  }));
+
 test("protects the current Hatch Pet skill and Linux bundled-skill staging owner", () =>
   withTempDir((workspace) => {
     const hatchPetSurface = productionRegistry.surfaces.find(
@@ -572,7 +616,7 @@ test("tracks Work Louder control-surface hooks when the service, kits, and HID r
       surface.satisfiedAnchors.some((anchor) => anchor.id === "hid-runtime-package"),
     );
     assert.ok(
-      surface.evidence.some((entry) => entry.path.includes("codex-micro-service-fixture.js")),
+      surface.evidence.some((entry) => entry.path.includes("service-fixture.js")),
     );
     assert.ok(
       surface.requiredAnchors

@@ -105,6 +105,17 @@ function printableStrings(buffer, minLength = 4) {
   return [...strings].sort();
 }
 
+function registryNativeStringNeedles(registry) {
+  const needles = new Set();
+  for (const surface of registry?.surfaces ?? []) {
+    for (const needle of surface.nativeStringNeedles ?? []) needles.add(needle);
+    for (const anchor of surface.requiredEvidence ?? []) {
+      for (const needle of anchor.nativeStringNeedles ?? []) needles.add(needle);
+    }
+  }
+  return [...needles];
+}
+
 function asarEntries(asarPath, prefix = "app.asar") {
   const archive = fs.readFileSync(asarPath);
   if (archive.length < 16) {
@@ -356,7 +367,12 @@ function enrichInventoryFile(file, options = {}) {
     enriched.text = buffer.toString("utf8");
   }
   if (buffer != null && type === "native") {
-    enriched.nativeStrings = printableStrings(buffer).slice(0, 5000);
+    const allStrings = printableStrings(buffer);
+    const nativeStringNeedles = options.nativeStringNeedles ?? [];
+    enriched.nativeStrings = allStrings.filter(
+      (value, index) =>
+        index < 5000 || nativeStringNeedles.some((needle) => includesNeedle(value, needle)),
+    );
     enriched.fileCommand = runFileCommand(file.absolutePath);
   }
 
@@ -378,7 +394,9 @@ function createInventory({ registry = null, sourcePath, workDir = null } = {}) {
 
   try {
     const appDir = kind === "dmg" ? extractDmgToApp({ dmgPath: resolvedSourcePath, workDir: scratchDir }) : resolvedSourcePath;
-    const files = collectInventoryFiles(appDir).sort((a, b) => a.relativePath.localeCompare(b.relativePath));
+    const files = collectInventoryFiles(appDir, {
+      nativeStringNeedles: registryNativeStringNeedles(registry),
+    }).sort((a, b) => a.relativePath.localeCompare(b.relativePath));
     return {
       generatedAt: new Date().toISOString(),
       registryVersion: registry?.version ?? null,

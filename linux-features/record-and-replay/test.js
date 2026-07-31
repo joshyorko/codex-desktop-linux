@@ -611,6 +611,19 @@ test("record-and-replay mirrors finalized dictation transcripts into active bund
   assert.match(patched, /e===`send`\?n\.onTranscriptSend\(i\):n\.onTranscriptInsert\(i\)/);
 });
 
+test("record-and-replay preserves the latest transcript performance marker", () => {
+  const source =
+    "function send(t,n,i){let c=`Create an image of a neon cabin`;" +
+    "c.length>0&&(up.getInstance().dispatchMessage(`global-dictation-record-history-item`,{text:c})," +
+    "n.performance.mark(`transcript_dispatched`),t===`send`?i.onTranscriptSend(c):i.onTranscriptInsert(c))}";
+  const patched = applyRecordReplayDictationTranscriptPatch(source);
+
+  assert.notEqual(patched, source);
+  assert.equal(applyRecordReplayDictationTranscriptPatch(patched), patched);
+  assert.match(patched, /codexLinuxRecordReplayCaptureTranscript\?\.\(c,t\)/);
+  assert.match(patched, /n\.performance\.mark\(`transcript_dispatched`\)/);
+});
+
 test("record-and-replay mirrors global dictation completions into active bundle", () => {
   const source =
     "async function L(e,t,n=null){let r=await f({transcript:n==null?await y(e.audio):await R(n,e.audio),cleanupEnabled:t});U===e&&(U=null),a.dispatchMessage(`global-dictation-completed`,{sessionId:e.sessionId,text:r})}";
@@ -622,6 +635,19 @@ test("record-and-replay mirrors global dictation completions into active bundle"
   assert.match(patched, /linux-record-replay-speech-context-active/);
   assert.match(patched, /source:"codex-global-dictation"/);
   assert.match(patched, /a\.dispatchMessage\(`global-dictation-completed`,\{sessionId:e\.sessionId,text:r\}\)/);
+});
+
+test("record-and-replay preserves the latest global dictation performance marker", () => {
+  const source =
+    "async function H(e){let o=await S({transcript:a});" +
+    "J===e&&(J=null),e.analytics.performance.mark(`transcript_dispatched`)," +
+    "n.dispatchMessage(`global-dictation-completed`,{sessionId:e.sessionId,text:o})}";
+  const patched = applyRecordReplayGlobalDictationTranscriptPatch(source);
+
+  assert.notEqual(patched, source);
+  assert.equal(applyRecordReplayGlobalDictationTranscriptPatch(patched), patched);
+  assert.match(patched, /e\.analytics\.performance\.mark\(`transcript_dispatched`\)/);
+  assert.match(patched, /codex-linux-record-replay-global-dictation/);
 });
 
 test("record-and-replay generated transcript runtimes are syntactically valid", () => {

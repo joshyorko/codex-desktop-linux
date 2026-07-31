@@ -342,7 +342,7 @@ function recordReplayConversationTranscriptPattern() {
 }
 
 function recordReplayUpstreamTranscriptPattern() {
-  return /([A-Za-z_$][\w$]*)\.length>0&&\((([A-Za-z_$][\w$]*)\.getInstance\(\)\.dispatchMessage\(`global-dictation-record-history-item`,\{text:\1\}\),([A-Za-z_$][\w$]*)===`send`\?([A-Za-z_$][\w$]*)\.onTranscriptSend\(\1\):\5\.onTranscriptInsert\(\1\))\)/u;
+  return /([A-Za-z_$][\w$]*)\.length>0&&\((([A-Za-z_$][\w$]*)\.getInstance\(\)\.dispatchMessage\(`global-dictation-record-history-item`,\{text:\1\}\),(?:[A-Za-z_$][\w$]*\.performance\.mark\(`transcript_dispatched`\),)?([A-Za-z_$][\w$]*)===`send`\?([A-Za-z_$][\w$]*)\.onTranscriptSend\(\1\):\5\.onTranscriptInsert\(\1\))\)/u;
 }
 
 function applyRecordReplayHudPatch(currentSource) {
@@ -405,7 +405,7 @@ function applyRecordReplayGlobalDictationTranscriptPatch(currentSource) {
   }
 
   const completedPattern =
-    /(([A-Za-z_$][\w$]*)===([A-Za-z_$][\w$]*)&&\(\2=null\),)([A-Za-z_$][\w$]*)\.dispatchMessage\(`global-dictation-completed`,\{sessionId:\3\.sessionId,text:([A-Za-z_$][\w$]*)\}\)/u;
+    /(([A-Za-z_$][\w$]*)===([A-Za-z_$][\w$]*)&&\(\2=null\),(?:\3\.analytics\.performance\.mark\(`transcript_dispatched`\),)?)([A-Za-z_$][\w$]*)\.dispatchMessage\(`global-dictation-completed`,\{sessionId:\3\.sessionId,text:([A-Za-z_$][\w$]*)\}\)/u;
   if (completedPattern.test(currentSource)) {
     return currentSource.replace(
       completedPattern,
