@@ -50,6 +50,7 @@ function withTempFeatureRoot(enabled, fn) {
   try {
     fs.writeFileSync(path.join(root, "features.example.json"), JSON.stringify({ enabled: [] }, null, 2));
     fs.writeFileSync(path.join(root, "features.json"), JSON.stringify({ enabled }, null, 2));
+    fs.cpSync(path.resolve(__dirname, "../chronicle-skysight"), path.join(root, "chronicle-skysight"), { recursive: true });
     fs.cpSync(path.resolve(__dirname), path.join(root, "record-and-replay"), { recursive: true });
     return fn(root);
   } finally {
@@ -85,6 +86,7 @@ test("manifest keeps record-and-replay disabled by default", () => {
   const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
   assert.equal(manifest.id, "record-and-replay");
   assert.equal(manifest.defaultEnabled, false);
+  assert.deepEqual(manifest.requires, ["chronicle-skysight"]);
 });
 
 test("record-and-replay required files exist", () => {
@@ -106,13 +108,23 @@ test("record-and-replay is opt-in and disabled unless configured", () => {
   });
 });
 
-test("record-and-replay enables when listed in features.json", () => {
-  withTempFeatureRoot(["record-and-replay"], (root) => {
+test("record-and-replay enables with chronicle-skysight dependency", () => {
+  withTempFeatureRoot(["chronicle-skysight", "record-and-replay"], (root) => {
     const ids = enabledLinuxFeatureIds({ featuresRoot: root });
-    assert.deepEqual(ids, ["record-and-replay"]);
+    assert.deepEqual(ids, ["chronicle-skysight", "record-and-replay"]);
     assert.deepEqual(loadEnabledLinuxFeatures({ featuresRoot: root }).map((feature) => feature.id), [
+      "chronicle-skysight",
       "record-and-replay",
     ]);
+  });
+});
+
+test("record-and-replay rejects direct config without chronicle-skysight", () => {
+  withTempFeatureRoot(["record-and-replay"], (root) => {
+    assert.throws(
+      () => loadEnabledLinuxFeatures({ featuresRoot: root }),
+      /requires 'chronicle-skysight' to be enabled/,
+    );
   });
 });
 
@@ -120,7 +132,7 @@ test("record-and-replay patch descriptor loads only when feature is enabled", ()
   withTempFeatureConfig([], (root) => {
     assert.deepEqual(loadLinuxFeaturePatchDescriptors({ featuresRoot: root }), []);
   });
-  withTempFeatureConfig(["record-and-replay"], (root) => {
+  withTempFeatureConfig(["chronicle-skysight", "record-and-replay"], (root) => {
     const loaded = loadLinuxFeaturePatchDescriptors({ featuresRoot: root });
     assert.deepEqual(loaded.map((descriptor) => descriptor.id), [
       "feature:record-and-replay:record-and-replay-plugin-gate",
