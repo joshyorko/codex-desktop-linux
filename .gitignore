@@ -24,3 +24,4 @@ linux-features/local/
 # graphify
 graphify-out/
 .graphify_*
+.superpowers/
