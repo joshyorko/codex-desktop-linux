@@ -68,6 +68,7 @@ const {
   applyLinuxBundledPluginReconcileStaleSnapshotPatch,
   applyLinuxBrowserUseRouteLivenessPatch,
   applyLinuxExternalOpenEnvPatch,
+  applyLinuxRealtimeVoiceMicrophonePermissionPatch,
 } = require("./patches/impl/main-process/browser.js");
 const {
   applyLinuxChromeNativeHostRuntimePatch,
@@ -1015,6 +1016,7 @@ test("default core patch descriptors are grouped and unique", () => {
     "linux-computer-use-plugin-gate",
     "linux-computer-use-native-desktop-apps",
     "linux-chrome-plugin-auto-install",
+    "linux-realtime-voice-microphone-permission",
     "linux-chrome-native-host-runtime",
     "browser-use-node-repl-approval",
     "linux-bundled-plugin-reconcile-stale-snapshot",
@@ -7950,6 +7952,21 @@ test("auto-installs the current Chrome plugin gate shape", () => {
   assert.match(patched, /name:o\.s,syncInstallStateWithChromeExtension:!0,isAvailable:\(\{buildFlavor:e,env:t,features:r\}\)=>Ar\(e,t\)&&r\.externalBrowserUseAllowed/);
   assert.equal((patched.match(/installWhenMissing:!0,name:o\.c/g) || []).length, 1);
   assert.equal((patched.match(/installWhenMissing:!0,name:o\.s/g) || []).length, 0);
+});
+
+test("allows only microphone media permission for upstream realtime voice", () => {
+  const source =
+    'class AppSession{configure(){let e=session.fromPartition("persist:app");return e.setPermissionRequestHandler((e,t,n)=>{n(t===`clipboard-sanitized-write`)}),e.setPermissionCheckHandler((e,t)=>t===`clipboard-sanitized-write`),e}}';
+
+  const patched = applyLinuxRealtimeVoiceMicrophonePermissionPatch(source);
+
+  assert.notEqual(patched, source);
+  assert.match(patched, /codexLinuxAllowsMicrophonePermissionRequest/);
+  assert.match(patched, /mediaTypes/);
+  assert.match(patched, /mediaType/);
+  assert.match(patched, /===`audio`/);
+  assert.doesNotMatch(patched, /===`video`/);
+  assert.equal(applyLinuxRealtimeVoiceMicrophonePermissionPatch(patched), patched);
 });
 
 test("materializes trusted Linux bundled plugins through a private staging root", async () => {

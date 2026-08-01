@@ -11,10 +11,18 @@ const {
   applyLinuxBundledPluginReconcileStaleSnapshotPatch,
   applyLinuxBrowserUseRouteLivenessPatch,
   applyLinuxBrowserUseSocketDirectoryPatch,
+  applyLinuxRealtimeVoiceMicrophonePermissionPatch,
 } = require("../../../../impl/main-process/browser.js");
 const { applyLinuxChromePluginAutoInstallPatch } = require("../../../../impl/chrome-plugin.js");
 
 module.exports = [
+  mainBundlePatch({
+    id: "linux-realtime-voice-microphone-permission",
+    phase: "main-bundle",
+    order: 145,
+    ciPolicy: "required-upstream",
+    apply: applyLinuxRealtimeVoiceMicrophonePermissionPatch,
+  }),
   mainBundlePatch({
     id: "linux-chrome-plugin-auto-install",
     phase: "main-bundle",

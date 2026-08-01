@@ -8,6 +8,58 @@ const {
   requireName,
 } = require("../../lib/minified-js.js");
 
+function applyLinuxRealtimeVoiceMicrophonePermissionPatch(currentSource) {
+  const requestHelper = "codexLinuxAllowsMicrophonePermissionRequest";
+  const checkHelper = "codexLinuxAllowsMicrophonePermissionCheck";
+  const hasRequestHelper = currentSource.includes(`function ${requestHelper}(`);
+  const hasCheckHelper = currentSource.includes(`function ${checkHelper}(`);
+  if (hasRequestHelper || hasCheckHelper) {
+    if (!(hasRequestHelper && hasCheckHelper)) {
+      console.warn(
+        "WARN: Found incomplete Linux realtime voice microphone permission patch — skipping",
+      );
+    }
+    return currentSource;
+  }
+
+  const requestPattern =
+    /\.setPermissionRequestHandler\(\(([A-Za-z_$][\w$]*),([A-Za-z_$][\w$]*),([A-Za-z_$][\w$]*)\)=>\{\3\(\2===`clipboard-sanitized-write`\)\}\)/;
+  const checkPattern =
+    /\.setPermissionCheckHandler\(\(([A-Za-z_$][\w$]*),([A-Za-z_$][\w$]*)\)=>\2===`clipboard-sanitized-write`\)/;
+  if (!requestPattern.test(currentSource) || !checkPattern.test(currentSource)) {
+    if (currentSource.includes("clipboard-sanitized-write")) {
+      console.warn(
+        "WARN: Could not find current app session permission handlers — skipping Linux realtime voice microphone permission patch",
+      );
+    }
+    return currentSource;
+  }
+
+  let patchedSource = currentSource.replace(
+    requestPattern,
+    (_match, webContentsVar, permissionVar, callbackVar) =>
+      `.setPermissionRequestHandler((${webContentsVar},${permissionVar},${callbackVar},__codexDetails)=>{${callbackVar}(${permissionVar}===\`clipboard-sanitized-write\`||${permissionVar}===\`media\`&&${requestHelper}(__codexDetails))})`,
+  );
+  patchedSource = patchedSource.replace(
+    checkPattern,
+    (_match, webContentsVar, permissionVar) =>
+      `.setPermissionCheckHandler((${webContentsVar},${permissionVar},__codexOrigin,__codexDetails)=>${permissionVar}===\`clipboard-sanitized-write\`||${permissionVar}===\`media\`&&${checkHelper}(__codexDetails))`,
+  );
+
+  const helpers =
+    `function ${requestHelper}(e){let t=e?.mediaTypes;return Array.isArray(t)&&t.length>0&&t.every(e=>e===\`audio\`)}` +
+    `function ${checkHelper}(e){return e?.mediaType===\`audio\`}`;
+  const strictDirective = '"use strict";';
+  const insertionIndex = currentSource.startsWith(strictDirective)
+    ? strictDirective.length
+    : 0;
+  return (
+    patchedSource.slice(0, insertionIndex) +
+    helpers +
+    patchedSource.slice(insertionIndex)
+  );
+}
+
 function applyLinuxBundledPluginCopyPermissionsPatch(currentSource) {
   const ancestorHelperName = "codexLinuxValidateBundledPluginAncestors";
   const sourceHelperName = "codexLinuxValidateBundledPluginSource";
@@ -571,6 +623,7 @@ module.exports = {
   applyLinuxBundledPluginCopyPermissionsPatch,
   applyLinuxBundledPluginReconcileStaleSnapshotPatch,
   applyLinuxExternalOpenEnvPatch,
+  applyLinuxRealtimeVoiceMicrophonePermissionPatch,
   applyLinuxBrowserUseRouteLivenessPatch,
   applyLinuxBrowserUseSocketDirectoryPatch,
 };
