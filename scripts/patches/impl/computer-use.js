@@ -563,10 +563,12 @@ function applyLinuxComputerUsePluginsPageAvailabilityPatch(currentSource) {
   const installedPluginsAlreadyPatchedMatch = currentSource.match(installedPluginsAlreadyPatchedPattern);
   const installedCollectionAlreadyPatched =
     installedPluginsAlreadyPatchedMatch != null && unavailableComputerUseGuardPattern.test(currentSource);
+  let installedCollectionStartIndex;
   let installedPluginsVar;
   let installedPatchedSource;
 
   if (installedCollectionAlreadyPatched) {
+    installedCollectionStartIndex = installedPluginsAlreadyPatchedMatch.index;
     installedPluginsVar = installedPluginsAlreadyPatchedMatch[1];
     installedPatchedSource = currentSource;
   } else {
@@ -584,12 +586,14 @@ function applyLinuxComputerUsePluginsPageAvailabilityPatch(currentSource) {
     const installedPluginsAssignmentPattern = new RegExp(
       `\\b${escapeRegExp(installedPluginsVar)}=([A-Za-z_$][\\w$]*\\(\\{[^{}]*installedPlugins:([A-Za-z_$][\\w$]*),sharedWithYouPlugins:[A-Za-z_$][\\w$]*\\?\\?\\[\\],workspacePlugins:[A-Za-z_$][\\w$]*\\?\\?\\[\\]\\}\\))`,
     );
-    if (!installedPluginsAssignmentPattern.test(currentSource)) {
+    const installedPluginsAssignmentMatch = installedPluginsAssignmentPattern.exec(currentSource);
+    if (installedPluginsAssignmentMatch == null) {
       console.warn(
         "WARN: Could not find current Plugins-page installed plugin reconciliation contract — skipping Linux Computer Use global availability patch",
       );
       return currentSource;
     }
+    installedCollectionStartIndex = installedPluginsAssignmentMatch.index;
 
     installedPatchedSource = currentSource
       .replace(
@@ -607,10 +611,15 @@ function applyLinuxComputerUsePluginsPageAvailabilityPatch(currentSource) {
   let featuredPluginsChanged = false;
   const featuredPluginsPattern =
     /([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)\.filter\(([A-Za-z_$][\w$]*)\)/g;
-  const patchedSource = installedPatchedSource.replace(
+  const featuredScopePrefix = installedPatchedSource.slice(0, installedCollectionStartIndex);
+  const featuredScope = installedPatchedSource.slice(installedCollectionStartIndex);
+  const patchedFeaturedScope = featuredScope.replace(
     featuredPluginsPattern,
     (match, featuredPluginsVar, _storefrontPluginsVar, _filterVar, offset) => {
-      const nextSource = installedPatchedSource.slice(offset + match.length, offset + match.length + 12000);
+      if (featuredPluginsChanged) {
+        return match;
+      }
+      const nextSource = featuredScope.slice(offset + match.length, offset + match.length + 12000);
       const pluginsUseIndex = nextSource.indexOf(`plugins:${featuredPluginsVar}`);
       if (
         pluginsUseIndex === -1 ||
@@ -622,6 +631,7 @@ function applyLinuxComputerUsePluginsPageAvailabilityPatch(currentSource) {
       return `${match}.map(e=>e.plugin?.name===\`computer-use\`||e.plugin?.id?.split(\`@\`)[0]===\`computer-use\`?${installedPluginsVar}.find(e=>e.plugin?.name===\`computer-use\`&&e.marketplaceName===\`openai-bundled\`&&e.plugin?.source?.type===\`local\`)??e:e)`;
     },
   );
+  const patchedSource = featuredScopePrefix + patchedFeaturedScope;
 
   if (!featuredPluginsChanged) {
     console.warn(

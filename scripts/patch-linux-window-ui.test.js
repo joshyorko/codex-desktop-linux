@@ -10175,6 +10175,30 @@ test("reconciles the latest Plugins page collection to bundled Computer Use", ()
   assert.deepEqual(Array.from(result.unavailable), ["other-missing"]);
 });
 
+test("does not inject installed-plugin lookup into an earlier Plugins search component", () => {
+  const source =
+    "function Search(){let bi={},Ce=[{remoteMarketplaceName:`openai-curated`,plugin:{id:`computer-use`,name:`computer-use`,source:{type:`remote`}}}],tt=e=>true,Oe=Ce.filter(tt),Ne={featuredPluginIds:[],plugins:Oe};return Oe}" +
+    "function ui({createdByMePlugins:e,installedPlugins:t,sharedWithYouPlugins:n,workspacePlugins:r}){return [{remoteMarketplaceName:`openai-curated`,plugin:{id:`computer-use`,name:`computer-use`,source:{type:`remote`}}},...e,...t,...n,...r]}" +
+    "let Ht=[{plugin:{id:`computer-use`,name:`computer-use`}}],yi=[],Sn=[],hn=[],yn=[],Wr=[{remoteMarketplaceName:`openai-curated`,plugin:{id:`computer-use`,name:`computer-use`,source:{type:`remote`}}}],li=e=>true," +
+    "Ut=[{marketplaceName:`openai-bundled`,marketplacePath:`/marketplace.json`,plugin:{id:`computer-use@openai-bundled`,name:`computer-use`,source:{type:`local`}}},{plugin:{id:`other-missing`,name:`other-missing`}}]," +
+    "bi=ui({createdByMePlugins:[...yi,...Sn??[]],installedPlugins:Ut,sharedWithYouPlugins:hn??[],workspacePlugins:yn??[]})," +
+    "xi=Wr.filter(li),Ai={connectedPlugins:bi,featuredPluginIds:[],plugins:xi}," +
+    "qi=new Set([...Ht,...yi,...Sn??[],...hn??[],...yn??[]].map(e=>e.plugin.id))," +
+    "Ji=new Set(bi.filter(e=>!qi.has(e.plugin.id)).map(e=>e.plugin.id));";
+
+  const patched = applyLinuxComputerUsePluginsPageAvailabilityPatch(source);
+  const result = vm.runInNewContext(
+    `${patched};({search:Search(),featured:Ai.plugins.find(e=>e.plugin.name===\`computer-use\`)})`,
+  );
+
+  assert.equal(result.search[0].plugin.source.type, "remote");
+  assert.equal(result.featured.plugin.id, "computer-use@openai-bundled");
+  assert.equal(
+    (patched.match(/\.map\(e=>e\.plugin\?\.name===`computer-use`/g) ?? []).length,
+    1,
+  );
+});
+
 test("reconciles Featured Computer Use from an already patched installed collection", () => {
   const source =
     "function Si({installedPlugins:e}){return [{remoteMarketplaceName:`openai-curated`,plugin:{id:`computer-use`,name:`computer-use`,source:{type:`remote`}}},...e]}" +
