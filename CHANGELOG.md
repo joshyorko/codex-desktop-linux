@@ -35,6 +35,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- The opt-in Dock icon tweak now targets the current upstream main-process
+  bundle, restoring Linux window, tray, and desktop icon synchronization.
 - The opt-in shallow repository watcher now patches both current app bundles
   and routes the Linux Parcel working-tree path through the same shallow host,
   restoring bounded watches on the latest upstream DMG.

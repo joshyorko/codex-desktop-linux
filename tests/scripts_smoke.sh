@@ -1539,7 +1539,7 @@ SCRIPT
     assert_file_not_exists "$capture_dir/AppDir/usr/lib/systemd/user/codex-update-manager.service"
     assert_file_not_exists "$capture_dir/AppDir/usr/share/polkit-1/actions/com.github.ilysenko.codex-desktop-linux.update.policy"
     assert_file_not_exists "$capture_dir/AppDir/opt/codex-desktop/update-builder"
-    assert_contains "$capture_dir/AppDir/codex-desktop.desktop" "Exec=AppRun %u"
+    assert_contains "$capture_dir/AppDir/codex-desktop.desktop" "Exec=AppRun --show %u"
     assert_contains "$capture_dir/AppDir/codex-desktop.desktop" "Icon=codex-desktop"
     assert_contains "$capture_dir/AppDir/codex-desktop.desktop" "Keywords=codex;openai;ai;coding;"
     assert_contains "$capture_dir/AppDir/codex-desktop.desktop" "X-AppImage-Version=2026.03.24.120000+appimage"
@@ -1595,7 +1595,7 @@ SCRIPT
     assert_contains "$capture_dir/AppDir/AppRun" "resources/codex-cli/bin/codex"
     assert_contains "$capture_dir/AppDir/AppRun" "export CODEX_CLI_PATH"
 
-    printf '%s\n' '#!/usr/bin/env bash' 'printf "%s\n" "${CODEX_CLI_PATH:-}"' > "$capture_dir/AppDir/opt/codex-desktop/start.sh"
+    printf '%s\n' '#!/usr/bin/env bash' 'printf "%s\n" "${CODEX_CLI_PATH:-}" "$@"' > "$capture_dir/AppDir/opt/codex-desktop/start.sh"
     chmod 0755 "$capture_dir/AppDir/opt/codex-desktop/start.sh"
     local app_run_output
     local app_run_path
@@ -1604,6 +1604,8 @@ SCRIPT
     [ "$app_run_output" = "$bundled_cli" ] || fail "Expected AppRun to select bundled Codex CLI: $app_run_output"
     app_run_output="$(env -i PATH="$app_run_path" HOME="$workspace/home" APPDIR="$capture_dir/AppDir" CODEX_CLI_PATH=/custom/codex "$BASH_BIN" "$capture_dir/AppDir/AppRun")"
     [ "$app_run_output" = "/custom/codex" ] || fail "Expected explicit CODEX_CLI_PATH to override bundled CLI: $app_run_output"
+    app_run_output="$(env -i PATH="$app_run_path" HOME="$workspace/home" APPDIR="$capture_dir/AppDir" "$BASH_BIN" "$capture_dir/AppDir/AppRun" --show)"
+    [ "$app_run_output" = "$bundled_cli"$'\n''--show' ] || fail "Expected AppRun to preserve the desktop --show action: $app_run_output"
     [ "$("$BASH_BIN" "$bundled_cli" --version)" = "v22.22.2" ] || fail "Expected bundled CLI wrapper to use the managed Node runtime"
 
     rm -rf "$platform_source" "$capture_dir"
@@ -5560,6 +5562,7 @@ test_launcher_template_sanity() {
     assert_contains "$REPO_DIR/launcher/start.sh.template" "codex-browser-sidebar"
     assert_contains "$REPO_DIR/launcher/start.sh.template" "codex-linux-warm-start-enabled"
     assert_contains "$REPO_DIR/launcher/start.sh.template" "--new-instance"
+    assert_contains "$REPO_DIR/launcher/start.sh.template" "--show"
     assert_contains "$REPO_DIR/launcher/start.sh.template" "CODEX_MULTI_LAUNCH"
     assert_contains "$REPO_DIR/launcher/start.sh.template" "CODEX_MULTI_LAUNCH_PORT_RANGE"
     assert_contains "$REPO_DIR/launcher/start.sh.template" "choose_multi_launch_port"
@@ -5612,6 +5615,10 @@ adopt_body = source.split("adopt_existing_webview_server() {", 1)[1].split("star
 ensure_body = source.split("start_webview_server() {", 1)[1].split("wait_for_webview_server", 1)[0]
 reconcile_body = source.split("reconcile_runtime_state() {", 1)[1].split("set_electron_defaults() {", 1)[0]
 match_executable_body = source.split("pid_matches_executable() {", 1)[1].split("find_running_app_pid() {", 1)[0]
+match_appimage_body = source.split("pid_matches_appimage_install() {", 1)[1].split("pid_matches_app_install() {", 1)[0]
+match_install_body = source.split("pid_matches_app_install() {", 1)[1].split("pid_matches_running_app() {", 1)[0]
+match_running_body = source.split("pid_matches_running_app() {", 1)[1].split("pid_is_foreign_codex_electron() {", 1)[0]
+find_running_body = source.split("find_running_app_pid() {", 1)[1].split("pid_in_same_launch_instance() {", 1)[0]
 arg0_path_body = source.split("pid_cmdline_arg0_path() {", 1)[1].split("pid_arg0_matches_path() {", 1)[0]
 arg0_match_body = source.split("pid_arg0_matches_path() {", 1)[1].split("pid_environ_lines() {", 1)[0]
 foreign_body = source.split("pid_is_foreign_codex_electron() {", 1)[1].split("discover_running_app_pid() {", 1)[0]
@@ -5664,6 +5671,8 @@ if 'send_warm_start_launch_action "${LAUNCHER_ARGS[@]}"' not in source:
     raise SystemExit("warm-start handoff must not receive launcher-only multi-launch flags")
 if "client.shutdown(socket.SHUT_WR)" not in send_body or "response = client.recv(32)" not in send_body:
     raise SystemExit("warm-start IPC client must read the Electron socket acknowledgement")
+if "running_app_is_active || return 1" not in send_body:
+    raise SystemExit("warm-start IPC must revalidate the shared resident identity before socket handoff")
 if 'launch_electron "${LAUNCHER_ARGS[@]}"' not in source:
     raise SystemExit("Electron launch must receive sanitized launcher args")
 if 'FEATURE_LAUNCHER_HOOK_DIR="$SCRIPT_DIR/.codex-linux/launcher.d"' not in source:
@@ -5676,8 +5685,10 @@ if 'Adopted concurrently-started verified webview server' not in source:
     raise SystemExit("launcher must tolerate a concurrent verified webview server winning the bind race")
 if 'set_detected_running_app "$pid"' not in detect_body:
     raise SystemExit("detect_warm_start must record a pid-file running app even when warm start is disabled")
-if 'runtime_recovery_scan_needed && pid="$(discover_running_app_pid)"' not in detect_body:
+if 'if runtime_recovery_scan_needed; then' not in detect_body or 'pid="$(discover_running_app_pid)"' not in detect_body:
     raise SystemExit("detect_warm_start must limit the running-app scan to recovery cases")
+if detect_body.index('pid="$(discover_running_app_pid)"') > detect_body.index("detect_cross_install_conflict"):
+    raise SystemExit("detect_warm_start must reject a foreign install only after same-install recovery discovery")
 if '[ -S "$LAUNCH_ACTION_SOCKET" ]' in detect_body:
     raise SystemExit("detect_warm_start must not gate the running-app scan on launch socket existence; hidden instances can lose the socket")
 if not re.search(r'if ! linux_setting_enabled "codex-linux-warm-start-enabled" 1; then.*?return 0', source, re.S):
@@ -5694,7 +5705,7 @@ if "terminate_stale_electron_with_pidfd" not in warm_recovery_body:
     raise SystemExit("warm-start recovery must terminate only an identity-verified stale Electron")
 if "os.pidfd_open" not in terminate_body or "signal.pidfd_send_signal" not in terminate_body:
     raise SystemExit("stale Electron termination must bind signals to a pidfd")
-for identity_guard in ("expected_start_time", "expected_executable", "expected_app_id", "expected_instance_id"):
+for identity_guard in ("expected_start_time", "expected_executable", "expected_appimage", "expected_app_id", "expected_instance_id"):
     if identity_guard not in terminate_body:
         raise SystemExit(f"pidfd termination is missing identity guard: {identity_guard}")
 if 'running_app_is_active || return 0' not in warm_recovery_body or '[ "$WARM_START" -eq 1 ]' in warm_recovery_body:
@@ -5705,7 +5716,7 @@ if not re.search(r'trap cleanup_launcher EXIT.*?recover_unhealthy_running_app.*?
     raise SystemExit("launcher must recover an unhealthy packaged origin before warm-start IPC")
 if launch_body.count("unset ELECTRON_RUN_AS_NODE") != 2:
     raise SystemExit("launch_electron must clear ELECTRON_RUN_AS_NODE before both Electron launch paths")
-if 'pid_matches_executable "$RUNNING_APP_PID" "$SCRIPT_DIR/electron"' not in launch_body:
+if 'pid_matches_running_app "$RUNNING_APP_PID"' not in launch_body:
     raise SystemExit("launch_electron must not overwrite APP_PID_FILE for second-instance handoff")
 if 'echo "$ELECTRON_PID" > "$APP_PID_FILE"' not in launch_body:
     raise SystemExit("launch_electron must still write APP_PID_FILE for normal cold launches")
@@ -5723,6 +5734,20 @@ if "command -v timeout" in source or re.search(r'(^|[ \t])timeout[ \t]+"?\\$', s
     raise SystemExit("launcher hot path must not require external timeout")
 if match_executable_body.index('actual="$(pid_cmdline_arg0_path "$pid")"') > match_executable_body.index('pid_is_current_user "$pid"'):
     raise SystemExit("launcher process discovery must check cmdline arg0 before reading /proc status for UID")
+if 'pid_matches_executable "$pid" "$SCRIPT_DIR/electron" || pid_matches_appimage_install "$pid"' not in match_install_body:
+    raise SystemExit("resident install matching must keep exact executable identity before the AppImage fallback")
+if 'pid_environ_value "$pid" APPIMAGE' not in match_appimage_body or '[ "$resident_appimage" = "$APPIMAGE" ]' not in match_appimage_body:
+    raise SystemExit("resident install matching must use the stable AppImage path across transient remounts")
+native_fast_path = 'if pid_matches_executable "$pid" "$SCRIPT_DIR/electron"; then\n        return 0\n    fi'
+if native_fast_path not in match_running_body or match_running_body.index(native_fast_path) > match_running_body.index("pid_matches_appimage_install"):
+    raise SystemExit("native resident matching must return before AppImage and additional environment reads")
+for identity_guard in ("pid_matches_app_identity", "pid_in_same_launch_instance"):
+    if identity_guard not in match_running_body:
+        raise SystemExit(f"resident matching is missing shared identity guard: {identity_guard}")
+if "pid_matches_running_app" not in find_running_body:
+    raise SystemExit("app.pid discovery must use the shared resident identity contract")
+if '! pid_matches_app_install "$pid"' not in foreign_body:
+    raise SystemExit("cross-install detection must exclude AppImage remounts from foreign residents")
 if 'basename "$actual"' in foreign_body:
     raise SystemExit("foreign Electron detection must not fork basename for every /proc candidate")
 if 'readlink "/proc/$pid/cwd"' in summary_body:
@@ -5891,8 +5916,8 @@ if 'clear_stale_pid_file' not in reconcile_body:
 if 'if [ -z "$webview_pid" ] || { ! pid_is_webview_server "$webview_pid" && ! pid_is_stale_webview_server "$webview_pid"; }; then' not in reconcile_body:
     raise SystemExit("reconcile_runtime_state must clear stale launcher webview ownership markers without touching valid orphaned servers")
 discover_body = source.split("discover_running_app_pid() {", 1)[1].split("running_app_is_active() {", 1)[0]
-if 'pid_in_same_launch_instance "$pid"' not in discover_body:
-    raise SystemExit("discover_running_app_pid must filter by launch instance so default and side-by-side apps never adopt each other")
+if 'pid_matches_running_app "$pid"' not in discover_body or 'pid_in_same_launch_instance "$pid"' not in discover_body:
+    raise SystemExit("discover_running_app_pid must use the shared resident identity contract")
 instance_match_body = source.split("pid_in_same_launch_instance() {", 1)[1].split("discover_running_app_pid() {", 1)[0]
 if 'CODEX_LINUX_INSTANCE_ID=$CODEX_LINUX_INSTANCE_ID' not in instance_match_body or 'CODEX_LINUX_MULTI_LAUNCH=1' not in instance_match_body:
     raise SystemExit("pid_in_same_launch_instance must match instance identity from the process environment")
@@ -8896,7 +8921,20 @@ test_linux_file_manager_patch_smoke() {
     node "$REPO_DIR/scripts/patch-linux-window-ui.js" "$extracted" >"$output_log" 2>&1
     assert_contains "$extracted/.vite/build/main-test.js" 'detect:()=>`linux-file-manager`'
     assert_contains "$extracted/.vite/build/main-test.js" 'linux:{label:`File Manager`'
-    assert_contains "$extracted/.vite/build/main-test.js" 'process.platform===`linux`&&(D.on(`system-context-menu`,e=>e.preventDefault()),D.removeMenu()),process.platform===`win32`&&D.removeMenu(),'
+    node - "$extracted/.vite/build/main-test.js" <<'NODE'
+const fs = require("node:fs");
+const source = fs.readFileSync(process.argv[2], "utf8");
+const expected =
+  "process.platform===`linux`&&" +
+  "(process.env.XDG_SESSION_TYPE??``).trim().toLowerCase()===`x11`&&" +
+  "/(^|:)gnome(:|$)/i.test((process.env.XDG_CURRENT_DESKTOP??``).trim())&&" +
+  "D.on(`system-context-menu`,e=>e.preventDefault())," +
+  "process.platform===`linux`&&D.removeMenu()," +
+  "process.platform===`win32`&&D.removeMenu(),";
+if (!source.includes(expected)) {
+  throw new Error("Expected the generic window listener to be scoped to GNOME/X11");
+}
+NODE
     assert_not_contains "$extracted/.vite/build/main-test.js" 'D.setMenuBarVisibility(!1)'
     assert_contains "$extracted/.vite/build/main-test.js" '&&D.setIcon('
     assert_contains "$extracted/webview/assets/app-initial-test.js" '`subAgent`in e?e.subAgent:`subagent`in e?e.subagent:null'
@@ -8907,6 +8945,90 @@ test_linux_file_manager_patch_smoke() {
     assert_occurrence_count "$extracted/webview/assets/app-initial-test.js" '`subagent`in e?e.subagent' '1'
     assert_occurrence_count "$extracted/webview/assets/app-initial-test.js" 'Zl(e.agent_nickname)' '1'
     assert_not_contains "$output_log" 'Failed to apply Linux File Manager Patch'
+}
+
+test_linux_titlebar_context_menu_patch_smoke() {
+    info "Checking managed-window Linux titlebar context-menu patch behavior"
+    local workspace="$TMP_DIR/titlebar-context-menu-patch"
+    local extracted="$workspace/extracted"
+    local first_report="$workspace/first-report.json"
+    local second_report="$workspace/second-report.json"
+    local output_log="$workspace/output.log"
+    local first_hash
+    local second_hash
+    local bundle_body
+
+    mkdir -p "$workspace"
+    bundle_body='const electron=require(`electron`);class WindowManager{registerWindow(){}async createWindow(e={}){let t=process.platform===`win32`&&(e.appearance??`primary`)===`primary`?electron.screen.getPrimaryDisplay().workArea:null,{appearance:o=`primary`}=e,N=new electron.BrowserWindow({});(process.platform===`win32`||process.platform===`linux`)&&N.removeMenu(),this.registerWindow(N,0,!0,o,`register`);host.on(`did-create-window`,()=>{let e=new electron.BrowserWindow({});process.platform===`win32`&&e.removeMenu(),e.show()});return N}}'
+    make_fake_extracted_asar "$extracted" "$bundle_body"
+
+    node "$REPO_DIR/scripts/patch-linux-window-ui.js" \
+        --report-json "$first_report" \
+        "$extracted" >"$output_log" 2>&1
+    assert_occurrence_count \
+        "$extracted/.vite/build/main-test.js" \
+        'system-context-menu' \
+        '2'
+    node - "$extracted/.vite/build/main-test.js" <<'NODE'
+const fs = require("node:fs");
+const source = fs.readFileSync(process.argv[2], "utf8");
+const expected =
+  "process.platform===`linux`&&" +
+  "(process.env.XDG_SESSION_TYPE??``).trim().toLowerCase()===`x11`&&" +
+  "/(^|:)gnome(:|$)/i.test((process.env.XDG_CURRENT_DESKTOP??``).trim())&&" +
+  "N.on(`system-context-menu`,e=>e.preventDefault())," +
+  "(process.platform===`win32`||process.platform===`linux`)&&N.removeMenu(),";
+if (!source.includes(expected)) {
+  throw new Error("Expected the managed-window listener to be scoped to GNOME/X11");
+}
+const popupExpected =
+  "process.platform===`linux`&&" +
+  "(process.env.XDG_SESSION_TYPE??``).trim().toLowerCase()===`x11`&&" +
+  "/(^|:)gnome(:|$)/i.test((process.env.XDG_CURRENT_DESKTOP??``).trim())&&" +
+  "e.on(`system-context-menu`,e=>e.preventDefault())," +
+  "process.platform===`linux`&&e.removeMenu()," +
+  "process.platform===`win32`&&e.removeMenu(),";
+if (!source.includes(popupExpected)) {
+  throw new Error("Expected the popup listener to be scoped to GNOME/X11");
+}
+NODE
+    node - "$first_report" <<'NODE'
+const fs = require("node:fs");
+const report = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+const entry = report.patches.find(
+  (patch) => patch.name === "linux-managed-window-system-context-menu",
+);
+if (entry?.status !== "applied") {
+  throw new Error(`Expected managed-window patch to be applied, got ${entry?.status}`);
+}
+if (entry?.ciPolicy !== "optional") {
+  throw new Error(`Expected managed-window patch to be optional, got ${entry?.ciPolicy}`);
+}
+if (
+  JSON.stringify(entry.strategies) !==
+  JSON.stringify([{ group: "linux-managed-window-menu", strategy: "upstream-combined" }])
+) {
+  throw new Error(`Unexpected managed-window strategy: ${JSON.stringify(entry?.strategies)}`);
+}
+NODE
+
+    first_hash="$(sha256sum "$extracted/.vite/build/main-test.js" | awk '{print $1}')"
+    node "$REPO_DIR/scripts/patch-linux-window-ui.js" \
+        --report-json "$second_report" \
+        "$extracted" >"$output_log" 2>&1
+    second_hash="$(sha256sum "$extracted/.vite/build/main-test.js" | awk '{print $1}')"
+    [ "$second_hash" = "$first_hash" ] \
+        || fail "Expected second titlebar context-menu patch pass to preserve the main bundle hash"
+    node - "$second_report" <<'NODE'
+const fs = require("node:fs");
+const report = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+const entry = report.patches.find(
+  (patch) => patch.name === "linux-managed-window-system-context-menu",
+);
+if (entry?.status !== "already-applied") {
+  throw new Error(`Expected managed-window patch to be idempotent, got ${entry?.status}`);
+}
+NODE
 }
 
 test_linux_translucent_sidebar_default_patch_smoke() {
@@ -9475,6 +9597,11 @@ function makeWindow(id) {
     },
     focus() {
       state.windowCalls.push(`${id}:focus`);
+      if (state.focusError) {
+        const error = state.focusError;
+        state.focusError = null;
+        throw error;
+      }
     },
   };
 }
@@ -9515,6 +9642,7 @@ function resetCalls() {
   state.ensureHostWindowCalls = [];
   state.createFreshLocalWindowCalls = [];
   state.focusCalls = [];
+  state.focusError = null;
   state.windowCalls = [];
   state.errors = [];
   state.ieCalls = 0;
@@ -9701,6 +9829,14 @@ async function boot(settings = {}, env = { CODEX_DESKTOP_LAUNCH_ACTION_SOCKET: "
 
   resetCalls();
   state.primaryWindow = state.primary;
+  state.focusError = new Error("focus rejected");
+  await runSecondInstance(["codex-desktop", "--new-chat"]);
+  assert(state.errors.length === 1 && state.errors[0].meta.kind === "linux-launch-action-failed", "a rejected launch action should be reported");
+  assert(state.ieCalls === 1, "a rejected launch action should run the previous focus fallback");
+  assert(state.focusCalls.length === 2 && state.focusCalls.every((id) => id === "primary"), "fallback should retry focus after a rejected launch action");
+
+  resetCalls();
+  state.primaryWindow = state.primary;
   await runSecondInstance(["codex-desktop", "--quick-chat"]);
   assert(state.queueArgs.length === 0, "--quick-chat without a deeplink should not be consumed by deeplink routing");
   assert(state.createFreshLocalWindowCalls.length === 0, "--quick-chat should reuse the warm primary window");
@@ -9746,6 +9882,21 @@ async function boot(settings = {}, env = { CODEX_DESKTOP_LAUNCH_ACTION_SOCKET: "
   socket = await runSocketArgs(["codex-desktop"]);
   assert(socket.outputs[0] === "ok\n", "warm-start socket should acknowledge fallback focus args");
   assert(state.ieCalls === 1, "warm-start socket should use the focus fallback for args without launch flags");
+
+  resetCalls();
+  state.primaryWindow = state.primary;
+  socket = await runSocketArgs(["--show"]);
+  assert(socket.outputs[0] === "ok\n", "warm-start socket should acknowledge the AppImage show action");
+  assert(state.ieCalls === 1, "AppImage --show should reuse the existing focus fallback");
+  assert(state.focusCalls.length === 1 && state.focusCalls[0] === "primary", "AppImage --show should focus the warm primary window");
+
+  resetCalls();
+  state.primaryWindow = state.primary;
+  const firstShow = runSocketArgs(["--show"]);
+  const secondShow = runSocketArgs(["--show"]);
+  const [firstShowSocket, secondShowSocket] = await Promise.all([firstShow, secondShow]);
+  assert(firstShowSocket.outputs[0] === "ok\n" && secondShowSocket.outputs[0] === "ok\n", "overlapping AppImage activations should both be acknowledged");
+  assert(state.ieCalls === 2 && state.focusCalls.length === 2, "overlapping AppImage activations should both reach the idempotent focus fallback");
 
   resetCalls();
   state.primaryWindow = state.primary;
@@ -9802,6 +9953,12 @@ async function boot(settings = {}, env = { CODEX_DESKTOP_LAUNCH_ACTION_SOCKET: "
   assert(state.createFreshLocalWindowCalls.length === 0, "initial --new-chat should reuse a warm primary window");
   assert(state.navigateCalls.length === 1 && state.navigateCalls[0].path === "/", "initial --new-chat should navigate an existing window to /");
   assert(state.focusCalls.length === 1 && state.focusCalls[0] === "primary", "initial --new-chat should focus the main window");
+
+  resetCalls();
+  state.primaryWindow = state.primary;
+  await runInitialArgs(["codex-desktop", "--show"]);
+  assert(state.ieCalls === 1, "initial AppImage --show should reuse the existing focus fallback");
+  assert(state.focusCalls.length === 1 && state.focusCalls[0] === "primary", "initial AppImage --show should focus the main window");
 
   await boot({ promptChatEnabled: false });
   resetCalls();
@@ -10812,6 +10969,7 @@ EOF
 test_launcher_warm_start_recovery() {
     info "Checking warm-start recovery after launcher SIGKILL"
     bash "$REPO_DIR/tests/launcher_warm_start_recovery.sh"
+    CODEX_TEST_APPIMAGE_REMOUNT=1 bash "$REPO_DIR/tests/launcher_warm_start_recovery.sh"
     CODEX_TEST_DISABLE_WARM_START=1 bash "$REPO_DIR/tests/launcher_warm_start_recovery.sh"
     CODEX_TEST_KILL_DURING_PRELAUNCH=1 bash "$REPO_DIR/tests/launcher_warm_start_recovery.sh"
     CODEX_TEST_DISABLE_PIDFD=1 CODEX_TEST_NORMAL_LOCK_ONLY=1 \
@@ -10822,6 +10980,7 @@ test_launcher_warm_start_recovery() {
 
 test_launcher_window_reopen_behavior() {
     local nominal_log="$TMP_DIR/launcher-window-reopen-nominal.log"
+    local appimage_remount_log="$TMP_DIR/launcher-window-reopen-appimage-remount.log"
     local mutation_log="$TMP_DIR/launcher-window-reopen-mutation.log"
     local mutation_control_log="$TMP_DIR/launcher-window-reopen-mutation-control.log"
     local no_pidfd_log="$TMP_DIR/launcher-window-reopen-no-pidfd.log"
@@ -10854,6 +11013,22 @@ test_launcher_window_reopen_behavior() {
         fail "Window-reopen behavior harness nominal run failed (status $status)"
     fi
     cat "$nominal_log"
+
+    set +e
+    CODEX_TEST_APPIMAGE_REMOUNT=1 \
+        bash "$REPO_DIR/tests/launcher_window_reopen_behavior.sh" \
+        > "$appimage_remount_log" 2>&1
+    status=$?
+    set -e
+    if [ "$status" -ne 0 ] \
+        || ! grep -Fxq \
+            'launcher AppImage remount window-reopen behavior test passed' \
+            "$appimage_remount_log" \
+        || ! grep -Fq '"outcome":"appimage-remount-preserved"' "$appimage_remount_log"; then
+        cat "$appimage_remount_log" >&2
+        fail "Window-reopen behavior harness AppImage remount run failed (status $status)"
+    fi
+    cat "$appimage_remount_log"
 
     set +e
     CODEX_TEST_FORCE_RESIDENT_REPLACEMENT=1 \
@@ -11083,6 +11258,7 @@ main() {
     test_webview_probe_equivalence
     test_side_by_side_launcher_identity
     test_linux_file_manager_patch_smoke
+    test_linux_titlebar_context_menu_patch_smoke
     test_linux_translucent_sidebar_default_patch_smoke
     test_keybinds_settings_tab_patch_smoke
     test_keybinds_settings_patch_warns_on_bundle_shape_miss
