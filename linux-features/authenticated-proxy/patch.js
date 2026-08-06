@@ -33,11 +33,11 @@ function applyAuthenticatedProxyPatch(currentSource) {
   }
 
   const fetchPattern = new RegExp(
-    `let (${JS_IDENT})=(${JS_IDENT})==null\\?await ${electronVar}\\.net\\.fetch\\((${JS_IDENT}),\\{method:(${JS_IDENT}),headers:(${JS_IDENT}),body:(${JS_IDENT})\\(\\),signal:(${JS_IDENT}),credentials:(${JS_IDENT})\\?\\x60include\\x60:\\x60same-origin\\x60\\}\\):await this\\.performProgressRequest\\(\\{body:\\6\\(\\),headers:\\5,method:\\4,onUploadProgress:\\2,resolvedUrl:\\3,signal:\\7,useSessionCookies:\\8\\}\\);`,
+    `(?:let |,)${JS_IDENT};if\\((${JS_IDENT})==null\\)\\{let ${JS_IDENT}=\\{method:${JS_IDENT},headers:${JS_IDENT},body:${JS_IDENT}\\(\\),redirect:${JS_IDENT},signal:${JS_IDENT},credentials:${JS_IDENT}\\?\\x60include\\x60:\\x60same-origin\\x60\\};${JS_IDENT}=await ${electronVar}\\.net\\.fetch\\(${JS_IDENT},${JS_IDENT}\\)\\}else ${JS_IDENT}=await this\\.performProgressRequest\\(\\{body:${JS_IDENT}\\(\\),headers:${JS_IDENT},method:${JS_IDENT},onUploadProgress:${JS_IDENT},resolvedUrl:${JS_IDENT},signal:${JS_IDENT},useSessionCookies:${JS_IDENT}\\}\\);`,
   );
   const fetchMatch = currentSource.match(fetchPattern);
   const fetchAlreadyPatched = currentSource.includes(
-    "!codexLinuxProxyAuthEntry()?await",
+    "&&!codexLinuxProxyAuthEntry()){",
   );
   if (
     currentSource.includes("performDesktopFetch") &&
@@ -94,12 +94,12 @@ function applyAuthenticatedProxyPatch(currentSource) {
   }
 
   if (fetchMatch != null) {
-    const [needle, resultVar, progressVar] = fetchMatch;
+    const [needle, progressVar] = fetchMatch;
     patchedSource = patchedSource.replace(
       needle,
       needle.replace(
-        `let ${resultVar}=${progressVar}==null?await`,
-        `let ${resultVar}=${progressVar}==null&&!codexLinuxProxyAuthEntry()?await`,
+        `if(${progressVar}==null){`,
+        `if(${progressVar}==null&&!codexLinuxProxyAuthEntry()){`,
       ),
     );
   }

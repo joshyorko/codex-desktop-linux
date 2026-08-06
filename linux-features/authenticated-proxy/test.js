@@ -371,7 +371,7 @@ test("routes current authenticated proxy desktop fetch shape through ClientReque
     "let c=require(`electron`);",
     "async function boot(){await c.app.whenReady()}",
     "class Fetcher{",
-    "async performDesktopFetch(){let t={},r=`GET`,i=null,s=`https://chatgpt.com/wham/usage`,a={aborted:false,addEventListener(){},removeEventListener(){}},l=true,h=()=>null,g=async e=>{let n=this.cloneHeaders(t);let p=i==null?await c.net.fetch(s,{method:r,headers:n,body:h(),signal:a,credentials:l?`include`:`same-origin`}):await this.performProgressRequest({body:h(),headers:n,method:r,onUploadProgress:i,resolvedUrl:s,signal:a,useSessionCookies:l});return p};return g({})}",
+    "async performDesktopFetch(){let t={},r=`GET`,i=null,o=`follow`,s=`https://chatgpt.com/wham/usage`,a={aborted:false,addEventListener(){},removeEventListener(){}},l=true,h=()=>null,g=async e=>{let n=this.cloneHeaders(t),p;if(i==null){let e={method:r,headers:n,body:h(),redirect:o,signal:a,credentials:l?`include`:`same-origin`};p=await c.net.fetch(s,e)}else p=await this.performProgressRequest({body:h(),headers:n,method:r,onUploadProgress:i,resolvedUrl:s,signal:a,useSessionCookies:l});return p};return g({})}",
     "performProgressRequest({body:e,headers:t,method:n,onUploadProgress:r,resolvedUrl:i,signal:a,useSessionCookies:o}){return new Promise((s,l)=>{let u=c.net.request({method:n,url:i,headers:t,useSessionCookies:o}),d=-1,f=()=>{let e=u.getUploadProgress();!e.started||e.current===d||(d=e.current,r({loaded:e.current,total:e.total}))},p=setInterval(f,50),m=()=>{clearInterval(p)},h=()=>{m(),a.removeEventListener(`abort`,g)},g=()=>{h(),u.abort(),l(new DOMException(`The operation was aborted`,`AbortError`))};if(a.addEventListener(`abort`,g,{once:!0}),a.aborted){g();return}u.on(`error`,e=>{h(),l(e)}),u.on(`response`,e=>{f(),m();let t=[];e.on(`data`,e=>{t.push(e)}),e.on(`error`,e=>{h(),l(e)}),e.on(`end`,()=>{h();let n=Buffer.concat(t),r=new Headers;for(let[t,n]of Object.entries(e.headers))for(let e of Array.isArray(n)?n:[n])r.append(t,e);s(new Response(n.length===0?null:n,{status:e.statusCode,statusText:e.statusMessage,headers:r}))})});let _=e instanceof ArrayBuffer?Buffer.from(e):e;u.end(_)})}",
     "cloneHeaders(e){return e}",
     "}",
@@ -379,7 +379,7 @@ test("routes current authenticated proxy desktop fetch shape through ClientReque
   ].join("");
   const patched = applyPatchTwiceWithoutWarnings(applyAuthenticatedProxyPatch, source);
 
-  assert.match(patched, /i==null&&!codexLinuxProxyAuthEntry\(\)\?await c\.net\.fetch/);
+  assert.match(patched, /if\(i==null&&!codexLinuxProxyAuthEntry\(\)\)\{/);
   assert.match(
     patched,
     /codexLinuxAttachProxyAuthToRequest\(u\);let d=-1,f=\(\)=>\{if\(r==null\)return;/,
