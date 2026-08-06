@@ -4809,7 +4809,7 @@ test_bundled_plugin_computer_use_preserves_upstream_shell() {
     mkdir -p \
         "$upstream_plugin/.codex-plugin" \
         "$upstream_plugin/assets" \
-        "$upstream_plugin/scripts" \
+        "$upstream_plugin/bin" \
         "$upstream_plugin/skills/computer-use" \
         "$upstream_plugin/Codex Computer Use.app/Contents/MacOS"
     printf '#!/usr/bin/env bash\n' > "$backend"
@@ -4818,7 +4818,7 @@ test_bundled_plugin_computer_use_preserves_upstream_shell() {
     printf '%s\n' '{"mcpServers":{"computer-use":{"command":"./Codex Computer Use.app/Contents/MacOS/client","args":["mcp"],"cwd":"."}}}' > "$upstream_plugin/.mcp.json"
     printf '%s\n' '{"name":"computer-use","version":"1.0.1000387","description":"Control desktop apps on macOS from ChatGPT through Computer Use. Prefer purpose-built connectors, APIs, or CLIs.","author":{"name":"OpenAI","url":"https://openai.com/"},"license":"Proprietary","keywords":["computer-use","desktop-control","macos","automation","accessibility"],"mcpServers":"./.mcp.json","skills":"./skills/","interface":{"displayName":"Computer Use","shortDescription":"Control Mac apps from ChatGPT","longDescription":"Mac Computer Use lets ChatGPT use any app on your computer.","developerName":"OpenAI","logo":"./assets/app-icon.png","defaultPrompt":["Play a playlist to help me lock in","Build & run my open Xcode project and test it for bugs","Play a game in Chess.app"]}}' > "$upstream_plugin/.codex-plugin/plugin.json"
     printf '%s\n' '---' 'name: computer-use' 'description: Control local Mac apps through Computer Use.' '---' '' '# Computer Use' '' 'Prefer a dedicated plugin or skill when it can complete the task.' '' '# Computer Use Confirmations Policy' '' 'Confirm risky actions.' > "$upstream_plugin/skills/computer-use/SKILL.md"
-    printf '%s\n' 'export const upstreamComputerUseClient = true;' > "$upstream_plugin/scripts/computer-use-client.mjs"
+    printf '%s\n' '#!/bin/sh' 'exec upstream-computer-use-client "$@"' > "$upstream_plugin/bin/computer-use-client-launcher"
     printf '%s\n' '# Upstream node repl contract' > "$upstream_plugin/.codex-plugin/computer-use-node-repl.md"
     printf '%s\n' 'upstream-icon' > "$upstream_plugin/assets/app-icon.png"
     printf '%s\n' 'mac-binary' > "$upstream_plugin/Codex Computer Use.app/Contents/MacOS/client"
@@ -4843,7 +4843,7 @@ test_bundled_plugin_computer_use_preserves_upstream_shell() {
     assert_not_contains "$manifest" 'macOS'
     assert_contains "$staged_plugins/computer-use/skills/computer-use/SKILL.md" 'Control local Linux apps through Computer Use.'
     assert_contains "$staged_plugins/computer-use/skills/computer-use/SKILL.md" 'Computer Use Confirmations Policy'
-    assert_file_exists "$staged_plugins/computer-use/scripts/computer-use-client.mjs"
+    assert_file_exists "$staged_plugins/computer-use/bin/computer-use-client-launcher"
     assert_file_exists "$staged_plugins/computer-use/.codex-plugin/computer-use-node-repl.md"
     assert_contains "$staged_plugins/computer-use/.mcp.json" '"command": "./bin/codex-computer-use-linux"'
     cmp -s "$upstream_plugin/assets/app-icon.png" "$staged_plugins/computer-use/assets/app-icon.png" \
@@ -4899,7 +4899,7 @@ test_bundled_plugin_system_computer_use_preserves_cosmic_helper_name() {
         "$system_bin" \
         "$upstream_plugin/.codex-plugin" \
         "$upstream_plugin/assets" \
-        "$upstream_plugin/scripts" \
+        "$upstream_plugin/bin" \
         "$upstream_plugin/skills/computer-use"
     printf '%s\n' \
         '#!/usr/bin/env bash' \
@@ -4913,7 +4913,7 @@ test_bundled_plugin_system_computer_use_preserves_cosmic_helper_name() {
         > "$upstream_plugin/.codex-plugin/computer-use-node-repl.md"
     printf '%s\n' '{"mcpServers":{}}' > "$upstream_plugin/.mcp.json"
     printf '%s\n' 'fixture-icon' > "$upstream_plugin/assets/app-icon.png"
-    printf '%s\n' 'export const fixture = true;' > "$upstream_plugin/scripts/computer-use-client.mjs"
+    printf '%s\n' '#!/bin/sh' 'exec upstream-computer-use-client "$@"' > "$upstream_plugin/bin/computer-use-client-launcher"
     printf '%s\n' '---' 'name: computer-use' '---' '' '# Computer Use Confirmations Policy' \
         > "$upstream_plugin/skills/computer-use/SKILL.md"
     chmod +x "$backend" "$cosmic"

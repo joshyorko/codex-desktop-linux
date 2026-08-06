@@ -356,7 +356,7 @@ stage_linux_computer_use_plugin_base() {
         ".codex-plugin/computer-use-node-repl.md" \
         ".mcp.json" \
         "assets/app-icon.png" \
-        "scripts/computer-use-client.mjs" \
+        "bin/computer-use-client-launcher" \
         "skills/computer-use/SKILL.md"; do
         if [ ! -f "$upstream_plugin/$required_path" ]; then
             warn "Upstream Computer Use plugin is missing $required_path"
