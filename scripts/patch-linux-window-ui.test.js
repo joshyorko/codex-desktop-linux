@@ -4504,7 +4504,7 @@ test("adds Linux avatar overlay mouse passthrough recovery", () => {
   assert.match(patched, /codexLinuxSyncAvatarPointerInteractivity\(e\)/);
   assert.match(patched, /codexLinuxBuildAvatarInputShape\(e\)/);
   assert.match(patched, /codexLinuxApplyAvatarInputShape\(e\)/);
-  assert.match(patched, /codexLinuxShouldUseWholeWindowInput\(\)\{return this\.codexLinuxWholeWindowInput===!0\}/);
+  assert.match(patched, /codexLinuxShouldUseWholeWindowInput\(\)\{return this\.codexLinuxWholeWindowInput===!0\|\|this\.showsVoiceControls===!0\}/);
   assert.match(patched, /codexLinuxIsI3Session\(\)/);
   assert.match(patched, /process\.env\.I3SOCK/);
   assert.match(patched, /codexLinuxApplyAvatarCompositorHints\(e\)/);
@@ -4569,6 +4569,18 @@ test("keeps the avatar overlay core patch idempotent after pet overlay compositi
   assert.notEqual(petPatched, corePatched);
   assert.equal(rerun, petPatched);
   assert.deepEqual(warnings, []);
+});
+
+test("upgrades an existing Linux avatar input patch for voice controls", () => {
+  const patched = applyLinuxAvatarOverlayMousePassthroughPatch(latestAvatarOverlayBundleFixture());
+  const legacy = patched.replace(
+    "codexLinuxShouldUseWholeWindowInput(){return this.codexLinuxWholeWindowInput===!0||this.showsVoiceControls===!0}",
+    "codexLinuxShouldUseWholeWindowInput(){return this.codexLinuxWholeWindowInput===!0}",
+  );
+
+  const upgraded = applyLinuxAvatarOverlayMousePassthroughPatch(legacy);
+
+  assert.match(upgraded, /codexLinuxShouldUseWholeWindowInput\(\)\{return this\.codexLinuxWholeWindowInput===!0\|\|this\.showsVoiceControls===!0\}/);
 });
 
 test("pet overlay opts into full-window input on X11 and Wayland", () => {
@@ -4794,6 +4806,12 @@ test("Linux avatar overlay interactivity is bounded to avatar regions", () => {
   ]);
   controller.dragState = null;
   assert.equal(controller.codexLinuxShouldUseWholeWindowInput(), false);
+  controller.showsVoiceControls = true;
+  assert.equal(controller.codexLinuxShouldUseWholeWindowInput(), true);
+  assert.deepEqual(serializeShape(controller.codexLinuxBuildAvatarInputShape(overlayWindow)), [
+    { x: 0, y: 0, width: 356, height: 320 },
+  ]);
+  controller.showsVoiceControls = false;
   controller.codexLinuxWholeWindowInput = true;
   assert.deepEqual(serializeShape(controller.codexLinuxBuildAvatarInputShape(overlayWindow)), [
     { x: 0, y: 0, width: 356, height: 320 },
