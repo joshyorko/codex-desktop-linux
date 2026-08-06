@@ -33,7 +33,7 @@ function applyAuthenticatedProxyPatch(currentSource) {
   }
 
   const fetchPattern = new RegExp(
-    `let (${JS_IDENT})=(${JS_IDENT})==null\\?await ${electronVar}\\.net\\.fetch\\((${JS_IDENT}),\\{method:(${JS_IDENT}),headers:(${JS_IDENT}),body:(${JS_IDENT})\\(\\),redirect:(${JS_IDENT}),signal:(${JS_IDENT}),credentials:(${JS_IDENT})\\?\\x60include\\x60:\\x60same-origin\\x60\\}\\):await this\\.performProgressRequest\\(\\{body:\\6\\(\\),headers:\\5,method:\\4,onUploadProgress:\\2,resolvedUrl:\\3,signal:\\8,useSessionCookies:\\9\\}\\);`,
+    `let (${JS_IDENT})=(${JS_IDENT})==null\\?await ${electronVar}\\.net\\.fetch\\((${JS_IDENT}),\\{method:(${JS_IDENT}),headers:(${JS_IDENT}),body:(${JS_IDENT})\\(\\),signal:(${JS_IDENT}),credentials:(${JS_IDENT})\\?\\x60include\\x60:\\x60same-origin\\x60\\}\\):await this\\.performProgressRequest\\(\\{body:\\6\\(\\),headers:\\5,method:\\4,onUploadProgress:\\2,resolvedUrl:\\3,signal:\\7,useSessionCookies:\\8\\}\\);`,
   );
   const fetchMatch = currentSource.match(fetchPattern);
   const fetchAlreadyPatched = currentSource.includes(
