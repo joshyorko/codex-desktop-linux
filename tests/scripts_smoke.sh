@@ -5036,6 +5036,30 @@ EOF
     "$BASH_BIN" "$probe" || fail "Expected launcher to preserve all LD_LIBRARY_PATH states"
 }
 
+test_launcher_captures_desktop_entry_for_current_process_only() {
+    info "Checking launcher validates the GIO desktop-entry PID"
+    local probe="$TMP_DIR/launcher-desktop-entry-pid-probe.sh"
+
+    awk '
+        /^capture_launched_desktop_entry\(\) \{/ { capture = 1 }
+        capture { print }
+        capture && /^}/ { exit }
+    ' "$REPO_DIR/launcher/start.sh.template" > "$probe"
+    cat >> "$probe" <<'EOF'
+GIO_LAUNCHED_DESKTOP_FILE=/home/user/.local/share/applications/chatgpt.desktop
+GIO_LAUNCHED_DESKTOP_FILE_PID="$BASHPID"
+capture_launched_desktop_entry
+[ "$CODEX_LINUX_LAUNCHED_DESKTOP_ENTRY" = chatgpt ] || exit 2
+
+GIO_LAUNCHED_DESKTOP_FILE=/usr/share/applications/org.gnome.Terminal.desktop
+GIO_LAUNCHED_DESKTOP_FILE_PID="$((BASHPID + 1))"
+capture_launched_desktop_entry
+[ "${CODEX_LINUX_LAUNCHED_DESKTOP_ENTRY+x}" != x ] || exit 3
+EOF
+
+    "$BASH_BIN" "$probe" || fail "Expected launcher to reject stale GIO desktop-entry metadata"
+}
+
 test_packaged_runtime_keeps_managed_node_out_of_user_service_path() {
     info "Checking packaged runtime exports the user PATH to user services"
     local workspace="$TMP_DIR/packaged-runtime-user-path"
@@ -6464,7 +6488,8 @@ EOF
     assert_contains "$REPO_DIR/launcher/start.sh.template" "make_tree_owner_trusted"
     assert_contains "$REPO_DIR/launcher/start.sh.template" "clear_bundled_marketplace_tmp_cache"
     assert_not_contains "$REPO_DIR/launcher/start.sh.template" "monitor_bundled_marketplace_tmp_permissions"
-    assert_contains "$REPO_DIR/launcher/start.sh.template" "extension-id.json"
+    assert_contains "$REPO_DIR/launcher/start.sh.template" "extension-ids.json"
+    assert_not_contains "$REPO_DIR/launcher/start.sh.template" 'scripts_dir / "extension-id.json"'
     assert_contains "$REPO_DIR/launcher/start.sh.template" ".config/BraveSoftware/Brave-Browser/NativeMessagingHosts"
     assert_contains "$REPO_DIR/launcher/start.sh.template" ".config/chromium/NativeMessagingHosts"
     assert_contains "$REPO_DIR/launcher/start.sh.template" "scripts/check-extension-installed.js"
@@ -6586,11 +6611,17 @@ assertCacheLinks({
 const chromeBody = functionBody("sync_chrome_bundled_plugin_cache", "sync_computer_use_bundled_plugin_cache");
 for (const required of [
   'make_path_owner_trusted',
+  'cache_root="$codex_home/plugins/linux-runtime-cache/openai-bundled/chrome"',
   'path_has_unsafe_write',
   'tree_has_unsafe_write "$cache_plugin"',
   'cache_was_untrusted=1',
   'make_tree_owner_trusted "$tmp_plugin"',
   'make_tree_owner_trusted "$cache_plugin"',
+  'managed_cache_root="$codex_home/plugins/cache/openai-bundled/chrome"',
+  'managed_backup_plugin="$managed_cache_root/.chrome-$version.linux-backup.$$"',
+  'mv -T -- "$managed_cache_plugin" "$managed_backup_plugin"',
+  'previous cache was restored',
+  'Chrome app-server cache refreshed from bundled resources',
   'write_chrome_native_host_manifests "$host_path" "$cache_root/latest"',
 ]) {
   if (!chromeBody.includes(required)) {
@@ -6660,7 +6691,8 @@ SCRIPT_DIR="$root/app"
 HOME="$root/home"
 CODEX_HOME="$HOME/.codex"
 source_plugin="$SCRIPT_DIR/resources/plugins/openai-bundled/plugins/chrome"
-cache_root="$CODEX_HOME/plugins/cache/openai-bundled/chrome"
+source_client="$source_plugin/scripts/browser-client.mjs"
+cache_root="$CODEX_HOME/plugins/linux-runtime-cache/openai-bundled/chrome"
 cache_plugin="$cache_root/26.test"
 
 bundled_plugin_version() { printf '%s\n' 26.test; }
@@ -6713,19 +6745,68 @@ chmod 0755 "$cache_root/native-host"
 # Simulate a cache and relevant ancestor created under umask 0002. The four
 # files used by the old partial comparison still match, while an imported
 # module that was not compared has been changed.
-chmod 775 "$CODEX_HOME" "$CODEX_HOME/plugins" "$CODEX_HOME/plugins/cache" \
-  "$CODEX_HOME/plugins/cache/openai-bundled" "$cache_root" "$cache_plugin"
+chmod 775 "$CODEX_HOME" "$CODEX_HOME/plugins" \
+  "$CODEX_HOME/plugins/linux-runtime-cache" \
+  "$CODEX_HOME/plugins/linux-runtime-cache/openai-bundled" \
+  "$cache_root" "$cache_plugin"
 chmod 664 "$cache_plugin/scripts/node_modules/classic-level.mjs"
 chmod -R go-w "$SCRIPT_DIR"
+
+official_cache="$CODEX_HOME/plugins/cache/openai-bundled/chrome"
+official_plugin="$official_cache/26.test"
+official_host="$official_plugin/extension-host/linux/x64/extension-host"
+official_client="$official_plugin/scripts/browser-client.mjs"
+mkdir -p "$(dirname "$official_host")" "$(dirname "$official_client")"
+cat > "$official_host" <<'HOST'
+#!/usr/bin/env bash
+printf '%s\n' OFFICIAL
+HOST
+printf '%s\n' stale-client > "$official_client"
+chmod 0755 "$official_host"
+ln -s 26.test "$official_cache/latest"
+chmod 0775 \
+  "$CODEX_HOME/plugins/cache" \
+  "$CODEX_HOME/plugins/cache/openai-bundled" \
+  "$official_cache" \
+  "$official_plugin" \
+  "$official_plugin/extension-host" \
+  "$official_plugin/extension-host/linux" \
+  "$official_plugin/extension-host/linux/x64"
 
 sync_chrome_bundled_plugin_cache
 
 grep -qx trusted-module "$cache_plugin/scripts/node_modules/classic-level.mjs"
+grep -qx trusted-client "$official_client"
+
+# A failed promotion must restore the previous app-server-owned cache and must
+# not abort the cold-start sync under set -e.
+printf '%s\n' replacement-client > "$source_client"
+mv() {
+  local args=("$@")
+  local argc="${#args[@]}"
+  local source="${args[$((argc - 2))]}"
+  local destination="${args[$((argc - 1))]}"
+  if [[ "$source" == *".linux-refresh."* ]] && [ "$destination" = "$official_plugin" ]; then
+    return 73
+  fi
+  command mv "$@"
+}
+sync_chrome_bundled_plugin_cache > "$root/managed-cache-promotion-failure.log" 2>&1
+grep -qx trusted-client "$official_client"
+grep -q "previous cache was restored" "$root/managed-cache-promotion-failure.log"
+if find "$official_cache" -mindepth 1 -maxdepth 1 -type d \
+    \( -name '*.linux-refresh.*' -o -name '*.linux-backup.*' \) -print -quit | grep -q .; then
+  echo "Chrome app-server cache refresh left temporary or backup directories after restoration" >&2
+  exit 1
+fi
+unset -f mv
+printf '%s\n' trusted-client > "$source_client"
+
 for trusted_path in \
   "$CODEX_HOME" \
   "$CODEX_HOME/plugins" \
-  "$CODEX_HOME/plugins/cache" \
-  "$CODEX_HOME/plugins/cache/openai-bundled" \
+  "$CODEX_HOME/plugins/linux-runtime-cache" \
+  "$CODEX_HOME/plugins/linux-runtime-cache/openai-bundled" \
   "$cache_root"; do
   if find "$trusted_path" -maxdepth 0 ! -type l -perm /022 -print -quit | grep -q .; then
     echo "Chrome cache ancestor remained group/world writable: $trusted_path" >&2
@@ -6736,8 +6817,22 @@ if find "$cache_plugin" ! -type l -perm /022 -print -quit | grep -q .; then
   echo "Chrome plugin cache remained group/world writable" >&2
   exit 1
 fi
+if ! find "$official_plugin" -maxdepth 0 -perm /022 -print -quit | grep -q .; then
+  echo "Launcher unexpectedly blessed the app-server-owned Chrome cache" >&2
+  exit 1
+fi
 test -L "$cache_root/latest"
 test "$(readlink "$cache_root/latest")" = 26.test
+marketplace_plugin="$CODEX_HOME/.tmp/bundled-marketplaces/openai-bundled/plugins/chrome"
+test -L "$marketplace_plugin"
+test "$(readlink "$marketplace_plugin")" = "$cache_root/latest"
+
+# app-server owns and replaces the official install cache. That operation
+# must not consume the Linux marketplace source or native-host runtime.
+printf '%s\n' stale > "$official_cache/stale"
+rm -rf "$official_cache"
+test -f "$marketplace_plugin/.codex-plugin/plugin.json"
+test -x "$cache_root/native-host"
 grep -qx untouched "$root/predictable-temp-target"
 if grep -q PRESEEDED_PAYLOAD "$cache_root/native-host"; then
   echo "Chrome native host launcher retained a pre-seeded executable" >&2
@@ -6954,6 +7049,23 @@ proxy_output="$(env -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY \
   PATH="$no_setsid_bin" "$native_host_path")"
 test "$proxy_output" = 'ARCH=x64'
 test ! -e "$probe_called_file"
+
+# The app-server registry is patched to reference the trusted Linux runtime
+# cache. An installed-cache executable must never override the wrapper target.
+official_plugin="$CODEX_HOME/plugins/cache/openai-bundled/chrome/26.test"
+official_host="$official_plugin/extension-host/linux/x64/extension-host"
+mkdir -p "$(dirname "$official_host")"
+cat > "$official_host" <<'HOST'
+#!/usr/bin/env bash
+printf '%s\n' OFFICIAL
+HOST
+chmod 0755 "$official_host"
+ln -s 26.test "$CODEX_HOME/plugins/cache/openai-bundled/chrome/latest"
+chmod -R go-w "$CODEX_HOME/plugins/cache"
+official_output="$(env -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY \
+  -u http_proxy -u https_proxy -u all_proxy -u NO_PROXY -u no_proxy \
+  PATH="$no_setsid_bin" "$native_host_path")"
+test "$official_output" = 'ARCH=x64'
 '''
 )
 PY
@@ -8553,8 +8665,8 @@ JS
 
 Use the browser bound to `browser` for tasks in this skill.
 MD
-    cat > "$chrome_dir/scripts/extension-id.json" <<'JSON'
-{"extensionId":"hehggadaopoacecdllhhajmbjkdcmajg","extensionHostName":"com.openai.codexextension"}
+    cat > "$chrome_dir/scripts/extension-ids.json" <<'JSON'
+{"extensionIds":["hehggadaopoacecdllhhajmbjkdcmajg"],"extensionHostName":"com.openai.codexextension"}
 JSON
     cat > "$chrome_dir/scripts/browser-client.mjs" <<'JS'
 const browserPreference={};function preferredWindowIdFor(){}function getForUrl(){}const extensionInstanceId=null;
@@ -8842,8 +8954,8 @@ test_chrome_native_host_manifest_writer() {
     mkdir -p "$plugin_dir/scripts" "$home_dir" "$app_dir/.codex-linux" "$(dirname "$host_path")"
     printf '#!/bin/sh\n' > "$host_path"
     chmod +x "$host_path"
-    cat > "$plugin_dir/scripts/extension-id.json" <<'JSON'
-{"extensionId":"abcdefghijklmnopabcdefghijklmnop","extensionHostName":"com.example.codextest"}
+    cat > "$plugin_dir/scripts/extension-ids.json" <<'JSON'
+{"extensionIds":["abcdefghijklmnopabcdefghijklmnop"],"extensionHostName":"com.example.codextest"}
 JSON
     printf '%s\n' ".config/example-browser/NativeMessagingHosts" > "$app_dir/.codex-linux/chrome-native-host-manifest-paths"
 
@@ -9216,13 +9328,15 @@ JS
     assert_not_contains "$extracted/.vite/build/main-test.js" 'codexLinuxQuitFinalized'
     assert_contains "$extracted/.vite/build/main-test.js" 'WARN: Linux quit drain cleanup failed'
     assert_contains "$extracted/.vite/build/main-test.js" 'WARN: Linux quit context cleanup failed'
+    assert_contains "$extracted/.vite/build/main-test.js" 'WARN: Linux quit cleanup failed'
     assert_contains "$extracted/.vite/build/main-test.js" 'WARN: Linux quit disposables cleanup failed'
     assert_contains "$extracted/.vite/build/main-test.js" 'finally{l.app.exit(0)}'
     assert_not_contains "$extracted/.vite/build/main-test.js" 'finally{l.app.quit()}'
-    assert_occurrence_count "$extracted/.vite/build/main-test.js" 'codexLinuxRunQuitDrain(()=>{' '2'
-    assert_contains "$extracted/.vite/build/main-test.js" 'Promise.resolve().then(e).then(codexLinuxLogQuitDrainResults),new Promise'
+    assert_occurrence_count "$extracted/.vite/build/main-test.js" 'codexLinuxRunQuitCleanup(()=>{' '2'
+    assert_contains "$extracted/.vite/build/main-test.js" 'Promise.resolve().then(e).then(codexLinuxLogQuitDrainResults).catch'
+    assert_contains "$extracted/.vite/build/main-test.js" '.then(()=>Promise.resolve().then(()=>U5(h,N5)).catch'
     assert_contains "$extracted/.vite/build/main-test.js" 'codexLinuxExplicitQuitDrainTimeoutMs'
-    assert_contains "$extracted/.vite/build/main-test.js" 'setTimeout(()=>e(Error(`Linux quit drain timed out`)),typeof codexLinuxExplicitQuitDrainTimeoutMs'
+    assert_contains "$extracted/.vite/build/main-test.js" 'setTimeout(()=>e(Error(`Linux quit cleanup timed out`)),typeof codexLinuxExplicitQuitDrainTimeoutMs'
     assert_not_contains "$extracted/.vite/build/main-test.js" '\`number\`'
     assert_not_contains "$output_log" 'WARN: Could not find tray quit menu handler'
     assert_not_contains "$output_log" 'WARN: Could not find quit-app IPC handler'
@@ -9328,7 +9442,7 @@ NODE
     assert_occurrence_count "$extracted/.vite/build/main-test.js" 'typeof codexLinuxShouldBypassQuitPrompt===`function`&&codexLinuxShouldBypassQuitPrompt()' '1'
     assert_occurrence_count "$extracted/.vite/build/main-test.js" 'codexLinuxLogQuitDrainResults=e=>{' '1'
     assert_occurrence_count "$extracted/.vite/build/main-test.js" 'codexLinuxFinalizeQuit=()=>{' '1'
-    assert_occurrence_count "$extracted/.vite/build/main-test.js" 'codexLinuxRunQuitDrain(()=>{' '2'
+    assert_occurrence_count "$extracted/.vite/build/main-test.js" 'codexLinuxRunQuitCleanup(()=>{' '2'
 }
 
 test_keybinds_settings_tab_patch_smoke() {
@@ -11244,6 +11358,7 @@ main() {
     test_chrome_native_host_manifest_writer
     test_launcher_managed_node_handles_unset_path
     test_launcher_captures_original_ld_library_path_state
+    test_launcher_captures_desktop_entry_for_current_process_only
     test_packaged_runtime_keeps_managed_node_out_of_user_service_path
     test_launcher_extra_bundled_plugin_cache_rollback
     test_launcher_extra_bundled_plugin_cache_concurrent_destination

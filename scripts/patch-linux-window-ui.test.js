@@ -184,6 +184,7 @@ const {
   applyLinuxAppSunsetPatch,
   applyLinuxBrowserUseAvailabilityPatch,
   applyLinuxBrowserUseExternalAvailabilityPatch,
+  patchLinuxBrowserUseExternalAvailabilityAssets,
   applyLinuxBrowserUseWebviewHostRecoveryPatch,
   applyLinuxBrowserUseWebviewRemountStorePatch,
   applyLinuxBrowserUseNonLocalNavigationPatch,
@@ -1892,9 +1893,9 @@ function currentBootstrapUpdaterBundleFixture() {
     "let r=require(`electron`),i=require(`node:path`),o=require(`node:fs`),u=require(`node:child_process`);",
     "var g6={enabled:!1,running:!1,state:`disabled`};",
     "async function v6(){",
-    "let{startedAtMs:e,buildFlavor:i,desktopSentry:o,sparkleManager:s,productionAppcastStateStore:Q,setSparkleBridgeHandlers:c,setSecondInstanceArgsHandler:l}=n.k(),d=n.P.shouldIncludeSparkle(i,process.platform,process.env)||process.platform===`linux`;",
-    "let ee=new G5,P=null,W=null,te=e=>{if(e?.quitImmediately===!1){ee.allowQuitTemporarilyForUpdateInstall();return}ee.allowQuitTemporarilyForUpdateInstall(),r.app.quit()},F=F3({}),oe=iZ({}),se=oe.getWindowContext();",
-    "c({onDownloadProgressChanged:()=>{se.broadcastAppUpdateState()},onInstallProgressChanged:()=>{T&&se.broadcastAppUpdateState()},onUpdateReadyChanged:()=>{se.broadcastAppUpdateState()},onUpdateLifecycleStateChanged:()=>{se.broadcastAppUpdateState()},onRelaunchNoticeChanged:()=>{se.broadcastAppUpdateState()},onInstallUpdatesRequested:e=>{te(e)},isTrustedIpcEvent:M});",
+    "let{startedAtMs:e,buildFlavor:i,desktopSentry:o,sparkleManager:s,startupPhases:d,productionAppcastStateStore:Q,setSparkleBridgeHandlers:c,setSecondInstanceArgsHandler:l}=n.k(),v=n.P.shouldIncludeSparkle(i,process.platform,process.env)||process.platform===`linux`;",
+    "let ee=new G5,P=null,te=e=>{if(e?.quitImmediately===!1){ee.allowQuitTemporarilyForUpdateInstall();return}ee.allowQuitTemporarilyForUpdateInstall(),r.app.quit()},F=F3({}),oe=iZ({}),se=oe.getWindowContext();",
+    "c({onDownloadProgressChanged:()=>{se.broadcastAppUpdateState()},onDownloadedUpdateAppBrandChanged:()=>{se.broadcastAppUpdateState()},onInstallProgressChanged:()=>{T&&se.broadcastAppUpdateState()},onUpdateReadyChanged:()=>{se.broadcastAppUpdateState()},onUpdateLifecycleStateChanged:()=>{se.broadcastAppUpdateState()},onRelaunchNoticeChanged:()=>{se.broadcastAppUpdateState()},onInstallUpdatesRequested:e=>{te(e)},isTrustedIpcEvent:M});",
     "}exports.runMainAppStartup=v6;",
   ].join("");
 }
@@ -2713,7 +2714,7 @@ test("adds a bounded will-quit drain fallback on Linux", () => {
   assert.doesNotMatch(patched, /codexLinuxQuitFinalized/);
   assert.match(
     patched,
-    /Promise\.resolve\(\)\.then\(\(\)=>U5\(h,N5\)\)\.catch\(e=>\{try\{console\.warn\(`WARN: Linux quit context cleanup failed`,e\)\}catch\{\}\}\)/,
+    /\.then\(\(\)=>Promise\.resolve\(\)\.then\(\(\)=>U5\(h,N5\)\)\.catch\(e=>\{try\{console\.warn\(`WARN: Linux quit context cleanup failed`,e\)\}catch\{\}\}\)\)/,
   );
   assert.match(
     patched,
@@ -2721,14 +2722,14 @@ test("adds a bounded will-quit drain fallback on Linux", () => {
   );
   assert.match(
     patched,
-    /Promise\.race\(\[Promise\.resolve\(\)\.then\(e\)\.then\(codexLinuxLogQuitDrainResults\),new Promise\(\(_,e\)=>setTimeout\(\(\)=>e\(Error\(`Linux quit drain timed out`\)\),typeof codexLinuxExplicitQuitDrainTimeoutMs===`number`\?codexLinuxExplicitQuitDrainTimeoutMs:3e3\)\)\]\)\.catch\(e=>\{try\{console\.warn\(`WARN: Linux quit drain cleanup failed`,e\)\}catch\{\}\}\)\.then\(codexLinuxFinalizeQuit\)/,
+    /Promise\.race\(\[Promise\.resolve\(\)\.then\(e\)[^;]+new Promise\(\(_,e\)=>setTimeout\(\(\)=>e\(Error\(`Linux quit cleanup timed out`\)\),typeof codexLinuxExplicitQuitDrainTimeoutMs===`number`\?codexLinuxExplicitQuitDrainTimeoutMs:3e3\)\)\]\)\.catch\(e=>\{try\{console\.warn\(`WARN: Linux quit cleanup failed`,e\)\}catch\{\}\}\)\.then\(codexLinuxFinalizeQuit\)/,
   );
   assert.match(
     patched,
-    /codexLinuxRunQuitDrain=e=>\{if\(process\.platform===`linux`\)\{/,
+    /codexLinuxRunQuitCleanup=e=>\{if\(process\.platform===`linux`\)\{/,
   );
   assert.equal(
-    (patched.match(/codexLinuxRunQuitDrain\(\(\)=>\{/g) ?? []).length,
+    (patched.match(/codexLinuxRunQuitCleanup\(\(\)=>\{/g) ?? []).length,
     2,
   );
   assert.equal(
@@ -2772,12 +2773,87 @@ test("Linux will-quit reaches app.exit after the drain deadline", async () => {
   assert.deepEqual(state.exitCodes, [0]);
   assert.equal(state.quitCalls, 0);
   assert.deepEqual(state.warnings, [
-    "WARN: Linux quit drain cleanup failed Error: Linux quit drain timed out",
+    "WARN: Linux quit cleanup failed Error: Linux quit cleanup timed out",
   ]);
   resolveGlobalState();
   await new Promise((resolve) => setTimeout(resolve, 10));
   assert.equal(state.exitCalls, 1);
   assert.equal(state.quitCalls, 0);
+});
+
+test("Linux will-quit bounds context disposal inside the quit deadline", async () => {
+  const stalledContextDispose = new Promise(() => {});
+  let contextDisposeCalls = 0;
+  let disposablesCalls = 0;
+  const state = await runPatchedLinuxWillQuit({
+    contextDispose() {
+      contextDisposeCalls += 1;
+      return stalledContextDispose;
+    },
+    disposablesDispose() {
+      disposablesCalls += 1;
+    },
+    timeoutMs: 5,
+  });
+
+  assert.equal(contextDisposeCalls, 1);
+  assert.equal(disposablesCalls, 1);
+  assert.equal(state.exitCalls, 1);
+  assert.deepEqual(state.exitCodes, [0]);
+  assert.equal(state.quitCalls, 0);
+  assert.deepEqual(state.warnings, [
+    "WARN: Linux quit cleanup failed Error: Linux quit cleanup timed out",
+  ]);
+});
+
+test("Linux reduced will-quit branch shares the complete cleanup deadline", async () => {
+  const stalledContextDispose = new Promise(() => {});
+  let contextDisposeCalls = 0;
+  let disposablesCalls = 0;
+  let globalStateFlushCalls = 0;
+  let settingsFlushCalls = 0;
+  let stopCodexMicroCalls = 0;
+  let flushTracingCalls = 0;
+  const state = await runPatchedLinuxWillQuit({
+    contextDispose() {
+      contextDisposeCalls += 1;
+      return stalledContextDispose;
+    },
+    disposablesDispose() {
+      disposablesCalls += 1;
+    },
+    flushTracing() {
+      flushTracingCalls += 1;
+      return Promise.resolve();
+    },
+    globalStateFlush() {
+      globalStateFlushCalls += 1;
+      return Promise.resolve();
+    },
+    settingsFlush() {
+      settingsFlushCalls += 1;
+      return Promise.resolve();
+    },
+    shouldSkipDrain: true,
+    stopCodexMicro() {
+      stopCodexMicroCalls += 1;
+      return Promise.resolve();
+    },
+    timeoutMs: 5,
+  });
+
+  assert.equal(contextDisposeCalls, 1);
+  assert.equal(disposablesCalls, 1);
+  assert.equal(globalStateFlushCalls, 0);
+  assert.equal(settingsFlushCalls, 0);
+  assert.equal(stopCodexMicroCalls, 1);
+  assert.equal(flushTracingCalls, 1);
+  assert.equal(state.exitCalls, 1);
+  assert.deepEqual(state.exitCodes, [0]);
+  assert.equal(state.quitCalls, 0);
+  assert.deepEqual(state.warnings, [
+    "WARN: Linux quit cleanup failed Error: Linux quit cleanup timed out",
+  ]);
 });
 
 test("Linux will-quit logs rejected asynchronous drain work before exit", async () => {
@@ -2915,6 +2991,79 @@ test("missing, renamed, or ambiguous will-quit targets fail the required lifecyc
     ),
     "l.app.on(`ready`,()=>{})",
     `${willQuitDrainBundleFixture()}${willQuitDrainBundleFixture()}`,
+  ];
+  const descriptor = corePatchDescriptors().find(
+    (candidate) => candidate.id === "linux-explicit-quit-drain-timeout",
+  );
+
+  for (const source of sources) {
+    const report = createPatchReport();
+    const { value: result, warnings } = captureWarns(() =>
+      applyMainBundlePatchDescriptors(source, [descriptor], {}, report),
+    );
+
+    assert.equal(result.patchedSource, source);
+    assert.deepEqual(warnings, [
+      "WARN: Could not uniquely match current will-quit drain sequence — skipping Linux explicit quit drain timeout patch",
+    ]);
+    assert.equal(report.patches[0]?.status, "failed-required");
+    assert.equal(report.patches[0]?.reason, warnings[0]);
+  }
+});
+
+test("recognizes the bounded Linux quit cleanup as already applied", () => {
+  const source = applyLinuxWillQuitDrainTimeoutPatch(
+    willQuitDrainBundleFixture(),
+  );
+  const descriptor = corePatchDescriptors().find(
+    (candidate) => candidate.id === "linux-explicit-quit-drain-timeout",
+  );
+  const report = createPatchReport();
+  const { value: result, warnings } = captureWarns(() =>
+    applyMainBundlePatchDescriptors(source, [descriptor], {}, report),
+  );
+
+  assert.equal(result.patchedSource, source);
+  assert.deepEqual(warnings, []);
+  assert.equal(report.patches[0]?.status, "already-applied");
+});
+
+test("does not accept a partial Linux quit cleanup call-site patch", () => {
+  const source = applyLinuxWillQuitDrainTimeoutPatch(
+    willQuitDrainBundleFixture(),
+  ).replace(
+    "codexLinuxRunQuitCleanup(()=>{c.dispose(),u.dispose();",
+    "codexLinuxRunQuitDrain(()=>{c.dispose(),u.dispose();",
+  );
+  const descriptor = corePatchDescriptors().find(
+    (candidate) => candidate.id === "linux-explicit-quit-drain-timeout",
+  );
+  const report = createPatchReport();
+  const { value: result, warnings } = captureWarns(() =>
+    applyMainBundlePatchDescriptors(source, [descriptor], {}, report),
+  );
+
+  assert.equal(result.patchedSource, source);
+  assert.deepEqual(warnings, [
+    "WARN: Could not uniquely match current will-quit drain sequence — skipping Linux explicit quit drain timeout patch",
+  ]);
+  assert.equal(report.patches[0]?.status, "failed-required");
+  assert.equal(report.patches[0]?.reason, warnings[0]);
+});
+
+test("does not accept damaged Linux quit cleanup factory bodies", () => {
+  const patched = applyLinuxWillQuitDrainTimeoutPatch(
+    willQuitDrainBundleFixture(),
+  );
+  const sources = [
+    patched.replace(
+      "codexLinuxRunQuitCleanup(()=>{c.dispose(),u.dispose();return Promise.allSettled([p(),m()])})",
+      "codexLinuxRunQuitCleanup(()=>{return Promise.resolve()})",
+    ),
+    patched.replace(
+      "codexLinuxRunQuitCleanup(()=>{c.dispose(),u.dispose();return Promise.allSettled([d.flush(),f.flush(),p(),m()])})",
+      "codexLinuxRunQuitCleanup(()=>{return Promise.resolve()})",
+    ),
   ];
   const descriptor = corePatchDescriptors().find(
     (candidate) => candidate.id === "linux-explicit-quit-drain-timeout",
@@ -7608,8 +7757,14 @@ test("adds Linux package updater to current bootstrap updater wiring", () => {
   assert.match(patched, /s=codexLinuxPackageUpdateBridge\.manager/);
   assert.match(patched, /te=codexLinuxPackageUpdateBridge\.quitForUpdate/);
   assert.match(patched, /async function codexLinuxProbeUpdateManager\(\)/);
+  assert.match(patched, /require\(`node:child_process`\)\.execFile\(codexLinuxUpdateManagerPath\(\)/);
+  assert.match(patched, /require\(`node:fs`\)\.existsSync\(e\)/);
+  assert.match(patched, /require\(`node:path`\)\.join/);
+  assert.doesNotMatch(patched, /__codexChild\.execFile\(codexLinuxUpdateManagerPath\(\)/);
   assert.match(patched, /codexLinuxRunUpdateManager\(\[`--help`\]\)/);
   assert.match(patched, /async function codexLinuxRefreshUpdateState\(\)\{return codexLinuxReadUpdateState\(\)\}/);
+  assert.match(patched, /codexLinuxUpdateLifecycleState\(r,e\)/);
+  assert.match(patched, /e===`update_detected`&&t\?\.deferred_build===!0/);
   assert.match(patched, /codexLinuxProbeUpdateManager\(\)\.then\(\(\)=>\{s=!0,i\(\),a\(\);return!0\}\)/);
   assert.match(patched, /manager:\{setAutomaticBackgroundDownloadsEnabled:\(\)=>\{\}/);
   assert.match(patched, /getIsUpdateReady:\(\)=>s&&t/);
@@ -7618,6 +7773,23 @@ test("adds Linux package updater to current bootstrap updater wiring", () => {
   assert.match(patched, /e\.stdout\?\.includes\(`Manual install required:`\)\?await codexLinuxShowUpdateMessage/);
   assert.match(patched, /refresh:async\(\)=>\{if\(await c\)\{try\{await codexLinuxRefreshUpdateState\(\)\}/);
   assert.doesNotMatch(patched, /codexLinuxRunUpdateManager\(\[`status`,`--json`\]\)/);
+});
+
+test("does not reuse function-scoped module bindings in the Linux updater bridge", () => {
+  const source =
+    "function helper(){let __codexChild=require(`node:child_process`)," +
+    "__codexFs=require(`node:fs`),__codexPath=require(`node:path`);" +
+    "return[__codexChild,__codexFs,__codexPath]}" +
+    currentBootstrapUpdaterBundleFixture();
+
+  const patched = applyLinuxAppUpdaterBridgePatch(source);
+
+  assert.match(patched, /require\(`node:child_process`\)\.execFile\(codexLinuxUpdateManagerPath\(\)/);
+  assert.match(patched, /require\(`node:fs`\)\.existsSync\(e\)/);
+  assert.match(patched, /require\(`node:path`\)\.join/);
+  assert.doesNotMatch(patched, /__codexChild\.execFile\(codexLinuxUpdateManagerPath\(\)/);
+  assert.doesNotMatch(patched, /__codexFs\.existsSync\(e\)/);
+  assert.doesNotMatch(patched, /__codexPath\.join/);
 });
 
 test("implements the current Sparkle AppView, menu, and RPC contract on Linux", () => {
@@ -7725,12 +7897,12 @@ test("keeps the current Sparkle menu contract callable across Linux updater prob
 test("fails soft when the current updater callback bridge drifts", () => {
   for (const source of [
     currentBootstrapUpdaterBundleFixture().replace(
-      "let ee=new G5,P=null,W=null,te=e=>",
-      "let ee=G5(),P=null,W=null,te=e=>",
+      "let ee=new G5,P=null,te=e=>",
+      "let ee=G5(),P=null,te=e=>",
     ),
     currentBootstrapUpdaterBundleFixture().replace(
-      "let ee=new G5,P=null,W=null,te=e=>",
-      "let ee=new G5,P=null,te=e=>",
+      "ee.allowQuitTemporarilyForUpdateInstall(),r.app.quit()",
+      "ee.allowQuitTemporarilyForUpdateInstall(),r.app.exit()",
     ),
   ]) {
     const { value: patched, warnings } = captureWarns(() =>
@@ -7744,7 +7916,7 @@ test("fails soft when the current updater callback bridge drifts", () => {
 
 test("enables the existing app update menu on Linux", () => {
   const source =
-    "let{startedAtMs:r,buildFlavor:a,desktopSentry:o,sparkleManager:s,productionAppcastStateStore:P,setSparkleBridgeHandlers:c,setSecondInstanceArgsHandler:l}=t.y(),u=t.Z(a),d=t.C.shouldIncludeSparkle(a,process.platform,process.env),f=t.C.shouldIncludeUpdater(a,process.platform,process.env);Yb({enableSparkle:d});";
+    "let{startedAtMs:r,buildFlavor:a,desktopSentry:o,sparkleManager:s,startupPhases:h,productionAppcastStateStore:P,setSparkleBridgeHandlers:c,setSecondInstanceArgsHandler:l}=t.y(),u=t.Z(a),d=t.C.shouldIncludeSparkle(a,process.platform,process.env),f=t.C.shouldIncludeUpdater(a,process.platform,process.env);Yb({enableSparkle:d});";
   const patched = applyPatchTwice(applyLinuxAppUpdaterMenuPatch, source);
 
   assert.match(
@@ -8462,34 +8634,42 @@ test("enables Browser Use availability on Linux when only the Statsig gate is di
 
 test("enables external Browser Use availability on Linux without the upstream rollout flag", () => {
   const source =
-    "function m(e){let t=(0,l.c)(5),{hostId:n,windowType:r}=e,a=r===void 0?`electron`:r,o=i(`410065390`),s;t[0]===n?s=t[1]:(s={featureName:`browser_use_external`,hostId:n},t[0]=n,t[1]=s);let c=u(s),d=a===`chrome-extension`||o&&c.enabled&&!c.isLoading,f=a===`chrome-extension`?!1:c.isLoading,p;return t[2]!==d||t[3]!==f?(p={allowed:d,available:d,isLoading:f},t[2]=d,t[3]=f,t[4]=p):p=t[4],p}";
+    "function wfi(e){let t=(0,Efi.c)(14),{enabled:n,hostId:r,windowType:i}=e,a=n===void 0||n,o=i===void 0?`electron`:i,s=sh(`410065390`),c;t[0]!==a||t[1]!==r?(c={enabled:a,featureName:`browser_use_external`,hostId:r},t[0]=a,t[1]=r,t[2]=c):c=t[2];let l=pfi(c),u=Np(Cu.runCodexInWsl),d=ey(r),f=u===!0||d.kind===`wsl`,p;t[3]!==l.enabled||t[4]!==l.isLoading||t[5]!==s||t[6]!==f||t[7]!==o?(p=Tfi({isExternalBrowserUseFeatureEnabled:l.enabled,isExternalBrowserUseFeatureLoading:l.isLoading,isExternalBrowserUseGateEnabled:s,runCodexInWsl:f,windowType:o}),t[3]=l.enabled,t[4]=l.isLoading,t[5]=s,t[6]=f,t[7]=o,t[8]=p):p=t[8];return p}function Tfi({isExternalBrowserUseFeatureEnabled:e,isExternalBrowserUseFeatureLoading:t,isExternalBrowserUseGateEnabled:n,runCodexInWsl:r,windowType:i}){return i===`chrome-extension`?`available`:t?`loading`:n?e?r?`wsl-disabled`:`available`:`config-requirement-disabled`:`statsig-disabled`}";
 
   const patched = applyPatchTwice(applyLinuxBrowserUseExternalAvailabilityPatch, source);
 
   assert.match(
     patched,
-    /d=a===`chrome-extension`\|\|navigator\.userAgent\.includes\(`Linux`\)\|\|o&&c\.enabled&&!c\.isLoading/,
+    /return i===`chrome-extension`\|\|navigator\.userAgent\.includes\(`Linux`\)\?`available`:/,
   );
-  assert.match(
-    patched,
-    /f=a===`chrome-extension`\|\|navigator\.userAgent\.includes\(`Linux`\)\?!1:c\.isLoading/,
+  const context = { navigator: { userAgent: "Linux x86_64" } };
+  vm.runInNewContext(
+    `${patched};globalThis.result=Tfi({isExternalBrowserUseFeatureEnabled:!1,isExternalBrowserUseFeatureLoading:!1,isExternalBrowserUseGateEnabled:!1,runCodexInWsl:!1,windowType:\`electron\`})`,
+    context,
   );
+  assert.equal(context.result, "available");
   assert.match(patched, /featureName:`browser_use_external`/);
-  assert.match(patched, /i\(`410065390`\)/);
+  assert.match(patched, /sh\(`410065390`\)/);
 });
 
 test("keeps already patched external Browser Use availability unchanged", () => {
   const source =
-    "function m(e){let t=(0,l.c)(5),{hostId:n,windowType:r}=e,a=r===void 0?`electron`:r,o=i(`410065390`),s;t[0]===n?s=t[1]:(s={featureName:`browser_use_external`,hostId:n},t[0]=n,t[1]=s);let c=u(s),d=a===`chrome-extension`||navigator.userAgent.includes(`Linux`)||o&&c.enabled&&!c.isLoading,f=a===`chrome-extension`||navigator.userAgent.includes(`Linux`)?!1:c.isLoading,p;return p}";
+    "function wfi(){return{featureName:`browser_use_external`,gate:`410065390`}}function Tfi({isExternalBrowserUseFeatureEnabled:e,isExternalBrowserUseFeatureLoading:t,isExternalBrowserUseGateEnabled:n,runCodexInWsl:r,windowType:i}){return i===`chrome-extension`||navigator.userAgent.includes(`Linux`)?`available`:t?`loading`:n?e?r?`wsl-disabled`:`available`:`config-requirement-disabled`:`statsig-disabled`}";
 
   assert.equal(applyPatchTwice(applyLinuxBrowserUseExternalAvailabilityPatch, source), source);
 });
 
-test("external Browser Use availability descriptor matches the current monolithic bundle", () => {
+test("external Browser Use availability descriptor patches the complete current extracted-app contract", () => {
   const descriptor = require("./patches/core/all-linux/webview/browser-use-external-availability/patch.js");
 
-  assert.match("app-initial-BTphDPeq.js", descriptor.pattern);
-  assert.doesNotMatch("use-in-app-browser-use-availability-B4Bdb14G.js", descriptor.pattern);
+  assert.equal(descriptor.phase, "extracted-app:post-webview");
+  assert.equal(descriptor.order, 1990);
+  assert.equal(descriptor.ciPolicy, "optional");
+  assert.equal(descriptor.apply, patchLinuxBrowserUseExternalAvailabilityAssets);
+  assert.deepEqual(descriptor.status({ matched: 0, changed: 0 }, []), {
+    status: "skipped-optional",
+    reason: null,
+  });
 });
 
 test("allows Browser Use non-local navigation on Linux without the upstream rollout flag", () => {
