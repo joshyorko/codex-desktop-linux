@@ -20,30 +20,30 @@ function currentBrowserRegistry(variableName) {
 
 function currentMainRegistryFixture() {
   return [
-    currentBrowserRegistry("ob"),
-    "function fb(e){return Object.hasOwn(ob,e)}",
-    "Object.defineProperty(exports,`So`,{enumerable:!0,get:function(){return ob}}),Object.defineProperty(exports,`wo`,{enumerable:!0,get:function(){return fb}});",
+    currentBrowserRegistry("Oy"),
+    "function Iy(e){return Object.hasOwn(Oy,e)}",
+    "Object.defineProperty(exports,`Eo`,{enumerable:!0,get:function(){return Oy}}),Object.defineProperty(exports,`ko`,{enumerable:!0,get:function(){return Iy}});",
   ].join("");
 }
 
 function currentMainCallerFixture() {
   return [
     "let n=exports;function dl(e){return installedCommands.has(e)?`/usr/bin/${e}`:null}async function ml(e,t){launches.push([e,t])}",
-    "async function sne({browserFamily:e,platform:t=process.platform}){return t===`darwin`?!1:t===`win32`?!1:t===`linux`&&Ol(e)!=null}",
-    "async function lne({browserFamily:e,platform:t=process.platform,runCommand:n=ml,url:r}){await El({browserFamily:e,platform:t,runCommand:n,unsupportedPlatformError:`unsupported`,url:r})}",
-    "async function El({browserFamily:e,platform:t,runCommand:r,url:i}){let a=n.So[e];if(t===`linux`){let t=Ol(e);if(t==null)throw Error(`${a.displayName} is not installed`);await r(t,[i]);return}throw Error(`unsupported`)}",
-    "function Ol(e){let t=n.So[e],r=t.linux.installations;for(let e of r){let t=kl(e);if(t!=null)return t}return null}function kl(e){for(let t of e.commands){let e=dl(t);if(e!=null)return e}return null}",
-    "var oce={parse:e=>e},sce=class{async getInstalledBrowserFamilies(){let e=Object.keys(n.So).filter(n.wo);return(await Promise.all(e.map(async e=>({browserFamily:e,installed:await sne({browserFamily:e})})))).flatMap(({browserFamily:e,installed:t})=>t?[e]:[])}async openUrl({browserFamily:e,url:t}){await lne({browserFamily:oce.parse(e),url:t})}};globalThis.BrowserService=sce;",
+    "async function mne({browserFamily:e,platform:t=process.platform}){return t===`darwin`?!1:t===`win32`?!1:t===`linux`&&jl(e)!=null}",
+    "async function gne({browserFamily:e,platform:t=process.platform,runCommand:n=ml,url:r}){await kl({browserFamily:e,platform:t,runCommand:n,unsupportedPlatformError:`unsupported`,url:r})}",
+    "async function kl({browserFamily:e,platform:t,runCommand:r,url:i}){let a=n.Eo[e];if(t===`linux`){let t=jl(e);if(t==null)throw Error(`${a.displayName} is not installed`);await r(t,[i]);return}throw Error(`unsupported`)}",
+    "function jl(e){let t=n.Eo[e],r=t.linux.installations;for(let e of r){let t=Ml(e);if(t!=null)return t}return null}function Ml(e){for(let t of e.commands){let e=dl(t);if(e!=null)return e}return null}",
+    "var oce={parse:e=>e},wce=class{async getInstalledBrowserFamilies(){let e=Object.keys(n.Eo).filter(n.ko);return(await Promise.all(e.map(async e=>({browserFamily:e,installed:await mne({browserFamily:e})})))).flatMap(({browserFamily:e,installed:t})=>t?[e]:[])}async openUrl({browserFamily:e,url:t}){await gne({browserFamily:oce.parse(e),url:t})}};globalThis.BrowserService=wce;",
   ].join("");
 }
 
 function currentRendererFixture() {
   return [
-    currentBrowserRegistry("Xl"),
-    "function Yl(e){return Object.hasOwn(Xl,e)}",
-    "function rendererLinuxRegistry(){return Object.keys(Xl).filter(Yl).map(e=>({browserFamily:e,installations:Xl[e].linux.installations,manifestDirectories:Xl[e].linux.nativeMessagingManifestDirectories,processNames:Xl[e].linux.processNames}))}",
+    currentBrowserRegistry("Fu"),
+    "function Pu(e){return Object.hasOwn(Fu,e)}",
+    "function rendererLinuxRegistry(){return Object.keys(Fu).filter(Pu).map(e=>({browserFamily:e,installations:Fu[e].linux.installations,manifestDirectories:Fu[e].linux.nativeMessagingManifestDirectories,processNames:Fu[e].linux.processNames}))}",
     "function wfi(){return{enabled:!1,featureName:`browser_use_external`,gate:`410065390`}}",
-    "function Sfi({isExternalBrowserUseFeatureEnabled:e,isExternalBrowserUseFeatureLoading:t,isExternalBrowserUseGateEnabled:n,runCodexInWsl:r,windowType:i}){return i===`chrome-extension`?`available`:t?`loading`:n?e?r?`wsl-disabled`:`available`:`config-requirement-disabled`:`statsig-disabled`}",
+    "function jni({isExternalBrowserUseFeatureEnabled:e,isExternalBrowserUseFeatureLoading:t,isExternalBrowserUseGateEnabled:n,runCodexInWsl:r,windowType:i}){return i===`chrome-extension`?`available`:t?`loading`:n?e?r?`wsl-disabled`:`available`:`config-requirement-disabled`:`statsig-disabled`}",
     "globalThis.rendererLinuxRegistry=rendererLinuxRegistry;",
   ].join("");
 }

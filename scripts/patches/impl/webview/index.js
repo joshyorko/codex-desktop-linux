@@ -1173,25 +1173,25 @@ function patchCurrentBrowserUseRegistrySource(source) {
 }
 
 function currentBrowserUseMainCallerContract(source) {
-  return source.includes("async function sne({browserFamily:") &&
-    source.includes("async function lne({browserFamily:") &&
-    source.includes("function Ol(") &&
+  return source.includes("async function mne({browserFamily:") &&
+    source.includes("async function gne({browserFamily:") &&
+    source.includes("function jl(") &&
     source.includes("getInstalledBrowserFamilies(){") &&
     source.includes("async openUrl({browserFamily:");
 }
 
 function currentBrowserUseMainRegistryContract(source) {
   return currentBrowserUseRegistryState(source) !== "drifted" &&
-    source.includes("function fb(e){return Object.hasOwn(ob,e)}") &&
-    /Object\.defineProperty\(exports,["'`]So["'`],\{enumerable:!0,get:function\(\)\{return ob\}\}\)/u.test(source);
+    source.includes("function Iy(e){return Object.hasOwn(Oy,e)}") &&
+    /Object\.defineProperty\(exports,["'`]Eo["'`],\{enumerable:!0,get:function\(\)\{return Oy\}\}\)/u.test(source);
 }
 
 function currentBrowserUseRendererContract(source) {
   return currentBrowserUseRegistryState(source) !== "drifted" &&
     source.includes("featureName:`browser_use_external`") &&
     source.includes("410065390") &&
-    source.includes("function Yl(e){return Object.hasOwn(Xl,e)}") &&
-    source.includes("Object.keys(Xl).filter(Yl)") &&
+    source.includes("function Pu(e){return Object.hasOwn(Fu,e)}") &&
+    source.includes("Object.keys(Fu).filter(Pu)") &&
     (externalBrowserUseAvailabilityCurrentPattern.test(source) ||
       externalBrowserUseAvailabilityPatchedPattern.test(source));
 }
@@ -2447,19 +2447,19 @@ function applyLinuxSkillsListDedupePatch(currentSource) {
     .replace("function IJ(e){return e.skills}", `${helper}function IJ(e){return e.skills}`);
 }
 
-function patchCommentPreloadBundle(extractedDir) {
-  const commentPreloadBundle = path.join(extractedDir, ".vite", "build", "comment-preload.js");
-  if (!fs.existsSync(commentPreloadBundle)) {
+function patchBrowserPagePreloadBundle(extractedDir) {
+  const browserPagePreloadBundle = path.join(extractedDir, ".vite", "build", "browser-page-preload.js");
+  if (!fs.existsSync(browserPagePreloadBundle)) {
     console.warn(
-      `WARN: Could not find comment preload bundle in ${path.dirname(commentPreloadBundle)} — skipping annotation screenshot patch`,
+      `WARN: Could not find browser page preload bundle in ${path.dirname(browserPagePreloadBundle)} — skipping annotation screenshot patch`,
     );
     return { matched: false, changed: false };
   }
 
-  const source = fs.readFileSync(commentPreloadBundle, "utf8");
+  const source = fs.readFileSync(browserPagePreloadBundle, "utf8");
   const patchedSource = applyBrowserAnnotationScreenshotPatch(source);
   if (patchedSource !== source) {
-    fs.writeFileSync(commentPreloadBundle, patchedSource, "utf8");
+    fs.writeFileSync(browserPagePreloadBundle, patchedSource, "utf8");
     return { matched: true, changed: true };
   }
   return { matched: true, changed: false };
@@ -2492,5 +2492,5 @@ module.exports = {
   applyLocalEnvironmentActionModalDraftPatch,
   applySubagentNicknameMetadataPatch,
   codexLinuxWatchBrowserWebviewAttachment,
-  patchCommentPreloadBundle,
+  patchBrowserPagePreloadBundle,
 };

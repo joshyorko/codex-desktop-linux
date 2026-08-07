@@ -185,6 +185,7 @@ const {
   applyLinuxBrowserUseAvailabilityPatch,
   applyLinuxBrowserUseExternalAvailabilityPatch,
   patchLinuxBrowserUseExternalAvailabilityAssets,
+  patchBrowserPagePreloadBundle,
   applyLinuxBrowserUseWebviewHostRecoveryPatch,
   applyLinuxBrowserUseWebviewRemountStorePatch,
   applyLinuxBrowserUseNonLocalNavigationPatch,
@@ -1407,7 +1408,7 @@ function beforeQuitConfirmationBundleFixture() {
 
 function willQuitDrainBundleFixture() {
   return [
-    "l.app.on(`will-quit`,e=>{if(y=!0,v)return;let t=()=>{U5(h,N5).then(()=>{g.dispose(),l.app.quit()})};if(r.shouldSkipDrainBeforeQuit()){e.preventDefault(),v=!0,c.dispose(),u.dispose(),Promise.allSettled([p(),m()]).then(t);return}e.preventDefault(),v=!0,c.dispose(),u.dispose(),Promise.allSettled([d.flush(),f.flush(),p(),m()]).then(t)});",
+    "l.app.on(`will-quit`,e=>{if(y=!0,v)return;let t=()=>{U5(h,N5).then(()=>{g.dispose(),l.app.quit()})};if(r.shouldSkipDrainBeforeQuit()){e.preventDefault(),v=!0,c.dispose(),u.dispose(),Promise.allSettled([d.flush(),p(),m()]).then(t);return}e.preventDefault(),v=!0,c.dispose(),u.dispose(),Promise.allSettled([d.flush(),f.flush(),p(),m()]).then(t)});",
   ].join("");
 }
 
@@ -1917,7 +1918,8 @@ function latestAvatarOverlayBundleFixture() {
     "getLayoutForDisplay(e){return pf({anchor:this.anchor,displayBounds:this.layoutMode===`native`?e.workArea:e.bounds,mode:this.layoutMode,mascotSize:this.mascotSize,nativeMaterialAttached:this.compositionHost.isNativeMaterialAttached(),previousPlacement:this.placement,traySize:this.traySize??(this.layoutMode===`native`?y5:v5)})}",
     "applyLayout(e,t=this.getCurrentDisplay(),n=!1,r=!0,i=null){if(e.isDestroyed())return;let a=this.getLayoutForDisplay(t);this.layout=a,this.setWindowBounds(e,a.windowBounds,n,r),this.compositionHost.updateMascotRect(a.mascot),this.sendLayoutToRenderer(e,i),this.computerUseCursorLocation!=null&&this.dragState==null&&this.sendComputerUseCursorLocationToRenderer(e)}",
     "showWindow(e){if(e.isDestroyed())return;let t=this.isOpen();e.moveTop(),e.showInactive(),this.compositionHost.publishRemoteHostedPIPContentHost(),!t&&this.isOpen()&&this.broadcastOpenState()}",
-    "applyPointerInteractivityPolicy(){let e=this.window;if(e==null||e.isDestroyed()){this.mousePassthroughEnabled=!1;return}let t=!this.pointerInteractive;if(this.mousePassthroughEnabled!==t){if(this.mousePassthroughEnabled=t,t){e.setIgnoreMouseEvents(!0,{forward:!0});return}e.setIgnoreMouseEvents(!1),this.refreshCursorAtCurrentMousePosition(e)}}",
+    "applyPointerInteractivityPolicy(){let e=this.window;if(e==null||e.isDestroyed()){this.mousePassthroughEnabled=!1;return}if(this.applyInputShape(e))return;let t=!this.pointerInteractive;if(this.mousePassthroughEnabled!==t){if(this.mousePassthroughEnabled=t,t){e.setIgnoreMouseEvents(!0,{forward:!0});return}e.setIgnoreMouseEvents(!1),this.refreshCursorAtCurrentMousePosition(e)}}",
+    "applyInputShape(e){if(!this.supportsInputShape||this.inputShape==null)return!1;this.mousePassthroughEnabled&&=(e.setIgnoreMouseEvents(!1),!1);let t=Bs(e,this.inputShape.map(({height:e,left:t,top:n,width:r})=>({height:e,width:r,x:t,y:n})));return t&&(this.mousePassthroughEnabled=!1),t}",
     "setComputerUseCursorLocation(e){this.computerUseCursorLocation=e,this.computerUseCursorPoint=e.isActive?{x:e.x,y:e.y}:null}",
     "sendComputerUseCursorLocationToRenderer(e){this.windowManager.sendMessageToWebContents(e.webContents,{type:`avatar-overlay-computer-use-cursor-changed`})}",
     "refreshCursorAtCurrentMousePosition(e){let t=c.screen.getCursorScreenPoint();return this.sendCursorPointToAvatarOverlay(e,t,!1)}",
@@ -2844,7 +2846,7 @@ test("Linux reduced will-quit branch shares the complete cleanup deadline", asyn
 
   assert.equal(contextDisposeCalls, 1);
   assert.equal(disposablesCalls, 1);
-  assert.equal(globalStateFlushCalls, 0);
+  assert.equal(globalStateFlushCalls, 1);
   assert.equal(settingsFlushCalls, 0);
   assert.equal(stopCodexMicroCalls, 1);
   assert.equal(flushTracingCalls, 1);
@@ -3057,7 +3059,7 @@ test("does not accept damaged Linux quit cleanup factory bodies", () => {
   );
   const sources = [
     patched.replace(
-      "codexLinuxRunQuitCleanup(()=>{c.dispose(),u.dispose();return Promise.allSettled([p(),m()])})",
+      "codexLinuxRunQuitCleanup(()=>{c.dispose(),u.dispose();return Promise.allSettled([d.flush(),p(),m()])})",
       "codexLinuxRunQuitCleanup(()=>{return Promise.resolve()})",
     ),
     patched.replace(
@@ -4366,31 +4368,31 @@ test("patches current webview opaque window default bundle shapes", () => {
   );
 });
 
-test("patches the current comment preload screenshot anchor shape", () => {
+test("patches the current browser page preload screenshot anchor shape", () => {
   const source = [
-    "let Nt=Mt==null?[]:Pl(Mt),Pt=F==null?Nt:[],Ft=null,It=`hover-box`,Lt,Rt=[];",
-    "if(pt&&N?.annotation.anchor.kind===`element`){let e=Dt==null?null:as(Dt),t=e?.rect??fs(N.annotation.anchor);Lt=e?.borderRadius,It=js(N.annotation.anchor,t,w.width,w.height),Ft=Es(N.annotation.anchor,t,Dt),Rt=uc(Ot,w,{clipToVisibleArea:!0,selectionIndexOffset:1,viewportSize:N.annotation.viewportSize})}",
+    "let Ft=Nt==null?[]:Pl(Nt),It=Pt==null?Ft:[],Lt=null,Rt=`hover-box`,zt,Bt=[];",
+    "if(ht&&j?.annotation.anchor.kind===`element`){let e=kt==null?null:ns(kt),t=e?.rect??ls(j.annotation.anchor);zt=e?.borderRadius,Rt=Os(j.annotation.anchor,t,w.width,w.height),Lt=Cs(j.annotation.anchor,t,kt),Bt=sc(N,w,{clipToVisibleArea:!0,selectionIndexOffset:1,viewportSize:j.annotation.viewportSize})}",
   ].join("");
 
   const patched = applyPatchTwice(applyBrowserAnnotationScreenshotPatch, source);
 
   assert.match(
     patched,
-    /if\(pt&&N\?\.annotation\.anchor\.kind===`element`\)\{let t=fs\(N\.annotation\.anchor\);Lt=void 0,It=js/,
+    /if\(ht&&j\?\.annotation\.anchor\.kind===`element`\)\{let t=ls\(j\.annotation\.anchor\);zt=void 0,Rt=Os/,
   );
   assert.match(patched, /selectionIndexOffset:1/);
-  assert.doesNotMatch(patched, /e\?\.rect\?\?fs/);
+  assert.doesNotMatch(patched, /e\?\.rect\?\?ls/);
 });
 
-test("keeps the current stored annotation anchor shape unchanged", () => {
+test("keeps the current stored browser annotation anchor shape unchanged", () => {
   const source =
-    "if(pt&&N?.annotation.anchor.kind===`element`){let t=fs(N.annotation.anchor);Lt=void 0,It=js(N.annotation.anchor,t,w.width,w.height)}";
+    "if(ht&&j?.annotation.anchor.kind===`element`){let t=ls(j.annotation.anchor);zt=void 0,Rt=Os(j.annotation.anchor,t,w.width,w.height)}";
 
   assert.equal(applyPatchTwice(applyBrowserAnnotationScreenshotPatch, source), source);
 });
 
-test("reports current comment preload screenshot anchor drift", () => {
-  const source = "if(pt&&N?.annotation.anchor.kind===`element`){renderDriftedAnchor()}";
+test("reports current browser page preload screenshot anchor drift", () => {
+  const source = "if(ht&&j?.annotation.anchor.kind===`element`){renderDriftedAnchor()}";
   const { value, warnings } = captureWarns(() =>
     applyBrowserAnnotationScreenshotPatch(source),
   );
@@ -4399,6 +4401,24 @@ test("reports current comment preload screenshot anchor drift", () => {
   assert.deepEqual(warnings, [
     "WARN: Could not find browser annotation screenshot element highlight — skipping screenshot anchor patch",
   ]);
+});
+
+test("patches the current browser page preload asset", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-browser-page-preload-"));
+  try {
+    const buildDir = path.join(root, ".vite", "build");
+    fs.mkdirSync(buildDir, { recursive: true });
+    const assetPath = path.join(buildDir, "browser-page-preload.js");
+    fs.writeFileSync(
+      assetPath,
+      "if(ht&&j?.annotation.anchor.kind===`element`){let e=kt==null?null:ns(kt),t=e?.rect??ls(j.annotation.anchor);zt=e?.borderRadius,Rt=Os(j.annotation.anchor,t,w.width,w.height)}",
+    );
+
+    assert.deepEqual(patchBrowserPagePreloadBundle(root), { matched: true, changed: true });
+    assert.match(fs.readFileSync(assetPath, "utf8"), /let t=ls\(j\.annotation\.anchor\);zt=void 0/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("guards fast-mode model tier lookup when serviceTiers is missing", () => {
@@ -4502,6 +4522,7 @@ test("adds Linux avatar overlay mouse passthrough recovery", () => {
   assert.match(patched, /codexLinuxStartAvatarPassthroughRecovery\(\)/);
   assert.match(patched, /codexLinuxStopAvatarPassthroughRecovery\(\)/);
   assert.match(patched, /codexLinuxSyncAvatarPointerInteractivity\(e\)/);
+  assert.match(patched, /if\(this\.applyInputShape\(e\)\)return/);
   assert.match(patched, /codexLinuxBuildAvatarInputShape\(e\)/);
   assert.match(patched, /codexLinuxApplyAvatarInputShape\(e\)/);
   assert.match(patched, /codexLinuxShouldUseWholeWindowInput\(\)\{return this\.codexLinuxWholeWindowInput===!0\|\|this\.showsVoiceControls===!0\}/);

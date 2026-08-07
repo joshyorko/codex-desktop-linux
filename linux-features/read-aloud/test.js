@@ -955,7 +955,7 @@ test("main handler downloads setup files atomically", async () => {
 });
 
 test("assistant render patch adds an explicit read aloud button under the message", () => {
-  const source = "return (0,$.jsx)(Ov,{item:n,alwaysShowActions:M,assistantCopyText:p,turnId:m,autoReviewStats:y,hookStats:b,completedThreadGoal:x,after:g,conversationId:o,cwd:u,forceCodeBlockWordWrap:V,hasArtifacts:F,onAddSelectedTextToChat:H,onFileLinkOpen:v,onFork:D,renderCodeBlocksAsWritingBlocks:V})";
+  const source = "return (0,$.jsx)(Ov,{item:n,assistantCopyText:p,conversationId:o,showAssistantMessageActionRow:M,onAssistantFileLinkOpen:v})";
   const patched = twice(applyAssistantRenderPatch, source);
   assert.match(patched, /codex-linux-read-aloud-button/);
   assert.match(patched, /codex-linux-read-aloud-icon/);
@@ -991,7 +991,7 @@ test("assistant render patch ignores the current shared component definition", (
 });
 
 test("assistant render patch preserves the current JSX runtime alias", () => {
-  const source = "return (0,Q.jsx)(Ov,{item:n,alwaysShowActions:M,assistantCopyText:p,turnId:m,autoReviewStats:y,hookStats:b,completedThreadGoal:x,after:g,conversationId:o,cwd:u,forceCodeBlockWordWrap:V,hasArtifacts:F,onAddSelectedTextToChat:H,onFileLinkOpen:v,onFork:D,renderCodeBlocksAsWritingBlocks:V})";
+  const source = "return (0,Q.jsx)(Ov,{item:n,assistantCopyText:p,conversationId:o,showAssistantMessageActionRow:M,onAssistantFileLinkOpen:v})";
   const patched = twice(applyAssistantRenderPatch, source);
 
   assert.match(patched, /Q\.Fragment/);
@@ -999,28 +999,28 @@ test("assistant render patch preserves the current JSX runtime alias", () => {
   assert.match(patched, /globalThis\.codexLinuxReadAloudClick\?\.\(n,p,o,e\.currentTarget\)/);
 });
 
-test("assistant render patch covers the current shared assistant message call", () => {
-  const source = "return (0,t8.jsx)(K6c,{item:n,alwaysShowActions:re,assistantCopyText:b,turnId:x,processTargets:S,autoReviewStats:A,hookStats:j,threadDetailLevel:p,completedThreadGoal:M,after:T,electronAfter:E,conversationId:d,getVisualizeTurnTriggerType:f,cwd:g,hostId:_,reportEntityType:v,markdownMediaCacheKey:e,projectlessOutputDirectory:de,forceCodeBlockWordWrap:we,hasArtifacts:fe,onAddResponseTextAnnotation:r,onFileLinkOpen:k,onFork:B,renderCodeBlocksAsWritingBlocks:we,showActionRow:ie,showTimestampWithoutActions:ae,timestampHoverOnly:oe,showProcessBadges:i,allowCopyWhileStreaming:q})";
+test("assistant render patch covers the current local conversation turn call", () => {
+  const source = "return (0,$.jsx)(Rr,{item:B,historyEntityKey:o,isHeartbeatAutomationRequest:qe,isHeartbeatAutomationTurn:p,conversationId:r,getVisualizeTurnTriggerType:Ae,hostId:a,conversationDetailLevel:I,isTurnInProgress:P,cwd:b,resolvedApps:k,renderMcpApps:L,reportEntityType:A,toolActivityTurnKey:F,turnId:Ut,projectlessOutputDirectory:E,assistantCopyText:Pt??void 0,assistantAfter:ir,autoReviewStats:Kt,hookStats:qt,completedThreadGoal:j,hasArtifacts:tr,alwaysShowAssistantMessageActions:C,showAssistantMessageActionRow:n,allowAddSelectedTextToChat:w,onAssistantFileLinkOpen:zt,onForkTurn:ue})";
   const patched = twice(applyAssistantRenderPatch, source);
 
-  assert.match(patched, /t8\.Fragment/);
-  assert.match(patched, /\(0,t8\.jsx\)\("button"/);
-  assert.match(patched, /globalThis\.codexLinuxReadAloudClick\?\.\(n,b,d,e\.currentTarget\)/);
+  assert.match(patched, /\$\.Fragment/);
+  assert.match(patched, /\(0,\$\.jsx\)\("button"/);
+  assert.match(patched, /globalThis\.codexLinuxReadAloudClick\?\.\(B,Pt\?\?void 0,r,e\.currentTarget\)/);
 });
 
-test("assistant runtime descriptor targets current shared assistant bundles", () => {
+test("assistant runtime descriptor targets the current local conversation bundle", () => {
   const descriptor = featurePatches.find((patch) => patch.id === "assistant-runtime");
   assert.ok(descriptor);
   assert.equal(
     descriptor.pattern.test(
-      "app-initial-BHB6SClA.js",
+      "local-conversation-turn-DF8fx5gl.js",
     ),
     true,
   );
   for (const legacyName of [
     "index-current.js",
+    "app-initial-Biw83Aiz.js",
     "local-conversation-thread-current.js",
-    "local-conversation-turn-current.js",
     "app-initial~app-main~onboarding-page-zcfEkMl-.js",
     "app-initial~app-main~onboarding-page~hotkey-window-thread-page~editor-diff-page~thread-app-~current.js",
   ]) {
@@ -1035,7 +1035,7 @@ test("assistant runtime descriptor fails soft and atomically when the current re
     fs.mkdirSync(assetsDir, { recursive: true });
     const assetPath = path.join(
       assetsDir,
-      "app-initial-BHB6SClA.js",
+      "local-conversation-turn-DF8fx5gl.js",
     );
     const source = "console.log(`assistant render contract moved`);";
     fs.writeFileSync(assetPath, source);
@@ -1063,11 +1063,11 @@ test("assistant runtime descriptor reports applied then already-applied for the 
     fs.mkdirSync(assetsDir, { recursive: true });
     const assetPath = path.join(
       assetsDir,
-      "app-initial-BHB6SClA.js",
+      "local-conversation-turn-DF8fx5gl.js",
     );
     fs.writeFileSync(
       assetPath,
-      "return (0,DX.jsx)(Jft,{item:n,assistantCopyText:_,conversationId:l,renderCodeBlocksAsWritingBlocks:ie})",
+      "return (0,DX.jsx)(Jft,{item:n,assistantCopyText:_,conversationId:l,showAssistantMessageActionRow:ie,onAssistantFileLinkOpen:k})",
     );
     const descriptor = featurePatches.find((patch) => patch.id === "assistant-runtime");
     const descriptors = normalizePatchDescriptors([

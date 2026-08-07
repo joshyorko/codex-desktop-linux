@@ -165,9 +165,9 @@ function applyAssistantRenderPatch(source) {
     return source;
   }
   const jsxCallPattern =
-    /\(0,([A-Za-z_$][\w$]*)\.jsx\)\(([A-Za-z_$][\w$]*),\{(?=[^{}]*\bitem:)(?=[^{}]*\bassistantCopyText:)(?=[^{}]*\bconversationId:)(?=[^{}]*\brenderCodeBlocksAsWritingBlocks:)([^{}]*)\}\)/g;
+    /\(0,([A-Za-z_$][\w$]*)\.jsx\)\(([A-Za-z_$][\w$]*),\{(?=[^{}]*\bitem:)(?=[^{}]*\bassistantCopyText:)(?=[^{}]*\bconversationId:)(?=[^{}]*\bshowAssistantMessageActionRow:)(?=[^{}]*\bonAssistantFileLinkOpen:)([^{}]*)\}\)/g;
   const readProp = (props, name) =>
-    new RegExp(`(?:^|,)${name}:([A-Za-z_$][\\w$]*)`).exec(props)?.[1] ?? null;
+    new RegExp(`(?:^|,)${name}:([A-Za-z_$][\\w$]*(?:\\?\\?void 0)?)`).exec(props)?.[1] ?? null;
   const patched = source.replace(
     jsxCallPattern,
     (match, jsxVar, _component, props) => {
@@ -793,8 +793,8 @@ module.exports = {
       phase: "webview-asset",
       order: 20620,
       ciPolicy: "optional",
-      pattern: /^app-initial-[A-Za-z0-9_-]+\.js$/,
-      missingDescription: "current primary thread assistant bundle",
+      pattern: /^local-conversation-turn-[A-Za-z0-9_-]+\.js$/,
+      missingDescription: "current local conversation assistant bundle",
       skipDescription: "read aloud assistant runtime patch",
       apply: applyWebviewPatch,
     },
