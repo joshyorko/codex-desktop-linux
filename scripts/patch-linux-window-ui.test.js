@@ -1370,12 +1370,19 @@ function trayBundleFixture() {
   ].join("");
 }
 
+function exactDmgNestedTernaryTrayBundleFixture() {
+  return trayBundleFixture().replace(
+    "r=new c.Tray(t.defaultIcon)",
+    "r=new c.Tray(t.defaultIcon,process.platform===`win32`&&c.app.isPackaged?dEe(e.buildFlavor):void 0)",
+  ).replace("}}v&&k.on", "}};v&&k.on");
+}
+
 function currentTrayLifecycleBundleFixture() {
   return [
     "let codexLinuxQuitInProgress=!1,codexLinuxExplicitQuitApproved=!1,codexLinuxMarkQuitInProgress=()=>{codexLinuxQuitInProgress=!0},codexLinuxPrepareForExplicitQuit=()=>{codexLinuxExplicitQuitApproved=!0,codexLinuxMarkQuitInProgress()},codexLinuxShouldBypassQuitPrompt=()=>codexLinuxExplicitQuitApproved===!0,codexLinuxIsQuitInProgress=()=>codexLinuxQuitInProgress===!0;",
     "v&&k.on(`close`,e=>{let t=this.getPrimaryWindows().some(e=>e!==k);if((process.platform===`win32`||process.platform===`linux`)&&!this.isAppQuitting&&this.options.canHideLastWindowToTray?.()===!0&&!t){e.preventDefault(),k.hide();return}});",
     "async function gj(e){let t=e;if(typeof t.whenReady!=`function`)return!0;try{return await t.whenReady(),!0}catch{return!1}}function _j(e){let t=e;return typeof t.isReady==`function`?t.isReady():!0}",
-    "var H9=null,U9=null,G9=!1;async function fae(e){return G9=!0,U9??H9??(U9=(async()=>{let t={defaultIcon:e},r=typeof codexLinuxRegisterTray===`function`?codexLinuxRegisterTray(new c.Tray(t.defaultIcon)):new c.Tray(t.defaultIcon);if(!G9)return r.destroy(),null;r.setToolTip(c.app.getName());let i=new pb(r);return H9=i,!await i.waitForReady()||H9!==i?(H9===i&&(H9=null,i.destroy()),null):i})().finally(()=>{U9=null}),U9)}",
+    "var H9=null,U9=null,G9=!1;async function fae(e){return G9=!0,U9??H9??(U9=(async()=>{let t={defaultIcon:e},r=new c.Tray(t.defaultIcon,process.platform===`win32`&&c.app.isPackaged?dEe(e.buildFlavor):void 0);if(!G9)return r.destroy(),null;r.setToolTip(c.app.getName());let i=new pb(r);return H9=i,!await i.waitForReady()||H9!==i?(H9===i&&(H9=null,i.destroy()),null):i})().finally(()=>{U9=null}),U9)}",
     "var pb=class{constructor(e){this.tray=e;if(process.platform===`linux`){this.tray.on(`click`,()=>{}),this.updatePersistentTrayMenu();return}}destroy(){this.tray.destroy()}isReady(){return _j(this.tray)}waitForReady(){return gj(this.tray)}getNativeTrayMenuItems(){return[]}updatePersistentTrayMenu(){process.platform===`linux`&&this.tray.setContextMenu(c.Menu.buildFromTemplate(this.getNativeTrayMenuItems()))}}",
   ].join("");
 }
@@ -2680,8 +2687,46 @@ test("retains the current native Linux tray when quit-state helpers already exis
 
   assert.equal((patched.match(/codexLinuxRegisterTray=e=>/g) ?? []).length, 1);
   assert.match(patched, /let codexLinuxTray=null,codexLinuxRegisterTray=e=>/);
-  assert.match(patched, /r=codexLinuxRegisterTray\(new c\.Tray\(t\.defaultIcon\)\)/);
+  assert.match(
+    patched,
+    /r=codexLinuxRegisterTray\(new c\.Tray\(\.\.\.\(process\.platform===`linux`\?\[t\.defaultIcon\]:\[t\.defaultIcon,process\.platform===`win32`&&c\.app\.isPackaged\?dEe\(e\.buildFlavor\):void 0\]\)\)\)/,
+  );
   assert.doesNotMatch(patched, /typeof codexLinuxRegisterTray===`function`/);
+});
+
+test("wraps the complete exact-DMG nested-ternary Tray constructor in a parseable bundle", () => {
+  const source = `${currentMainBundlePrefix}${exactDmgNestedTernaryTrayBundleFixture()}`;
+  const patched = patchMainBundleSource(source, null);
+  const retainedConstructor =
+    "r=codexLinuxRegisterTray(new c.Tray(...(process.platform===`linux`?[t.defaultIcon]:[t.defaultIcon,process.platform===`win32`&&c.app.isPackaged?dEe(e.buildFlavor):void 0])))";
+
+  assert.ok(patched.includes(retainedConstructor));
+  assert.doesNotThrow(() => new Function(patched));
+  assert.equal(patchMainBundleSource(patched, null), patched);
+
+  const trayArguments = (platform) => {
+    const context = {
+      c: {
+        app: { isPackaged: true },
+        Tray: class {
+          constructor(...args) {
+            this.args = args;
+          }
+        },
+      },
+      codexLinuxRegisterTray: (tray) => tray,
+      dEe: () => "windows-guid",
+      e: { buildFlavor: "prod" },
+      process: { platform },
+      result: null,
+      t: { defaultIcon: "icon" },
+    };
+    vm.runInNewContext(`${retainedConstructor};result=r.args`, context);
+    return [...context.result];
+  };
+
+  assert.deepEqual(trayArguments("linux"), ["icon"]);
+  assert.deepEqual(trayArguments("win32"), ["icon", "windows-guid"]);
 });
 
 test("bypasses the upstream before-quit confirmation after a Linux explicit quit", () => {
