@@ -83,7 +83,10 @@ function applyInlineModelListPatch(source, context = {}) {
     }
 
     const inlineModelListVariable = findInlineModelListVariable(source);
-    const effortIndex = source.indexOf(EFFORT_TITLE_MARKER);
+    const modelTitleIndex = source.indexOf(MODEL_TITLE_MARKER);
+    const modelRowIndex = source.indexOf(MODEL_ROW_MARKER, modelTitleIndex);
+    const effortIndex =
+      modelRowIndex < 0 ? -1 : source.indexOf(EFFORT_TITLE_MARKER, modelRowIndex);
     if (inlineModelListVariable == null || effortIndex < 0) {
       if (context.warnOnMissingMarkers === true) {
         warn("Could not find the model list and advanced picker markers");

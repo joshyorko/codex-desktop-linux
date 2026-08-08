@@ -69,6 +69,16 @@ function modelPickerMenuBundleFixture() {
   ].join("");
 }
 
+function reorderedModelPickerMenuBundleFixture() {
+  return [
+    "function chatgptPicker(){",
+    "id:`composer.intelligenceDropdown.effort.title`;",
+    "chatgpt=(0,c6.jsxs)(c6.Fragment,{children:[chatgptTrigger,chatgptEffort]});",
+    "}",
+    modelPickerMenuBundleFixture(),
+  ].join("");
+}
+
 function modelPickerPowerBundleFixture() {
   return [
     "function ARe(e,{includeUltraInSlider:t=!1,removeXHigh:n=!1}={}){let r=PRe((t?[...FRe,URe]:FRe).filter(({reasoningEffort:e})=>!n||e!==`xhigh`),e);if(r.length>=3)return r;let i=PRe(IRe.filter(({reasoningEffort:e})=>!n||e!==`xhigh`),e);return i.length>=3?i:[]}",
@@ -211,6 +221,13 @@ test("model picker opens advanced view and renders model choices inline", () => 
   assert.match(patchedMenu, /children:\[ie,\/\*codex-linux-inline-model-list\*\//);
   assert.equal(applyDefaultAdvancedViewPatch(patchedState), patchedState);
   assert.equal(applyInlineModelListPatch(patchedMenu), patchedMenu);
+});
+
+test("model picker patch stays inside its component when ChatGPT picker comes first", () => {
+  const patched = applyInlineModelListPatch(reorderedModelPickerMenuBundleFixture());
+
+  assert.match(patched, /children:\[chatgptTrigger,chatgptEffort\]/);
+  assert.match(patched, /children:\[ie,\/\*codex-linux-inline-model-list\*\/effort\]/);
 });
 
 test("GPT-5.6 Power slider follows reasoning efforts enabled in settings", () => {
