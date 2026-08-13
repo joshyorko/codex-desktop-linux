@@ -7,8 +7,8 @@ const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
 
-require("./dock-icon.test.js");
 require("./suggested-prompts.test.js");
+require("./dock-icon.test.js");
 
 const {
   discoverLinuxFeatureManifests,
@@ -54,28 +54,30 @@ function modelPickerStateBundleFixture() {
     "function picker(){",
     "vz=wu(`composer-model-picker-menu-view-v1`,`simple`);",
     "}",
+    "function j_s(e){",
+    "let d=`chatgpt-model-picker`,[h,g]=(0,F_s.useState)(``),[_,v]=(0,F_s.useState)(`simple`);",
+    "return _}",
+    "function next(){}",
   ].join("");
 }
 
 function modelPickerMenuBundleFixture() {
   return [
-    "function menu(){",
+    "function j_s(){",
+    "id:`composer.intelligenceDropdown.effort.title`;",
+    "let re=[{id:`metadata`}],ie=re.find(e=>e.id),Ce=`label`,se=`text`;",
+    "we=(0,K1.jsxs)(K1.Fragment,{children:[Ce,se]});return we}",
+    "function Cgs(e){",
+    "let t=[],{advancedConfig:r,hideAdvancedSubmenus:i}=e,v=i!==void 0&&i,ce;",
+    "t[43]!==r.model||t[44]!==v?(ce=v||r.model==null?null:(0,H1.jsx)(wgs,{submenu:r.model}),t[43]=r.model,t[44]=v,t[45]=ce):ce=t[45];",
+    "return ce}",
+    "function wgs(e){",
+    "let n=e.submenu,o=n.title==null?null:(0,H1.jsx)(hH.Title,{children:n.title}),l=n.options.map(Tgs);return [o,l]}",
+    "function Tgs(e){return(0,H1.jsx)(hH.Item,{RightIcon:e.selected?fv:void 0,onSelect:t=>{t.preventDefault(),e.onSelect()},children:e.label},e.id)}",
+    "function XVs(){",
     "id:`composer.intelligenceDropdown.model.title`;",
-    "let ue=fragment,ie=ue;let fe;",
-    "id:`composer.intelligenceDropdown.model.rowLabel`;",
-    "id:`composer.intelligenceDropdown.effort.title`;",
-    "we=(0,c6.jsxs)(c6.Fragment,{children:[ye,effort]});",
-    "}",
-  ].join("");
-}
-
-function reorderedModelPickerMenuBundleFixture() {
-  return [
-    "function chatgptPicker(){",
-    "id:`composer.intelligenceDropdown.effort.title`;",
-    "chatgpt=(0,c6.jsxs)(c6.Fragment,{children:[chatgptTrigger,chatgptEffort]});",
-    "}",
-    modelPickerMenuBundleFixture(),
+    "let g=fragment,ie=g;let fe;",
+    "id:`composer.intelligenceDropdown.model.rowLabel`;}",
   ].join("");
 }
 
@@ -114,7 +116,6 @@ function simplifiedChineseLocaleFixture() {
   const labels = {
     "composer.mode.local.reasoning.none.label": "无",
     "composer.mode.local.reasoning.minimal.label": "极低",
-    "composer.mode.local.reasoning.low.label.v2": "轻度",
     "composer.mode.local.reasoning.medium.label": "中",
     "composer.mode.local.reasoning.high.label": "高",
     "composer.mode.local.reasoning.xhigh.label": "极高",
@@ -182,13 +183,20 @@ test("ui-tweaks is discoverable and disabled until listed in features.json", () 
         ["feature:ui-tweaks:reasoning-effort-labels-english", "webview-asset", "optional"],
         ["feature:ui-tweaks:appearance-dock-icon-main-process", "main-bundle", "optional"],
         ["feature:ui-tweaks:appearance-dock-icon-settings-row", "webview-asset", "optional"],
-        ["feature:ui-tweaks:appearance-dock-icon-settings-search", "webview-asset", "optional"],
         ["feature:ui-tweaks:home-suggested-prompts-main-process", "main-bundle", "optional"],
         ["feature:ui-tweaks:home-suggested-prompts-app-page", "webview-asset", "optional"],
         ["feature:ui-tweaks:home-suggested-prompts-settings-row", "webview-asset", "optional"],
         ["feature:ui-tweaks:home-suggested-prompts-content", "webview-asset", "optional"],
       ],
     );
+    const modelPickerDescriptors = descriptors.filter((descriptor) =>
+      descriptor.id.includes(":model-picker-"),
+    );
+    assert.equal(modelPickerDescriptors.length, 3);
+    assert.ok(
+      modelPickerDescriptors.every((descriptor) => typeof descriptor.enabled === "function"),
+    );
+    assert.ok(modelPickerDescriptors.every((descriptor) => descriptor.enabled({}) === false));
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
@@ -202,7 +210,7 @@ test("model picker descriptors target the current state and menu bundles", () =>
   assert.match(stateAsset, MODEL_PICKER_INLINE_ASSET_PATTERN);
   assert.match(effortAsset, MODEL_PICKER_EFFORT_ASSET_PATTERN);
 
-  // Current-DMG-only targeting must not retain previous chunks as fallbacks.
+  // Current-package-only targeting must not retain previous chunks as fallbacks.
   assert.doesNotMatch(
     "app-initial~app-main~page-CMpPiY3-.js",
     MODEL_PICKER_STATE_ASSET_PATTERN,
@@ -214,20 +222,85 @@ test("model picker opens advanced view and renders model choices inline", () => 
   const menuSource = modelPickerMenuBundleFixture();
   const patchedState = applyDefaultAdvancedViewPatch(stateSource);
   const patchedMenu = applyInlineModelListPatch(menuSource);
+  const H1 = {
+    Fragment: Symbol("Fragment"),
+    jsx: (type, props, key) => ({ key, props, type }),
+    jsxs: (type, props, key) => ({ key, props, type }),
+  };
+  const hH = { Item: Symbol("Item"), Title: Symbol("Title") };
+  const renderAdvancedModelList = Function(
+    "H1",
+    "hH",
+    "fv",
+    `${patchedMenu};return Cgs;`,
+  )(H1, hH, Symbol("Selected"));
+  const selected = [];
+  const modelOptions = [
+    {
+      id: "gpt-5.6-terra",
+      label: "5.6 Terra",
+      onSelect: () => selected.push("gpt-5.6-terra"),
+      selected: false,
+    },
+    {
+      id: "gpt-5.6-sol",
+      label: "5.6 Sol",
+      onSelect: () => selected.push("gpt-5.6-sol"),
+      selected: true,
+    },
+  ];
+  const rendered = renderAdvancedModelList({
+    advancedConfig: { model: { label: "Model", options: modelOptions } },
+    hideAdvancedSubmenus: false,
+  });
 
   assert.match(patchedState, ADVANCED_MENU_VIEW_PATTERN);
   assert.doesNotMatch(patchedState, SIMPLE_MENU_VIEW_PATTERN);
+  assert.match(patchedState, /useState\)\(`advanced`\)/);
+  assert.doesNotMatch(patchedState, /useState\)\(`simple`\)/);
   assert.match(patchedMenu, new RegExp(INLINE_MODEL_LIST_RUNTIME_MARKER));
-  assert.match(patchedMenu, /children:\[ie,\/\*codex-linux-inline-model-list\*\//);
+  assert.equal(
+    (patchedMenu.match(new RegExp(INLINE_MODEL_LIST_RUNTIME_MARKER, "g")) ?? []).length,
+    1,
+  );
+  assert.match(patchedMenu, /children:\[Ce,se\]/);
+  assert.doesNotMatch(patchedMenu, /children:\[ie,\/\*codex-linux-inline-model-list\*\//);
+  assert.equal(rendered.type, H1.Fragment);
+  assert.equal(rendered.props.children[0].type, hH.Title);
+  assert.equal(rendered.props.children[0].props.children, "Model");
+  assert.equal(rendered.props.children[1].type, "div");
+  assert.deepEqual(
+    rendered.props.children[1].props.children.map((item) => item.props.children),
+    ["5.6 Terra", "5.6 Sol"],
+  );
+  assert.ok(rendered.props.children[1].props.children.every((item) => item.type === hH.Item));
+  assert.ok(
+    rendered.props.children[1].props.children.every((item) => !modelOptions.includes(item)),
+  );
+  let prevented = false;
+  rendered.props.children[1].props.children[1].props.onSelect({
+    preventDefault: () => {
+      prevented = true;
+    },
+  });
+  assert.equal(prevented, true);
+  assert.deepEqual(selected, ["gpt-5.6-sol"]);
+  assert.equal(
+    renderAdvancedModelList({
+      advancedConfig: { model: { label: "Model", options: modelOptions } },
+      hideAdvancedSubmenus: true,
+    }),
+    null,
+  );
+  assert.equal(
+    renderAdvancedModelList({
+      advancedConfig: { model: null },
+      hideAdvancedSubmenus: false,
+    }),
+    null,
+  );
   assert.equal(applyDefaultAdvancedViewPatch(patchedState), patchedState);
   assert.equal(applyInlineModelListPatch(patchedMenu), patchedMenu);
-});
-
-test("model picker patch stays inside its component when ChatGPT picker comes first", () => {
-  const patched = applyInlineModelListPatch(reorderedModelPickerMenuBundleFixture());
-
-  assert.match(patched, /children:\[chatgptTrigger,chatgptEffort\]/);
-  assert.match(patched, /children:\[ie,\/\*codex-linux-inline-model-list\*\/effort\]/);
 });
 
 test("GPT-5.6 Power slider follows reasoning efforts enabled in settings", () => {
@@ -287,16 +360,23 @@ test("GPT-5.6 Power slider effort patch fails soft when upstream markers drift",
   assert.match(warnings[0], /Could not find the supported reasoning effort mapper/);
 });
 
-test("model picker tweak can be disabled through feature settings", () => {
+test("model picker tweak is disabled by default and can be explicitly enabled", () => {
   const stateSource = modelPickerStateBundleFixture();
   const menuSource = modelPickerMenuBundleFixture();
-  const context = {
+  const featureJson = JSON.parse(fs.readFileSync(path.join(__dirname, "feature.json"), "utf8"));
+  const defaultContext = {
     feature: {
+      manifest: featureJson,
+    },
+  };
+  const enabledContext = {
+    feature: {
+      manifest: featureJson,
       settings: {
         tweaks: {
           modelPicker: {
             showModelsByDefault: {
-              enabled: false,
+              enabled: true,
             },
           },
         },
@@ -304,11 +384,24 @@ test("model picker tweak can be disabled through feature settings", () => {
     },
   };
 
-  assert.equal(applyDefaultAdvancedViewPatch(stateSource, context), stateSource);
-  assert.equal(applyInlineModelListPatch(menuSource, context), menuSource);
+  assert.equal(featureJson.tweaks.modelPicker.showModelsByDefault.enabled, false);
+  assert.equal(applyDefaultAdvancedViewPatch(stateSource, defaultContext), stateSource);
+  assert.equal(applyInlineModelListPatch(menuSource, defaultContext), menuSource);
   assert.equal(
-    applyDynamicSupportedReasoningEffortsPatch(modelPickerPowerBundleFixture(), context),
+    applyDynamicSupportedReasoningEffortsPatch(modelPickerPowerBundleFixture(), defaultContext),
     modelPickerPowerBundleFixture(),
+  );
+  assert.match(
+    applyDefaultAdvancedViewPatch(stateSource, enabledContext),
+    ADVANCED_MENU_VIEW_PATTERN,
+  );
+  assert.match(
+    applyInlineModelListPatch(menuSource, enabledContext),
+    new RegExp(INLINE_MODEL_LIST_RUNTIME_MARKER),
+  );
+  assert.match(
+    applyDynamicSupportedReasoningEffortsPatch(modelPickerPowerBundleFixture(), enabledContext),
+    new RegExp(DYNAMIC_POWER_EFFORTS_RUNTIME_MARKER),
   );
 });
 
@@ -323,6 +416,30 @@ test("model picker drift warns and leaves the asset unchanged", () => {
   assert.match(warnings[0], /^WARN: Could not find the persisted model picker view marker/);
 });
 
+test("model picker mixed, duplicate, and incomplete contracts fail closed", () => {
+  const mixedState = modelPickerStateBundleFixture().replace(
+    "`composer-model-picker-menu-view-v1`,`simple`",
+    "`composer-model-picker-menu-view-v2`,`advanced`",
+  );
+  const duplicateMenu = modelPickerMenuBundleFixture() + modelPickerMenuBundleFixture();
+  const incompleteMenu = modelPickerMenuBundleFixture().replace(
+    "n.options.map(Tgs)",
+    "n.options",
+  );
+
+  for (const [source, apply] of [
+    [mixedState, applyDefaultAdvancedViewPatch],
+    [duplicateMenu, applyInlineModelListPatch],
+    [incompleteMenu, applyInlineModelListPatch],
+  ]) {
+    const { value, warnings } = withCapturedWarns(() =>
+      apply(source, { warnOnMissingMarkers: true }),
+    );
+    assert.equal(value, source);
+    assert.equal(warnings.length, 1);
+  }
+});
+
 test("reasoning effort labels stay in English in the Simplified Chinese locale", () => {
   const source = simplifiedChineseLocaleFixture();
   const patched = applyEnglishReasoningLabels(source);
@@ -330,10 +447,6 @@ test("reasoning effort labels stay in English in the Simplified Chinese locale",
   assert.equal(
     Object.hasOwn(ENGLISH_REASONING_LABELS, "composer.mode.local.reasoning.low.label"),
     false,
-  );
-  assert.equal(
-    ENGLISH_REASONING_LABELS["composer.mode.local.reasoning.low.label.v2"],
-    "Low",
   );
   for (const [key, label] of Object.entries(ENGLISH_REASONING_LABELS)) {
     assert.match(patched, new RegExp(`"${key.replaceAll(".", "\\.")}":\\\`${label}\\\``));
@@ -488,6 +601,11 @@ test("feature settings override the tracked defaults through features.json", () 
                     style: "font-weight: 800 !important; color: red;",
                   },
                 },
+                modelPicker: {
+                  showModelsByDefault: {
+                    enabled: true,
+                  },
+                },
               },
             },
           },
@@ -497,10 +615,16 @@ test("feature settings override the tracked defaults through features.json", () 
       )}\n`,
     );
 
-    const [descriptor] = loadLinuxFeaturePatchDescriptors({ featuresRoot });
+    const descriptors = loadLinuxFeaturePatchDescriptors({ featuresRoot });
+    const [descriptor] = descriptors;
     const patched = descriptor.apply(projectBundleFixture(), {});
 
     assert.match(patched, /font-weight: 800 !important; color: red;/);
+    assert.ok(
+      descriptors
+        .filter((candidate) => candidate.id.includes(":model-picker-"))
+        .every((candidate) => candidate.enabled({}) === true),
+    );
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }

@@ -1,6 +1,5 @@
 "use strict";
 
-const childProcess = require("node:child_process");
 const fs = require("node:fs");
 const path = require("node:path");
 
@@ -265,16 +264,6 @@ function patchCodexMicroService(extractedDir) {
   };
 }
 
-function stageNativeBinding(extractedDir) {
-  const helper = path.join(__dirname, "native-binding.js");
-  const output = childProcess.execFileSync(process.execPath, [helper, "--stage", extractedDir], {
-    encoding: "utf8",
-    env: process.env,
-    maxBuffer: 16 * 1024 * 1024,
-  });
-  return JSON.parse(output);
-}
-
 module.exports = {
   CODEX_MICRO_GATE_ID,
   CODEX_MICRO_GATE_MARKER,
@@ -317,24 +306,6 @@ module.exports = {
       missingDescription: "current Codex Micro feature-gate webview bundle",
       skipDescription: "Codex Micro feature-gate override",
       apply: applyCodexMicroFeatureGatePatch,
-    }),
-    extractedAppPatch({
-      id: "linux-node-hid-binding",
-      phase: "extracted-app:post-webview",
-      order: 29_000,
-      ciPolicy: "opt-in",
-      targetSummary: "current Work Louder nested node-hid 3.3.0 dependency",
-      apply: (extractedDir) => stageNativeBinding(extractedDir),
-      status: (result) => ({
-        status: result?.changed
-          ? "applied"
-          : result?.alreadyApplied
-            ? "already-applied"
-            : "skipped-optional",
-        reason: result == null
-          ? "node-hid binding staging returned no result"
-          : `${result.source} node-hid ${result.version}`,
-      }),
     }),
   ],
 };

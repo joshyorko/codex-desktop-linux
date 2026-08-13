@@ -143,7 +143,7 @@ test("read-aloud-mcp stage hook records marketplace entry", () => {
       INSTALL_DIR: installDir,
       WORK_DIR: path.join(workspace, "work"),
       ARCH: process.arch === "arm64" ? "aarch64" : "x86_64",
-      CODEX_UPSTREAM_APP_DIR: path.join(workspace, "Codex.app"),
+      CODEX_UPSTREAM_APP_DIR: path.join(workspace, "upstream", "usr", "lib", "chatgpt"),
       CODEX_LINUX_READ_ALOUD_MCP_SOURCE: fakeBackend,
       ICON_SOURCE: path.join(workspace, "missing-icon.png"),
     },
@@ -168,4 +168,10 @@ test("read-aloud-mcp stage hook records marketplace entry", () => {
     ),
     true,
   );
+});
+
+test("read-aloud-mcp stage hook consumes a release artifact without invoking Cargo", () => {
+  const stage = fs.readFileSync(path.join(__dirname, "stage.sh"), "utf8");
+  assert.doesNotMatch(stage, /cargo\s+(?:build|install)/);
+  assert.match(stage, /target\/release\/codex-read-aloud-linux/);
 });

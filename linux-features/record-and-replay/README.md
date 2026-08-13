@@ -3,7 +3,7 @@
 Opt-in Linux integration for Record & Replay demo-to-skill workflows.
 
 This feature stages the official `Record & Replay` bundled plugin shell from
-the current upstream DMG when it is available, swaps the macOS helper for a
+the current Linux package when it is available, swaps the unavailable helper for a
 Linux `event-stream` helper, and keeps the fallback template aligned with that
 same contract. The staged plugin launches `./bin/SkyLinuxComputerUseClient
 event-stream mcp`; that helper is backed by the Rust
@@ -23,13 +23,13 @@ It is disabled by default. Enable it in `linux-features/features.json`:
 
 ## Build Prerequisite
 
-Record & Replay requires the `chronicle-skysight` feature. Chronicle / Skysight
-builds the shared `codex-record-replay-linux` backend with Cargo and stages it
-under `resources/native/`; Record & Replay reuses that executable for its
-plugin and official-shaped `bin/SkyLinuxComputerUseClient` alias. Builds
-without a Rust toolchain can set
-`CODEX_RECORD_REPLAY_LINUX_SOURCE` to an executable prebuilt
-`codex-record-replay-linux` binary.
+The project release builds `codex-record-replay-linux` once and copies it into
+`resources/native/`, the staged plugin
+`bin/codex-record-replay-linux`, and the official-shaped plugin helper alias
+`bin/SkyLinuxComputerUseClient`. `make install-native` performs that release
+build once before staging. Direct `./install.sh` builds may set
+`CODEX_RECORD_REPLAY_LINUX_SOURCE` to an executable prebuilt binary. Updater
+rebuilds reuse the packaged artifact and never invoke Cargo.
 
 ## Behavior
 
@@ -39,15 +39,9 @@ without a Rust toolchain can set
   opt-in native audio metadata/recordings when explicitly enabled, InputCapture/libei
   readiness, X11 session metadata, active desktop/window snapshots,
   diagnostics, and `draft-prompt.md`.
-- Reuses the independently selectable Chronicle / Skysight activity-memory
-  foundation and also exposes its tools through the full `event-stream` MCP
-  server so Chronicle-compatible resources can feed skill drafting.
-- Feature availability, Chronicle permissions, and Skysight status polling are
-  passive. Starting Record & Replay uses bounded session evidence by default;
-  it does not start the continuous Skysight daemon.
-- Explicit Skysight starts persist an initiating `source` and `owner` in
-  status. Recording-session owners are stopped at stop, cancel, expiry, and
-  clean MCP shutdown boundaries; `manual-continuous` capture is left alone.
+- Exposes Linux Skysight pause/resume, status, snapshots, exclusions, and a
+  rolling evidence daemon through the same `event-stream` MCP server so
+  Chronicle-compatible resources can feed skill drafting.
 - Skysight segment directories contain `events.jsonl`, `metadata.json`, and
   bounded artifacts such as diagnostics, screenshots, window metadata, and
   AT-SPI/accessibility evidence when available.
@@ -129,3 +123,7 @@ The Rust helper also exposes MCP tools `skysight_start`,
 
 All helper invocations use `execFile` with fixed command shapes. The bridge does
 not expose a shell or arbitrary argv surface.
+
+```bash
+node --test linux-features/record-and-replay/test.js
+```

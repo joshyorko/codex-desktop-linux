@@ -4,69 +4,133 @@
 const fs = require("node:fs");
 const path = require("node:path");
 
+const THORIUM_BROWSER_FAMILY = "thorium";
+
+// 26.803.41515 replaced the per-script Chrome-only Linux constants with a
+// browser registry in extension-ids.json. Adding Thorium there covers manifest
+// locations, the browser inventory, running-process detection, profile
+// resolution, and window command selection in one entry, which is what the
+// seven source patches this replaces did by hand.
+const THORIUM_BROWSER_ENTRY = {
+  browserFamily: THORIUM_BROWSER_FAMILY,
+  displayName: "Thorium",
+  shortDisplayName: "Thorium",
+  extensionManagementUrl: "thorium://extensions",
+  linux: {
+    commands: ["thorium-browser-avx2", "thorium-browser", "thorium"],
+    configHomeEnvironmentVariables: ["XDG_CONFIG_HOME"],
+    nativeMessagingManifestDirectories: [".config/thorium/NativeMessagingHosts"],
+    processNames: ["thorium", "thorium-browser", "thorium-browser-avx2"],
+    userDataDirectorySegments: [".config", "thorium"],
+  },
+  macos: {
+    applicationNames: ["Thorium.app"],
+    bundleId: "org.chromium.Thorium",
+    nativeMessagingManifestDirectories: [
+      "Library/Application Support/Thorium/NativeMessagingHosts",
+    ],
+    processNames: ["Thorium", "Thorium Helper"],
+    userDataDirectorySegments: ["Library", "Application Support", "Thorium"],
+  },
+  windows: {
+    commandNames: ["thorium.exe", "thorium"],
+    installPathSegments: ["Thorium", "Application", "thorium.exe"],
+    processNames: ["thorium.exe"],
+    userDataDirectorySegments: ["Thorium", "User Data"],
+  },
+};
+
 function warn(message) {
   process.stderr.write(`WARN: ${message}\n`);
 }
 
-function sourceIncludesAny(source, texts) {
-  return (Array.isArray(texts) ? texts : [texts]).some(
-    (text) => typeof text === "string" && text.length > 0 && source.includes(text),
+function detectIndent(source) {
+  const match = source.match(/\n([ \t]+)"/u);
+  return match == null ? 2 : match[1].length;
+}
+
+function readRegistry(registryPath) {
+  let source;
+  try {
+    source = fs.readFileSync(registryPath, "utf8");
+  } catch (error) {
+    warn(
+      `Could not read ${path.basename(registryPath)}: ${error.message}; leaving Thorium unregistered`,
+    );
+    return null;
+  }
+
+  let parsed;
+  try {
+    parsed = JSON.parse(source);
+  } catch (error) {
+    warn(
+      `Could not parse ${path.basename(registryPath)}: ${error.message}; leaving Thorium unregistered`,
+    );
+    return null;
+  }
+
+  if (!Array.isArray(parsed?.browserDiagnostics)) {
+    warn(
+      `${path.basename(registryPath)} missing browserDiagnostics registry; leaving Thorium unregistered`,
+    );
+    return null;
+  }
+
+  return { source, parsed };
+}
+
+function thoriumEntryFor(registry) {
+  const donor = registry.browserDiagnostics.find(
+    (browser) => browser?.browserFamily === "chrome",
   );
+  if (donor == null) {
+    return null;
+  }
+
+  // Thorium is a Chromium fork and loads the same extension build, so it
+  // inherits the Chrome extension identity rather than declaring its own.
+  return {
+    ...THORIUM_BROWSER_ENTRY,
+    ...(donor.extensionIds == null ? {} : { extensionIds: [...donor.extensionIds] }),
+    ...(donor.storeUrl == null ? {} : { storeUrl: donor.storeUrl }),
+  };
 }
 
-function patchFile(filePath, patches) {
-  let source;
-  try {
-    source = fs.readFileSync(filePath, "utf8");
-  } catch (error) {
-    warn(`Could not read ${filePath}: ${error.message}`);
-    return;
+function registerThorium(pluginDir) {
+  const registryPath = path.join(pluginDir, "scripts", "extension-ids.json");
+  const registry = readRegistry(registryPath);
+  if (registry == null) {
+    return false;
   }
 
-  let changed = false;
-  for (const { label, oldText, newText, alreadyText = newText } of patches) {
-    if (source.includes(newText) || sourceIncludesAny(source, alreadyText)) {
-      console.log(`${path.basename(filePath)} already patched: ${label}`);
-      continue;
-    }
-    if (!source.includes(oldText)) {
-      warn(`${path.basename(filePath)} missing patch target for ${label}`);
-      continue;
-    }
-    source = source.replace(oldText, newText);
-    changed = true;
-    console.log(`Patched ${path.basename(filePath)}: ${label}`);
+  const { source, parsed } = registry;
+  if (
+    parsed.browserDiagnostics.some(
+      (browser) => browser?.browserFamily === THORIUM_BROWSER_FAMILY,
+    )
+  ) {
+    console.log("extension-ids.json already patched: Thorium browser registry");
+    return true;
   }
 
-  if (changed) {
-    fs.writeFileSync(filePath, source, "utf8");
-  }
-}
-
-function patchFileFirstMatch(filePath, { label, oldTexts, newText, alreadyText = newText }) {
-  let source;
-  try {
-    source = fs.readFileSync(filePath, "utf8");
-  } catch (error) {
-    warn(`Could not read ${filePath}: ${error.message}`);
-    return;
+  const entry = thoriumEntryFor(parsed);
+  if (entry == null) {
+    warn(
+      "extension-ids.json missing the Chrome registry entry Thorium inherits from; leaving Thorium unregistered",
+    );
+    return false;
   }
 
-  if ((typeof newText === "string" && source.includes(newText)) || sourceIncludesAny(source, alreadyText)) {
-    console.log(`${path.basename(filePath)} already patched: ${label}`);
-    return;
-  }
-
-  const match = oldTexts
-    .map((candidate) => typeof candidate === "string" ? { oldText: candidate, newText } : candidate)
-    .find((candidate) => source.includes(candidate.oldText));
-  if (!match) {
-    warn(`${path.basename(filePath)} missing patch target for ${label}`);
-    return;
-  }
-
-  fs.writeFileSync(filePath, source.replace(match.oldText, match.newText ?? newText), "utf8");
-  console.log(`Patched ${path.basename(filePath)}: ${label}`);
+  parsed.browserDiagnostics.push(entry);
+  const trailingNewline = source.endsWith("\n") ? "\n" : "";
+  fs.writeFileSync(
+    registryPath,
+    `${JSON.stringify(parsed, null, detectIndent(source))}${trailingNewline}`,
+    "utf8",
+  );
+  console.log("Patched extension-ids.json: Thorium browser registry");
+  return true;
 }
 
 const pluginDir = process.argv[2];
@@ -74,275 +138,4 @@ if (!pluginDir) {
   throw new Error("Usage: patch-chrome-plugin.js /path/to/chrome/plugin");
 }
 
-const scriptsDir = path.resolve(pluginDir, "scripts");
-
-const nativeHostManifestFallback = `  if (process.platform === "linux") {
-    const manifestPaths = [
-      path.join(
-        os.homedir(),
-        ".config",
-        "google-chrome",
-        "NativeMessagingHosts",
-        \`\${expectedHostName}.json\`,
-      ),
-      path.join(
-        os.homedir(),
-        ".config",
-        "google-chrome-beta",
-        "NativeMessagingHosts",
-        \`\${expectedHostName}.json\`,
-      ),
-      path.join(
-        os.homedir(),
-        ".config",
-        "google-chrome-unstable",
-        "NativeMessagingHosts",
-        \`\${expectedHostName}.json\`,
-      ),
-      path.join(
-        os.homedir(),
-        ".config",
-        "BraveSoftware",
-        "Brave-Browser",
-        "NativeMessagingHosts",
-        \`\${expectedHostName}.json\`,
-      ),
-      path.join(
-        os.homedir(),
-        ".config",
-        "chromium",
-        "NativeMessagingHosts",
-        \`\${expectedHostName}.json\`,
-      ),
-      path.join(
-        os.homedir(),
-        ".config",
-        "thorium",
-        "NativeMessagingHosts",
-        \`\${expectedHostName}.json\`,
-      ),
-    ];
-
-    return {
-      manifestPath:
-        manifestPaths.find((candidate) => fs.existsSync(candidate)) ||
-        manifestPaths[0],
-      registryKey: null,
-      registryManifestPath: null,
-      registryKeyExists: null,
-    };
-  }`;
-
-const nativeHostManifestFallbackWithoutThorium = nativeHostManifestFallback.replace(
-  `      path.join(
-        os.homedir(),
-        ".config",
-        "thorium",
-        "NativeMessagingHosts",
-        \`\${expectedHostName}.json\`,
-      ),
-`,
-  "",
-);
-
-const extensionAwareUserDataFallback = `  const linuxChromeUserDataDirectory = path.join(os.homedir(), ".config", "google-chrome");
-  const linuxChromeBetaUserDataDirectory = path.join(os.homedir(), ".config", "google-chrome-beta");
-  const linuxChromeUnstableUserDataDirectory = path.join(os.homedir(), ".config", "google-chrome-unstable");
-  const linuxChromiumUserDataDirectory = path.join(os.homedir(), ".config", "chromium");
-  const linuxThoriumUserDataDirectory = path.join(os.homedir(), ".config", "thorium");
-  const linuxBraveUserDataDirectory = path.join(
-    os.homedir(),
-    ".config",
-    "BraveSoftware",
-    "Brave-Browser",
-  );
-  const linuxUserDataCandidates = [
-    linuxBraveUserDataDirectory,
-    linuxChromeUserDataDirectory,
-    linuxChromeBetaUserDataDirectory,
-    linuxChromeUnstableUserDataDirectory,
-    linuxChromiumUserDataDirectory,
-    linuxThoriumUserDataDirectory,
-  ].filter((candidate) => fs.existsSync(candidate));
-  const linuxCandidateWithInstalledExtension = linuxUserDataCandidates.find(
-    (candidate) => {
-      try {
-        const extensionId = loadRemoteChromeExtensionId();
-        return findLatestChromeProfile(candidate) != null &&
-          fs.existsSync(
-            path.join(
-              candidate,
-              resolveChromeProfileDirectory(candidate),
-              "Extensions",
-              extensionId,
-            ),
-          );
-      } catch {
-        return false;
-      }
-    },
-  );
-  if (linuxCandidateWithInstalledExtension) {
-    return linuxCandidateWithInstalledExtension;
-  }
-
-  if (linuxUserDataCandidates.length > 0) return linuxUserDataCandidates[0];
-
-  return linuxChromeUserDataDirectory;`;
-
-const extensionAwareUserDataFallbackWithoutThorium = extensionAwareUserDataFallback
-  .replace('  const linuxThoriumUserDataDirectory = path.join(os.homedir(), ".config", "thorium");\n', "")
-  .replace("    linuxThoriumUserDataDirectory,\n", "");
-
-const defaultBrowserUserDataFallback = `  const linuxChromeUserDataDirectory = path.join(os.homedir(), ".config", "google-chrome");
-  const linuxChromeBetaUserDataDirectory = path.join(os.homedir(), ".config", "google-chrome-beta");
-  const linuxChromeUnstableUserDataDirectory = path.join(os.homedir(), ".config", "google-chrome-unstable");
-  const linuxChromiumUserDataDirectory = path.join(os.homedir(), ".config", "chromium");
-  const linuxThoriumUserDataDirectory = path.join(os.homedir(), ".config", "thorium");
-  const linuxBraveUserDataDirectory = path.join(
-    os.homedir(),
-    ".config",
-    "BraveSoftware",
-    "Brave-Browser",
-  );
-  const defaultBrowser = runCommand(["xdg-settings", "get", "default-web-browser"]);
-  if (
-    defaultBrowser === "brave-browser.desktop" &&
-    fs.existsSync(linuxBraveUserDataDirectory)
-  ) {
-    return linuxBraveUserDataDirectory;
-  }
-  if (
-    defaultBrowser === "google-chrome-beta.desktop" &&
-    fs.existsSync(linuxChromeBetaUserDataDirectory)
-  ) {
-    return linuxChromeBetaUserDataDirectory;
-  }
-  if (
-    defaultBrowser === "google-chrome-unstable.desktop" &&
-    fs.existsSync(linuxChromeUnstableUserDataDirectory)
-  ) {
-    return linuxChromeUnstableUserDataDirectory;
-  }
-  if (
-    ["chromium.desktop", "chromium-browser.desktop"].includes(defaultBrowser) &&
-    fs.existsSync(linuxChromiumUserDataDirectory)
-  ) {
-    return linuxChromiumUserDataDirectory;
-  }
-  if (
-    ["thorium-browser.desktop", "thorium-browser-avx2.desktop"].includes(defaultBrowser) &&
-    fs.existsSync(linuxThoriumUserDataDirectory)
-  ) {
-    return linuxThoriumUserDataDirectory;
-  }
-
-  if (fs.existsSync(linuxBraveUserDataDirectory)) return linuxBraveUserDataDirectory;
-  if (fs.existsSync(linuxChromeUserDataDirectory)) return linuxChromeUserDataDirectory;
-  if (fs.existsSync(linuxChromeBetaUserDataDirectory)) return linuxChromeBetaUserDataDirectory;
-  if (fs.existsSync(linuxChromeUnstableUserDataDirectory)) return linuxChromeUnstableUserDataDirectory;
-  if (fs.existsSync(linuxChromiumUserDataDirectory)) return linuxChromiumUserDataDirectory;
-  if (fs.existsSync(linuxThoriumUserDataDirectory)) return linuxThoriumUserDataDirectory;
-
-  return linuxChromeUserDataDirectory;`;
-
-const defaultBrowserUserDataFallbackWithoutThorium = defaultBrowserUserDataFallback
-  .replace('  const linuxThoriumUserDataDirectory = path.join(os.homedir(), ".config", "thorium");\n', "")
-  .replace(`  if (
-    ["thorium-browser.desktop", "thorium-browser-avx2.desktop"].includes(defaultBrowser) &&
-    fs.existsSync(linuxThoriumUserDataDirectory)
-  ) {
-    return linuxThoriumUserDataDirectory;
-  }
-`, "")
-  .replace("  if (fs.existsSync(linuxThoriumUserDataDirectory)) return linuxThoriumUserDataDirectory;\n", "");
-
-patchFileFirstMatch(path.join(scriptsDir, "installManifest.mjs"), {
-  label: "Thorium native host manifest location",
-  oldTexts: [
-    'linux:[".config/google-chrome/NativeMessagingHosts",".config/google-chrome-beta/NativeMessagingHosts",".config/google-chrome-unstable/NativeMessagingHosts",".config/BraveSoftware/Brave-Browser/NativeMessagingHosts",".config/chromium/NativeMessagingHosts"]',
-  ],
-  newText:
-    'linux:[".config/google-chrome/NativeMessagingHosts",".config/google-chrome-beta/NativeMessagingHosts",".config/google-chrome-unstable/NativeMessagingHosts",".config/BraveSoftware/Brave-Browser/NativeMessagingHosts",".config/chromium/NativeMessagingHosts",".config/thorium/NativeMessagingHosts"]',
-});
-
-patchFile(path.join(scriptsDir, "check-native-host-manifest.js"), [
-  {
-    label: "Thorium native host manifest fallback",
-    oldText: nativeHostManifestFallbackWithoutThorium,
-    newText: nativeHostManifestFallback,
-    alreadyText: '"thorium",\n        "NativeMessagingHosts"',
-  },
-]);
-
-patchFile(path.join(scriptsDir, "installed-browsers.js"), [
-  {
-    label: "Thorium browser inventory",
-    oldText: `  {
-    name: "Chromium",
-    bundleIds: ["org.chromium.Chromium"],
-    appNames: ["Chromium.app"],
-    commands: ["chromium", "chromium-browser"],
-    windowsExecutable: "chrome.exe",
-  },
-];`,
-    newText: `  {
-    name: "Chromium",
-    bundleIds: ["org.chromium.Chromium"],
-    appNames: ["Chromium.app"],
-    commands: ["chromium", "chromium-browser"],
-    windowsExecutable: "chrome.exe",
-  },
-  {
-    name: "Thorium",
-    bundleIds: ["org.chromium.Thorium"],
-    appNames: ["Thorium.app"],
-    commands: ["thorium-browser-avx2", "thorium-browser", "thorium"],
-    windowsExecutable: "chrome.exe",
-  },
-];`,
-    alreadyText: '"Thorium"',
-  },
-]);
-
-patchFileFirstMatch(path.join(scriptsDir, "chrome-is-running.js"), {
-  label: "Thorium running-process detection",
-  oldTexts: [
-    `  linux: new Set(["chrome", "google-chrome", "google-chrome-beta", "google-chrome-unstable", "brave", "brave-browser", "chromium", "chromium-browser"]),`,
-  ],
-  newText: `  linux: new Set(["chrome", "google-chrome", "google-chrome-beta", "google-chrome-unstable", "brave", "brave-browser", "chromium", "chromium-browser", "thorium", "thorium-browser", "thorium-browser-avx2"]),`,
-  alreadyText: "thorium-browser-avx2",
-});
-
-patchFileFirstMatch(path.join(scriptsDir, "check-extension-installed.js"), {
-  label: "Thorium extension-aware browser profile fallback",
-  oldTexts: [extensionAwareUserDataFallbackWithoutThorium],
-  newText: extensionAwareUserDataFallback,
-  alreadyText: "linuxThoriumUserDataDirectory",
-});
-
-patchFileFirstMatch(path.join(scriptsDir, "open-chrome-window.js"), {
-  label: "Thorium default-browser profile fallback",
-  oldTexts: [defaultBrowserUserDataFallbackWithoutThorium],
-  newText: defaultBrowserUserDataFallback,
-  alreadyText: "linuxThoriumUserDataDirectory",
-});
-
-patchFile(path.join(scriptsDir, "open-chrome-window.js"), [
-  {
-    label: "Thorium browser window command",
-    oldText: `  } else if (linuxUserDataDirectory.includes(path.join(".config", "chromium"))) {
-    linuxCommand = commandPath("chromium") || commandPath("chromium-browser") || "chromium";
-  }
-
-  return {`,
-    newText: `  } else if (linuxUserDataDirectory.includes(path.join(".config", "chromium"))) {
-    linuxCommand = commandPath("chromium") || commandPath("chromium-browser") || "chromium";
-  } else if (linuxUserDataDirectory.includes(path.join(".config", "thorium"))) {
-    linuxCommand = commandPath("thorium-browser-avx2") || commandPath("thorium-browser") || commandPath("thorium") || "thorium-browser";
-  }
-
-  return {`,
-    alreadyText: 'commandPath("thorium-browser-avx2")',
-  },
-]);
+registerThorium(pluginDir);

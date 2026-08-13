@@ -5,6 +5,7 @@ const {
 } = require("../../scripts/patches/lib/minified-js.js");
 
 const JS_IDENT = "[A-Za-z_$][\\w$]*";
+const BT = "`";
 
 function applyAuthenticatedProxyPatch(currentSource) {
   const electronVar = inferModuleAlias(currentSource, "electron");
@@ -22,62 +23,19 @@ function applyAuthenticatedProxyPatch(currentSource) {
   const requestLoginHelper =
     "function codexLinuxAttachProxyAuthToRequest(e){let t=codexLinuxProxyAuthEntry();if(t==null||e==null)return;e.on(`login`,(n,r)=>{if(!n?.isProxy){r();return}let i=codexLinuxProxyAuthHost(n.host),a=String(n.port??``).trim();if(t.host!==i||t.port&&t.port!==a){r();return}r(t.username,t.password)})}";
   const installHandlerNeedle = "function codexLinuxInstallProxyAuthHandler(";
-  const requestHelperNeedle = "function codexLinuxAttachProxyAuthToRequest(";
-  const hasInstallHelper = currentSource.includes(installHandlerNeedle);
-  const hasRequestHelper = currentSource.includes(requestHelperNeedle);
-  if (hasInstallHelper !== hasRequestHelper) {
-    console.warn(
-      "WARN: Found incomplete Linux proxy authentication helpers - skipping patch",
-    );
-    return currentSource;
-  }
-
-  const fetchPattern = new RegExp(
-    `(?:let |,)${JS_IDENT};if\\((${JS_IDENT})==null\\)\\{let ${JS_IDENT}=\\{method:${JS_IDENT},headers:${JS_IDENT},body:${JS_IDENT}\\(\\),redirect:${JS_IDENT},signal:${JS_IDENT},credentials:${JS_IDENT}\\?\\x60include\\x60:\\x60same-origin\\x60\\};${JS_IDENT}=await ${electronVar}\\.net\\.fetch\\(${JS_IDENT},${JS_IDENT}\\)\\}else ${JS_IDENT}=await this\\.performProgressRequest\\(\\{body:${JS_IDENT}\\(\\),headers:${JS_IDENT},method:${JS_IDENT},onUploadProgress:${JS_IDENT},resolvedUrl:${JS_IDENT},signal:${JS_IDENT},useSessionCookies:${JS_IDENT}\\}\\);`,
-  );
-  const fetchMatch = currentSource.match(fetchPattern);
-  const fetchAlreadyPatched = currentSource.includes(
-    "&&!codexLinuxProxyAuthEntry()){",
-  );
-  if (
-    currentSource.includes("performDesktopFetch") &&
-    fetchMatch == null &&
-    !fetchAlreadyPatched
-  ) {
-    console.warn(
-      "WARN: Could not route Linux proxy-auth desktop fetches through ClientRequest",
-    );
-    return currentSource;
-  }
-
-  const requestNeedle =
-    `let u=${electronVar}.net.request({method:n,url:i,headers:t,useSessionCookies:o}),d=-1,f=()=>{let e=u.getUploadProgress();!e.started||e.current===d||(d=e.current,r({loaded:e.current,total:e.total}))}`;
-  const requestAlreadyPatched = new RegExp(
-    `codexLinuxAttachProxyAuthToRequest\\(${JS_IDENT}\\);`,
-  ).test(currentSource);
-  if (
-    currentSource.includes("performProgressRequest") &&
-    !currentSource.includes(requestNeedle) &&
-    !requestAlreadyPatched
-  ) {
-    console.warn(
-      "WARN: Could not attach Linux proxy authentication to ClientRequest fetch path",
-    );
-    return currentSource;
-  }
-
-  const whenReadyNeedle = `await ${electronVar}.app.whenReady()`;
-  if (!hasInstallHelper && !currentSource.includes(whenReadyNeedle)) {
-    if (currentSource.includes(".app.whenReady()")) {
-      console.warn(
-        "WARN: Could not find Electron app ready point - skipping Linux proxy authentication patch",
-      );
-    }
-    return currentSource;
-  }
-
   let patchedSource = currentSource;
-  if (!hasInstallHelper) {
+
+  if (!patchedSource.includes(installHandlerNeedle)) {
+    const whenReadyNeedle = `await ${electronVar}.app.whenReady()`;
+    if (!patchedSource.includes(whenReadyNeedle)) {
+      if (patchedSource.includes(".app.whenReady()")) {
+        console.warn(
+          "WARN: Could not find Electron app ready point - skipping Linux proxy authentication patch",
+        );
+      }
+      return patchedSource;
+    }
+
     const strictDirective = '"use strict";';
     const helperInsertionIndex = patchedSource.startsWith(strictDirective)
       ? strictDirective.length
@@ -87,27 +45,62 @@ function applyAuthenticatedProxyPatch(currentSource) {
       appLoginHelper +
       requestLoginHelper +
       patchedSource.slice(helperInsertionIndex);
+
     patchedSource = patchedSource.replace(
       whenReadyNeedle,
       `codexLinuxInstallProxyAuthHandler(${electronVar});${whenReadyNeedle}`,
     );
+  } else if (!patchedSource.includes("function codexLinuxAttachProxyAuthToRequest(")) {
+    console.warn(
+      "WARN: Found incomplete Linux proxy authentication helpers - skipping patch",
+    );
+    return patchedSource;
   }
 
-  if (fetchMatch != null) {
-    const [needle, progressVar] = fetchMatch;
+  const legacyFetchNeedle =
+    `let f=i==null?await ${electronVar}.net.fetch(a,{method:r,headers:n,body:m(),signal:o,credentials:s?\`include\`:\`same-origin\`}):await this.performProgressRequest({body:m(),headers:n,method:r,onUploadProgress:i,resolvedUrl:a,signal:o,useSessionCookies:s});`;
+  const legacyFetchReplacement =
+    `let f=i==null&&!codexLinuxProxyAuthEntry()?await ${electronVar}.net.fetch(a,{method:r,headers:n,body:m(),signal:o,credentials:s?\`include\`:\`same-origin\`}):await this.performProgressRequest({body:m(),headers:n,method:r,onUploadProgress:i,resolvedUrl:a,signal:o,useSessionCookies:s});`;
+  const currentFetchGate = new RegExp(
+    `if\\((${JS_IDENT})==null\\)(?=\\{let ${JS_IDENT}=\\{method:${JS_IDENT},headers:${JS_IDENT},` +
+      `body:${JS_IDENT}\\(\\),redirect:${JS_IDENT},signal:${JS_IDENT},credentials:${JS_IDENT}\\?` +
+      `${BT}include${BT}:${BT}same-origin${BT}\\};${JS_IDENT}=await ${electronVar}\\.net\\.fetch\\()`,
+  );
+  const patchedCurrentFetchGate = new RegExp(
+    `if\\(${JS_IDENT}==null&&!codexLinuxProxyAuthEntry\\(\\)\\)(?=\\{let ${JS_IDENT}=\\{method:${JS_IDENT},` +
+      `headers:${JS_IDENT},body:${JS_IDENT}\\(\\),redirect:${JS_IDENT},signal:${JS_IDENT},credentials:)`,
+  );
+  if (patchedSource.includes(legacyFetchNeedle)) {
+    patchedSource = patchedSource.replace(legacyFetchNeedle, legacyFetchReplacement);
+  } else if (currentFetchGate.test(patchedSource)) {
     patchedSource = patchedSource.replace(
-      needle,
-      needle.replace(
-        `if(${progressVar}==null){`,
-        `if(${progressVar}==null&&!codexLinuxProxyAuthEntry()){`,
-      ),
+      currentFetchGate,
+      (_match, progressVar) => `if(${progressVar}==null&&!codexLinuxProxyAuthEntry())`,
+    );
+  } else if (
+    patchedSource.includes(".net.fetch(") &&
+    patchedSource.includes("performProgressRequest") &&
+    !patchedSource.includes("!codexLinuxProxyAuthEntry()?await") &&
+    !patchedCurrentFetchGate.test(patchedSource)
+  ) {
+    console.warn(
+      "WARN: Could not route Linux proxy-auth desktop fetches through ClientRequest",
     );
   }
 
+  const requestNeedle =
+    `let u=${electronVar}.net.request({method:n,url:i,headers:t,useSessionCookies:o}),d=-1,f=()=>{let e=u.getUploadProgress();!e.started||e.current===d||(d=e.current,r({loaded:e.current,total:e.total}))}`;
   const requestReplacement =
     `let u=${electronVar}.net.request({method:n,url:i,headers:t,useSessionCookies:o});codexLinuxAttachProxyAuthToRequest(u);let d=-1,f=()=>{if(r==null)return;let e=u.getUploadProgress();!e.started||e.current===d||(d=e.current,r({loaded:e.current,total:e.total}))}`;
   if (patchedSource.includes(requestNeedle)) {
     patchedSource = patchedSource.replace(requestNeedle, requestReplacement);
+  } else if (
+    patchedSource.includes("performProgressRequest") &&
+    !new RegExp(`codexLinuxAttachProxyAuthToRequest\\(${JS_IDENT}\\);`).test(patchedSource)
+  ) {
+    console.warn(
+      "WARN: Could not attach Linux proxy authentication to ClientRequest fetch path",
+    );
   }
 
   return patchedSource;

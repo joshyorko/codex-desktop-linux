@@ -1,5 +1,51 @@
 "use strict";
 
+const JS_IDENT = "[A-Za-z_$][\\w$]*";
+const BT = "`";
+
+function matchesCopilotReasoningEffortSettingsContract(source) {
+  const cleanReader = new RegExp(
+    `function ${JS_IDENT}\\(\\)\\{let ${JS_IDENT}=\\(0,${JS_IDENT}\\.c\\)\\(3\\),${JS_IDENT}=${JS_IDENT}\\(\\),` +
+      `\\{data:${JS_IDENT},isLoading:${JS_IDENT}\\}=${JS_IDENT}\\(${BT}copilot-default-model${BT}\\)` +
+      `[\\s\\S]{0,400}?reasoningEffort:${BT}medium${BT}`,
+  );
+  const cleanWriter = new RegExp(
+    `if\\(await ${JS_IDENT}\\(${JS_IDENT},${JS_IDENT}\\)\\)return;if\\(${JS_IDENT}\\)\\{await ${JS_IDENT}\\(` +
+      `${JS_IDENT},${BT}copilot-default-model${BT},${JS_IDENT},\\{throwOnFailure:!0\\}\\);return\\}`,
+  );
+  const patchedReader = source.includes("copilot-default-reasoning-effort`),codexCopilotModelValue=");
+  const patchedWriter = source.includes("`copilot-default-reasoning-effort`,");
+  return (cleanReader.test(source) || patchedReader) && (cleanWriter.test(source) || patchedWriter);
+}
+
+function matchesCopilotReasoningEffortModelListContract(source) {
+  const clean = new RegExp(
+    `${JS_IDENT}=\\(${JS_IDENT}===${BT}copilot${BT}\\?\\[${JS_IDENT}\\.find\\([^)]*\\)\\?\\?` +
+      `\\{reasoningEffort:${BT}medium${BT},description:${BT}medium effort${BT}\\}\\]:${JS_IDENT}\\)\\.filter\\(`,
+  );
+  const patched = new RegExp(`${JS_IDENT}=\\[\\.\\.\\.${JS_IDENT}\\]\\.filter\\(\\(\\{reasoningEffort:`);
+  return clean.test(source) || patched.test(source);
+}
+
+function matchesCopilotReasoningEffortUiContract(source) {
+  if (
+    !source.includes("composer.increaseReasoningEffort") ||
+    !source.includes("composer.reasoningSlashCommand.title") ||
+    !source.includes("reasoningEffortDisabled:")
+  ) {
+    return false;
+  }
+  const cleanLegacyGate = new RegExp(
+    `${JS_IDENT}=${JS_IDENT}\\?\\.authMethod===${BT}copilot${BT},${JS_IDENT}=!${JS_IDENT}&&!${JS_IDENT}(?:&&!0)?(?=,)`,
+  );
+  const cleanOfficialGate = new RegExp(
+    `${JS_IDENT}=${JS_IDENT}\\?\\.authMethod===${BT}copilot${BT}[\\s\\S]{0,1500}?,` +
+      `${JS_IDENT}=!${JS_IDENT}&&!${JS_IDENT}&&!0,${JS_IDENT}=[^,]{1,200}&&!${JS_IDENT}&&`,
+  );
+  return cleanLegacyGate.test(source) || cleanOfficialGate.test(source) ||
+    source.includes("reasoningEffortDisabled:!1");
+}
+
 function applyCopilotReasoningEffortSettingsPatch(currentSource) {
   let patchedSource = currentSource;
 
@@ -86,29 +132,18 @@ function applyCopilotReasoningEffortModelListPatch(currentSource) {
 
 function applyCopilotReasoningEffortUiPatch(currentSource) {
   let patchedSource = currentSource;
+  let composerControlsPatched = false;
 
-  const consolidatedComposerGateRegex =
-    /([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)\?\.authMethod===`copilot`,([\s\S]{0,400}?)([A-Za-z_$][\w$]*)=!([A-Za-z_$][\w$]*)&&!\1&&!0(?=[,;])/;
-  const patchedConsolidatedComposerGateRegex =
-    /([A-Za-z_$][\w$]*)=[A-Za-z_$][\w$]*\?\.authMethod===`copilot`,[\s\S]{0,400}?[A-Za-z_$][\w$]*=![A-Za-z_$][\w$]*&&!0(?=[,;])/;
   const currentComposerGateRegex =
     /([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)\?\.authMethod===`copilot`,([A-Za-z_$][\w$]*)=!([A-Za-z_$][\w$]*)(?:&&!\1)?(?=,)/;
-  const currentComposerGateMatch =
-    consolidatedComposerGateRegex.exec(patchedSource) ??
-    currentComposerGateRegex.exec(patchedSource);
+  const currentComposerGateMatch = currentComposerGateRegex.exec(patchedSource);
   if (currentComposerGateMatch) {
     const authMethodVar = currentComposerGateMatch[1];
-    if (currentComposerGateMatch.length === 6) {
-      patchedSource = patchedSource.replace(
-        consolidatedComposerGateRegex,
-        "$1=$2?.authMethod===`copilot`,$3$4=!$5&&!0",
-      );
-    } else {
-      patchedSource = patchedSource.replace(
-        currentComposerGateRegex,
-        "$1=$2?.authMethod===`copilot`,$3=!$4",
-      );
-    }
+    patchedSource = patchedSource.replace(
+      currentComposerGateRegex,
+      "$1=$2?.authMethod===`copilot`,$3=!$4",
+    );
+    composerControlsPatched = true;
 
     const currentDropdownNeedle = `reasoningEffortDisabled:${authMethodVar}`;
     const currentDropdownIndex = patchedSource.indexOf(
@@ -128,8 +163,39 @@ function applyCopilotReasoningEffortUiPatch(currentSource) {
         "WARN: Could not find current Copilot reasoning effort dropdown gate - skipping current dropdown patch",
       );
     }
-  } else if (
-    !patchedConsolidatedComposerGateRegex.test(patchedSource) &&
+  } else {
+    const officialComposerGateRegex = new RegExp(
+      `(${JS_IDENT})=(${JS_IDENT})\\?\\.authMethod===${BT}copilot${BT}([\\s\\S]{0,1500}?),` +
+        `(${JS_IDENT})=!(${JS_IDENT})&&!\\1&&!0,(${JS_IDENT})=([^,]{1,200})&&!\\1&&`,
+    );
+    const officialComposerGateMatch = officialComposerGateRegex.exec(patchedSource);
+    if (officialComposerGateMatch) {
+      const [match, copilotVar, hostVar, middle, shortcutVar, loadingVar, pickerVar, pickerPrefix] =
+        officialComposerGateMatch;
+      const replacement =
+        `${copilotVar}=${hostVar}?.authMethod===${BT}copilot${BT}${middle},` +
+        `${shortcutVar}=!${loadingVar}&&!0,${pickerVar}=${pickerPrefix}&&`;
+      patchedSource = patchedSource.replace(match, replacement);
+      const dropdownNeedle = `reasoningEffortDisabled:${copilotVar}`;
+      const gateIndex = officialComposerGateMatch.index;
+      const dropdownIndex = patchedSource.indexOf(dropdownNeedle, gateIndex);
+      if (dropdownIndex >= gateIndex && dropdownIndex < gateIndex + 20_000) {
+        patchedSource =
+          patchedSource.slice(0, dropdownIndex) +
+          "reasoningEffortDisabled:!1" +
+          patchedSource.slice(dropdownIndex + dropdownNeedle.length);
+      } else if (!patchedSource.includes("reasoningEffortDisabled:!1")) {
+        console.warn(
+          "WARN: Could not find current Copilot reasoning effort dropdown gate - skipping current dropdown patch",
+        );
+      }
+      composerControlsPatched = true;
+    }
+  }
+
+  if (
+    !composerControlsPatched &&
+    !patchedSource.includes("reasoningEffortDisabled:!1") &&
     patchedSource.includes("composer.increaseReasoningEffort") &&
     patchedSource.includes("reasoningEffortDisabled:")
   ) {
@@ -165,6 +231,7 @@ module.exports = {
       name: "copilot-reasoning-effort-settings",
       phase: "webview-asset",
       pattern: /^app-initial-[^.]+\.js$/,
+      assetMatch: matchesCopilotReasoningEffortSettingsContract,
       missingDescription: "model settings bundle",
       skipDescription: "Copilot reasoning effort settings patch",
       apply: applyCopilotReasoningEffortSettingsPatch,
@@ -174,6 +241,7 @@ module.exports = {
       name: "copilot-reasoning-effort-model-list",
       phase: "webview-asset",
       pattern: /^app-initial-[^.]+\.js$/,
+      assetMatch: matchesCopilotReasoningEffortModelListContract,
       missingDescription: "model list bundle",
       skipDescription: "Copilot reasoning effort model list patch",
       apply: applyCopilotReasoningEffortModelListPatch,
@@ -183,6 +251,7 @@ module.exports = {
       name: "copilot-reasoning-effort-ui",
       phase: "webview-asset",
       pattern: /^app-initial-[^.]+\.js$/,
+      assetMatch: matchesCopilotReasoningEffortUiContract,
       missingDescription: "current composer bundle",
       skipDescription: "Copilot reasoning effort UI patch",
       apply: applyCopilotReasoningEffortUiPatch,
@@ -191,4 +260,7 @@ module.exports = {
   applyCopilotReasoningEffortModelListPatch,
   applyCopilotReasoningEffortSettingsPatch,
   applyCopilotReasoningEffortUiPatch,
+  matchesCopilotReasoningEffortModelListContract,
+  matchesCopilotReasoningEffortSettingsContract,
+  matchesCopilotReasoningEffortUiContract,
 };

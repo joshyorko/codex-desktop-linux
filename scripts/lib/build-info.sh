@@ -5,16 +5,15 @@
 # shellcheck shell=bash
 
 write_build_info() {
-    local dmg_path="$1"
-    local app_dir="$2"
+    local package_path="$1"
+    local metadata_path="$2"
 
     mkdir -p "$INSTALL_DIR/resources" "$INSTALL_DIR/.codex-linux"
     node "$SCRIPT_DIR/scripts/lib/build-info.js" \
         "$SCRIPT_DIR" \
         "$INSTALL_DIR" \
-        "$dmg_path" \
-        "$app_dir" \
-        "$ELECTRON_VERSION" \
+        "$package_path" \
+        "$metadata_path" \
         "$CODEX_APP_ID" \
         "$CODEX_APP_DISPLAY_NAME"
     info "Build info written"

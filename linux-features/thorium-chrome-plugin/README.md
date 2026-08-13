@@ -18,9 +18,16 @@ core Linux port does not regularly test. Enable it by adding the feature id to
 When enabled, the feature:
 
 - adds Thorium native-messaging manifest locations for the generated launcher
-- patches the staged Chrome plugin scripts to detect Thorium installs, profiles,
-  running processes, default-browser desktop IDs, and launch commands
+- registers Thorium in the staged Chrome plugin's browser registry
+  (`scripts/extension-ids.json`), which is where upstream reads install
+  commands, process names, profile directories, and native-messaging manifest
+  locations from
 - adds Thorium to the Electron-side Chrome extension settings/status helper
+
+Thorium inherits the Chrome extension identity, because it loads the same
+extension build. Upstream moved this contract into the registry in
+26.803.41515; before that the same coverage needed seven separate patches
+against Chrome-only constants in individual plugin scripts.
 
 Run the focused tests with:
 

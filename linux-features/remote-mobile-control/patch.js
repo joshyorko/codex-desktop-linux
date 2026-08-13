@@ -48,9 +48,9 @@ const REMOTE_MOBILE_APP_SERVER_REMOTE_CONTROL_MARKER = "codexLinuxRemoteMobileLo
 const REMOTE_MOBILE_APP_SERVER_BASE_ARGS_NEEDLE = "[`-c`,`features.code_mode_host=true`]";
 const REMOTE_MOBILE_APP_SERVER_LAUNCH_TAIL = "`app-server`,`--analytics-default-enabled`]}";
 const REMOTE_MOBILE_APP_SERVER_REMOTE_CONTROL_HELPER =
-  "function codexLinuxRemoteMobileLocalAppServerArgs(){return process.platform===`linux`?[`--remote-control`]:[]}";
+  "function codexLinuxRemoteMobileLocalAppServerArgs(){if(process.platform===`linux`&&process.env.CODEX_REMOTE_CONTROL_APP_SERVER_MODE===`proxy`){let e=process.env.CODEX_REMOTE_CONTROL_APP_SERVER_PROXY_SOCKET;if(e?.startsWith(`%h/`)&&process.env.HOME)e=`${process.env.HOME}${e.slice(2)}`;return[`app-server`,`proxy`,...(e?[`--sock`,e]:[])]}return[`app-server`,...(process.platform===`linux`?[`--remote-control`]:[]),`--analytics-default-enabled`]}";
 const REMOTE_MOBILE_APP_SERVER_PATCHED_LAUNCH_TAIL =
-  "`app-server`,...codexLinuxRemoteMobileLocalAppServerArgs(),`--analytics-default-enabled`]}";
+  "...codexLinuxRemoteMobileLocalAppServerArgs()]}";
 const REMOTE_CONTROL_APP_INITIAL_ASSET_PATTERN = /^app-initial-[^.]+\.js$/u;
 const REMOTE_CONTROL_LINUX_COPY_REPLACEMENTS = [
   ["defaultMessage:`Mac`", "defaultMessage:`Linux`"],

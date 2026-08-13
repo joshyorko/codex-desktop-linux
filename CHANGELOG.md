@@ -11,10 +11,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   updates automatically** setting. Turning it off keeps notification and DMG
   verification active while deferring local package builds until an explicit
   **Check for updates**.
-- The embedded Computer Use backend is synchronized to standalone v0.4.6 as
-  `0.4.6-linux-alpha1`, including generic X11/EWMH window control, X11
-  `xdotool` keyboard, text, and coordinate-click input, KDE portal scroll
-  polarity, and portal key chords, with generic X11 registered last.
+- The embedded Computer Use backend is synchronized to standalone v0.4.9 as
+  `0.4.9-linux-alpha1`, including generic X11/EWMH window control, deep GTK4
+  accessibility traversal, bounded queue and child-read work, X11 `xdotool`
+  keyboard, text, and coordinate-click input, KDE portal scroll polarity, and
+  portal key chords, with generic X11 registered last.
 - A shared upstream DMG acceptance profile now produces the same structured
   decision for local installs, updater rebuilds, and scheduled CI. Scheduled
   rejections create one fingerprinted drift issue and supersede issues for
@@ -43,6 +44,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- The opt-in Dock icon tweak is restored for the signed official Linux package,
+  using its ChatGPT icon and desktop metadata while preserving ChatGPT
+  Community window, tray, and managed launcher synchronization.
+- Native remote-mobile builds now route side-by-side `--new-instance` launches
+  through the normal single-instance handoff, preventing competing Desktop
+  Remote Control owners. Nix module sessions instead proxy every Desktop
+  app-server RPC to the single declarative systemd owner, so enablement,
+  pairing, and status calls reach the process listening on the Unix control
+  socket without restricting non-owner Desktop instances.
 - Deferred upstream DMGs are revalidated before a build. A newer candidate
   supersedes the pending download, and a deleted cached DMG is redownloaded in
   the same explicit check. Fresh app-launch checks preserve the stable deferred
@@ -52,6 +62,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   can read the state and resume its previous automatic-build behavior. State
   written by prerelease builds using `update_available` is migrated back to
   `update_detected` on read.
+- Computer Use diagnostics now distinguish pointer-only direct uinput and
+  RemoteDesktop support from keyboard-ready input. Portal capabilities require
+  the methods and device/source types used by the runtime, plus the hidden
+  cursor mode on ScreenCast v2 and newer, so incomplete portal implementations
+  no longer produce a false-ready result without rejecting compatible v1 portals.
 - Native X11 coordinate clicks now use one supervised xdotool XTEST command,
   fall back to ydotool only when xdotool cannot launch, and preserve nested X11
   session identity instead of importing a host Wayland display.
@@ -59,11 +74,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   installed commit is limited to repository documentation or metadata.
 - The updater feature picker now changes only the enabled feature list, preserving
   nested feature settings and other local configuration keys across rebuilds.
+- The opt-in directory-only working-tree watcher now uses Watchbound for
+  bounded recursive Linux watch coverage while retaining its existing Git-ignore,
+  logical-path, root-recovery, and focus-recovery policies.
 - The opt-in Dock icon tweak now targets the current upstream main-process
   bundle, restoring Linux window, tray, and desktop icon synchronization.
 - The opt-in shallow repository watcher now patches both current app bundles
   and routes the Linux Parcel working-tree path through the same shallow host,
   restoring bounded watches on the latest upstream DMG.
+- The opt-in directory-only working-tree watcher now routes the current Linux
+  Parcel working-tree path through its existing bounded directory watcher,
+  restoring the feature on the latest upstream DMG, with byte-verified rollback
+  for its paired bundle writes.
 - Computer Use now supports Plasma 5 and 6 KWin scripting, validates every
   ydotool 1.0.3+ command shape it emits, and rejects semantically incompatible
   CLIs even when a daemon socket exists. Hyprland dispatch validation handles

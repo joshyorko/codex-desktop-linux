@@ -27,9 +27,6 @@ const {
   normalizePatchDescriptors,
 } = require("../../scripts/patches/engine.js");
 const { createPatchReport } = require("../../scripts/lib/patch-report.js");
-const {
-  applyLinuxExternalOpenEnvPatch,
-} = require("../../scripts/patches/impl/main-process/browser.js");
 const { requireName } = require("../../scripts/patches/lib/minified-js.js");
 
 function twice(fn, source) {
@@ -166,24 +163,25 @@ test("main handler does not capture a function-local child-process alias from an
   assert.doesNotMatch(patched, /let child=__codexChild\.spawn\(command,args/);
 });
 
-test("main bundle helper preserves the core Electron binding across patch reruns", () => {
+test("main bundle helper preserves the official Electron binding across patch reruns", () => {
   const source = [
     '"use strict";',
     'let c=require("electron"),e=require(`node:child_process`),f=require(`node:fs`),p=require(`node:path`),o=require(`node:os`);',
     'var h={handlers:{"set-vs-context":async()=>{},"native-desktop-apps":async()=>({apps:[]})}};',
   ].join("");
-  const withExternalOpen = applyLinuxExternalOpenEnvPatch(source);
-  const patched = applyMainBundlePatch(withExternalOpen);
+  const patched = applyMainBundlePatch(source);
 
   assert.equal(requireName(patched, "electron"), "c");
-  assert.match(patched, /let loadElectron=\(\)=>require\(`electron`\)/);
-  assert.equal(applyLinuxExternalOpenEnvPatch(patched), patched);
+  assert.match(patched, /electronApi=c/);
+  assert.doesNotMatch(patched, /electronApi=require\(`electron`\)/);
+  assert.equal(applyMainBundlePatch(patched), patched);
 });
 
 test("webview runtime appends only once", () => {
   const patched = twice(applyIndexRuntimePatch, "console.log(`index`);");
   assert.match(patched, /codexLinuxReadAloudClick/);
-  assert.match(patched, /vscode:\/\/codex\/"\+METHOD/);
+  assert.match(patched, /vscode:\/\/codex\/"\+method/);
+  assert.match(patched, /codexLinuxReadAloudGetSetting=key=>hostPost\("get-global-state"/);
   assert.match(patched, /codex-message-from-view/);
   assert.match(patched, /__codexForwardedViaBridge/);
   assert.match(patched, /Starting voice/);
@@ -955,7 +953,7 @@ test("main handler downloads setup files atomically", async () => {
 });
 
 test("assistant render patch adds an explicit read aloud button under the message", () => {
-  const source = "return (0,$.jsx)(Ov,{item:n,assistantCopyText:p,conversationId:o,showAssistantMessageActionRow:M,onAssistantFileLinkOpen:v})";
+  const source = "return (0,$.jsx)(Ov,{item:n,alwaysShowActions:M,assistantCopyText:p,turnId:m,autoReviewStats:y,hookStats:b,completedThreadGoal:x,after:g,conversationId:o,cwd:u,forceCodeBlockWordWrap:V,hasArtifacts:F,onAddSelectedTextToChat:H,onFileLinkOpen:v,onFork:D,renderCodeBlocksAsWritingBlocks:V})";
   const patched = twice(applyAssistantRenderPatch, source);
   assert.match(patched, /codex-linux-read-aloud-button/);
   assert.match(patched, /codex-linux-read-aloud-icon/);
@@ -991,7 +989,7 @@ test("assistant render patch ignores the current shared component definition", (
 });
 
 test("assistant render patch preserves the current JSX runtime alias", () => {
-  const source = "return (0,Q.jsx)(Ov,{item:n,assistantCopyText:p,conversationId:o,showAssistantMessageActionRow:M,onAssistantFileLinkOpen:v})";
+  const source = "return (0,Q.jsx)(Ov,{item:n,alwaysShowActions:M,assistantCopyText:p,turnId:m,autoReviewStats:y,hookStats:b,completedThreadGoal:x,after:g,conversationId:o,cwd:u,forceCodeBlockWordWrap:V,hasArtifacts:F,onAddSelectedTextToChat:H,onFileLinkOpen:v,onFork:D,renderCodeBlocksAsWritingBlocks:V})";
   const patched = twice(applyAssistantRenderPatch, source);
 
   assert.match(patched, /Q\.Fragment/);
@@ -999,33 +997,40 @@ test("assistant render patch preserves the current JSX runtime alias", () => {
   assert.match(patched, /globalThis\.codexLinuxReadAloudClick\?\.\(n,p,o,e\.currentTarget\)/);
 });
 
-test("assistant render patch covers the current local conversation turn call", () => {
-  const source = "return (0,$.jsx)(Rr,{item:B,historyEntityKey:o,isHeartbeatAutomationRequest:qe,isHeartbeatAutomationTurn:p,conversationId:r,getVisualizeTurnTriggerType:Ae,hostId:a,conversationDetailLevel:I,isTurnInProgress:P,cwd:b,resolvedApps:k,renderMcpApps:L,reportEntityType:A,toolActivityTurnKey:F,turnId:Ut,projectlessOutputDirectory:E,assistantCopyText:Pt??void 0,assistantAfter:ir,autoReviewStats:Kt,hookStats:qt,completedThreadGoal:j,hasArtifacts:tr,alwaysShowAssistantMessageActions:C,showAssistantMessageActionRow:n,allowAddSelectedTextToChat:w,onAssistantFileLinkOpen:zt,onForkTurn:ue})";
+test("assistant render patch covers the current shared assistant message call", () => {
+  const source = "return (0,t8.jsx)(K6c,{item:n,alwaysShowActions:re,assistantCopyText:b,turnId:x,processTargets:S,autoReviewStats:A,hookStats:j,threadDetailLevel:p,completedThreadGoal:M,after:T,electronAfter:E,conversationId:d,getVisualizeTurnTriggerType:f,cwd:g,hostId:_,reportEntityType:v,markdownMediaCacheKey:e,projectlessOutputDirectory:de,forceCodeBlockWordWrap:we,hasArtifacts:fe,onAddResponseTextAnnotation:r,onFileLinkOpen:k,onFork:B,renderCodeBlocksAsWritingBlocks:we,showActionRow:ie,showTimestampWithoutActions:ae,timestampHoverOnly:oe,showProcessBadges:i,allowCopyWhileStreaming:q})";
   const patched = twice(applyAssistantRenderPatch, source);
 
-  assert.match(patched, /\$\.Fragment/);
-  assert.match(patched, /\(0,\$\.jsx\)\("button"/);
-  assert.match(patched, /globalThis\.codexLinuxReadAloudClick\?\.\(B,Pt\?\?void 0,r,e\.currentTarget\)/);
+  assert.match(patched, /t8\.Fragment/);
+  assert.match(patched, /\(0,t8\.jsx\)\("button"/);
+  assert.match(patched, /globalThis\.codexLinuxReadAloudClick\?\.\(n,b,d,e\.currentTarget\)/);
 });
 
-test("assistant runtime descriptor targets the current local conversation bundle", () => {
+test("assistant runtime descriptor targets current shared assistant bundles", () => {
   const descriptor = featurePatches.find((patch) => patch.id === "assistant-runtime");
   assert.ok(descriptor);
   assert.equal(
     descriptor.pattern.test(
-      "local-conversation-turn-DF8fx5gl.js",
+      "local-conversation-turn-BSHPwQLO.js",
     ),
     true,
   );
   for (const legacyName of [
     "index-current.js",
-    "app-initial-Biw83Aiz.js",
     "local-conversation-thread-current.js",
+    "app-initial-BHB6SClA.js",
     "app-initial~app-main~onboarding-page-zcfEkMl-.js",
     "app-initial~app-main~onboarding-page~hotkey-window-thread-page~editor-diff-page~thread-app-~current.js",
   ]) {
     assert.equal(descriptor.pattern.test(legacyName), false, legacyName);
   }
+});
+
+test("webview runtime descriptor targets the official app bootstrap", () => {
+  const descriptor = featurePatches.find((patch) => patch.id === "webview-runtime");
+  assert.ok(descriptor);
+  assert.equal(descriptor.pattern.test("app-initial-Bd3Z1bES.js"), true);
+  assert.equal(descriptor.pattern.test("local-conversation-turn-BSHPwQLO.js"), false);
 });
 
 test("assistant runtime descriptor fails soft and atomically when the current render contract drifts", () => {
@@ -1035,7 +1040,7 @@ test("assistant runtime descriptor fails soft and atomically when the current re
     fs.mkdirSync(assetsDir, { recursive: true });
     const assetPath = path.join(
       assetsDir,
-      "local-conversation-turn-DF8fx5gl.js",
+      "local-conversation-turn-BSHPwQLO.js",
     );
     const source = "console.log(`assistant render contract moved`);";
     fs.writeFileSync(assetPath, source);
@@ -1063,11 +1068,11 @@ test("assistant runtime descriptor reports applied then already-applied for the 
     fs.mkdirSync(assetsDir, { recursive: true });
     const assetPath = path.join(
       assetsDir,
-      "local-conversation-turn-DF8fx5gl.js",
+      "local-conversation-turn-BSHPwQLO.js",
     );
     fs.writeFileSync(
       assetPath,
-      "return (0,DX.jsx)(Jft,{item:n,assistantCopyText:_,conversationId:l,showAssistantMessageActionRow:ie,onAssistantFileLinkOpen:k})",
+      "return (0,DX.jsx)(Jft,{item:n,assistantCopyText:_,conversationId:l,renderCodeBlocksAsWritingBlocks:ie})",
     );
     const descriptor = featurePatches.find((patch) => patch.id === "assistant-runtime");
     const descriptors = normalizePatchDescriptors([
@@ -1081,7 +1086,7 @@ test("assistant runtime descriptor reports applied then already-applied for the 
 
     const patched = fs.readFileSync(assetPath, "utf8");
     assert.match(patched, /codex-linux-read-aloud-button/);
-    assert.match(patched, /codexLinuxReadAloudVersion/);
+    assert.doesNotMatch(patched, /codexLinuxReadAloudVersion/);
     assert.equal(firstReport.patches[0].status, "applied");
     assert.equal(secondReport.patches[0].status, "already-applied");
   } finally {
@@ -1135,6 +1140,51 @@ test("general settings patch exports read aloud page without rendering it in Gen
     /children:\[S,C,w,T,\(0,\$\.jsx\)\(codexLinuxReadAloudSettingsRow,\{\}\),D,O,k,A,j,M,N,P,L\]/,
   );
   assert.match(patched, /children:\[S,C,w,T,D,O,k,A,j,M,N,P,L\]/);
+});
+
+test("general settings patch inserts controls into the official Linux general settings bundle", () => {
+  const source = [
+    "var ei=t(f(),1),$=rn();",
+    "function Hi(){let e=Fe(Ht);return(0,$.jsx)(dt,{title:(0,$.jsx)(Je,{slug:`general-settings`}),children:e?(0,$.jsx)(Ui,{}):null})}",
+    "function Ui(){return(0,$.jsxs)(A,{children:[null,(0,$.jsx)(Ii,{}),n&&i?(0,$.jsx)(xi,{}):null]})}",
+    "function Ea(){return null}",
+    "export{Hi as i,Ea as r};",
+  ].join("");
+  const patched = twice(applyGeneralSettingsPatch, source);
+
+  assert.match(patched, /codexLinuxReadAloudSettingsAliasesV2/);
+  assert.match(patched, /\(0,\$\.jsx\)\(codexLinuxReadAloudSettingsRow,\{\}\),\(0,\$\.jsx\)\(Ii,\{\}\)/);
+  assert.match(patched, /codexLinuxReadAloudGetSetting/);
+  assert.match(patched, /codexLinuxReadAloudSetSetting/);
+  assert.match(patched, /codexLinuxReadAloudSettingsPage as ReadAloudSettings/);
+});
+
+test("official settings have the runtime before any conversation chunk loads", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-read-aloud-official-settings-"));
+  try {
+    const assets = path.join(root, "webview", "assets");
+    fs.mkdirSync(assets, { recursive: true });
+    const appInitial = path.join(assets, "app-initial-Bd3Z1bES.js");
+    fs.writeFileSync(appInitial, "console.log(`official bootstrap`);");
+    const runtimeDescriptor = featurePatches.find((patch) => patch.id === "webview-runtime");
+    const report = createPatchReport();
+    applyWebviewAssetPatchDescriptors(
+      root,
+      normalizePatchDescriptors([
+        { ...runtimeDescriptor, featureId: "read-aloud", sourceKind: "feature" },
+      ]),
+      {},
+      report,
+    );
+
+    const patched = fs.readFileSync(appInitial, "utf8");
+    assert.match(patched, /codexLinuxReadAloudGetSetting/);
+    assert.match(patched, /codexLinuxReadAloudSetSetting/);
+    assert.equal(report.patches[0].status, "applied");
+    assert.equal(fs.existsSync(path.join(assets, "local-conversation-turn-BSHPwQLO.js")), false);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("general settings patch upgrades and removes an older injected General row", () => {

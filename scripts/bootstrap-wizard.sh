@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Guided, conservative setup helper for native ChatGPT Desktop for Linux builds.
+# Guided, conservative setup helper for native ChatGPT Community builds.
 set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -552,7 +552,7 @@ print_system_summary() {
         atomic_host="yes"
     fi
 
-    info "ChatGPT Desktop for Linux guided setup"
+    info "ChatGPT Community guided setup"
     info "Repository: $REPO_DIR"
     info "Distro: ID=${OS_RELEASE_ID:-unknown} ID_LIKE=${OS_RELEASE_ID_LIKE:-unknown} VERSION_ID=${OS_RELEASE_VERSION_ID:-unknown}"
     info "Package manager: $(detect_package_manager)"
@@ -805,9 +805,6 @@ unknown_enabled = [feature_id for feature_id in final if feature_id not in featu
 if unknown_enabled:
     warn(f"Enabled feature ids not found in this checkout: {csv(unknown_enabled)}")
 
-if "conversation-mode" in final and "read-aloud" not in final:
-    warn("conversation-mode is enabled without read-aloud; speech output requires the Read Aloud feature.")
-
 if features:
     print("[setup] Available Linux features:")
     for index, (feature_id, feature) in enumerate(features.items(), start=1):
@@ -819,7 +816,7 @@ else:
     print("[setup] Available Linux features: none found")
 
 if apply_changes and (enable or disable):
-    print("[setup] Feature changes apply after rebuilding and reinstalling ChatGPT Desktop for Linux.")
+    print("[setup] Feature changes apply after rebuilding and reinstalling ChatGPT Community.")
 PY
     then
         SETUP_ERROR_REPORTED=1
@@ -853,8 +850,7 @@ print_safe_disable_guidance() {
     fi
 
     if list_includes_id "$disable_raw" "read-aloud" ||
-        list_includes_id "$disable_raw" "read-aloud-mcp" ||
-        list_includes_id "$disable_raw" "conversation-mode"; then
+        list_includes_id "$disable_raw" "read-aloud-mcp"; then
         local data_home="${XDG_DATA_HOME:-$HOME/.local/share}"
         local read_aloud_data="$data_home/codex-desktop/read-aloud"
         local read_aloud_model
@@ -877,7 +873,7 @@ validate_cleanup_feature_ids() {
     raw="${raw//,/ }"
     for item in $raw; do
         case "$item" in
-            remote-mobile-control|read-aloud|read-aloud-mcp|conversation-mode)
+            remote-mobile-control|read-aloud|read-aloud-mcp)
                 ;;
             "")
                 ;;
@@ -977,8 +973,7 @@ run_feature_cleanup() {
     fi
 
     if list_includes_id "$cleanup_raw" "read-aloud" ||
-        list_includes_id "$cleanup_raw" "read-aloud-mcp" ||
-        list_includes_id "$cleanup_raw" "conversation-mode"; then
+        list_includes_id "$cleanup_raw" "read-aloud-mcp"; then
         local data_home="${XDG_DATA_HOME:-$HOME/.local/share}"
         local read_aloud_data="$data_home/codex-desktop/read-aloud"
         local read_aloud_model
@@ -1129,7 +1124,7 @@ prompt_for_feature_changes_gui() {
             rows+=("$id" "${title_of[$id]}")
         done
         selected="$(zenity --list --checklist \
-            --title="ChatGPT Desktop for Linux features" \
+            --title="ChatGPT Community features" \
             --text="Select the optional Linux features to enable for the next build." \
             --column="Enable" --column="Feature" --column="Description" \
             --print-column=2 --separator=$'\n' \

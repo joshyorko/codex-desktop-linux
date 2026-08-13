@@ -5,6 +5,9 @@ These are not upstream Codex plugins; they are Linux-side extensions that can
 add ASAR patches, staged resources, runtime hooks, package hooks, or custom
 build/install hooks. The full architecture contract is documented in
 [`docs/linux-features-architecture.md`](../docs/linux-features-architecture.md).
+Every feature targets the verified official Linux `.deb` payload; none depends
+on a macOS bundle, replacement Electron runtime, or rebuilt upstream native
+module.
 
 By default, no optional Linux features are enabled. Copy
 `features.example.json` to `features.json` before running `./install.sh` or
@@ -12,9 +15,7 @@ building packages, then list the feature ids you want:
 
 ```json
 {
-  "enabled": [
-    "example-feature"
-  ]
+  "enabled": []
 }
 ```
 
@@ -69,7 +70,7 @@ make setup-native
 # non-interactive feature edits:
 CODEX_BOOTSTRAP_NONINTERACTIVE=1 \
 CODEX_LINUX_FEATURES=remote-mobile-control,read-aloud \
-CODEX_LINUX_DISABLE_FEATURES=conversation-mode \
+CODEX_LINUX_DISABLE_FEATURES=pet-overlay \
 make setup-native
 ```
 
@@ -103,7 +104,8 @@ Each feature directory must include:
 Declarative runtime hooks are staged under `codex-app/.codex-linux/`:
 
 - `runtimeHooks.env` writes literal `KEY=VALUE` files consumed by the launcher
-- `runtimeHooks.prelaunch` runs synchronously before webview setup
+- `runtimeHooks.prelaunch` runs synchronously before the official `ChatGPT`
+  executable starts
 - `runtimeHooks.electronArgs` appends one Electron argument per line
 - `runtimeHooks.launcher` runs before final Electron args are built; executable
   hooks receive current Electron args as argv and can print `env KEY=VALUE` or
@@ -161,6 +163,7 @@ Feature self-tests live inside each feature directory. Run them with:
 node --test linux-features/*/test.js
 ```
 
-Core Linux compatibility patches should stay in `scripts/patches/` until they
-are deliberately migrated. Use `linux-features/` for additions that are useful
-for some users but not mandatory for every Linux build.
+The default core patch registry is empty. A core compatibility patch requires a
+reproduced blocker on the official Linux package and a regression test. Use
+`linux-features/` for additions that are useful for some users but not mandatory
+for every Linux build.

@@ -1,7 +1,9 @@
 # Frameless Titlebar
 
-This optional feature hides the Linux Electron titlebar overlay controls and
-removes the native menu chrome from the primary and Quick Chat Codex windows.
+This optional feature removes the app-rendered titlebar controls and menu
+chrome from the primary and Quick Chat Community windows. The official Linux
+runtime already owns native BrowserWindow decoration; this feature only changes
+the current webview layout and does not patch main-process window creation.
 It is intended for compositors or window managers where compositor-managed
 decorations already provide the expected window controls, such as Hyprland
 setups. It is also a

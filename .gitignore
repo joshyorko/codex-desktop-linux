@@ -14,7 +14,7 @@ bin/codex-*
 target/
 dist/
 dist-next/
-reports/upstream-dmg/
+reports/upstream-linux-package/
 linux-features/features.json
 linux-features/local/
 .idea/

@@ -1,7 +1,7 @@
 {
   "id": "shared-app-server-socket",
   "title": "Shared App-Server Socket",
-  "description": "Opt-in protocol-transparent Unix socket shared by Codex Desktop and one or more ordinary app-server clients.",
+  "description": "Opt-in protocol-transparent Unix socket shared by ChatGPT Community and one or more ordinary app-server clients.",
   "defaultEnabled": false,
   "entrypoints": {
     "patchDescriptors": "./patch.js"
@@ -24,5 +24,10 @@
       "name": "socket-cleanup.sh",
       "mode": "0755"
     }
+  },
+  "packageDependencies": {
+    "deb": ["nodejs"],
+    "rpm": ["nodejs"],
+    "pacman": ["nodejs"]
   }
 }

@@ -5,6 +5,7 @@ const currentCreationTime =
 const patchedCreationTime =
   currentCreationTime +
   "??(/^local:[\\da-f]{8}-[\\da-f]{4}-7[\\da-f]{3}-[89ab][\\da-f]{3}-[\\da-f]{12}$/i.test(e.key)?Number.parseInt(e.key.slice(6).replaceAll(`-`,``).slice(0,12),16):e.conversation.recencyAt??e.conversation.updatedAt)";
+
 function countOccurrences(source, needle) {
   return source.split(needle).length - 1;
 }
@@ -28,6 +29,14 @@ function applyProjectTaskSortPatch(source) {
   return source.replace(currentCreationTime, patchedCreationTime);
 }
 
+function matchesProjectTaskSortContract(source) {
+  const currentCount = countOccurrences(source, currentCreationTime);
+  const patchedCount = countOccurrences(source, patchedCreationTime);
+  const unpatchedCount = currentCount - patchedCount;
+  return (patchedCount === 1 && unpatchedCount === 0) ||
+    (patchedCount === 0 && unpatchedCount === 1);
+}
+
 const descriptors = [
   {
     id: "creation-time",
@@ -35,6 +44,7 @@ const descriptors = [
     order: 20_900,
     ciPolicy: "optional",
     pattern: /^app-initial-[^.]+\.js$/,
+    assetMatch: matchesProjectTaskSortContract,
     missingDescription: "project task sort webview bundle",
     skipDescription: "project task creation timestamp feature patch",
     apply: applyProjectTaskSortPatch,
@@ -43,5 +53,6 @@ const descriptors = [
 
 module.exports = {
   applyProjectTaskSortPatch,
+  matchesProjectTaskSortContract,
   descriptors,
 };

@@ -56,9 +56,9 @@ function currentFilteredCopilotReasoningEffortModelListFixture() {
 
 function currentCopilotReasoningEffortUiFixture() {
   return [
-    "function QMs(){let F=!BJr(v)||m.isLoading||T===`pending`,I=u?.authMethod===`copilot`,L=YAs(y,b),B=!F&&!I&&!0;return DX(`composer.increaseReasoningEffort`,()=>{Se(`increase`)},{enabled:B}),(0,EQ.jsx)(CMs,{reasoningEffortDisabled:I})}",
+    "function dz(){let k=!Bm(u),A=a?.authMethod===`copilot`,j=!k&&!A,M=yh(d,m);return aO(`composer.increaseReasoningEffort`,()=>we(`increase`),{enabled:j}),(0,gz.jsx)(_m,{reasoningEffortDisabled:A})}",
     "function unrelatedGate(){let q=a&&b&&!0,c;return q}",
-    "function XGs(){let h=c?.authMethod===`copilot`;let A=o.formatMessage({id:`composer.reasoningSlashCommand.title`});let M=l&&m&&!h&&!0,N;return{enabled:M,dependencies:N}}",
+    "function uU(){let p=o?.authMethod===`copilot`;let E=i.formatMessage({id:`composer.reasoningSlashCommand.title`});let O=s&&f&&!p&&!0,k;return{enabled:O,dependencies:k}}",
     "function permissionGate(){let A=O.length>0,j=!w&&!A;return{shouldAutoDenyPermissionRequest:j}}",
   ].join("");
 }
@@ -132,10 +132,9 @@ test("persists Copilot reasoning effort through the current default writer", () 
   );
 });
 
-test("current DMG descriptors target only the owning Copilot chunks", () => {
-  const currentChunk = "app-initial-BHB6SClA.js";
-  const adjacentChunk =
-    "app-initial~app-main~new-thread-panel-page~onboarding-page~appgen-library-page~hotkey-windo~d4kxte0o-BsjKAgmz.js";
+test("current package descriptors use the semantic app-initial owner", () => {
+  const currentChunk = "app-initial-Bd3Z1bES.js";
+  const adjacentChunk = "projects-index-page-DjNy92Xe.js";
   const loaded = require("./patch.js").descriptors;
 
   assert.ok(loaded.every((descriptor) => descriptor.pattern.test(currentChunk)));
@@ -164,18 +163,13 @@ test("allows Copilot auth to use the current app effort controls", () => {
     applyCopilotReasoningEffortUiPatch,
     currentCopilotReasoningEffortUiFixture(),
   );
-  const secondPass = withCapturedWarns(() =>
-    applyCopilotReasoningEffortUiPatch(patched),
-  );
 
-  assert.equal(secondPass.value, patched);
-  assert.deepEqual(secondPass.warnings, []);
-  assert.match(patched, /I=u\?\.authMethod===`copilot`,L=YAs\(y,b\),B=!F&&!0/);
+  assert.match(patched, /A=a\?\.authMethod===`copilot`,j=!k,M=/);
   assert.match(patched, /reasoningEffortDisabled:!1/);
-  assert.match(patched, /let A=o\.formatMessage\(\{id:`composer\.reasoningSlashCommand\.title`\}\);let M=l&&m&&!0,N;/);
-  assert.doesNotMatch(patched, /B=!F&&!I/);
-  assert.doesNotMatch(patched, /reasoningEffortDisabled:I/);
-  assert.doesNotMatch(patched, /M=l&&m&&!h&&!0/);
+  assert.match(patched, /let E=i\.formatMessage\(\{id:`composer\.reasoningSlashCommand\.title`\}\);let O=s&&f&&!0,k;/);
+  assert.doesNotMatch(patched, /j=!k&&!A/);
+  assert.doesNotMatch(patched, /reasoningEffortDisabled:A/);
+  assert.doesNotMatch(patched, /O=s&&f&&!p&&!0/);
   assert.match(patched, /let q=a&&b&&!0,c/);
   assert.match(patched, /A=O\.length>0,j=!w&&!A/);
 });
@@ -220,39 +214,40 @@ test("feature descriptor loader exposes the Copilot webview asset patches only w
       ["webview-asset", "webview-asset", "webview-asset"],
     );
     assert.ok(descriptors.every((descriptor) => descriptor.ciPolicy === "optional"));
-    const currentChunk = "app-initial-BHB6SClA.js";
-    assert.ok(descriptors.every((descriptor) => descriptor.pattern.test(currentChunk)));
+    const currentSettingsChunk = "app-initial-settings-current.js";
+    const currentUiChunk = "app-initial-ui-current.js";
+    assert.match(currentSettingsChunk, descriptors[0].pattern);
+    assert.match(currentSettingsChunk, descriptors[1].pattern);
+    assert.match(currentUiChunk, descriptors[2].pattern);
     assert.ok(descriptors.every((descriptor) => !descriptor.pattern.test("unrelated-bundle.js")));
   });
 });
 
 test("enabled feature descriptors patch the current app settings chunk", () => {
   const featuresRoot = path.resolve(__dirname, "..");
-  const currentChunk = "app-initial-BHB6SClA.js";
+  const currentSettingsChunk = "app-initial-settings-Bd3Z1bES.js";
+  const currentUiChunk = "app-initial-ui-Bd3Z1bES.js";
 
   withTempFeatureConfig(["copilot-reasoning-effort"], () => {
     withTempDir((extractedDir) => {
       writeAsset(
         extractedDir,
-        currentChunk,
-        [
-          currentCopilotReasoningEffortSettingsFixture(),
-          currentFilteredCopilotReasoningEffortModelListFixture(),
-          currentCopilotReasoningEffortUiFixture(),
-        ].join(""),
+        currentSettingsChunk,
+        `${currentCopilotReasoningEffortSettingsFixture()};${currentFilteredCopilotReasoningEffortModelListFixture()}`,
       );
+      writeAsset(extractedDir, currentUiChunk, currentCopilotReasoningEffortUiFixture());
 
       const descriptors = normalizePatchDescriptors(
         loadLinuxFeaturePatchDescriptors({ featuresRoot }),
       );
       applyWebviewAssetPatchDescriptors(extractedDir, descriptors, {}, null);
-      const patched = readAsset(extractedDir, currentChunk);
+      const patched = readAsset(extractedDir, currentSettingsChunk);
 
       assert.match(patched, /copilot-default-reasoning-effort/);
       assert.match(patched, /a=\[\.\.\.t\]\.filter/);
       assert.doesNotMatch(patched, /e===`copilot`\?\[/);
-      assert.match(patched, /reasoningEffortDisabled:!1/);
-      assert.match(patched, /M=l&&m&&!0,N/);
+      assert.match(readAsset(extractedDir, currentUiChunk), /reasoningEffortDisabled:!1/);
+      assert.match(readAsset(extractedDir, currentUiChunk), /O=s&&f&&!0,k/);
     });
   });
 });

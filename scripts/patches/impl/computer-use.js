@@ -4,6 +4,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 
 const {
+  findLastRegexMatch,
   findMatchingBrace,
   requireName,
 } = require("../lib/minified-js.js");
@@ -405,6 +406,95 @@ function applyLinuxComputerUseFeaturePatch(currentSource) {
   return currentSource;
 }
 
+// Scan to the `;` that closes the declaration the plugins query lives in,
+// ignoring separators nested in calls, literals, or template substitutions.
+function findStatementEnd(source, fromIndex) {
+  const stack = [];
+  let quote = null;
+  let escaped = false;
+
+  for (let i = fromIndex; i < source.length; i += 1) {
+    const char = source[i];
+    if (quote != null) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === "\\") {
+        escaped = true;
+      } else if (quote === "`" && char === "$" && source[i + 1] === "{") {
+        stack.push("`");
+        quote = null;
+        i += 1;
+      } else if (char === quote) {
+        quote = null;
+      }
+      continue;
+    }
+
+    if (char === "'" || char === '"' || char === "`") {
+      quote = char;
+    } else if (char === "(" || char === "[" || char === "{") {
+      stack.push(char);
+    } else if (char === ")" || char === "]" || char === "}") {
+      const opener = stack.pop();
+      if (opener === "`") {
+        quote = "`";
+      } else if (opener == null) {
+        return -1;
+      }
+    } else if (char === ";" && stack.length === 0) {
+      return i;
+    }
+  }
+
+  return -1;
+}
+
+// The settings component is compiled with the React Compiler, so the plugin
+// card is derived inside memo-cache branches rather than a plain declaration
+// chain. Anchor on that derivation and inject before the query is first read.
+function currentComputerUseCardTarget(source) {
+  const computerUsePluginNameVars = new Set(
+    [...source.matchAll(/([A-Za-z_$][\w$]*)=`computer-use`/g)].map((match) => match[1]),
+  );
+  if (computerUsePluginNameVars.size === 0) {
+    return null;
+  }
+
+  const derivations = [...source.matchAll(
+    /(?<derived>[A-Za-z_$][\w$]*)=(?<selector>[A-Za-z_$][\w$]*)\((?<plugins>[A-Za-z_$][\w$]*)\.availablePlugins,(?<pluginName>[A-Za-z_$][\w$]*),(?<marketplacePath>[A-Za-z_$][\w$]*)\)/g,
+  )].filter((match) => computerUsePluginNameVars.has(match.groups.pluginName));
+  if (derivations.length !== 1) {
+    return null;
+  }
+
+  const derivation = derivations[0];
+  const pluginsQueryVar = derivation.groups.plugins;
+  const declarationIndex = source.lastIndexOf(`${pluginsQueryVar}=`, derivation.index);
+  if (declarationIndex === -1) {
+    return null;
+  }
+
+  const statementEnd = findStatementEnd(source, declarationIndex);
+  if (statementEnd === -1 || statementEnd >= derivation.index) {
+    return null;
+  }
+
+  const platformVar = findLastRegexMatch(
+    source.slice(0, declarationIndex),
+    /\{computerUseAvailability:[A-Za-z_$][\w$]*,platform:([A-Za-z_$][\w$]*)\}=/g,
+  )?.[1];
+  if (platformVar == null) {
+    return null;
+  }
+
+  return {
+    insertAt: statementEnd + 1,
+    pluginsQueryVar,
+    pluginNameVar: derivation.groups.pluginName,
+    platformVar,
+  };
+}
+
 function applyCurrentComputerUseSettingsContract(currentSource) {
   if (
     !currentSource.includes("computerUseAvailability:") ||
@@ -449,41 +539,16 @@ function applyCurrentComputerUseSettingsContract(currentSource) {
   );
 
   let cardChanged = false;
-  const cardPattern =
-    /let ([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*),([A-Za-z_$][\w$]*)\),([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)\(\3\),((?:[A-Za-z_$][\w$]*=[A-Za-z_$][\w$]*\([A-Za-z_$][\w$]*\),)+)([A-Za-z_$][\w$]*);/g;
-  patchedSource = patchedSource.replace(
-    cardPattern,
-    (
-      match,
-      pluginsQueryVar,
-      pluginsHookVar,
-      selectedHostVar,
-      emptyPluginsVar,
-      marketplacePathVar,
-      marketplacePathHookVar,
-      intermediateDeclarations,
-      computerUsePluginVar,
-      offset,
-    ) => {
-      const lookback = patchedSource.slice(Math.max(0, offset - 900), offset);
-      const nextSource = patchedSource.slice(offset + match.length, offset + match.length + 800);
-      const platformVar = lookback.match(
-        /\{computerUseAvailability:[A-Za-z_$][\w$]*,platform:([A-Za-z_$][\w$]*)\}=/,
-      )?.[1];
-      const pluginNameVar = nextSource.match(
-        new RegExp(
-          String.raw`${computerUsePluginVar}=[A-Za-z_$][\w$]*\(${pluginsQueryVar}\.availablePlugins,([A-Za-z_$][\w$]*),${marketplacePathVar}\)`,
-        ),
-      )?.[1];
-      if (platformVar == null || pluginNameVar == null) {
-        return match;
-      }
-      const bundledMarketplaceDonorVar =
-        `${computerUsePluginVar}BundledMarketplaceDonor`;
-      cardChanged = true;
-      return `let ${pluginsQueryVar}=${pluginsHookVar}(${selectedHostVar},${emptyPluginsVar}),${marketplacePathVar}=${marketplacePathHookVar}(${selectedHostVar}),${intermediateDeclarations.slice(0, -1)};let ${bundledMarketplaceDonorVar}=${pluginsQueryVar}.availablePlugins.find(e=>e.marketplaceName===\`openai-bundled\`&&typeof e.marketplacePath===\`string\`&&e.marketplacePath.startsWith(\`/\`)&&e.marketplacePath.endsWith(\`/.agents/plugins/marketplace.json\`));${platformVar}===\`linux\`&&${bundledMarketplaceDonorVar}!=null&&!${pluginsQueryVar}.availablePlugins.some(e=>e.plugin?.name===${pluginNameVar}||e.plugin?.id?.split(\`@\`)[0]===${pluginNameVar})&&(${pluginsQueryVar}={...${pluginsQueryVar},availablePlugins:[...${pluginsQueryVar}.availablePlugins,{marketplaceName:\`openai-bundled\`,marketplacePath:${bundledMarketplaceDonorVar}.marketplacePath,logoPath:new URL(\`computer-use-plugin-icon-linux.png\`,import.meta.url).href,logoDarkPath:new URL(\`computer-use-plugin-icon-linux.png\`,import.meta.url).href,plugin:{id:${pluginNameVar},name:${pluginNameVar},installed:!0,enabled:!0}}]});let ${computerUsePluginVar};`;
-    },
-  );
+  const cardTarget = currentComputerUseCardTarget(patchedSource);
+  if (cardTarget != null) {
+    const { insertAt, pluginsQueryVar, pluginNameVar, platformVar } = cardTarget;
+    const bundledMarketplaceDonorVar = `${pluginsQueryVar}BundledMarketplaceDonor`;
+    const linuxCard =
+      `let ${bundledMarketplaceDonorVar}=${pluginsQueryVar}.availablePlugins.find(e=>e.marketplaceName===\`openai-bundled\`&&typeof e.marketplacePath===\`string\`&&e.marketplacePath.startsWith(\`/\`)&&e.marketplacePath.endsWith(\`/.agents/plugins/marketplace.json\`));${platformVar}===\`linux\`&&${bundledMarketplaceDonorVar}!=null&&!${pluginsQueryVar}.availablePlugins.some(e=>e.plugin?.name===${pluginNameVar}||e.plugin?.id?.split(\`@\`)[0]===${pluginNameVar})&&(${pluginsQueryVar}={...${pluginsQueryVar},availablePlugins:[...${pluginsQueryVar}.availablePlugins,{marketplaceName:\`openai-bundled\`,marketplacePath:${bundledMarketplaceDonorVar}.marketplacePath,logoPath:new URL(\`computer-use-plugin-icon-linux.png\`,import.meta.url).href,logoDarkPath:new URL(\`computer-use-plugin-icon-linux.png\`,import.meta.url).href,plugin:{id:${pluginNameVar},name:${pluginNameVar},installed:!0,enabled:!0}}]});`;
+    patchedSource =
+      `${patchedSource.slice(0, insertAt)}${linuxCard}${patchedSource.slice(insertAt)}`;
+    cardChanged = true;
+  }
 
   if (!cardChanged) {
     const latestCardPattern =

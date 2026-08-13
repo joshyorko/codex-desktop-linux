@@ -175,11 +175,6 @@ pub fn installed_package_version() -> String {
     }
 }
 
-/// Returns whether the primary native package still appears to be installed.
-pub fn is_primary_package_installed() -> bool {
-    installed_package_version() != "unknown"
-}
-
 fn installed_deb_version() -> String {
     installed_version_from_command(
         &program_path(DPKG_QUERY_CANDIDATES, "dpkg-query"),

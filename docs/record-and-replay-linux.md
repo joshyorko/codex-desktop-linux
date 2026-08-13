@@ -3,7 +3,7 @@
 This document tracks the Linux compatibility path for Codex Record & Replay.
 Treat Record & Replay as a demo-to-skill compiler, not as a coordinate macro
 recorder. Parity on Linux means staging the same bundled Record & Replay plugin
-shell from the current upstream DMG, replacing the macOS Sky Computer Use
+shell from the current official Linux package, replacing the unavailable Sky Computer Use
 event-stream helper with a Linux implementation of that helper contract, then
 capturing semantic evidence into a bundle that drafts and imports ordinary Codex
 skills.
@@ -425,7 +425,7 @@ Current Linux slice status:
    allowlisted bridge methods for recording status, HUD stop, diagnostics,
    bundle review, browser trace ingestion, draft prompt generation, and skill
    import.
-6. Upstream activation follow-up: inspect the current DMG bundle and enable the
+6. Upstream activation follow-up: inspect the current official package and enable the
    Plugins page overflow action "Record a skill" on Linux if it can launch the
    plugin/MCP flow without macOS-only private recorder dependencies.
 7. Provider follow-ups: expand browser trace/CDP into live browser attachment,
@@ -433,6 +433,10 @@ Current Linux slice status:
    capture where the portal stack supports it, deepen X11 event metadata, and
    add richer compositor-specific capture backends behind the same bundle
    contract.
+
+These phases are feature-development history, not build-source instructions.
+Every implementation and test uses the current signed official Linux `.deb` as
+its upstream baseline; macOS bundles are compatibility references only.
 
 ## Phase 1 Conclusion
 

@@ -638,53 +638,25 @@ test("stage hook accepts a verified prebuilt helper", () => {
   }
 });
 
-test("stage hook builds from the repository root", () => {
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "global-dictation-build-root-"));
-  const sourceRoot = path.join(tempDir, "source");
-  const installDir = path.join(tempDir, "install");
-  const binDir = path.join(tempDir, "bin");
-  const observedCwd = path.join(tempDir, "cargo.cwd");
-  fs.mkdirSync(sourceRoot);
-  fs.mkdirSync(binDir);
-  fs.writeFileSync(
-    path.join(binDir, "cargo"),
-    [
-      `#!${hostBash}`,
-      "set -eu",
-      "pwd > \"$FAKE_CARGO_CWD\"",
-      "printf '%s\\n' \"$*\" > \"$FAKE_CARGO_ARGS\"",
-      "target_dir=\"$FAKE_SOURCE_ROOT/global-dictation-linux/target/release\"",
-      "mkdir -p \"$target_dir\"",
-      "cp \"$FAKE_SOURCE_BINARY\" \"$target_dir/codex-global-dictation-linux\"",
-    ].join("\n"),
-    { mode: 0o755 },
-  );
+test("stage hook requires a release artifact and never invokes Cargo", () => {
+  const stage = fs.readFileSync(path.join(__dirname, "stage.sh"), "utf8");
+  assert.doesNotMatch(stage, /cargo\s+(?:build|install)/);
+  assert.match(stage, /global-dictation-linux\/target\/release\/codex-global-dictation-linux/);
 
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "global-dictation-missing-release-"));
   try {
-    execFileSync(path.join(__dirname, "stage.sh"), {
-      cwd: "/",
-      env: {
-        ...process.env,
-        FAKE_CARGO_ARGS: path.join(tempDir, "cargo.args"),
-        FAKE_CARGO_CWD: observedCwd,
-        FAKE_SOURCE_ROOT: sourceRoot,
-        FAKE_SOURCE_BINARY: process.execPath,
-        INSTALL_DIR: installDir,
-        PATH: `${binDir}${path.delimiter}${hostPath}`,
-        SCRIPT_DIR: sourceRoot,
-      },
-      stdio: "pipe",
-    });
-    assert.equal(fs.readFileSync(observedCwd, "utf8").trim(), sourceRoot);
-    assert.equal(
-      fs.readFileSync(path.join(tempDir, "cargo.args"), "utf8").trim(),
-      "build --release --manifest-path global-dictation-linux/Cargo.toml",
-    );
-    assert.equal(
-      fs.statSync(
-        path.join(installDir, "resources", "native", "codex-global-dictation-linux"),
-      ).mode & 0o777,
-      0o755,
+    assert.throws(
+      () => execFileSync(path.join(__dirname, "stage.sh"), {
+        cwd: "/",
+        env: {
+          ...process.env,
+          CODEX_GLOBAL_DICTATION_LINUX_SOURCE: path.join(tempDir, "missing-helper"),
+          INSTALL_DIR: path.join(tempDir, "install"),
+          SCRIPT_DIR: tempDir,
+        },
+        stdio: "pipe",
+      }),
+      /Command failed/,
     );
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });

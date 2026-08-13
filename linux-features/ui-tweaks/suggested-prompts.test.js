@@ -54,10 +54,10 @@ function appPageFixture() {
 
 function mainFixture() {
   return [
-    "function nt(e){return Xe().ambientSuggestions&&e.getEffective(n.oa.enabled.key)===!0}",
-    "async function rt({appServerConnection:e,settingsStore:t}){",
-    "if(!nt(t))return{enabled:!1,staleTimeMs:n.ml(null)};let r=await e.getAccount();",
-    "return{enabled:n.pl(r.account),staleTimeMs:n.ml(r.account)}}",
+    "function Or(e){return br().ambientSuggestions&&e.getEffective(n.Wi.enabled.key)===!0}",
+    "async function kr({appServerConnection:e,settingsStore:t}){",
+    "let{ambientSuggestionsStaleTimeMs:n}=br();if(!Or(t)||n==null)return{enabled:!1};",
+    "let{account:r}=await e.getAccount();return ie(r)?{enabled:!0,staleTimeMs:n}:{enabled:!1}}",
   ].join("");
 }
 
@@ -134,9 +134,56 @@ test("main patch enables refresh while preserving the upstream account call", ()
 
   assert.notEqual(patched, source);
   assert.equal((patched.match(new RegExp(MAIN_ELIGIBILITY_MARKER, "g")) || []).length, 1);
-  assert.match(patched, /n\.pl\(r\.account\)/);
-  assert.match(patched, /staleTimeMs:n\.ml\(r\.account\)/);
+  assert.match(patched, /ie\(r\)/);
+  assert.match(patched, /staleTimeMs:n/);
+  assert.match(patched, /await e\.getAccount\(\)/);
   assert.equal(applySuggestedPromptsMainPatch(patched), patched);
+});
+
+test("main patch preserves current minified aliases", () => {
+  const source = [
+    "async function refresh({appServerConnection:connection,settingsStore:store}){",
+    "let{ambientSuggestionsStaleTimeMs:stale}=featureState();",
+    "if(!settingsEligible(store)||stale==null)return{enabled:!1};",
+    "let{account:account}=await connection.getAccount();",
+    "return accountEligible(account)?{enabled:!0,staleTimeMs:stale}:{enabled:!1}}",
+  ].join("");
+  const patched = applySuggestedPromptsMainPatch(source);
+
+  assert.notEqual(patched, source);
+  assert.match(patched, /featureState\(\)/);
+  assert.match(patched, /settingsEligible\(store\)/);
+  assert.match(patched, /await connection\.getAccount\(\)/);
+  assert.match(patched, /accountEligible\(account\)/);
+  assert.match(patched, /staleTimeMs:stale/);
+  assert.equal(applySuggestedPromptsMainPatch(patched), patched);
+});
+
+test("main patch rejects incomplete, duplicate, and mixed contracts byte-identically", () => {
+  const current = mainFixture();
+  const patched = applySuggestedPromptsMainPatch(current);
+  const sources = [
+    current.replace("ambientSuggestionsStaleTimeMs", "ambientSuggestionStaleTimeMs"),
+    current.replace("await e.getAccount()", "await e.account()"),
+    patched.replace("(ie(r),function", "(ie(r)&&function"),
+    patched.replace("staleTimeMs:n", "staleTimeMs:refreshMs"),
+    patched.replace(
+      `function ${MAIN_ELIGIBILITY_MARKER}(){return!0}`,
+      `function ${MAIN_ELIGIBILITY_MARKER}(){return!1}`,
+    ),
+    current + current,
+    patched + patched,
+    current + patched,
+    `${current}function ${MAIN_ELIGIBILITY_MARKER}(){return!0}`,
+    `${patched}function ${MAIN_ELIGIBILITY_MARKER}(){return!0}`,
+  ];
+
+  for (const source of sources) {
+    const result = captureWarnings(() => applySuggestedPromptsMainPatch(source));
+    assert.equal(result.value, source);
+    assert.equal(result.warnings.length, 1);
+    assert.match(result.warnings[0], /current Suggested Prompts main process contract/);
+  }
 });
 
 test("Home content renders generated suggestions instead of selecting curated cards", () => {

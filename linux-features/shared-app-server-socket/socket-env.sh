@@ -11,12 +11,8 @@ node_bin="$(command -v node || true)"
 
 if [ -n "${CODEX_LINUX_APP_DIR:-}" ]; then
     staged_reaper="$CODEX_LINUX_APP_DIR/.codex-linux/features/shared-app-server-socket/orphan-reaper.js"
-    managed_node="$CODEX_LINUX_APP_DIR/resources/node-runtime/bin/node"
     if [ -f "$staged_reaper" ]; then
         reaper_path="$staged_reaper"
-    fi
-    if [ -x "$managed_node" ]; then
-        node_bin="$managed_node"
     fi
 fi
 

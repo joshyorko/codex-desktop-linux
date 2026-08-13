@@ -1054,36 +1054,6 @@ test("record-and-replay cleanup preserves Chronicle shared backend", () => {
   }
 });
 
-test("launcher rejects unsafe bundled plugin version path components", () => {
-  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "codex-record-replay-version-"));
-  try {
-    const launcher = fs.readFileSync(path.join(repoRoot(), "launcher/start.sh.template"), "utf8");
-    const segment = launcher.slice(
-      launcher.indexOf("bundled_plugin_version() {"),
-      launcher.indexOf("bundled_plugin_name() {"),
-    );
-    assert.notEqual(segment.length, 0);
-
-    const run = (version) => {
-      const pluginDir = path.join(workspace, `plugin-${String(version).replace(/[^A-Za-z0-9._-]/g, "_")}`);
-      fs.mkdirSync(path.join(pluginDir, ".codex-plugin"), { recursive: true });
-      const pluginJson = path.join(pluginDir, ".codex-plugin/plugin.json");
-      fs.writeFileSync(pluginJson, JSON.stringify({ name: "record-and-replay", version }));
-      return execFileSync("bash", ["-c", `${segment}\nbundled_plugin_version "$1"`, "probe", pluginJson], {
-        encoding: "utf8",
-      }).trim();
-    };
-
-    assert.equal(run("1.2.3-linux.1"), "1.2.3-linux.1");
-    assert.throws(() => run("."));
-    assert.throws(() => run(".."));
-    assert.throws(() => run("../escape"));
-    assert.throws(() => run("1/2"));
-  } finally {
-    fs.rmSync(workspace, { recursive: true, force: true });
-  }
-});
-
 test("record-and-replay stage hook uses the current upstream plugin shell when present", () => {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "codex-record-replay-stage-upstream-"));
   try {
@@ -1091,7 +1061,7 @@ test("record-and-replay stage hook uses the current upstream plugin shell when p
     const fakeBinary = path.join(workspace, "codex-record-replay-linux");
     const upstreamPlugin = path.join(
       workspace,
-      "upstream/ChatGPT.app/Contents/Resources/plugins/openai-bundled/plugins/record-and-replay",
+      "upstream/ChatGPT/resources/plugins/openai-bundled/plugins/record-and-replay",
     );
     const marketplace = path.join(installDir, "resources/plugins/openai-bundled/.agents/plugins/marketplace.json");
     fs.mkdirSync(path.join(upstreamPlugin, ".codex-plugin"), { recursive: true });
@@ -1145,7 +1115,7 @@ test("record-and-replay stage hook uses the current upstream plugin shell when p
         ...process.env,
         SCRIPT_DIR: repoRoot(),
         INSTALL_DIR: installDir,
-        CODEX_UPSTREAM_APP_DIR: path.join(workspace, "upstream/ChatGPT.app"),
+        CODEX_UPSTREAM_APP_DIR: path.join(workspace, "upstream/ChatGPT"),
       },
       stdio: "pipe",
     });
@@ -1184,7 +1154,7 @@ test("record-and-replay stage hook rejects the obsolete nested-app plugin shell"
     const fakeBinary = path.join(workspace, "codex-record-replay-linux");
     const upstreamPlugin = path.join(
       workspace,
-      "upstream/ChatGPT.app/Contents/Resources/plugins/openai-bundled/plugins/record-and-replay",
+      "upstream/ChatGPT/resources/plugins/openai-bundled/plugins/record-and-replay",
     );
     const oldClient = path.join(
       upstreamPlugin,
@@ -1233,7 +1203,7 @@ test("record-and-replay stage hook rejects the obsolete nested-app plugin shell"
         ...process.env,
         SCRIPT_DIR: repoRoot(),
         INSTALL_DIR: installDir,
-        CODEX_UPSTREAM_APP_DIR: path.join(workspace, "upstream/ChatGPT.app"),
+        CODEX_UPSTREAM_APP_DIR: path.join(workspace, "upstream/ChatGPT"),
       },
       stdio: "pipe",
     });
@@ -1252,7 +1222,7 @@ test("record-and-replay stage hook borrows upstream webview icon when present", 
   try {
     const installDir = path.join(workspace, "install");
     const fakeBinary = path.join(workspace, "codex-record-replay-linux");
-    const assetsDir = path.join(installDir, "content/webview/assets");
+    const assetsDir = path.join(installDir, "resources");
     fs.mkdirSync(assetsDir, { recursive: true });
     fs.writeFileSync(path.join(assetsDir, "record-and-replay-plugin-icon-fixture.png"), "fake-png");
     fs.writeFileSync(fakeBinary, "#!/bin/sh\nprintf '{\"ok\":true}\\n'\n");

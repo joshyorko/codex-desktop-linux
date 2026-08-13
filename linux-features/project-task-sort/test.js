@@ -11,7 +11,7 @@ const vm = require("node:vm");
 const {
   loadLinuxFeaturePatchDescriptors,
 } = require("../../scripts/lib/linux-features.js");
-const { patchAssetFiles } = require("../../scripts/patches/lib/assets.js");
+const { patchUniqueAssetFile } = require("../../scripts/patches/lib/assets.js");
 const {
   applyProjectTaskSortPatch,
   descriptors,
@@ -161,23 +161,25 @@ test("descriptor targets and patches the current project chunk", () => {
     const assetsDir = path.join(tempDir, "webview", "assets");
     const assetPath = path.join(
       assetsDir,
-      "app-initial-BHB6SClA.js",
+      "app-initial-Bd3Z1bES.js",
     );
     fs.mkdirSync(assetsDir, { recursive: true });
     fs.writeFileSync(assetPath, currentProjectSource);
 
-    const result = patchAssetFiles(
+    const result = patchUniqueAssetFile(
       tempDir,
       descriptors[0].pattern,
+      descriptors[0].assetMatch,
       descriptors[0].apply,
       "missing",
+      "ambiguous",
     );
 
-    assert.deepEqual(result, { matched: 1, changed: 1 });
+    assert.deepEqual(result, { matched: 1, changed: 1, assetName: "app-initial-Bd3Z1bES.js" });
     assert.notEqual(fs.readFileSync(assetPath, "utf8"), currentProjectSource);
     assert.equal(
       descriptors[0].pattern.test(
-        "app-initial~app-main~projects-index-page~remote-conversation-page-y7pwA1Hj.js",
+        "projects-index-page-DjNy92Xe.js",
       ),
       false,
     );

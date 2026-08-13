@@ -33,7 +33,11 @@ function appPageEligibilityPattern() {
 }
 
 function mainEligibilityPattern() {
-  return /return\{enabled:([A-Za-z_$][\w$]*)\.([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*)\.account\),staleTimeMs:\1\.([A-Za-z_$][\w$]*)\(\3\.account\)\}/gu;
+  return /let\{ambientSuggestionsStaleTimeMs:([A-Za-z_$][\w$]*)\}=([A-Za-z_$][\w$]*)\(\);if\(!([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*)\)\|\|\1==null\)return\{enabled:!1\};let\{account:([A-Za-z_$][\w$]*)\}=await ([A-Za-z_$][\w$]*)\.getAccount\(\);return ([A-Za-z_$][\w$]*)\(\5\)\?\{enabled:!0,staleTimeMs:\1\}:\{enabled:!1\}/gu;
+}
+
+function patchedMainEligibilityPattern() {
+  return /let\{ambientSuggestionsStaleTimeMs:([A-Za-z_$][\w$]*)\}=([A-Za-z_$][\w$]*)\(\);if\(!([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*)\)\|\|\1==null\)return\{enabled:!1\};let\{account:([A-Za-z_$][\w$]*)\}=await ([A-Za-z_$][\w$]*)\.getAccount\(\);return\(([A-Za-z_$][\w$]*)\(\5\),function codexLinuxUiTweaksSuggestedPromptsMainEnabled\(\)\{return!0\}\(\)\)\?\{enabled:!0,staleTimeMs:\1\}:\{enabled:!1\}/gu;
 }
 
 function settingsEligibilityPattern() {
@@ -105,6 +109,22 @@ function suggestedPromptsHomeContentContract(source) {
   return "drifted";
 }
 
+function suggestedPromptsMainContract(source) {
+  if (typeof source !== "string") {
+    return "drifted";
+  }
+  const markerMatches = source.split(MAIN_ELIGIBILITY_MARKER).length - 1;
+  const cleanMatches = matchCount(source, mainEligibilityPattern());
+  const patchedMatches = matchCount(source, patchedMainEligibilityPattern());
+  if (markerMatches === 0 && cleanMatches === 1 && patchedMatches === 0) {
+    return "current";
+  }
+  if (markerMatches === 1 && cleanMatches === 0 && patchedMatches === 1) {
+    return "patched";
+  }
+  return "drifted";
+}
+
 function replaceRolloutGates(source) {
   return source.replace(
     gateAssignmentPattern(),
@@ -139,22 +159,28 @@ function applySuggestedPromptsAppPagePatch(source) {
 
 function applySuggestedPromptsMainPatch(source) {
   try {
-    const markerMatches = typeof source === "string"
-      ? source.split(MAIN_ELIGIBILITY_MARKER).length - 1
-      : 0;
-    const cleanMatches = typeof source === "string" ? matchCount(source, mainEligibilityPattern()) : 0;
-    if (markerMatches === 1 && cleanMatches === 0) {
+    const contract = suggestedPromptsMainContract(source);
+    if (contract === "patched") {
       return source;
     }
-    if (markerMatches !== 0 || cleanMatches !== 1) {
+    if (contract !== "current") {
       warn("main process");
       return source;
     }
 
     return source.replace(
       mainEligibilityPattern(),
-      (_match, namespace, enabledMethod, accountName, staleMethod) =>
-        `return{enabled:(${namespace}.${enabledMethod}(${accountName}.account),function ${MAIN_ELIGIBILITY_MARKER}(){return!0}()),staleTimeMs:${namespace}.${staleMethod}(${accountName}.account)}`,
+      (
+        _match,
+        staleTimeName,
+        featureStateName,
+        settingsEligibilityName,
+        settingsStoreName,
+        accountName,
+        appServerConnectionName,
+        accountEligibilityName,
+      ) =>
+        `let{ambientSuggestionsStaleTimeMs:${staleTimeName}}=${featureStateName}();if(!${settingsEligibilityName}(${settingsStoreName})||${staleTimeName}==null)return{enabled:!1};let{account:${accountName}}=await ${appServerConnectionName}.getAccount();return(${accountEligibilityName}(${accountName}),function ${MAIN_ELIGIBILITY_MARKER}(){return!0}())?{enabled:!0,staleTimeMs:${staleTimeName}}:{enabled:!1}`,
     );
   } catch (error) {
     console.warn(

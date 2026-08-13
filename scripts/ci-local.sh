@@ -31,12 +31,11 @@ Targets:
   install-deps:ubuntu-24.04  Test install-deps on one apt image
   install-deps:debian-12     Test install-deps on one apt image
   nix                        Run the heavy Nix flake build checks
-  upstream                   Build the app against the upstream DMG
+  upstream                   Build the app from the signed official Linux package
 
 Environment:
   CI_CONTAINER_ENGINE=docker|podman
   CI_PACKAGE_VERSION=2026.04.28.000000+local
-  CI_DMG_PATH=/path/to/Codex.dmg
   CI_SKIP_PULL=1
   CI_CACHE_DIR=/path/to/cache
 
@@ -104,20 +103,6 @@ mount_github_summary_args() {
     fi
 }
 
-mount_upstream_args() {
-    local -n _args="$1"
-    local upstream_dir="/tmp/codex-upstream-ci"
-    mkdir -p "$upstream_dir"
-    _args+=(-v "$upstream_dir:$upstream_dir")
-
-    if [ -n "${CI_DMG_PATH:-}" ] && [ "${CI_DMG_PATH#/}" != "$CI_DMG_PATH" ]; then
-        local dmg_dir
-        dmg_dir="$(dirname "$CI_DMG_PATH")"
-        mkdir -p "$dmg_dir"
-        _args+=(-v "$dmg_dir:$dmg_dir")
-    fi
-}
-
 run_container_job() {
     local job="$1"
     local image_key="$2"
@@ -143,8 +128,6 @@ run_container_job() {
         -e "CI_PACKAGE_VERSION=$CI_PACKAGE_VERSION"
         -e "PACKAGE_VERSION=$CI_PACKAGE_VERSION"
         -e "CARGO_TERM_COLOR=${CARGO_TERM_COLOR:-always}"
-        -e "UPSTREAM_DMG_URL=${UPSTREAM_DMG_URL:-https://persistent.oaistatic.com/codex-app-prod/ChatGPT.dmg}"
-        -e "UPSTREAM_DMG_PATH=${UPSTREAM_DMG_PATH:-/tmp/codex-upstream-ci/Codex.dmg}"
         -v "$REPO_DIR:/work"
         -v "$CI_CACHE_DIR:/ci-cache"
         -w /work
@@ -159,17 +142,7 @@ run_container_job() {
         args+=(-v "$git_common_dir:$git_common_dir:ro")
     fi
 
-    if [ -n "${CI_DMG_PATH:-}" ]; then
-        args+=(-e "CI_DMG_PATH=$CI_DMG_PATH")
-    fi
-    if [ -n "${UPSTREAM_DMG_CACHE_HIT:-}" ]; then
-        args+=(-e "UPSTREAM_DMG_CACHE_HIT=$UPSTREAM_DMG_CACHE_HIT")
-    fi
-
     mount_github_summary_args args
-    if [ "$job" = "upstream" ]; then
-        mount_upstream_args args
-    fi
 
     info "Running $job in $image_key"
     "$engine" "${args[@]}" "$image" bash /work/scripts/ci/container-entrypoint.sh "$job"

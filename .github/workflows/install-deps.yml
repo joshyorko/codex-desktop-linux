@@ -16,10 +16,14 @@ on:
       - packaging/linux/control
       - .github/workflows/install-deps.yml
 
+permissions:
+  contents: read
+
 jobs:
   apt-node-bootstrap:
     name: ${{ matrix.image }}
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     container:
       image: ${{ matrix.image }}
       options: --user root
@@ -33,7 +37,7 @@ jobs:
     env:
       DEBIAN_FRONTEND: noninteractive
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
 
       - name: Bootstrap sudo
         run: |
@@ -51,11 +55,11 @@ jobs:
           npx -v
           dpkg-query -W -f='${Provides}\n' nodejs | grep -E '(^|[,[:space:]])npm([,[:space:](]|$)'
 
-      - name: Verify installer passes Node preflight
+      - name: Verify installer rejects retired source format after dependency preflight
         run: |
           export PATH="$HOME/.local/bin:$PATH"
           output=$(./install.sh /tmp/nope.dmg 2>&1) && status=0 || status=$?
           printf '%s\n' "$output"
           test "$status" -ne 0
-          printf '%s\n' "$output" | grep -q "Provided DMG not found: /tmp/nope.dmg"
+          printf '%s\n' "$output" | grep -q "macOS DMG inputs are no longer supported"
           ! printf '%s\n' "$output" | grep -q "Node.js 20+ required"

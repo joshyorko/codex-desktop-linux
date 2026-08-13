@@ -1,6 +1,6 @@
 # Project Task Created Sorting
 
-Optional current-DMG patch for the alternate Projects sidebar.
+Optional current-package patch for the alternate Projects sidebar.
 
 When the upstream sidebar rollout exposes `Created`, local task rows may omit
 `conversation.createdAt` even though their `local:<UUIDv7>` keys contain a

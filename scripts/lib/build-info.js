@@ -197,7 +197,7 @@ function packageProfile(target) {
       label: "Debian / Ubuntu / Pop!_OS / Mint / Elementary",
       packageManager: "apt",
       format: ".deb",
-      notes: "Managed Node.js runtime is bundled; no distro Node.js package is required",
+      notes: "The official Linux runtime and Codex CLI are bundled; no external Electron or CLI package is required",
     };
   }
   if (target.atomic && ids.has("fedora")) {
@@ -252,23 +252,6 @@ function sha256File(filePath) {
   return hasher.digest("hex");
 }
 
-function appBundleVersion(appDir) {
-  const infoPath = path.join(appDir, "Contents", "Info.plist");
-  if (!fs.existsSync(infoPath)) {
-    return null;
-  }
-  const result = childProcess.spawnSync(
-    "python3",
-    ["-c", "import plistlib,sys; p=plistlib.load(open(sys.argv[1],'rb')); print(p.get('CFBundleShortVersionString') or p.get('CFBundleVersion') or '')", infoPath],
-    { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
-  );
-  if (result.status !== 0) {
-    return null;
-  }
-  const version = result.stdout.trim();
-  return version.length > 0 ? version : null;
-}
-
 function linuxTargetInfo(target) {
   return {
     summary: linuxTargetSummary(target),
@@ -286,25 +269,28 @@ function linuxTargetInfo(target) {
 
 function buildInfo(options) {
   const repoDir = path.resolve(options.repoDir);
-  const dmgPath = path.resolve(options.dmgPath);
-  const appDir = path.resolve(options.appDir);
+  const packagePath = path.resolve(options.upstreamPackagePath);
   const featuresRoot = linuxFeaturesRoot({ featuresRoot: options.featuresRoot });
   const env = options.env ?? process.env;
   const target = options.linuxTarget ?? detectLinuxTargetContext();
+  const metadata = options.upstreamMetadata ?? {};
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     generatedAt: isoTimestamp(env),
     appIdentity: {
       id: options.appId,
       displayName: options.appDisplayName,
     },
-    upstreamDmg: {
-      fileName: path.basename(dmgPath),
-      sizeBytes: fs.statSync(dmgPath).size,
-      sha256: sha256File(dmgPath),
-      appVersion: appBundleVersion(appDir),
+    upstreamLinuxPackage: {
+      package: metadata.package ?? "chatgpt",
+      version: metadata.version ?? null,
+      architecture: metadata.architecture ?? null,
+      repository: metadata.repository ?? null,
+      repositoryPath: metadata.repositoryPath ?? null,
+      fileName: path.basename(packagePath),
+      sizeBytes: fs.statSync(packagePath).size,
+      sha256: sha256File(packagePath),
     },
-    electronVersion: options.electronVersion,
     source: sourceInfo(repoDir, env),
     linuxTarget: linuxTargetInfo(target),
     packageProfile: packageProfile(target),
@@ -327,21 +313,19 @@ function main() {
   const [
     repoDir,
     installDir,
-    dmgPath,
-    appDir,
-    electronVersion,
+    packagePath,
+    metadataPath,
     appId,
     appDisplayName,
   ] = process.argv.slice(2);
-  if ([repoDir, installDir, dmgPath, appDir, electronVersion, appId, appDisplayName].some((value) => !value)) {
-    console.error("Usage: build-info.js <repo-dir> <install-dir> <dmg-path> <app-dir> <electron-version> <app-id> <app-display-name>");
+  if ([repoDir, installDir, packagePath, metadataPath, appId, appDisplayName].some((value) => !value)) {
+    console.error("Usage: build-info.js <repo-dir> <install-dir> <package-path> <metadata-path> <app-id> <app-display-name>");
     process.exit(1);
   }
   writeBuildInfo({
     repoDir,
-    dmgPath,
-    appDir,
-    electronVersion,
+    upstreamPackagePath: packagePath,
+    upstreamMetadata: readJsonFile(metadataPath) ?? {},
     appId,
     appDisplayName,
     outputPaths: [

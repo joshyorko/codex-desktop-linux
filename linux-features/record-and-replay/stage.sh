@@ -40,11 +40,9 @@ find_upstream_record_replay_icon() {
     local candidate
     for assets_dir in \
         "$target_plugin/assets" \
-        "$INSTALL_DIR/content/webview/assets" \
-        "$INSTALL_DIR/app/content/webview/assets" \
-        "$INSTALL_DIR/resources/app/content/webview/assets"; do
+        "$INSTALL_DIR/resources"; do
         [ -d "$assets_dir" ] || continue
-        candidate="$(find "$assets_dir" -maxdepth 1 -type f \( -name 'app-icon.png' -o -name 'record-and-replay-plugin-icon-*.png' \) | sort | head -n 1)"
+        candidate="$(find "$assets_dir" -maxdepth 1 -type f \( -name 'app-icon.png' -o -name 'record-and-replay-plugin-icon-*.png' -o -name 'icon-chatgpt.png' \) | sort | head -n 1)"
         [ -n "$candidate" ] || continue
         printf '%s\n' "$candidate"
         return 0
@@ -78,7 +76,7 @@ find_upstream_record_replay_plugin() {
     local candidate=""
 
     [ -n "$app_dir" ] || return 1
-    candidate="$app_dir/Contents/Resources/plugins/openai-bundled/plugins/record-and-replay"
+    candidate="$app_dir/resources/plugins/openai-bundled/plugins/record-and-replay"
     [ -f "$candidate/.codex-plugin/plugin.json" ] || return 1
     [ -f "$candidate/.mcp.json" ] || return 1
     [ -d "$candidate/skills/record-and-replay" ] || return 1
@@ -99,7 +97,7 @@ stage_record_replay_plugin_base() {
     if source_plugin="$(find_upstream_record_replay_plugin)"; then
         cp -R "$source_plugin/." "$target_plugin/"
         find "$target_plugin" \( -name '*:com.apple.*' -o -name '.gitkeep' -o -name '.DS_Store' \) -delete
-        echo "Record & Replay plugin base staged from upstream DMG" >&2
+        echo "Record & Replay plugin base staged from official Linux package" >&2
         return 0
     fi
 
@@ -183,8 +181,35 @@ fs.writeFileSync(pluginPath, `${JSON.stringify(plugin, null, 2)}\n`);
 NODE
 }
 
+build_record_replay_backend() {
+    local source_binary="$SCRIPT_DIR/target/release/codex-record-replay-linux"
+    local packaged_binary="$INSTALL_DIR/resources/native/codex-record-replay-linux"
+
+    if [ -n "${CODEX_RECORD_REPLAY_LINUX_SOURCE:-}" ]; then
+        [ -x "$CODEX_RECORD_REPLAY_LINUX_SOURCE" ] || {
+            echo "Record & Replay source is not executable: $CODEX_RECORD_REPLAY_LINUX_SOURCE" >&2
+            return 1
+        }
+        echo "Using prebuilt Record & Replay backend" >&2
+        printf '%s\n' "$CODEX_RECORD_REPLAY_LINUX_SOURCE"
+        return 0
+    fi
+
+    if [ -x "$packaged_binary" ]; then
+        printf '%s\n' "$packaged_binary"
+        return 0
+    fi
+
+    [ -x "$source_binary" ] || {
+        echo "Record & Replay requires a prebuilt release binary: $source_binary" >&2
+        echo "Build native helpers once before packaging, or set CODEX_RECORD_REPLAY_LINUX_SOURCE." >&2
+        return 1
+    }
+    printf '%s\n' "$source_binary"
+}
+
+backend_binary="$(build_record_replay_backend)"
 native_target_dir="$INSTALL_DIR/resources/native"
-backend_binary="$native_target_dir/codex-record-replay-linux"
 plugin_template="$SCRIPT_DIR/linux-features/record-and-replay/plugin-template"
 target_plugin="$INSTALL_DIR/resources/plugins/openai-bundled/plugins/record-and-replay"
 target_marketplace="$INSTALL_DIR/resources/plugins/openai-bundled/.agents/plugins/marketplace.json"
@@ -194,10 +219,11 @@ target_marketplace="$INSTALL_DIR/resources/plugins/openai-bundled/.agents/plugin
     exit 1
 }
 
-[ -x "$backend_binary" ] || {
-    echo "Record & Replay requires the Chronicle / Skysight shared backend: $backend_binary" >&2
-    exit 1
-}
+mkdir -p "$native_target_dir"
+if [ "$backend_binary" != "$native_target_dir/codex-record-replay-linux" ]; then
+    cp "$backend_binary" "$native_target_dir/codex-record-replay-linux"
+fi
+chmod 0755 "$native_target_dir/codex-record-replay-linux"
 
 stage_record_replay_plugin_base "$target_plugin" "$plugin_template"
 patch_record_replay_plugin_for_linux "$target_plugin"

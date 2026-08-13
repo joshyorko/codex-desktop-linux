@@ -13,10 +13,45 @@ const {
   enabledLinuxFeaturePackageFiles,
   enabledLinuxFeaturePackagePlan,
   loadLinuxFeaturePatchDescriptors,
+  loadEnabledLinuxFeatures,
+  linuxFeaturesConfig,
   restoreEnabledLinuxFeaturePackageResourcePermissions,
   stageEnabledLinuxFeaturePackageResources,
   stageEnabledLinuxFeatureInstall,
 } = require("./linux-features.js");
+
+test("known retired feature ids are ignored while arbitrary unknown ids fail", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-retired-feature-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const featuresRoot = path.join(root, "linux-features");
+  fs.mkdirSync(featuresRoot);
+  const configPath = path.join(featuresRoot, "features.json");
+  fs.writeFileSync(configPath, JSON.stringify({
+    enabled: [
+      "codex-wrapper-updater",
+      "conversation-delete",
+      "conversation-mode",
+      "deferred-update-build",
+      "example-feature",
+      "open-target-discovery",
+      "ssh-command-wrapper",
+      "x11-ewmh-computer-use",
+      "zed-opener",
+    ],
+    settings: { "open-target-discovery": { stale: true } },
+  }));
+
+  assert.deepEqual(linuxFeaturesConfig({ featuresRoot, featuresConfigPath: configPath }), {
+    enabled: [], settings: {}, configPath,
+  });
+  assert.deepEqual(loadEnabledLinuxFeatures({ featuresRoot, featuresConfigPath: configPath }), []);
+
+  fs.writeFileSync(configPath, JSON.stringify({ enabled: ["open-target-discovry"] }));
+  assert.throws(
+    () => loadEnabledLinuxFeatures({ featuresRoot, featuresConfigPath: configPath }),
+    /not found.*open-target-discovry/,
+  );
+});
 
 function makeFeatureRoot(root, featureManifest) {
   const featuresRoot = path.join(root, "linux-features");

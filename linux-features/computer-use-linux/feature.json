@@ -1,0 +1,10 @@
+{
+  "id": "computer-use-linux",
+  "title": "Linux Computer Use",
+  "description": "Optional Linux desktop-control UI and native MCP backend integration.",
+  "defaultEnabled": false,
+  "entrypoints": {
+    "patchDescriptors": "./patch.js",
+    "stageHook": "./stage.sh"
+  }
+}

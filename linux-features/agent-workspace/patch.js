@@ -4,13 +4,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const {
   findCodexRequestWebviewAsset,
-  findImportedAsset,
-  findRequiredWebviewAsset,
 } = require("../../scripts/patches/lib/assets.js");
-const {
-  requireName,
-} = require("../../scripts/patches/lib/minified-js.js");
-
 const SETTINGS_ASSET = "agent-workspaces-linux.js";
 const SETTINGS_SLUG = "agent-workspaces";
 const SETTINGS_COMMAND_KEY = "codex-linux-agent-workspace-command";
@@ -20,11 +14,17 @@ function warn(message, patchName) {
   console.warn(`WARN: ${message} - skipping ${patchName}`);
 }
 
+const NODE_MODULE_EXPRESSIONS = Object.freeze({
+  childProcessVar: 'require("node:child_process")',
+  fsVar: 'require("node:fs")',
+  pathVar: 'require("node:path")',
+});
+
 function agentWorkspaceAppPickerBridgeSource({ fsVar, pathVar }) {
   return [
-    `"linux-agent-workspace-pick-app":async()=>{let __codexElectron;try{__codexElectron=require("electron")}catch(e){return{ok:!1,action:"pickStartupApp",message:"file picker unavailable"}}`,
+    `"linux-agent-workspace-pick-app":async()=>{let __codexFsModule=${fsVar},__codexPathModule=${pathVar},__codexElectron;try{__codexElectron=require("electron")}catch(e){return{ok:!1,action:"pickStartupApp",message:"file picker unavailable"}}`,
     `let __codexDesktopTokens=e=>{let t=[],n="",r=null,a=!1,o=String(e||"");for(let i=0;i<o.length;i++){let c=o[i];if(a){n+=c,a=!1;continue}if(c==="\\\\"){a=!0;continue}if(r){if(c===r)r=null;else n+=c;continue}if(c==="'"||c==='"'){r=c;continue}if(/\\s/.test(c)){if(n)t.push(n),n="";continue}n+=c}if(a)n+="\\\\";if(n)t.push(n);return t};`,
-    `let __codexDesktopEntry=__codexPath=>{if(typeof __codexPath!=="string"||!__codexPath.endsWith(".desktop"))return null;try{let __codexText=${fsVar}.readFileSync(__codexPath,"utf8"),__codexInEntry=!1,__codexName=null,__codexExec=null;for(let __codexLine of __codexText.split(/\\r?\\n/)){let __codexTrimmed=__codexLine.trim();if(!__codexTrimmed||__codexTrimmed.startsWith("#"))continue;if(__codexTrimmed.startsWith("[")&&__codexTrimmed.endsWith("]")){__codexInEntry=__codexTrimmed==="[Desktop Entry]";continue}if(!__codexInEntry)continue;let __codexEquals=__codexTrimmed.indexOf("=");if(__codexEquals<1)continue;let __codexKey=__codexTrimmed.slice(0,__codexEquals),__codexValue=__codexTrimmed.slice(__codexEquals+1).trim();if((__codexKey==="Name"||__codexKey.startsWith("Name["))&&!__codexName)__codexName=__codexValue;else if(__codexKey==="Exec"&&!__codexExec)__codexExec=__codexValue}if(!__codexExec)return null;let __codexPercent="__CODEX_PERCENT__",__codexCleanExec=__codexExec.replace(/%%/g,__codexPercent).replace(/%[A-Za-z]/g,"").replace(new RegExp(__codexPercent,"g"),"%").trim(),__codexCommand=__codexDesktopTokens(__codexCleanExec);return __codexCommand.length?{name:__codexName||${pathVar}.basename(__codexPath,".desktop"),command:__codexCommand,desktop_file:__codexPath}:null}catch{return null}};`,
+    `let __codexDesktopEntry=__codexPath=>{if(typeof __codexPath!=="string"||!__codexPath.endsWith(".desktop"))return null;try{let __codexText=__codexFsModule.readFileSync(__codexPath,"utf8"),__codexInEntry=!1,__codexName=null,__codexExec=null;for(let __codexLine of __codexText.split(/\\r?\\n/)){let __codexTrimmed=__codexLine.trim();if(!__codexTrimmed||__codexTrimmed.startsWith("#"))continue;if(__codexTrimmed.startsWith("[")&&__codexTrimmed.endsWith("]")){__codexInEntry=__codexTrimmed==="[Desktop Entry]";continue}if(!__codexInEntry)continue;let __codexEquals=__codexTrimmed.indexOf("=");if(__codexEquals<1)continue;let __codexKey=__codexTrimmed.slice(0,__codexEquals),__codexValue=__codexTrimmed.slice(__codexEquals+1).trim();if((__codexKey==="Name"||__codexKey.startsWith("Name["))&&!__codexName)__codexName=__codexValue;else if(__codexKey==="Exec"&&!__codexExec)__codexExec=__codexValue}if(!__codexExec)return null;let __codexPercent="__CODEX_PERCENT__",__codexCleanExec=__codexExec.replace(/%%/g,__codexPercent).replace(/%[A-Za-z]/g,"").replace(new RegExp(__codexPercent,"g"),"%").trim(),__codexCommand=__codexDesktopTokens(__codexCleanExec);return __codexCommand.length?{name:__codexName||__codexPathModule.basename(__codexPath,".desktop"),command:__codexCommand,desktop_file:__codexPath}:null}catch{return null}};`,
     `try{let e=await __codexElectron.dialog.showOpenDialog({title:"Choose startup app",properties:["openFile"]});let t=Array.isArray(e.filePaths)?e.filePaths:[],n=t[0]||null,r=__codexDesktopEntry(n);return{ok:!e.canceled&&t.length>0,action:"pickStartupApp",json:{canceled:!!e.canceled,path:n,paths:t,startup_app:r,desktop:!!r}}}catch(e){return{ok:!1,action:"pickStartupApp",message:e instanceof Error?e.message:String(e)}}}`,
   ].join("");
 }
@@ -61,10 +61,31 @@ function useUserWritableNpmPrefixForInstallRuntime(source) {
 }
 
 function agentWorkspaceBridgeWithWorkspaceStartSource(args) {
-  return useUserWritableNpmPrefixForInstallRuntime(AGENT_WORKSPACE_BRIDGE_SOURCE_TEMPLATE)
-    .split("__CODEX_CHILD_PROCESS_VAR__").join(args.childProcessVar)
-    .split("__CODEX_FS_VAR__").join(args.fsVar)
-    .split("__CODEX_PATH_VAR__").join(args.pathVar);
+  let source = useUserWritableNpmPrefixForInstallRuntime(AGENT_WORKSPACE_BRIDGE_SOURCE_TEMPLATE)
+    .split("__CODEX_CHILD_PROCESS_VAR__").join("__codexChildProcessModule")
+    .split("__CODEX_FS_VAR__").join("__codexFsModule")
+    .split("__CODEX_PATH_VAR__").join("__codexPathModule");
+  const captures = [
+    [
+      `"linux-agent-workspace-pick-app":async()=>{`,
+      `let __codexFsModule=${args.fsVar},__codexPathModule=${args.pathVar};`,
+    ],
+    [
+      `"linux-agent-workspace-copy-browser-data":async({sourcePath:__codexSourcePath,profileId:__codexProfileId}={})=>{`,
+      `let __codexFsModule=${args.fsVar},__codexPathModule=${args.pathVar};`,
+    ],
+    [
+      `"linux-agent-workspace":async({action:__codexAction,timeoutMs:__codexTimeoutMs,profileId:__codexProfileId,profile:__codexProfile,replace:__codexReplace,dryRun:__codexDryRun,workspaceId:__codexWorkspaceId,purpose:__codexPurpose,runSetup:__codexRunSetup,ackHiddenWorkspace:__codexAckHiddenWorkspace,ackUnenforcedPolicy:__codexAckUnenforcedPolicy,startupWaitWindow:__codexStartupWaitWindow,startupScreenshotWindow:__codexStartupScreenshotWindow,cleanupId:__codexCleanupId,outputPath:__codexOutputPath,templateKind:__codexTemplateKind,hostPath:__codexHostPath,browserPath:__codexBrowserPath,userDataDir:__codexUserDataDir,alwaysOnTop:__codexAlwaysOnTop,permissions:__codexPermissions}={})=>{`,
+      `let __codexChildProcessModule=${args.childProcessVar},__codexFsModule=${args.fsVar},__codexPathModule=${args.pathVar};`,
+    ],
+  ];
+  for (const [marker, capture] of captures) {
+    if (!source.includes(marker)) {
+      throw new Error(`could not add agent workspace module capture for ${marker}`);
+    }
+    source = source.replace(marker, `${marker}${capture}`);
+  }
+  return source;
 }
 
 function agentWorkspaceActionBridgeSource(args) {
@@ -140,28 +161,13 @@ function replaceAgentWorkspaceActionBridge(currentSource, actionBridgeSource) {
 function applyAgentWorkspaceMainBridgePatch(currentSource) {
   const patchName = "agent workspace main bridge patch";
   if (currentSource.includes('"linux-agent-workspace":async')) {
-    const childProcessVar = requireName(currentSource, "node:child_process");
-    const fsVar = requireName(currentSource, "node:fs");
-    const pathVar = requireName(currentSource, "node:path");
-    if (childProcessVar == null || fsVar == null || pathVar == null) {
-      warn("Could not find Node module aliases for agent workspace bridge upgrade", patchName);
-      return currentSource;
-    }
-    const args = { childProcessVar, fsVar, pathVar };
+    const args = NODE_MODULE_EXPRESSIONS;
     let patchedSource = currentSource;
     patchedSource = ensureAgentWorkspaceBridgeEntry(patchedSource, agentWorkspaceAppPickerBridgeSource(args));
     patchedSource = ensureAgentWorkspaceBridgeEntry(patchedSource, agentWorkspaceMountPickerBridgeSource());
     patchedSource = ensureAgentWorkspaceBridgeEntry(patchedSource, agentWorkspaceBrowserDataPickerBridgeSource());
     patchedSource = ensureAgentWorkspaceBridgeEntry(patchedSource, agentWorkspaceBrowserDataCopyBridgeSource(args));
     return replaceAgentWorkspaceActionBridge(patchedSource, agentWorkspaceActionBridgeSource(args));
-  }
-
-  const childProcessVar = requireName(currentSource, "node:child_process");
-  const fsVar = requireName(currentSource, "node:fs");
-  const pathVar = requireName(currentSource, "node:path");
-  if (childProcessVar == null || fsVar == null || pathVar == null) {
-    warn("Could not find Node module aliases", patchName);
-    return currentSource;
   }
 
   const handlerNeedle = `"get-global-state":async({key:`;
@@ -172,12 +178,13 @@ function applyAgentWorkspaceMainBridgePatch(currentSource) {
 
   return currentSource.replace(
     handlerNeedle,
-    `${agentWorkspaceBridgeWithWorkspaceStartSource({ childProcessVar, fsVar, pathVar })},${handlerNeedle}`,
+    `${agentWorkspaceBridgeWithWorkspaceStartSource(NODE_MODULE_EXPRESSIONS)},${handlerNeedle}`,
   );
 }
 
 function buildAgentWorkspaceSettingsSource({
   chunkAsset,
+  chunkExportName = "s",
   reactAsset,
   reactExportName = "t",
   codexRequestAsset,
@@ -185,7 +192,7 @@ function buildAgentWorkspaceSettingsSource({
   vscodeApiAsset,
 }) {
   const requestAsset = codexRequestAsset ?? vscodeApiAsset;
-  return `import{s as __toESM}from"./${chunkAsset}";
+  return `import{${chunkExportName} as __toESM}from"./${chunkAsset}";
 import{${reactExportName} as __reactFactory}from"./${reactAsset}";
 import{${codexRequestExportName} as __post}from"./${requestAsset}";
 
@@ -1817,20 +1824,25 @@ function inferRuntimeDependenciesFromSettingsSource(source) {
   const jsxFactoryLocal = source.match(
     new RegExp(`${escapeRegExp(jsxLocal)}=([A-Za-z_$][\\w$]*)\\(\\)`),
   )?.[1] ?? null;
-  const reactFactoryLocal = source.match(
-    new RegExp(`${escapeRegExp(reactLocal)}=[A-Za-z_$][\\w$]*\\(([A-Za-z_$][\\w$]*)\\(\\),1\\)`),
-  )?.[1] ?? null;
-  if (jsxFactoryLocal == null || reactFactoryLocal == null) {
+  const reactInitialization = source.match(
+    new RegExp(`${escapeRegExp(reactLocal)}=([A-Za-z_$][\\w$]*)\\(([A-Za-z_$][\\w$]*)\\(\\),1\\)`),
+  );
+  const chunkHelperLocal = reactInitialization?.[1] ?? null;
+  const reactFactoryLocal = reactInitialization?.[2] ?? null;
+  if (jsxFactoryLocal == null || chunkHelperLocal == null || reactFactoryLocal == null) {
     return null;
   }
 
   const bindings = importBindings(source);
+  const chunkBinding = bindings.get(chunkHelperLocal);
   const reactBinding = bindings.get(reactFactoryLocal);
-  if (bindings.get(jsxFactoryLocal) == null || reactBinding == null) {
+  if (bindings.get(jsxFactoryLocal) == null || chunkBinding == null || reactBinding == null) {
     return null;
   }
 
   return {
+    chunkAsset: chunkBinding.assetName,
+    chunkExportName: chunkBinding.exportName,
     reactAsset: reactBinding.assetName,
     reactExportName: reactBinding.exportName,
   };
@@ -1859,31 +1871,22 @@ function resolveAgentWorkspaceSettingsAsset(extractedDir) {
   }
 
   const runtimeDependencies = inferRuntimeDependenciesFromSettingsAssets(assetsDir);
-  let reactAsset;
-  let reactExportName;
-  if (runtimeDependencies != null) {
-    ({ reactAsset, reactExportName } = runtimeDependencies);
-  } else {
-    const jsxRuntimeAsset = findRequiredWebviewAsset(
-      assetsDir,
-      /^jsx-runtime-.*\.js$/,
-      "react.transitional.element",
-      "JSX runtime asset",
-    );
-    const jsxRuntimeSource = fs.readFileSync(path.join(assetsDir, jsxRuntimeAsset), "utf8");
-    const jsxExportsReactFactory = /export\{[^}]*\bn\b/.test(jsxRuntimeSource);
-    reactAsset = jsxExportsReactFactory
-      ? jsxRuntimeAsset
-      : findRequiredWebviewAsset(assetsDir, /^react-.*\.js$/, "react.transitional.element", "React asset");
-    reactExportName = jsxExportsReactFactory ? "n" : "t";
+  if (runtimeDependencies == null) {
+    throw new Error("could not resolve current settings runtime dependencies");
   }
-  const chunkAsset = findImportedAsset(assetsDir, reactAsset, "React shared chunk asset");
+  const {
+    chunkAsset,
+    chunkExportName,
+    reactAsset,
+    reactExportName,
+  } = runtimeDependencies;
   const codexRequestAsset = findCodexRequestWebviewAsset(assetsDir);
 
   return {
     filePath: path.join(assetsDir, SETTINGS_ASSET),
     source: buildAgentWorkspaceSettingsSource({
       chunkAsset,
+      chunkExportName,
       reactAsset,
       reactExportName,
       codexRequestAsset: codexRequestAsset.assetName,
@@ -1994,10 +1997,12 @@ function applyAgentWorkspaceSettingsSharedPatch(currentSource) {
       throw new Error("could not add agent workspace section title");
     }
     const sectionRendererMatch = patchedSource.match(
-      /case`worktrees`:\{[\s\S]*?\(0,([A-Za-z_$][\w$]*)\.jsx\)\(([A-Za-z_$][\w$]*),\{id:`settings\.section\.worktrees`/,
+      /case`local-environments`:\{[\s\S]*?\(0,([A-Za-z_$][\w$]*)\.jsx\)\(([A-Za-z_$][\w$]*),\{id:`settings\.section\.local-environments`/,
     );
-    const jsxAlias = sectionRendererMatch?.[1] ?? "d";
-    const messageComponent = sectionRendererMatch?.[2] ?? "n";
+    if (sectionRendererMatch == null) {
+      throw new Error("could not resolve current settings section renderer aliases");
+    }
+    const [, jsxAlias, messageComponent] = sectionRendererMatch;
     patchedSource = patchedSource.replace(
       sectionNeedle,
       `case\`${SETTINGS_SLUG}\`:{return (0,${jsxAlias}.jsx)(${messageComponent},{id:\`settings.section.${SETTINGS_SLUG}\`,defaultMessage:\`Agent Workspaces\`,description:\`Title for Agent Workspaces settings section\`})}${sectionNeedle}`,

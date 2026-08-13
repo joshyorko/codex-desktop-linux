@@ -24,14 +24,14 @@ For the Nix flake build, use the declarative app variant instead because the
 git-ignored `features.json` file is not part of the flake source:
 
 ```bash
-nix run .#remote-mobile-control
+nix run .#codex-desktop-remote-mobile-control
 ```
 
 Feature-specific Nix outputs are additive. To combine this feature with the
 Computer Use UI opt-in:
 
 ```bash
-nix run .#computer-use-ui-remote-mobile-control
+nix run .#codex-desktop-computer-use-ui-remote-mobile-control
 ```
 
 What it changes:
@@ -83,12 +83,17 @@ What it changes:
 - Preserves `remote_control = true` / `features.remote_control = true` in the
   local Codex config instead of letting upstream strip it before app-server
   startup.
+- Starts the native Desktop app-server with `--remote-control`, or starts
+  `codex app-server proxy` when a declarative service owns the control socket.
+  The proxy forwards the complete Desktop RPC stream instead of splitting
+  enablement, pairing, status, and conversation RPCs between two processes.
 - Updates Remote settings and mobile setup copy so the experimental Linux flow
   is not described as Mac-only.
 - Stages `.codex-linux/cold-start.d/remote-mobile-control`, a feature-owned
-  cold-start hook that provisions the upstream managed standalone daemon runtime
-  when it is missing, then starts the managed app-server daemon with
-  `remote-control start`.
+  cold-start hook that starts the app-server daemon with `remote-control start`
+  through the official Codex executable bundled in the Linux package. It does
+  not download or install another CLI. It also stages a single-instance
+  requirement marker.
 
 ## Control topology boundaries
 
@@ -111,7 +116,7 @@ feature descriptor to appear exactly once in this table.
 | --- | --- | --- |
 | `linux-remote-control-device-key` | `outbound-control` | Provides the client key used to enroll this Desktop against another remote-control host. |
 | `linux-remote-control-client-revocation-recovery` | `outbound-control` | Clears revoked client material before re-enrollment. |
-| `linux-remote-mobile-app-server-remote-control` | `mobile-host` | Starts this Desktop app-server with remote-control host support. |
+| `linux-remote-mobile-app-server-remote-control` | `mobile-host` | Starts a native Desktop-owned app-server or proxies Desktop RPCs to a declarative owner. |
 | `linux-remote-control-load-gate` | `outbound-control` | Allows remote-control environments to load in Connections. |
 | `linux-remote-control-feature-sync` | `shared-boundary` | Enables `remote_control` only for the local host and excludes Remote SSH hosts. |
 | `linux-remote-control-visibility` | `outbound-control` | Exposes remote-control Connections UI when the server permits it. |
@@ -140,12 +145,27 @@ Feature-owned surfaces outside the descriptor array are also topology-scoped:
 
 | Surface | Primary responsibility | Contract |
 | --- | --- | --- |
-| `stage.sh` | `mobile-host` | Stages the host marker, cold-start hook, and optional Chrome bridge patch. |
-| `cold-start-hook.sh` | `mobile-host` | Elects one local remote-control runtime owner and starts only the standalone fallback. |
+| `stage.sh` | `mobile-host` | Stages the host marker, single-instance requirement, cold-start hook, and optional Chrome bridge patch. |
+| `cold-start-hook.sh` | `mobile-host` | Elects one local remote-control runtime owner and starts only the bundled official Codex fallback. |
 | `applyLinuxRemoteMobileChromeBridgePatch` | `mobile-host` | Keeps local Browser Use available to an authorized mobile-controlled session. |
-| Nix `codex-remote-control.service` | `mobile-host` | Replaces the mutable standalone fallback with one declarative local app-server owner. |
+| Nix `codex-remote-control.service` | `mobile-host` | Replaces the bundled-process fallback with one declarative local app-server owner. |
 | `applyLinuxRemoteControlSshInstallActionPatch` | `remote-ssh` | Keeps the existing Remote SSH install action available. |
 | `applyLinuxRemoteControlSshInstallReleasePatch` | `remote-ssh` | Sends an explicit Codex release only to the Remote SSH install/update action. |
+
+The app-server has exactly one Remote Control owner in either supported
+topology:
+
+```text
+Native: Desktop -> codex app-server --remote-control
+Nix:    Desktop -> codex app-server proxy --sock <owner socket>
+               -> Unix control socket -> systemd app-server --remote-control
+```
+
+The packaged single-instance marker is enforced only in the native topology,
+where a second Desktop would create a second Remote Control owner. In the Nix
+topology, multiple Desktop instances may proxy to the same declarative owner.
+The selected CLI must provide `codex app-server proxy`; this path is validated
+with Codex CLI 0.147.0 and follows the repository's current-CLI policy.
 
 The main RPC boundaries are:
 
@@ -162,28 +182,15 @@ The main RPC boundaries are:
 
 Remote mobile daemon requirement:
 
-The interactive Codex CLI and the remote-control daemon are separate concerns.
-You can keep using a Homebrew-installed `codex` for normal terminal and Desktop
-app-server usage. Outside the declarative Nix service described below, this
-feature uses the upstream managed standalone daemon runtime at:
-
-```bash
-~/.codex/packages/standalone/current/codex
-```
-
-If that binary is missing, the feature's cold-start hook runs the upstream
-standalone installer with `CODEX_INSTALL_DIR` pointed at a private bin directory
-under `~/.codex/packages/standalone/.bin`. That satisfies the managed daemon
-layout without changing `CODEX_CLI_PATH`, creating `~/.local/bin/codex`, or
-adding PATH blocks to your shell profile.
-
-The hook is launched best-effort in the background by the generic launcher hook
-runner. When the system `timeout` command is available, the installer/start path
-is capped by
+The hook uses `$CODEX_LINUX_APP_DIR/resources/codex`, which comes directly from
+the verified official Linux package. It never downloads a second CLI, creates a
+`~/.local/bin/codex` link, or changes the user's shell `PATH`. The hook is
+launched best-effort in the background by the generic launcher hook runner.
+When the system `timeout` command is available, the start path is capped by
 `CODEX_REMOTE_CONTROL_DAEMON_AUTOSTART_TIMEOUT_SECONDS` (default `30`), so
-Desktop cold start is not blocked by network, GitHub, or installer stalls.
-When `timeout` is unavailable, the hook continues the installer/start path in a
-background subprocess. Hook output is written to the launcher log.
+Desktop cold start is not blocked by a stalled daemon. When `timeout` is
+unavailable, the hook continues the start path in a background subprocess. Hook
+output is written to the launcher log.
 
 On NixOS, prefer the flake's Home Manager module instead of the launcher hook:
 
@@ -204,35 +211,31 @@ On NixOS, prefer the flake's Home Manager module instead of the launcher hook:
 
 The module installs the remote-mobile package variant and manages
 `codex-remote-control.service` as a user systemd unit running
-`codex app-server --remote-control --listen unix://`. It also sets
-`CODEX_REMOTE_CONTROL_DAEMON_AUTOSTART_DISABLED=1` so the launcher does not
-start a second mutable standalone daemon.
+`codex app-server --remote-control --listen unix://`. It sets
+`CODEX_REMOTE_CONTROL_APP_SERVER_MODE=proxy`, so the app-server child spawned
+by Desktop runs `codex app-server proxy` and forwards its complete stdio RPC
+stream to the service's Unix control socket. The companion
+`CODEX_REMOTE_CONTROL_APP_SERVER_PROXY_SOCKET` value keeps the proxy aligned
+with the service when `codexHome` or `listen` is customized. Only `unix://` and
+absolute `unix:///path` listeners are supported. The module also sets
+`CODEX_REMOTE_CONTROL_DAEMON_AUTOSTART_DISABLED=1` by default so the launcher
+does not start a second bundled daemon process.
+
+If the service or socket is unavailable, the Desktop proxy fails visibly; it
+does not fall back to launching another Desktop-owned app-server. Fix the user
+service or its shared CLI state instead of creating a competing owner.
 
 At cold start, an active, enabled, or otherwise installed systemd user unit is
-the remote-control runtime owner. Without that unit, the launcher defers to a
+the remote-control runtime owner. Without that unit, the launcher defers to an
 explicit autostart disablement, then to a valid Desktop app-server marker, and
-uses the standalone runtime only as the final fallback. The selected owner is
-written to the launcher log.
+uses the bundled official Codex runtime only as the final fallback. The selected
+owner is written to the launcher log.
 
-This is compatible with immutable Linux systems such as Bluefin / Universal
-Blue because the managed daemon runtime is user-scoped state under
-`~/.codex/packages/standalone`. It does not require `dnf`, `rpm-ostree`, host
-package layering, or base-OS mutation. The private `.bin` directory is only a
-launcher-owned target for the installer symlink; it is not prepended to the
-user's persistent shell `PATH`.
-
-Set `CODEX_REMOTE_CONTROL_RUNTIME_AUTO_INSTALL_DISABLED=1` to disable that
-runtime provisioning and only use an already-installed standalone runtime.
-
-To force a specific daemon binary without affecting the interactive CLI, set:
+To test a specific daemon binary without changing the interactive CLI, set:
 
 ```bash
-CODEX_REMOTE_CONTROL_CODEX_PATH=/path/to/standalone/codex
+CODEX_REMOTE_CONTROL_CODEX_PATH=/path/to/codex
 ```
-
-To keep Desktop using Homebrew while the daemon uses standalone, set
-`CODEX_CLI_PATH` to the Brew binary and leave
-`CODEX_REMOTE_CONTROL_CODEX_PATH` unset or pointed at the standalone binary.
 
 KDE Plasma smoke check:
 
