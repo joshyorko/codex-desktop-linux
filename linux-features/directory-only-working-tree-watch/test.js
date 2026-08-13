@@ -25,6 +25,7 @@ const {
   PARCEL_WATCH_MARKER,
   PARCEL_WORKING_TREE_WATCH,
   QUALIFICATION_WARNINGS_SYMBOL_KEY,
+  REPORT_SHIM_SYMBOL_KEY,
   WATCHBOUND_VERSION,
   codexLinuxStartDirectoryOnlyWorkingTreeWatch,
   descriptors,
@@ -3276,7 +3277,9 @@ async function waitFor(predicate, label, timeout = 3000) {
 }
 
 test("the adapter fails closed on every Watchbound 2.1.1 contract mismatch", async (t) => {
+  const originalReport = Object.getOwnPropertyDescriptor(process, "report");
   t.after(() => {
+    Object.defineProperty(process, "report", originalReport);
     delete globalThis[MODULE_OVERRIDE_KEY];
     delete globalThis[ENGINE_KEY];
   });
@@ -3339,6 +3342,180 @@ test("the adapter fails closed on every Watchbound 2.1.1 contract mismatch", asy
     );
     assert.equal(fake.subscriptions.length, 0);
   }
+});
+
+test("the adapter replaces process.report before any Watchbound code runs", async (t) => {
+  const originalReport = Object.getOwnPropertyDescriptor(process, "report");
+  let poisonedCalls = 0;
+  Object.defineProperty(process, "report", {
+    configurable: true,
+    enumerable: true,
+    value: {
+      getReport() {
+        poisonedCalls += 1;
+        throw new Error("getReport is fatal inside the packaged Electron binary");
+      },
+    },
+  });
+  const fake = fakeWatchbound();
+  fake.capabilities.schemaVersion = 0;
+  globalThis[MODULE_OVERRIDE_KEY] = fake;
+  delete globalThis[ENGINE_KEY];
+  t.after(() => {
+    delete globalThis[MODULE_OVERRIDE_KEY];
+    delete globalThis[ENGINE_KEY];
+    Object.defineProperty(process, "report", originalReport);
+  });
+
+  const start = () => codexLinuxStartDirectoryOnlyWorkingTreeWatch(
+    {
+      getFileSystemPath: () => "/qualified/root",
+      platformPath: async () => path.posix,
+    },
+    {
+      path: "/logical/root",
+      recursive: true,
+      renameEventHandling: "changed-path-with-parent-directory",
+      onChange() {},
+    },
+    {
+      maxWatches: 64,
+      honorGitIgnore: false,
+      ignoredDirectoryNames: [],
+    },
+  );
+  await assert.rejects(start(), /requires watchbound 2\.1\.1/u);
+
+  assert.equal(poisonedCalls, 0);
+  const shim = process.report;
+  assert.equal(shim[Symbol.for(REPORT_SHIM_SYMBOL_KEY)], true);
+  const report = shim.getReport();
+  assert.equal(typeof report.header, "object");
+  assert.ok(Array.isArray(report.sharedObjects));
+  let expectGlibc = false;
+  try {
+    expectGlibc = fs.readFileSync("/usr/bin/ldd", "latin1").includes("GNU C Library");
+  } catch {}
+  if (expectGlibc) {
+    assert.match(report.header.glibcVersionRuntime, /^\d+\.\d+/u);
+  }
+
+  await assert.rejects(start(), /requires watchbound 2\.1\.1/u);
+  assert.equal(process.report, shim);
+});
+
+test("the report shim reads the glibc version from a Nix store interpreter", async (t) => {
+  const interpreterPath =
+    "/nix/store/6q3xi2h1a7lb0k5cm9dr8v4y5zj0wf2s-glibc-2.40-66/lib64/ld-linux-x86-64.so.2";
+  const interpreterBytes = Buffer.from(`${interpreterPath}\0`, "utf8");
+  const image = Buffer.alloc(512);
+  image.writeUInt32LE(0x464c457f, 0);
+  image[4] = 2;
+  image[5] = 1;
+  image.writeBigUInt64LE(64n, 32);
+  image.writeUInt16LE(56, 54);
+  image.writeUInt16LE(1, 56);
+  image.writeUInt32LE(3, 64);
+  image.writeBigUInt64LE(256n, 64 + 8);
+  image.writeBigUInt64LE(BigInt(interpreterBytes.length), 64 + 32);
+  interpreterBytes.copy(image, 256);
+  const executable = path.join(tempDirectory(t, "watchbound-nix-elf-"), "electron");
+  fs.writeFileSync(executable, image);
+
+  const originalReport = Object.getOwnPropertyDescriptor(process, "report");
+  Object.defineProperty(process, "report", {
+    configurable: true,
+    enumerable: true,
+    value: {
+      getReport() {
+        throw new Error("getReport is fatal inside the packaged Electron binary");
+      },
+    },
+  });
+  const fake = fakeWatchbound();
+  fake.capabilities.schemaVersion = 0;
+  fake.reportProbeExecutable = executable;
+  globalThis[MODULE_OVERRIDE_KEY] = fake;
+  delete globalThis[ENGINE_KEY];
+  t.after(() => {
+    delete globalThis[MODULE_OVERRIDE_KEY];
+    delete globalThis[ENGINE_KEY];
+    Object.defineProperty(process, "report", originalReport);
+  });
+
+  await assert.rejects(
+    codexLinuxStartDirectoryOnlyWorkingTreeWatch(
+      {
+        getFileSystemPath: () => "/qualified/root",
+        platformPath: async () => path.posix,
+      },
+      {
+        path: "/logical/root",
+        recursive: true,
+        renameEventHandling: "changed-path-with-parent-directory",
+        onChange() {},
+      },
+      {
+        maxWatches: 64,
+        honorGitIgnore: false,
+        ignoredDirectoryNames: [],
+      },
+    ),
+    /requires watchbound 2\.1\.1/u,
+  );
+
+  const report = process.report.getReport();
+  assert.equal(report.header.glibcVersionRuntime, "2.40");
+  assert.deepEqual(report.sharedObjects, []);
+});
+
+test("a failed Watchbound import degrades to the preserved fallback", async (t) => {
+  const originalReport = Object.getOwnPropertyDescriptor(process, "report");
+  let poisonedCalls = 0;
+  Object.defineProperty(process, "report", {
+    configurable: true,
+    enumerable: true,
+    value: {
+      getReport() {
+        poisonedCalls += 1;
+        throw new Error("getReport is fatal inside the packaged Electron binary");
+      },
+    },
+  });
+  delete globalThis[MODULE_OVERRIDE_KEY];
+  delete globalThis[ENGINE_KEY];
+  t.after(() => {
+    Object.defineProperty(process, "report", originalReport);
+  });
+
+  let fallbackCalls = 0;
+  const preserved = { dispose() {} };
+  const result = await codexLinuxStartDirectoryOnlyWorkingTreeWatch(
+    {
+      getFileSystemPath: () => "/qualified/root",
+      platformPath: async () => path.posix,
+    },
+    {
+      path: "/logical/root",
+      recursive: true,
+      renameEventHandling: "changed-path-with-parent-directory",
+      onChange() {},
+    },
+    {
+      maxWatches: 64,
+      honorGitIgnore: false,
+      ignoredDirectoryNames: [],
+    },
+    () => {
+      fallbackCalls += 1;
+      return preserved;
+    },
+  );
+
+  assert.equal(fallbackCalls, 1);
+  assert.equal(result, preserved);
+  assert.equal(poisonedCalls, 0);
+  assert.equal(process.report[Symbol.for(REPORT_SHIM_SYMBOL_KEY)], true);
 });
 
 test("the adapter preserves Codex policy around the Watchbound engine", async (t) => {
