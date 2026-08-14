@@ -45,13 +45,16 @@ test("launcher composes declarative hooks and forwards arguments", (t) => {
   writeExecutable(path.join(hooks, "launcher.d", "fixture.sh"), "#!/bin/bash\nprintf '%s\\n' 'env LAUNCHER_ENV=from-launcher' 'electron-arg --launcher-arg=value'\n");
   writeExecutable(path.join(hooks, "after-exit.d", "fixture.sh"), "#!/bin/bash\nprintf after-exit > \"$TEST_ROOT/after-exit\"\n");
 
+  const env = {
+    ...process.env,
+    CODEX_HOME: path.join(root, "codex-home"),
+    XDG_CONFIG_HOME: path.join(root, "config"),
+    TEST_ROOT: root,
+  };
+  delete env.CHROME_DESKTOP;
+  delete env.BAMF_DESKTOP_FILE_HINT;
   const result = childProcess.spawnSync(path.join(root, "start.sh"), ["codex://thread/123", "--new-window"], {
-    env: {
-      ...process.env,
-      CODEX_HOME: path.join(root, "codex-home"),
-      XDG_CONFIG_HOME: path.join(root, "config"),
-      TEST_ROOT: root,
-    },
+    env,
     encoding: "utf8",
   });
   assert.equal(result.status, 7);
@@ -62,6 +65,7 @@ test("launcher composes declarative hooks and forwards arguments", (t) => {
     "from-launcher",
   ]);
   assert.deepEqual(fs.readFileSync(path.join(root, "arguments"), "utf8").trim().split("\n"), [
+    "--class=codex-desktop",
     "--feature-arg=one two",
     "--launcher-arg=value",
     "codex://thread/123",
@@ -104,6 +108,7 @@ test("launcher loads global and app-specific Electron flags", (t) => {
 
   assert.equal(result.status, 7);
   assert.deepEqual(fs.readFileSync(path.join(root, "arguments"), "utf8").trim().split("\n"), [
+    "--class=codex-desktop",
     "--ozone-platform=wayland",
     "--enable-features=WaylandWindowDecorations",
     "--ozone-platform=x11",
@@ -112,6 +117,7 @@ test("launcher loads global and app-specific Electron flags", (t) => {
   assert.deepEqual(
     fs.readFileSync(path.join(root, "launcher-hook-arguments"), "utf8").trim().split("\n"),
     [
+      "--class=codex-desktop",
       "--ozone-platform=wayland",
       "--enable-features=WaylandWindowDecorations",
       "--ozone-platform=x11",
@@ -145,7 +151,10 @@ test("launcher uses the HOME config fallback and ignores non-file flag paths", (
 
   assert.equal(result.status, 7);
   assert.equal(result.stderr, "");
-  assert.equal(fs.readFileSync(path.join(root, "arguments"), "utf8"), "--ozone-platform=wayland\n");
+  assert.equal(
+    fs.readFileSync(path.join(root, "arguments"), "utf8"),
+    "--class=codex-desktop\n--ozone-platform=wayland\n",
+  );
 });
 
 test("diagnose validates the official runtime without starting it", (t) => {
