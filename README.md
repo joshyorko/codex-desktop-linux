@@ -117,6 +117,25 @@ Old `.dmg`, `DMG=`, and `CODEX_DMG_*` inputs are intentionally unsupported.
   disables unprivileged user namespaces, use the native package or follow the
   sandbox guidance in [Troubleshooting](docs/troubleshooting.md).
 
+### Anonymous daily usage count
+
+To help the community decide whether maintaining this distribution is useful,
+the launcher sends at most one anonymous usage event per UTC day to the
+[public GoatCounter dashboard](https://gary.goatcounter.com/). The event
+contains only the fixed path `/app-launch`. GoatCounter derives an aggregate
+country from the network request; no application activity, account or machine
+identifier, version, architecture, package format, language, screen size, or
+referrer is sent. Every installation sends the same fixed, non-identifying
+User-Agent so GoatCounter does not discard the request as a bot.
+
+The request runs silently in the background. A missing `curl`, a blocked
+request, or any other error never delays the application and produces no
+output. Disable the usage count with the single environment variable:
+
+```bash
+CODEX_LINUX_DISABLE_USAGE_REPORTING=1 codex-desktop
+```
+
 ## Uninstall
 
 First close both **ChatGPT Community** and the official **ChatGPT** application.
@@ -201,6 +220,7 @@ requirements, known limitations, configuration, and tests.
 | `appshots` | Capture and crop the focused Linux window from the composer | [Docs](linux-features/appshots/README.md) |
 | `authenticated-proxy` | Username/password support for HTTP proxies | [Docs](linux-features/authenticated-proxy/README.md) |
 | `automation-extensions` | Multi-time schedules and eager `automation_update` exposure | [Docs](linux-features/automation-extensions/README.md) |
+| `chronicle-skysight` | Opt-in Linux desktop activity memory and restricted Skysight MCP tools | [Docs](linux-features/chronicle-skysight/README.md) |
 | `codex-micro` | Work Louder Codex Micro hotplug and hidraw policy using upstream `node-hid` | [Docs](linux-features/codex-micro/README.md) |
 | `computer-use-linux` | Linux desktop-control UI and native MCP backend | [Docs](linux-features/computer-use-linux/README.md) |
 | `copilot-reasoning-effort` | Persistent reasoning-effort defaults for Copilot-auth sessions | [Docs](linux-features/copilot-reasoning-effort/README.md) |
@@ -223,6 +243,7 @@ requirements, known limitations, configuration, and tests.
 | `shallow-repository-watches` | Avoid recursive main-thread walks for transient repository previews | [Docs](linux-features/shallow-repository-watches/README.md) |
 | `shared-app-server-socket` | Share one protocol-transparent Unix app-server socket | [Docs](linux-features/shared-app-server-socket/README.md) |
 | `thorium-chrome-plugin` | Add Thorium to the official bundled Chrome integration | [Docs](linux-features/thorium-chrome-plugin/README.md) |
+| `tray-usage` | Show usage remaining in the Linux system-tray menu | [Docs](linux-features/tray-usage/README.md) |
 | `ui-tweaks` | Optional visual and interaction customizations | [Docs](linux-features/ui-tweaks/README.md) |
 
 Account rollouts and server-side ChatGPT features remain controlled by OpenAI.

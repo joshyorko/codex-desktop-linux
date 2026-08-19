@@ -95,6 +95,35 @@ test("chronicle-skysight stages restricted MCP plugin and shared backend", () =>
   }
 });
 
+test("chronicle-skysight reuses the updater-staged backend without Cargo", () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "codex-chronicle-skysight-backend-"));
+  try {
+    const backend = path.join(workspace, "target/release/codex-record-replay-linux");
+    fs.mkdirSync(path.dirname(backend), { recursive: true });
+    fs.writeFileSync(backend, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+
+    const selected = execFileSync(
+      "bash",
+      ["-c", ". \"$FEATURE_DIR/shared-backend.sh\"; build_chronicle_skysight_backend"],
+      {
+        cwd: workspace,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          FEATURE_DIR: featureDir,
+          SCRIPT_DIR: workspace,
+          CODEX_RECORD_REPLAY_LINUX_SOURCE: "",
+          HOME: path.join(workspace, "home-without-cargo"),
+        },
+      },
+    ).trim();
+
+    assert.equal(selected, backend);
+  } finally {
+    fs.rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
 test("chronicle-skysight owns activity-memory bridge and tray integration", () => {
   const source = [
     'const cp=require("node:child_process"),fs=require("node:fs"),path=require("node:path");',

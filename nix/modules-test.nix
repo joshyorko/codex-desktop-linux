@@ -107,6 +107,9 @@ assert lib.assertMsg
   (features.normalize [ "ui-tweaks" "ui-tweaks" "agent-workspace" ] == [ "agent-workspace" "ui-tweaks" ])
   "Nix feature IDs are not sorted and deduplicated";
 assert lib.assertMsg
+  (features.normalize [ "record-and-replay" ] == [ "chronicle-skysight" "record-and-replay" ])
+  "Nix feature dependencies were not added to an existing direct selection";
+assert lib.assertMsg
   (features.normalize [ "codex-wrapper-updater" "zed-opener" ] == [ ])
   "known retired and aliased-retired feature IDs were not ignored";
 assert lib.assertMsg

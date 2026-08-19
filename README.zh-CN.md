@@ -107,6 +107,22 @@ UPSTREAM_DEB=/path/to/chatgpt_<version>_<arch>.deb make build-app
 - AppImage 不会自动添加 `--no-sandbox`。若发行版禁用了 unprivileged user
   namespaces，请使用原生软件包或参阅[故障排除](docs/troubleshooting.md)。
 
+### 匿名每日使用计数
+
+为了帮助社区判断是否值得继续维护本发行版，launcher 每个 UTC 日期最多向
+[公开的 GoatCounter dashboard](https://gary.goatcounter.com/) 发送一次匿名
+使用事件。事件只包含固定路径 `/app-launch`。GoatCounter 根据网络请求生成汇总
+国家信息；不会发送应用内操作、账户或设备标识、版本、架构、软件包格式、语言、
+屏幕尺寸或 referrer。所有安装都会发送相同且不含识别信息的固定 User-Agent，
+以避免 GoatCounter 将请求当作 bot 丢弃。
+
+请求会在后台静默执行。缺少 `curl`、请求被拦截或发生任何其他错误时，应用启动
+都不会被延迟，也不会产生输出。可用唯一的环境变量关闭此计数：
+
+```bash
+CODEX_LINUX_DISABLE_USAGE_REPORTING=1 codex-desktop
+```
+
 ## 卸载
 
 先完全关闭 **ChatGPT Community** 和官方 **ChatGPT**，然后使用安装它的包
@@ -187,6 +203,7 @@ Nix 用户应从 profile、Home Manager 配置或 NixOS module 中删除该包�
 | `appshots` | 从 composer 捕获并裁剪当前 Linux 窗口 | [文档](linux-features/appshots/README.md) |
 | `authenticated-proxy` | 带用户名和密码的 HTTP proxy | [文档](linux-features/authenticated-proxy/README.md) |
 | `automation-extensions` | 多时间调度和 eager `automation_update` | [文档](linux-features/automation-extensions/README.md) |
+| `chronicle-skysight` | 可选的 Linux 桌面活动记忆与受限 Skysight MCP 工具 | [文档](linux-features/chronicle-skysight/README.md) |
 | `codex-micro` | 使用上游 `node-hid` 的 Codex Micro hotplug/hidraw policy | [文档](linux-features/codex-micro/README.md) |
 | `computer-use-linux` | Linux desktop-control UI 与原生 MCP backend | [文档](linux-features/computer-use-linux/README.md) |
 | `copilot-reasoning-effort` | Copilot auth 的 reasoning-effort 默认值 | [文档](linux-features/copilot-reasoning-effort/README.md) |
@@ -209,6 +226,7 @@ Nix 用户应从 profile、Home Manager 配置或 NixOS module 中删除该包�
 | `shallow-repository-watches` | 避免临时 repo preview 在主线程递归遍历 | [文档](linux-features/shallow-repository-watches/README.md) |
 | `shared-app-server-socket` | 共享 protocol-transparent Unix app-server socket | [文档](linux-features/shared-app-server-socket/README.md) |
 | `thorium-chrome-plugin` | 为官方 Chrome integration 添加 Thorium | [文档](linux-features/thorium-chrome-plugin/README.md) |
+| `tray-usage` | 在 Linux 系统托盘菜单显示剩余用量 | [文档](linux-features/tray-usage/README.md) |
 | `ui-tweaks` | 可选 UI 与交互自定义 | [文档](linux-features/ui-tweaks/README.md) |
 
 ChatGPT account rollout 和 server-side 功能仍由 OpenAI 控制。重新构建本项目

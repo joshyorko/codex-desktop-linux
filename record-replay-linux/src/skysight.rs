@@ -25,6 +25,7 @@ const RESOURCES_DIR_NAME: &str = "resources";
 const EXCLUSIONS_FILE_NAME: &str = "exclusions.json";
 const STOP_REQUEST_FILE_NAME: &str = "stop-requested";
 const PAUSE_REQUEST_FILE_NAME: &str = "pause-requested";
+const LIFECYCLE_LOCK_FILE_NAME: &str = ".lifecycle.lock";
 const SUMMARY_AGENT_SETTING_FILE_NAME: &str = "summary-agent";
 const MEMORY_INSTRUCTIONS_FILE_NAME: &str = "SkysightMemoryInstructions.md";
 const CHRONICLE_INSTRUCTIONS_FILE_NAME: &str = "instructions.md";
@@ -380,6 +381,7 @@ pub fn start_skysight(
     if let Some(summary_agent) = options.summary_agent {
         write_summary_agent_runtime_setting(paths, summary_agent)?;
     }
+    let _lifecycle_lock = lifecycle_lock(paths)?;
     if let Ok(status) = read_status(paths) {
         if status.is_running
             && status
@@ -393,7 +395,8 @@ pub fn start_skysight(
             if let Some(owner) = requested_owner.as_deref() {
                 status.owner = Some(owner.to_string());
             }
-            write_status(paths, &status)?;
+            write_status_locked(paths, &status)?;
+            drop(_lifecycle_lock);
             return skysight_status(paths);
         }
     }
@@ -409,6 +412,10 @@ pub fn start_skysight(
         .arg("daemon")
         .arg("--interval-seconds")
         .arg(options.interval_seconds.to_string())
+        .arg("--source")
+        .arg(&source)
+        .arg("--owner")
+        .arg(&owner)
         .env("CODEX_SKYSIGHT_RUNTIME_DIR", &paths.runtime_dir)
         .env("CODEX_SKYSIGHT_SEGMENTS_DIR", &paths.segments_dir)
         .env("CODEX_SKYSIGHT_RESOURCES_DIR", &paths.resources_dir)
@@ -441,7 +448,7 @@ pub fn start_skysight(
     })?;
     status.source = Some(source);
     status.owner = Some(owner);
-    write_status(paths, &status)?;
+    write_status_locked(paths, &status)?;
     Ok(status)
 }
 
@@ -456,8 +463,22 @@ pub fn run_skysight_daemon(
     if let Some(summary_agent) = summary_agent {
         write_summary_agent_runtime_setting(paths, summary_agent)?;
     }
-    let requested_source = source.filter(|value| !value.trim().is_empty());
-    let requested_owner = owner.filter(|value| !value.trim().is_empty());
+    let requested_source = source
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| {
+            env::var(SOURCE_ENV)
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+        })
+        .unwrap_or_else(|| DEFAULT_START_SOURCE.to_string());
+    let requested_owner = owner
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| {
+            env::var(OWNER_ENV)
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+        })
+        .unwrap_or_else(|| DEFAULT_START_OWNER.to_string());
     let interval = Duration::from_secs(interval_seconds.max(1));
     let ocr_policy = crate::ocr::OcrPolicy::from_env();
     let mut ocr_readiness = None;
@@ -468,8 +489,8 @@ pub fn run_skysight_daemon(
         interval_seconds,
         ocr_policy.clone(),
         initial_ocr_readiness,
-        requested_source.as_deref(),
-        requested_owner.as_deref(),
+        Some(&requested_source),
+        Some(&requested_owner),
     )?;
     loop {
         let cached_ocr_readiness = cached_ocr_readiness(&ocr_policy, &mut ocr_readiness);
@@ -871,7 +892,9 @@ pub fn skysight_status(paths: &SkysightPaths) -> Result<SkysightStatus> {
 }
 
 pub fn stop_skysight(paths: &SkysightPaths) -> Result<SkysightStatus> {
-    stop_skysight_with_source(paths, "skysight_stop")
+    ensure_layout(paths)?;
+    let _lifecycle_lock = lifecycle_lock(paths)?;
+    stop_skysight_with_source_locked(paths, "skysight_stop")
 }
 
 pub fn stop_skysight_if_owned(
@@ -879,17 +902,18 @@ pub fn stop_skysight_if_owned(
     owner: &str,
     source: &str,
 ) -> Result<Option<SkysightStatus>> {
+    ensure_layout(paths)?;
+    let _lifecycle_lock = lifecycle_lock(paths)?;
     let Ok(status) = read_status(paths) else {
         return Ok(None);
     };
     if !status.is_running || status.owner.as_deref() != Some(owner) {
         return Ok(None);
     }
-    stop_skysight_with_source(paths, source).map(Some)
+    stop_skysight_with_source_locked(paths, source).map(Some)
 }
 
-fn stop_skysight_with_source(paths: &SkysightPaths, source: &str) -> Result<SkysightStatus> {
-    ensure_layout(paths)?;
+fn stop_skysight_with_source_locked(paths: &SkysightPaths, source: &str) -> Result<SkysightStatus> {
     if let Ok(status) = read_status(paths) {
         if let Some(pid) = status.pid {
             if process_is_alive(pid, status.process_start_time_ticks) {
@@ -915,7 +939,7 @@ fn stop_skysight_with_source(paths: &SkysightPaths, source: &str) -> Result<Skys
         ocr_readiness: None,
     })?;
     status.source = Some(source.to_string());
-    write_status(paths, &status)?;
+    write_status_locked(paths, &status)?;
     Ok(status)
 }
 
@@ -2215,7 +2239,26 @@ fn read_status(paths: &SkysightPaths) -> Result<SkysightStatus> {
         .with_context(|| format!("failed to parse {}", paths.status_path.display()))
 }
 
+fn lifecycle_lock(paths: &SkysightPaths) -> Result<crate::secure_fs::DirectoryLock> {
+    crate::secure_fs::lock_directory(&paths.runtime_dir, LIFECYCLE_LOCK_FILE_NAME)
+}
+
 fn write_status(paths: &SkysightPaths, status: &SkysightStatus) -> Result<()> {
+    let _lifecycle_lock = lifecycle_lock(paths)?;
+    let mut status = status.clone();
+    if let Ok(current) = read_status(paths) {
+        if current.is_running {
+            if current.pid != status.pid {
+                return Ok(());
+            }
+            status.source = current.source;
+            status.owner = current.owner;
+        }
+    }
+    write_status_locked(paths, &status)
+}
+
+fn write_status_locked(paths: &SkysightPaths, status: &SkysightStatus) -> Result<()> {
     crate::secure_fs::write_private_file(
         &paths.status_path,
         format!("{}\n", serde_json::to_string_pretty(status)?),
@@ -3674,6 +3717,102 @@ mod tests {
 
         assert_eq!(status.source.as_deref(), Some("chronicle-tray"));
         assert_eq!(status.owner.as_deref(), Some("manual-continuous"));
+    }
+
+    #[test]
+    fn concurrent_manual_handoff_wins_before_owned_stop() {
+        let _guard = env_guard();
+        let temp = tempfile::tempdir().unwrap();
+        let paths = SkysightPaths::new(temp.path().join("runtime"), temp.path().join("resources"));
+        ensure_layout(&paths).unwrap();
+
+        let mut status = status_value(StatusValueInput {
+            paths: &paths,
+            state: "running",
+            is_running: true,
+            paused: false,
+            pause_reason: None,
+            interval_seconds: Some(60),
+            pid: Some(std::process::id()),
+            started_at: Some(now_timestamp()),
+            end_reason: None,
+            message: Some("recording-owned capture".to_string()),
+            ocr_policy: None,
+            ocr_readiness: None,
+        })
+        .unwrap();
+        status.source = Some("event-stream-start".to_string());
+        status.owner = Some("recording-session:old".to_string());
+        write_status_locked(&paths, &status).unwrap();
+
+        let lifecycle = lifecycle_lock(&paths).unwrap();
+        let thread_paths = paths.clone();
+        let (attempting_tx, attempting_rx) = std::sync::mpsc::channel();
+        let stop = std::thread::spawn(move || {
+            attempting_tx.send(()).unwrap();
+            stop_skysight_if_owned(
+                &thread_paths,
+                "recording-session:old",
+                "event-stream-shutdown",
+            )
+        });
+        attempting_rx.recv().unwrap();
+
+        status.source = Some("chronicle-tray".to_string());
+        status.owner = Some("manual-continuous".to_string());
+        write_status_locked(&paths, &status).unwrap();
+        drop(lifecycle);
+
+        assert!(stop.join().unwrap().unwrap().is_none());
+        assert!(!paths.stop_request_path.exists());
+        let persisted = read_status(&paths).unwrap();
+        assert_eq!(persisted.source.as_deref(), Some("chronicle-tray"));
+        assert_eq!(persisted.owner.as_deref(), Some("manual-continuous"));
+    }
+
+    #[test]
+    fn stale_daemon_status_write_preserves_new_owner() {
+        let _guard = env_guard();
+        let temp = tempfile::tempdir().unwrap();
+        let paths = SkysightPaths::new(temp.path().join("runtime"), temp.path().join("resources"));
+        ensure_layout(&paths).unwrap();
+
+        let mut stale_daemon_status = status_value(StatusValueInput {
+            paths: &paths,
+            state: "running",
+            is_running: true,
+            paused: false,
+            pause_reason: None,
+            interval_seconds: Some(60),
+            pid: Some(std::process::id()),
+            started_at: Some(now_timestamp()),
+            end_reason: None,
+            message: Some("daemon status before handoff".to_string()),
+            ocr_policy: None,
+            ocr_readiness: None,
+        })
+        .unwrap();
+        stale_daemon_status.source = Some("event-stream-start".to_string());
+        stale_daemon_status.owner = Some("recording-session:old".to_string());
+        write_status_locked(&paths, &stale_daemon_status).unwrap();
+
+        let reassigned = start_skysight(
+            &paths,
+            SkysightStartOptions {
+                interval_seconds: 60,
+                summary_agent: None,
+                source: Some("chronicle-tray".to_string()),
+                owner: Some("manual-continuous".to_string()),
+            },
+        )
+        .unwrap();
+        assert_eq!(reassigned.owner.as_deref(), Some("manual-continuous"));
+
+        write_status(&paths, &stale_daemon_status).unwrap();
+
+        let persisted = read_status(&paths).unwrap();
+        assert_eq!(persisted.source.as_deref(), Some("chronicle-tray"));
+        assert_eq!(persisted.owner.as_deref(), Some("manual-continuous"));
     }
 
     #[test]

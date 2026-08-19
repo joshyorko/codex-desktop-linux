@@ -1,14 +1,6 @@
 "use strict";
 
 const APPSHOT_HELPER_MARKER = "codexLinuxAppshotStartCapture";
-const LINUX_APPSHOT_X11_HOTKEYS = [
-  { hotkey: "DoubleOption", label: "Alt + Alt" },
-  { hotkey: "DoubleShift", label: "Shift + Shift" },
-  { hotkey: "Ctrl+Super+A", label: "Ctrl + Super + A" },
-];
-const LINUX_APPSHOT_WAYLAND_HOTKEYS = [
-  { hotkey: "Ctrl+Super+A", label: "Ctrl + Super + A" },
-];
 
 function warn(message, patchName) {
   console.warn(`WARN: ${message} - skipping ${patchName}`);
@@ -95,41 +87,6 @@ function applyLinuxAppshotHotkeyPatch(currentSource) {
   return currentSource;
 }
 
-function applyLinuxAppshotSettingsHotkeyPatch(currentSource) {
-  const linuxX11Options = `[${LINUX_APPSHOT_X11_HOTKEYS.map(
-    (option) => `{hotkey:\`${option.hotkey}\`,label:\`${option.label}\`}`,
-  ).join(",")}]`;
-  const linuxWaylandOptions = `[${LINUX_APPSHOT_WAYLAND_HOTKEYS.map(
-    (option) => `{hotkey:\`${option.hotkey}\`,label:\`${option.label}\`}`,
-  ).join(",")}]`;
-  if (currentSource.includes("codexLinuxAppshotHotkeyOptions")) {
-    return currentSource;
-  }
-  const stateDataVar = currentSource.match(/\b([A-Za-z_$][\w$]*)\?\.configuredHotkey\?\?null/)?.[1] ?? null;
-
-  const optionsPattern = /let ([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)===`windows`\?\[\{hotkey:`DoubleAlt`,label:([A-Za-z_$][\w$]*)\.formatMessage\(([A-Za-z_$][\w$]*)\.doubleAlt\)\},\{hotkey:`DoubleShift`,label:\3\.formatMessage\(\4\.doubleShift\)\}\]:([A-Za-z_$][\w$]*),([A-Za-z_$][\w$]*)=\1\.find/g;
-  const matches = [...currentSource.matchAll(optionsPattern)];
-  if (matches.length === 1 && stateDataVar != null) {
-    const [, optionsVar, platformVar, intlVar, messagesVar, macOptionsVar, selectedVar] = matches[0];
-    let patchedSource = currentSource.replace(
-      optionsPattern,
-      `let ${optionsVar}=codexLinuxAppshotHotkeyOptions(${stateDataVar},${platformVar},${intlVar},${messagesVar},${macOptionsVar}),${selectedVar}=${optionsVar}.find`,
-    );
-    const helper =
-      `function codexLinuxAppshotHotkeyOptions(e,t,n,r,i){return t===\`linux\`?e?.linuxWayland?${linuxWaylandOptions}:${linuxX11Options}:t===\`windows\`?[{hotkey:\`DoubleAlt\`,label:n.formatMessage(r.doubleAlt)},{hotkey:\`DoubleShift\`,label:n.formatMessage(r.doubleShift)}]:i}`;
-    const sourceMapIndex = patchedSource.lastIndexOf("\n//# sourceMappingURL=");
-    if (sourceMapIndex >= 0) {
-      return `${patchedSource.slice(0, sourceMapIndex)};${helper}${patchedSource.slice(sourceMapIndex)}`;
-    }
-    return `${patchedSource}\n;${helper}`;
-  }
-
-  if (currentSource.includes("appshot-hotkey-state") || currentSource.includes("DoubleCommand")) {
-    warn("Could not find current AppShots settings hotkey option call site", "Linux AppShots settings patch");
-  }
-  return currentSource;
-}
-
 function linuxAppshotWaylandHelperSource() {
   return "function codexLinuxAppshotIsWayland(){return process.platform===`linux`&&((process.env.XDG_SESSION_TYPE||``).toLowerCase()===`wayland`||!!process.env.WAYLAND_DISPLAY)}";
 }
@@ -212,21 +169,11 @@ const descriptors = [
     order: 143,
     apply: applyLinuxAppshotHotkeyPatch,
   },
-  {
-    id: "linux-appshots-settings-hotkey",
-    phase: "webview-asset",
-    order: 1091,
-    pattern: /^appshots-settings-.*\.js$/,
-    missingDescription: "AppShots settings bundle",
-    skipDescription: "Linux AppShots settings hotkey patch",
-    apply: applyLinuxAppshotSettingsHotkeyPatch,
-  },
 ];
 
 module.exports = {
   applyLinuxAppshotAvailabilityPatch,
   applyLinuxAppshotHotkeyPatch,
   applyLinuxAppshotMainProcessPatch,
-  applyLinuxAppshotSettingsHotkeyPatch,
   descriptors,
 };

@@ -781,12 +781,7 @@ impl RecordReplayLinux {
     }
 
     fn stop_owned_skysight_for_active_session(&self, source: &str) -> Result<()> {
-        let status = crate::refresh_runtime_status();
-        let session_dir = status
-            .session_dir
-            .filter(|_| matches!(&status.state, RecordingRuntimeState::Active))
-            .or_else(|| self.active_session_dir());
-        if let Some(session_dir) = session_dir {
+        if let Some(session_dir) = self.active_session_dir() {
             crate::recorder::stop_owned_skysight_for_session(&session_dir, source)?;
         }
         Ok(())
@@ -1318,6 +1313,88 @@ mod tests {
                 Some("recording-session:fixture-session")
             );
             assert_eq!(stopped.source.as_deref(), Some("event-stream-shutdown"));
+            Ok::<(), anyhow::Error>(())
+        })();
+
+        for (key, value) in previous {
+            match value {
+                Some(value) => std::env::set_var(key, value),
+                None => std::env::remove_var(key),
+            }
+        }
+        result.unwrap();
+    }
+
+    #[test]
+    fn stale_mcp_shutdown_does_not_stop_reconnected_session_skysight() {
+        let _guard = env_guard();
+        let temp = tempfile::tempdir().unwrap();
+        let env_keys = [
+            "CODEX_HOME",
+            "CODEX_SKYSIGHT_RUNTIME_DIR",
+            "CODEX_SKYSIGHT_RESOURCES_DIR",
+            "CODEX_SKYSIGHT_EXCLUSIONS_PATH",
+            "CODEX_RECORD_REPLAY_STATUS_PATH",
+        ];
+        let previous = env_keys
+            .iter()
+            .map(|key| (*key, std::env::var_os(key)))
+            .collect::<Vec<_>>();
+        std::env::set_var("CODEX_HOME", temp.path().join("codex-home"));
+        std::env::set_var(
+            "CODEX_SKYSIGHT_RUNTIME_DIR",
+            temp.path().join("skysight-runtime"),
+        );
+        std::env::set_var(
+            "CODEX_SKYSIGHT_RESOURCES_DIR",
+            temp.path().join("skysight-resources"),
+        );
+        std::env::set_var(
+            "CODEX_SKYSIGHT_EXCLUSIONS_PATH",
+            temp.path().join("exclusions.json"),
+        );
+        std::env::set_var(
+            "CODEX_RECORD_REPLAY_STATUS_PATH",
+            temp.path().join("record-replay-status.json"),
+        );
+
+        let result = (|| {
+            let old_session = temp.path().join("old-session");
+            let new_session = temp.path().join("new-session");
+            for (session_dir, session_id) in
+                [(&old_session, "old-session"), (&new_session, "new-session")]
+            {
+                std::fs::create_dir_all(session_dir)?;
+                let manifest = crate::manifest::RecordingBundleManifest::new(
+                    session_id.to_string(),
+                    "2026-07-15T12:00:00Z".to_string(),
+                );
+                crate::manifest::write_manifest(session_dir, &manifest)?;
+            }
+
+            let stale_service = RecordReplayLinux::default();
+            stale_service.set_active_session(Some(old_session));
+            crate::runtime_status::write_active_status(&new_session, None)?;
+
+            let paths = SkysightPaths::from_env();
+            let mut status = skysight_status(&paths)?;
+            status.state = "running".to_string();
+            status.is_running = true;
+            status.owner = Some("recording-session:new-session".to_string());
+            status.source = Some("event-stream-start".to_string());
+            std::fs::write(
+                &paths.status_path,
+                format!("{}\n", serde_json::to_string_pretty(&status)?),
+            )?;
+
+            stale_service.stop_owned_skysight_for_active_session("event-stream-shutdown")?;
+
+            assert!(!paths.stop_request_path.exists());
+            let current = skysight_status(&paths)?;
+            assert_eq!(
+                current.owner.as_deref(),
+                Some("recording-session:new-session")
+            );
             Ok::<(), anyhow::Error>(())
         })();
 
