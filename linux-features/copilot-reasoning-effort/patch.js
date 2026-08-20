@@ -40,7 +40,7 @@ function matchesCopilotReasoningEffortUiContract(source) {
   );
   const cleanOfficialGate = new RegExp(
     `${JS_IDENT}=${JS_IDENT}\\?\\.authMethod===${BT}copilot${BT}[\\s\\S]{0,1500}?,` +
-      `${JS_IDENT}=!${JS_IDENT}&&!${JS_IDENT}&&!0,${JS_IDENT}=[^,]{1,200}&&!${JS_IDENT}&&`,
+      `${JS_IDENT}=[^,]{1,300}&&!${JS_IDENT}&&!0,${JS_IDENT}=[^,]{1,300}&&!${JS_IDENT}&&`,
   );
   return cleanLegacyGate.test(source) || cleanOfficialGate.test(source) ||
     source.includes("reasoningEffortDisabled:!1");
@@ -166,15 +166,15 @@ function applyCopilotReasoningEffortUiPatch(currentSource) {
   } else {
     const officialComposerGateRegex = new RegExp(
       `(${JS_IDENT})=(${JS_IDENT})\\?\\.authMethod===${BT}copilot${BT}([\\s\\S]{0,1500}?),` +
-        `(${JS_IDENT})=!(${JS_IDENT})&&!\\1&&!0,(${JS_IDENT})=([^,]{1,200})&&!\\1&&`,
+        `(${JS_IDENT})=([^,]{1,300})&&!\\1&&!0,(${JS_IDENT})=([^,]{1,300})&&!\\1&&`,
     );
     const officialComposerGateMatch = officialComposerGateRegex.exec(patchedSource);
     if (officialComposerGateMatch) {
-      const [match, copilotVar, hostVar, middle, shortcutVar, loadingVar, pickerVar, pickerPrefix] =
+      const [match, copilotVar, hostVar, middle, shortcutVar, shortcutPrefix, pickerVar, pickerPrefix] =
         officialComposerGateMatch;
       const replacement =
         `${copilotVar}=${hostVar}?.authMethod===${BT}copilot${BT}${middle},` +
-        `${shortcutVar}=!${loadingVar}&&!0,${pickerVar}=${pickerPrefix}&&`;
+        `${shortcutVar}=${shortcutPrefix}&&!0,${pickerVar}=${pickerPrefix}&&`;
       patchedSource = patchedSource.replace(match, replacement);
       const dropdownNeedle = `reasoningEffortDisabled:${copilotVar}`;
       const gateIndex = officialComposerGateMatch.index;

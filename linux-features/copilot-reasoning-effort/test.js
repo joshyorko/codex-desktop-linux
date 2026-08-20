@@ -63,6 +63,18 @@ function currentCopilotReasoningEffortUiFixture() {
   ].join("");
 }
 
+function reactCompilerCopilotReasoningEffortUiFixture() {
+  return [
+    "function iHc(){let q=K,ee=p?.authMethod===`copilot`,te=QRc(j,T),",
+    "ie=C?.isModelLocked!==!0&&!q&&!ee&&!0,",
+    "ae=C?.isModelLocked!==!0&&l!=null&&!q&&g&&!ee&&A!==`error`;",
+    "m1(`composer.increaseReasoningEffort`,Ve,{enabled:ie});",
+    "return (0,I4.jsx)(CVc,{reasoningEffortDisabled:ee})}",
+    "function G$c(){let A=o.formatMessage({id:`composer.reasoningSlashCommand.title`});",
+    "let M=l&&m&&!h&&!0,N;return{enabled:M,dependencies:N}}",
+  ].join("");
+}
+
 function withTempDir(fn) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-copilot-reasoning-feature-"));
   try {
@@ -172,6 +184,19 @@ test("allows Copilot auth to use the current app effort controls", () => {
   assert.doesNotMatch(patched, /O=s&&f&&!p&&!0/);
   assert.match(patched, /let q=a&&b&&!0,c/);
   assert.match(patched, /A=O\.length>0,j=!w&&!A/);
+});
+
+test("allows Copilot auth through the current React compiler effort guards", () => {
+  const patched = applyPatchTwice(
+    applyCopilotReasoningEffortUiPatch,
+    reactCompilerCopilotReasoningEffortUiFixture(),
+  );
+
+  assert.match(patched, /ie=C\?\.isModelLocked!==!0&&!q&&!0/);
+  assert.match(patched, /ae=C\?\.isModelLocked!==!0&&l!=null&&!q&&g&&A!==`error`/);
+  assert.match(patched, /reasoningEffortDisabled:!1/);
+  assert.doesNotMatch(patched, /!q&&!ee&&!0/);
+  assert.doesNotMatch(patched, /!q&&g&&!ee&&/);
 });
 
 test("current app UI drift warns without touching adjacent gates", () => {
